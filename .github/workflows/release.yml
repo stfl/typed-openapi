@@ -1,0 +1,63 @@
+name: release
+
+# A tag is the trigger, so publishing is something a maintainer does by tagging
+# a commit that CI has already passed — never a side effect of a merge.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Package and verify without publishing
+        type: boolean
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  publish:
+    name: publish typed-openapi to crates.io
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      # Trusted Publishing: crates.io exchanges this workflow's OIDC identity
+      # for a token that lives for the length of one job, so the repository
+      # holds no long-lived registry credential at all. It needs one-time setup
+      # on crates.io — Settings > Trusted Publishing on the crate, naming this
+      # repository, this workflow file and the `crates-io` environment — and
+      # the crate must already exist there, so the very first version is
+      # published by hand with `cargo publish -p typed-openapi`.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      # The tag says which version is being released; the manifest says which
+      # version exists. A release where they disagree is a mistake worth
+      # catching before anything is uploaded, because a crates.io version
+      # cannot be replaced.
+      - name: the tag and the manifest agree
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "typed-openapi"))')
+          echo "tag=$tag manifest=$manifest"
+          [ "$tag" = "$manifest" ] || { echo "::error::tag v$tag does not match version $manifest"; exit 1; }
+
+      - run: cargo package -p typed-openapi
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+        if: startsWith(github.ref, 'refs/tags/v')
+
+      - name: publish
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p typed-openapi

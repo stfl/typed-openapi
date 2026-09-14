@@ -1,0 +1,20 @@
+# Dependency updates arrive as pull requests so that CI decides whether a bump
+# is safe before anyone looks at it. Weekly rather than daily: a published
+# library's dependency set should move deliberately, and a queue of open bumps
+# is what makes people stop reading them.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One pull request for the routine bumps; anything that breaks a build
+      # gets its own, because that is the one worth reading.
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
