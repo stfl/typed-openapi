@@ -75,7 +75,7 @@ typify = { workspace = true, optional = true }
 # itself is how a test target turns a feature on without any library consumer
 # inheriting it: a dev-dependency's features reach `cargo test` and
 # `cargo clippy --all-targets` and stop there.
-typed-openapi = { path = ".", features = ["document"] }
+typed-openapi = { path = ".", features = ["document", "generate"] }
 
 [package.metadata.docs.rs]
 all-features = true

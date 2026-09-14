@@ -6,18 +6,15 @@ publish = false
 description = "Bless step: the vendor's document plus the adopter's Overlay in, the overlaid document and the generated api source out."
 
 [dependencies]
-anyhow = { workspace = true }
-typed-openapi = { path = "../../../typed-openapi", features = ["document"] }
-heck = { workspace = true }
-openapiv3 = { workspace = true }
-prettyplease = { workspace = true }
-proc-macro2 = { workspace = true }
-quote = { workspace = true }
-schemars = { workspace = true }
-serde_json = { workspace = true }
-serde_yaml_ng = { workspace = true }
-syn = { workspace = true }
-typify = { workspace = true }
+# The generator itself. An adopter's xtask needs nothing else: typify, the
+# syntax-tree printer and the OpenAPI object model all sit behind these features
+# rather than in the adopter's own manifest.
+#
+# `generate` implies `document`; both are named because this is the one manifest
+# in the workspace that may ask for the document reader from a section a build
+# without test targets reads, and `cli/tests/feature_gate.rs` reads these lines
+# as text to prove the other five do not.
+typed-openapi = { path = "../../../typed-openapi", features = ["document", "generate"] }
 
 [lints]
 workspace = true

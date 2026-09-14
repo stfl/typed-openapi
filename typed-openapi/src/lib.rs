@@ -65,6 +65,9 @@ pub mod overlay;
 #[cfg(feature = "document")]
 pub mod schema;
 
+#[cfg(feature = "generate")]
+pub mod generate;
+
 pub mod client;
 pub mod model;
 pub mod multipart;
