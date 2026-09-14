@@ -311,3 +311,8 @@ and exits 1. Your adapter has to let that body through: ureq turns a 4xx into an
 error and discards the body unless it is built with
 `http_status_as_error(false)`, which is why
 [`client.rs`](../examples/toy/cli/src/client.rs) does.
+
+Both paths are reachable from a test without a socket. `Recorder::failing_route`
+queues a failure for one method and path and `Recorder::answering_route` a
+response with any status, so what `toy` prints for a refused send and what it
+prints for a 4xx are each one line of setup away.

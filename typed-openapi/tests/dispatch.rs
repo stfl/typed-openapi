@@ -16,6 +16,7 @@
 )]
 
 use clap::{ArgMatches, Command};
+use http::Method;
 use typed_openapi::tree::{self, DispatchError, Outcome};
 use typed_openapi::{Document, HttpRequest, Recorder, render};
 
@@ -84,6 +85,26 @@ fn a_read_is_sent_on_sight() {
     let sent = only(&client);
     assert_eq!(sent.uri().path(), "/vouchers/5");
     assert_eq!(sent.method(), "GET");
+}
+
+/// The other half of the seam. `DispatchError::Transport` is where a client's
+/// own error arrives, and a script is what puts one there.
+#[test]
+fn a_client_that_fails_is_reported_as_the_transport_and_the_request_still_went_out() {
+    let doc = document();
+    // An answer is queued against the request as it goes out, so the route is
+    // the path with the id already substituted, not the template the document
+    // spells it with.
+    let client = Recorder::new().failing_route(Method::GET, "/vouchers/5", "nothing came back");
+    let matches = parse(&doc, &["toy", "vouchers", "get", "--id", "5"]);
+
+    let error = tree::dispatch(&doc, doc.base(), &client, &matches)
+        .expect_err("the script fails this route");
+
+    assert!(matches!(error, DispatchError::Transport(_)), "{error:?}");
+    assert_eq!(error.to_string(), "transport: nothing came back");
+    assert_eq!(only(&client).uri().path(), "/vouchers/5");
+    assert_eq!(client.unused(), 0, "the script was used up");
 }
 
 /// A `dispatch`-only CLI has no seam to vet a body in, so what the document

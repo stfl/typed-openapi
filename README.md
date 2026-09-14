@@ -117,6 +117,12 @@ ten lines each and live in [`examples/toy/cli/src/client.rs`][adapters], written
 to be copied rather than depended on. The default feature set is 30 crates; 21
 without `clap`.
 
+`Recorder` is the one client the crate does ship: it sends nothing, answers from
+a script — queued for a route or for anything, a response or a failure — and
+keeps every request it was given, so a test of anything above the seam needs no
+socket, no runtime and no fixture server. It is a `SyncClient` and an
+`AsyncClient` over one script, so both call paths run off one fixture.
+
 ## What it does not do
 
 - **No authentication.** Sign the `http::Request` in your own adapter.
