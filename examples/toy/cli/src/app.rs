@@ -88,50 +88,41 @@ pub fn root(api: &Api) -> Command {
 /// The hand-written verb, with the words its chain stands behind.
 ///
 /// `--commit` is this verb's own, because the chain is this verb's own. The
-/// gates are not: they belong to the operation the chain calls, so they are
-/// read off the document rather than spelled here — an Overlay that renames the
-/// gate renames this flag with it, and there is nothing to keep in step.
+/// gates are not: they belong to the operation the chain calls, so `tree::gates`
+/// puts them here — the same call `tree::command` makes for a generated
+/// subcommand, spelled once. An Overlay that renames the gate renames this flag
+/// with it, and there is nothing to keep in step.
 ///
 /// Every gate is `required`, exactly as it is under `raw`, and a voucher that
 /// turns out not to need enshrining does not soften that: which operations the
 /// chain reaches is the *server's* answer, arriving after the command line is
 /// gone, so the word is asked for while there is still someone to ask.
 fn finalize_voucher(api: &Api) -> Command {
-    let mut cmd = Command::new(FINALIZE)
-        .about("Fetch a voucher, enshrine it if it is open, then render it")
-        .long_about(
-            "Fetch a voucher, enshrine it if it is open, then render it.\n\n\
-             The fetch is a read and always runs — the chain depends on the \
-             answer. Without --commit the writes that follow are printed and \
-             not sent.",
-        )
-        .arg(
-            Arg::new(ID)
-                .long(ID)
-                .required(true)
-                .value_name("INT")
-                .value_parser(value_parser!(i64))
-                .help("The voucher to finalize"),
-        )
-        .arg(
-            Arg::new(typed_openapi::COMMIT)
-                .long(typed_openapi::COMMIT)
-                .action(clap::ArgAction::SetTrue)
-                .help("Send the writes. Without it this is a dry run that prints them"),
-        );
-    for gate in api.operation(OperationId::EnshrineVoucher).gates() {
-        cmd = cmd.arg(
-            Arg::new(gate.as_str().to_owned())
-                .long(gate.as_str().to_owned())
-                .action(clap::ArgAction::SetTrue)
-                .required(true)
-                .help(format!(
-                    "Required, and demanded in addition to --commit: the chain \
-                     stands behind the `{gate}` gate"
-                )),
-        );
-    }
-    cmd
+    tree::gates(
+        Command::new(FINALIZE)
+            .about("Fetch a voucher, enshrine it if it is open, then render it")
+            .long_about(
+                "Fetch a voucher, enshrine it if it is open, then render it.\n\n\
+                 The fetch is a read and always runs — the chain depends on the \
+                 answer. Without --commit the writes that follow are printed and \
+                 not sent.",
+            )
+            .arg(
+                Arg::new(ID)
+                    .long(ID)
+                    .required(true)
+                    .value_name("INT")
+                    .value_parser(value_parser!(i64))
+                    .help("The voucher to finalize"),
+            )
+            .arg(
+                Arg::new(typed_openapi::COMMIT)
+                    .long(typed_openapi::COMMIT)
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Send the writes. Without it this is a dry run that prints them"),
+            ),
+        api.operation(OperationId::EnshrineVoucher),
+    )
 }
 
 /// Run what the user typed, against the server they named.

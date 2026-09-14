@@ -15,10 +15,10 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
-use clap::{ArgMatches, Command};
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use http::Method;
 use typed_openapi::tree::{self, DispatchError, Outcome};
-use typed_openapi::{Answers, Document, HttpRequest, Plan, Recorder, Values, render};
+use typed_openapi::{Answers, COMMIT, Document, HttpRequest, Plan, Recorder, Values, render};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
 const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
@@ -515,4 +515,91 @@ fn a_committed_write_with_one_of_two_gates_answered_sends_nothing() {
         decided(&Answers::new().commit().gate("enshrine").gate("email")),
         Plan::Send(_)
     ));
+}
+
+/// One definition, two callers. A command of the caller's own carries exactly
+/// the gate flags the generated subcommand carries — same spelling, same help,
+/// same required-ness — because both are `tree::gates`, and a hand-written verb
+/// over a gated operation spells nothing itself.
+#[test]
+fn a_command_of_your_own_carries_the_gate_the_subcommand_carries() {
+    let doc = document();
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+
+    let mine = tree::gates(Command::new("finalize-voucher"), op);
+    let generated = tree::command(op);
+
+    for gate in op.gates() {
+        let (mine, generated) = (flag(&mine, gate.as_str()), flag(&generated, gate.as_str()));
+        assert_eq!(
+            mine.get_help().map(ToString::to_string),
+            generated.get_help().map(ToString::to_string)
+        );
+        assert!(mine.is_required_set() && generated.is_required_set());
+    }
+
+    // And nothing else came with them: the gates are all this door adds, so a
+    // caller's own flags are theirs to choose.
+    let added: Vec<&str> = mine
+        .get_arguments()
+        .filter_map(|arg| arg.get_long())
+        .filter(|long| *long != "help")
+        .collect();
+    assert_eq!(added, ["enshrine"]);
+}
+
+/// An operation with no gate is handed back the command it was given, so a
+/// caller adds the flags unconditionally and asks the document nothing.
+#[test]
+fn an_operation_that_names_no_gate_adds_no_flag() {
+    let doc = document();
+    let op = doc.get("createVoucher").expect("the document describes it");
+
+    let mine = tree::gates(Command::new("create"), op);
+
+    assert!(
+        mine.get_arguments()
+            .filter_map(|arg| arg.get_long())
+            .all(|long| long == "help")
+    );
+}
+
+/// A command this crate did not build has no answer for a gate it never
+/// declared, and no answer is the closed one: the request is held back, rather
+/// than the reading panicking on a flag clap has not heard of.
+#[test]
+fn a_gate_flag_a_command_never_declared_reads_as_unanswered() {
+    let doc = document();
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+    // A verb of the caller's own that offers `--commit` and no gate flag: the
+    // shape `tree::gates` exists to prevent, and the one that must still answer.
+    let matches = Command::new("finalize-voucher")
+        .arg(Arg::new(COMMIT).long(COMMIT).action(ArgAction::SetTrue))
+        .get_matches_from(["finalize-voucher", "--commit"]);
+
+    let answered = tree::answers(op, &matches);
+
+    assert!(answered.committed(), "the flag it does offer is read");
+    let gate = op.gates().first().expect("enshrineVoucher names one gate");
+    assert!(
+        !answered.answered(gate),
+        "and the one it does not is closed"
+    );
+    assert!(
+        matches!(
+            Plan::build(op, doc.base(), Values::new().param("id", 5), &answered)
+                .expect("the values satisfy the operation"),
+            Plan::DryRun(_)
+        ),
+        "an unanswered gate holds the request back, confirmation and all"
+    );
+
+    // A command carrying neither flag is the same answer rather than two
+    // panics: nothing was asked, so nothing is answered.
+    let bare = Command::new("bare").get_matches_from(["bare"]);
+    assert_eq!(tree::answers(op, &bare), Answers::new());
 }

@@ -165,10 +165,11 @@ match has no `_` arm, so a status the vendor adds is a compile error where
 someone has to decide whether it may be enshrined.
 
 The verb is held to the same words the generated subcommand is. Its chain calls
-the gated `enshrineVoucher`, so it builds its gate flags out of
-`Operation::gates` and reads them back with `tree::answers` — the word is the
-document's, not this crate's, and `toy finalize-voucher` demands `--enshrine`
-exactly as `toy raw vouchers enshrine` does.
+the gated `enshrineVoucher`, so it adds its gate flags with `tree::gates` — the
+same call the generated subcommand makes — and reads them back with
+`tree::answers`. The word is the document's, not this crate's, and
+`toy finalize-voucher` demands `--enshrine` exactly as `toy raw vouchers
+enshrine` does.
 
 [`cli/examples/root.rs`](cli/examples/root.rs) is the other shape: the
 operations *are* the CLI, 53 lines, no `raw` layer and no dispatch of its own.
