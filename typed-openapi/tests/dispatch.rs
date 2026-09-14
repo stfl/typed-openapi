@@ -15,10 +15,10 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
-use clap::{ArgMatches, Command};
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use http::Method;
 use typed_openapi::tree::{self, DispatchError, Outcome};
-use typed_openapi::{Answers, Document, HttpRequest, Plan, Recorder, Values, render};
+use typed_openapi::{Answers, COMMIT, Document, HttpRequest, Plan, Recorder, Values, render};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
 const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
@@ -564,4 +564,42 @@ fn an_operation_that_names_no_gate_adds_no_flag() {
             .filter_map(|arg| arg.get_long())
             .all(|long| long == "help")
     );
+}
+
+/// A command this crate did not build has no answer for a gate it never
+/// declared, and no answer is the closed one: the request is held back, rather
+/// than the reading panicking on a flag clap has not heard of.
+#[test]
+fn a_gate_flag_a_command_never_declared_reads_as_unanswered() {
+    let doc = document();
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+    // A verb of the caller's own that offers `--commit` and no gate flag: the
+    // shape `tree::gates` exists to prevent, and the one that must still answer.
+    let matches = Command::new("finalize-voucher")
+        .arg(Arg::new(COMMIT).long(COMMIT).action(ArgAction::SetTrue))
+        .get_matches_from(["finalize-voucher", "--commit"]);
+
+    let answered = tree::answers(op, &matches);
+
+    assert!(answered.committed(), "the flag it does offer is read");
+    let gate = op.gates().first().expect("enshrineVoucher names one gate");
+    assert!(
+        !answered.answered(gate),
+        "and the one it does not is closed"
+    );
+    assert!(
+        matches!(
+            Plan::build(op, doc.base(), Values::new().param("id", 5), &answered)
+                .expect("the values satisfy the operation"),
+            Plan::DryRun(_)
+        ),
+        "an unanswered gate holds the request back, confirmation and all"
+    );
+
+    // A command carrying neither flag is the same answer rather than two
+    // panics: nothing was asked, so nothing is answered.
+    let bare = Command::new("bare").get_matches_from(["bare"]);
+    assert_eq!(tree::answers(op, &bare), Answers::new());
 }

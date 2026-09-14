@@ -313,6 +313,11 @@ A verb you write yourself joins in through the same three calls the generated
 surface uses: `tree::gates` puts the flags on your command, `tree::answers`
 reads them back, and `Plan::decide` does the rest. The flags are spelled in one
 place, so the two command lines cannot come to disagree about one operation.
+
+A flag your command does not declare reads as **unanswered**, which holds the
+request back. So a command built before an Overlay named a new gate goes on
+working and starts printing dry runs, rather than sending something nobody
+typed the word for.
 [`examples/toy/cli/src/app.rs`](../examples/toy/cli/src/app.rs) does exactly
 that for `finalize-voucher`, whose chain calls the gated `enshrineVoucher` — so
 the same word is demanded whichever way the operation is reached.

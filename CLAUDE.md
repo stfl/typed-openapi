@@ -29,6 +29,12 @@ any parameter or field claims one, so a body field spelled like a gate moves
 aside rather than shadowing it. A gate on a read is refused while the document
 is reduced: a request sent on sight has nothing for a gate to hold.
 
+`tree::gates` is the one place a gate becomes a flag, and `tree::command` goes
+through it, so a hand-written verb and a generated subcommand cannot spell one
+gate two ways. `tree::answers` reads a flag the command never declared as
+unanswered rather than panicking, which is what makes the reading safe to point
+at a command this crate did not build.
+
 **Both command names are decided while the document is reduced.** `Grouping` in
 `src/names.rs` reads the rule off every path once; an `Operation` carries the
 group and the command it was placed under, and both travel in the postcard blob.

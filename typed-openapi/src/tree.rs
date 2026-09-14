@@ -181,26 +181,41 @@ fn long_about(op: &Operation) -> String {
 ///
 /// A read carries neither flag, so there is nothing to ask it.
 ///
-/// `matches` has to carry the operation's own flags — the subcommand
-/// [`command`] built, or a hand-written verb offering the same ones — because a
-/// flag clap never heard of is a panic rather than an answer. A verb of your own
-/// builds them out of [`Operation::gates`] for exactly that reason: then there
-/// is nothing to keep in step.
+/// A flag the command never declared reads as unanswered, which is the closed
+/// answer: it holds the request back. That is what makes this safe to point at
+/// a command this crate did not build — a verb of your own, or one built before
+/// an Overlay named a new gate. Give your own command its flags with [`gates`]
+/// and the two stay in step by construction.
 #[must_use]
 pub fn answers(op: &Operation, matches: &ArgMatches) -> Answers {
     if op.effect() == Effect::Read {
         return Answers::new();
     }
     let mut answered = Answers::new();
-    if matches.get_flag(COMMIT) {
+    if flag(matches, COMMIT) {
         answered = answered.commit();
     }
     for gate in op.gates() {
-        if matches.get_flag(gate.as_str()) {
+        if flag(matches, gate.as_str()) {
             answered = answered.gate(gate.as_str());
         }
     }
     answered
+}
+
+/// Did the command line carry this flag?
+///
+/// `ArgMatches::get_flag` panics on an id the `Command` never declared, and a
+/// panic is the wrong answer to "is this gate answered?". A command with no
+/// flag for a gate has no answer for it, and no answer is `false` — the reading
+/// the gate has everywhere else, and the one that holds the request back.
+fn flag(matches: &ArgMatches, id: &str) -> bool {
+    matches
+        .try_get_one::<bool>(id)
+        .ok()
+        .flatten()
+        .copied()
+        .unwrap_or(false)
 }
 
 /// Read one operation's arguments out of its `ArgMatches`, under the names the
