@@ -27,7 +27,7 @@ file stem.
 | Path | What it is | Who reads it |
 |---|---|---|
 | `spec/<name>.overlaid.yaml` | the vendor's document with your corrections applied | you, in review — and it is embedded so the crate can be held to it |
-| `src/types.rs` | `components.schemas` as Rust types, from [typify] | your code, and the wrappers |
+| `src/types.rs` | `components.schemas` as Rust types, from [typify]. A named schema stating a `pattern` becomes a newtype that enforces it, with `Display` beside the `FromStr` | your code, and the wrappers |
 | `src/ops.rs` | one typed wrapper per operation, the closed `OperationId` set, and the `(operationId, method, path)` inventory | your code, and a CLI's dispatch |
 | `src/model.postcard` | the corrected document already reduced to the facts a command line needs | the shipped binary, through `Document::from_blob` |
 
@@ -50,7 +50,7 @@ use typed_openapi::generate::Settings;
 Settings::new("spec/vendor.yaml")
     .overlay("spec/corrections.yaml")
     .overlay("spec/cli.yaml")
-    .replace("money", "api_types::Money")
+    .replace("currency", "api_types::Currency")
     .regenerated_by("just bless")
     .write_to("api-generated")?;
 ```
@@ -78,18 +78,21 @@ Emit `rust_type` wherever the document declares `format`. Call it once per
 format; calls accumulate.
 
 This is where a type you already own replaces the `String` the document would
-otherwise produce. A `total` field of `format: money` becomes your own
-`Money` newtype, with `Display` and `FromStr` wired up, and with no
-hand-written mirror on top of the generated struct.
+otherwise produce. A `currency` field of `format: currency` becomes your own
+`Currency` newtype, with no hand-written mirror on top of the generated struct.
 
-The key is the format, not a schema name. The shape being replaced is read out
-of the document, so the rule a CLI validates against and the rule your Rust type
-stands for are the same bytes. A document that spells one format two ways gets
-one substitution per spelling rather than a silent miss on the second.
+The key is the format, not a schema name, so a document that spells one format
+two ways gets one substitution per spelling rather than a silent miss on the
+second.
 
 `rust_type` is written into the generated source verbatim, so it must be a path
 the generated crate can name — which means the crate that owns the type is a
 dependency of the generated crate.
+
+It is the route for a type that needs *behaviour*. A rule needs no Rust at all:
+name the schema that states it and the generated newtype enforces it, on the
+command line as well as in Rust.
+[overlay.md](overlay.md#owning-the-type-yourself) has the trade written out.
 
 ### `Settings::regenerated_by(command) -> Settings`
 
@@ -156,7 +159,6 @@ fn main() -> ExitCode {
     let blessed = Settings::new(adoption.join("spec/vendor.yaml"))
         .overlay(adoption.join("spec/corrections.yaml"))
         .overlay(adoption.join("spec/cli.yaml"))
-        .replace("money", "api_types::Money")
         .write_to(adoption.join("api-generated"));
 
     match blessed {

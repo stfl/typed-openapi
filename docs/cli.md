@@ -204,26 +204,27 @@ taken after the first prefix gains a counter, `body-id`, `body-id-3`.
 
 ## Value checking
 
-A flag's value parser is the document's own schema, so a bad amount reports
-itself at parse time the way a bad enum value does — one error shape for one
-kind of mistake.
+A flag's value parser is the document's own schema, so a value the document
+rules out reports itself at parse time the way a bad enum value does — one error
+shape for one kind of mistake.
 
 | the document says | value name | accepted |
 |---|---|---|
-| `type: string` | `<STRING>` | anything. A `pattern` reaches `--help` and is **not** enforced |
-| `type: string`, `format: money` | `<AMOUNT>` | an optional `-`, digits, then optionally `.` and one or two more digits |
-| `type: integer` | `<INT>` | an `i64`. `5.0` is refused |
-| `type: number` | `<NUMBER>` | a finite `f64` |
+| `type: string` | `<STRING>` | whatever its `pattern`, `minLength` and `maxLength` allow |
+| `type: integer` | `<INT>` | an `i64` inside its `minimum`, `maximum` and `multipleOf` |
+| `type: number` | `<NUMBER>` | a finite `f64`, under the same three |
 | `type: boolean` | `<BOOL>` | `true` or `false` |
 | `enum: [...]` on a string | `<STRING>` | one of the listed values, and these complete |
 
-Enforcing an arbitrary ECMA-262 `pattern` would cost a regex engine; the one
-constraint this crate does enforce is the money rule, in
-[`src/scalar.rs`](../typed-openapi/src/scalar.rs).
+Every rule a scalar schema states is enforced, and the ones that constrain a
+value are on the flag's help line, written by the same code that refuses it.
+[validation.md](validation.md) is the whole list — what each refusal reads
+like, which road a parameter and a body field take, and what the regex engine
+behind `pattern` costs a binary.
 
 ```console
 $ toy raw vouchers create --total 12.505 --currency EUR --status open
-error: invalid value '12.505' for '--total <AMOUNT>': `12.505` is not an amount (digits, optionally `.` and one or two decimals)
+error: invalid value '12.505' for '--total <STRING>': `12.505` does not match ^-?[0-9]+(\.[0-9]{1,2})?$
 
 $ toy raw vouchers create --total 12.50 --currency EUR --status void
 error: invalid value 'void' for '--status <STRING>'

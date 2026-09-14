@@ -22,16 +22,16 @@ dry run: nothing was sent. Add --commit to send it.
 
 ## Two consumers, one document
 
-**The Rust caller** gets owned types and one method per operation, with your own
-newtypes substituted in: `Voucher.total` is a `Money`, not a `String`, with no
-mirror type and no conversion at the boundary.
+**The Rust caller** gets owned types and one method per operation, with a
+newtype wherever the document names a rule: `Voucher.total` is a `Money`, not a
+`String`, and it cannot be built out of something that is not an amount.
 
 **The CLI consumer** gets a two-level tree — one subcommand per resource the
 document's paths name, one per operation under it, so `PUT /vouchers/{id}` is
 `vouchers update` whatever the vendor called it — with flags from the parameters
-and the request body, values checked against the document's own formats and
-enums, and dynamic shell completion. Mount the tree under `raw`, under any other
-name, or as the whole CLI:
+and the request body, values held to every rule the document states about them,
+and dynamic shell completion. Mount the tree under `raw`, under any other name,
+or as the whole CLI:
 
 ```rust,ignore
 let matches = Command::new("toy")
@@ -45,7 +45,17 @@ match tree::dispatch(api.document(), api.base(), &client, &matches)? {
 ```
 
 Both go through the same request builder, so the CLI and the typed caller cannot
-disagree about what an operation is.
+disagree about what an operation is — and both run the document's `pattern` on
+the same regex engine, so they cannot disagree about what a value is either:
+
+```console
+$ toy vouchers create --total 1,50 --currency EUR --status open
+error: invalid value '1,50' for '--total <STRING>': `1,50` does not match ^-?[0-9]+(\.[0-9]{1,2})?$
+```
+
+`pattern`, `minLength`, `maxLength`, `minimum`, `maximum`, the two `exclusive`
+flags and `multipleOf` are all enforced, in the document's own numbers. What
+that costs is a fifth of the binary — see [docs/validation.md][val].
 
 ## The gate
 
@@ -75,7 +85,6 @@ vendor while the one that marks operations for a command line sits above it:
 Settings::new("spec/vendor.yaml")
     .overlay("spec/corrections.yaml")   // what the vendor got wrong
     .overlay("spec/cli.yaml")           // what only a command line needs
-    .replace("money", "api_types::Money")
     .write_to("api-generated")?;
 ```
 
@@ -114,6 +123,12 @@ without `clap`.
 - **No array or object query parameters**, and no `style` / `explode`.
 - **No async CLI.** The command tree is sync; `AsyncClient` is for the typed
   caller.
+- **No check on a whole-body file.** `--json-body FILE` is held to being JSON
+  and no further; holding its *content* to a schema needs the generated
+  `struct`, which only your crate can name. `tree::select` is the seam for it.
+- **A regex engine in every binary.** Enforcing `pattern` costs one, there is no
+  feature that removes it, and on the example it is 810 KB of a 4.6 MB stripped
+  binary.
 - **The reduced model is a binary blob.** It is diffable only by regenerating
   it, not by reading it.
 - **Rust 1.88**, in every feature set. The floor is the regex engine a
@@ -139,6 +154,7 @@ recipes rather than a copy of them.
 | [docs/generating.md][gen] | the bless step, the `Settings` interface, wiring your own `xtask` |
 | [docs/overlay.md][ov] | writing corrections as Overlay actions, and the tripwire form |
 | [docs/cli.md][cli] | mounting the tree, the gate, flag naming, completion |
+| [docs/validation.md][val] | every rule that is enforced, where it runs, and what the engine costs |
 | [docs/builders.md][bu] | the `builder` feature and what it costs |
 | [docs/drift.md][drift] | every way a vendor revision is caught, and where |
 | [`examples/toy`][ex] | one adoption end to end, built and tested by CI |
@@ -151,6 +167,7 @@ Licensed under either of Apache-2.0 or MIT, at your option.
 [drift]: https://github.com/stfl/typed-openapi/blob/main/docs/drift.md
 [ov]: https://github.com/stfl/typed-openapi/blob/main/docs/overlay.md
 [cli]: https://github.com/stfl/typed-openapi/blob/main/docs/cli.md
+[val]: https://github.com/stfl/typed-openapi/blob/main/docs/validation.md
 [bu]: https://github.com/stfl/typed-openapi/blob/main/docs/builders.md
 [ex]: https://github.com/stfl/typed-openapi/tree/main/examples/toy
 [adapters]: https://github.com/stfl/typed-openapi/blob/main/examples/toy/cli/src/client.rs

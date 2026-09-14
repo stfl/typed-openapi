@@ -32,14 +32,15 @@ early they bite:
 | catches up with a correction, or drops something a correction names | `api/tests/corrections.rs` | test | which row no longer describes a difference |
 | **adds an operation** | — | — | **nothing** |
 | **adds a field to a schema nothing destructures or constructs** | — | — | **nothing** |
-| **changes a summary, a description or a plain string's `pattern`** | — | — | **nothing** |
+| **changes a summary or a description** | — | — | **nothing** |
+| **loosens a rule — a wider `pattern`, a higher `maximum`** | — | — | **nothing**, until a value the old rule refused arrives |
 
 The verbatim messages are in the sections below.
 
 ## Bless time: the Overlay as an assertion
 
 `ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Two of
-the example adoption's four actions — one in
+the example adoption's five actions — one in
 [`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml), one in
 [`spec/cli.yaml`](../examples/toy/spec/cli.yaml) — are written as JSONPath
 filters that state what the vendor currently says, so a revision that changes
@@ -48,7 +49,7 @@ overwritten. The message opens with the layer, because with corrections split
 by purpose that is the first thing to know:
 
 ```
-spec/corrections.yaml: the Overlay does not apply: actions[0] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
+spec/corrections.yaml: the Overlay does not apply: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
 ```
 
 The form and its cost are in [docs/overlay.md](overlay.md#the-tripwire-form);
@@ -208,10 +209,12 @@ compile — but code that only *depends* on an operation without calling it need
 the `documented` assertion, and a subcommand nobody has written Rust against
 simply stops existing.
 
-**Prose and unenforced constraints.** A changed `summary` or `description`
-reaches `--help` and nothing objects. Neither does a changed `pattern` on a
-plain string: `Scalar::Text` carries the pattern into the help line and does not
-enforce it. Only a `format: money` field has a rule the CLI applies.
+**Prose, and a rule the vendor loosens.** A changed `summary` or `description`
+reaches `--help` and nothing objects. A *tightened* rule — a narrower `pattern`,
+a lower `maximum` — is enforced from the next bless step onwards, so a value
+that stops being allowed is refused at the flag. A *loosened* one is the quiet
+case: nothing was relying on the old rule, so nothing notices until a value the
+old rule refused turns up and is accepted.
 
 **A vendor revision nobody fetches.** Every bless-time check above runs against
 the vendor document that is committed here. `just blessed` re-runs the bless

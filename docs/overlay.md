@@ -13,6 +13,7 @@ when a correction later stops fitting is [docs/drift.md](drift.md).
   - [1. Plain corrections](#1-plain-corrections)
   - [2. Type validations and newtypes](#2-type-validations-and-newtypes)
   - [3. Grouping and the command line](#3-grouping-and-the-command-line)
+- [Owning the type yourself](#owning-the-type-yourself)
 - [CORRECTIONS, and the test that holds it](#corrections-and-the-test-that-holds-it)
 
 ## Why an Overlay
@@ -90,20 +91,20 @@ bless step runs.**
 
 ```yaml
   - target: "$.components.schemas.Voucher[?(@.total.format == 'money')].total"
-    description: Say what an amount looks like; the vendor declares the format and not the rule.
+    description: Point the vendor's amount at the rule.
     update:
-      pattern: ^-?[0-9]+(\.[0-9]{1,2})?$
+      $ref: "#/components/schemas/Money"
 ```
 
 The filter selects `Voucher`'s `properties` member only while `total` is still
 declared `format: money`; the step after it names `total`. A plain
 `$.components.schemas.Voucher.properties.total` would do the same edit — and
 would keep doing it silently after the vendor retyped the field as a number,
-stamping a decimal-string pattern onto a schema that is no longer a string. The
-filter form fails instead, and names itself:
+pointing an amount's rule at a schema that is no longer a string. The filter
+form fails instead, and names itself:
 
 ```
-spec/corrections.yaml: the Overlay does not apply: actions[0] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
+spec/corrections.yaml: the Overlay does not apply: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
 ```
 
 The same trick works on a path item. Targeting `.get` rather than the path
@@ -135,7 +136,6 @@ before it produced:
 Settings::new("spec/toy.yaml")
     .overlay("spec/corrections.yaml")
     .overlay("spec/cli.yaml")
-    .replace("money", "api_types::Money")
     .write_to("api-generated")?;
 ```
 
@@ -194,18 +194,42 @@ An operation the vendor ships and documents nowhere:
             "200": { description: OK }
 ```
 
-A rule the vendor declares a `format` for and never states. `pattern` is plain
-JSON Schema, so this belongs here and not in a client layer: a TypeScript
-generator honours it and a request validator honours it, and leaving it out
-would hand the vendor back a document that still does not say what an amount
-is.
+A rule the vendor declares a `format` for and never states. `format: money`
+says that somebody somewhere knows what an amount is; `pattern` says it in
+plain JSON Schema, which every consumer of the document can run. So this
+belongs here and not in a client layer: a TypeScript generator honours it, a
+request validator honours it, and leaving it out hands the vendor back a
+document that still does not say what an amount is.
+
+Give the rule a **schema name** and it is stated once for every field that
+carries an amount — and the name is what the bless step turns into a Rust type.
+Two actions, and the second is a tripwire:
 
 ```yaml
-  - target: "$.components.schemas.Voucher[?(@.total.format == 'money')].total"
-    description: Say what an amount looks like; the vendor declares the format and not the rule.
+  - target: $.components.schemas
+    description: Say what an amount is, once, under a name.
     update:
-      pattern: ^-?[0-9]+(\.[0-9]{1,2})?$
+      Money:
+        type: string
+        description: A decimal amount carried in a string.
+        pattern: ^-?[0-9]+(\.[0-9]{1,2})?$
+
+  - target: "$.components.schemas.Voucher[?(@.total.format == 'money')].total"
+    description: Point the vendor's amount at that rule.
+    update:
+      $ref: "#/components/schemas/Money"
 ```
+
+`update` merges, so the vendor's own `type`, `format` and `description` stay
+where the vendor put them and `total` keeps its place in `properties` —
+`--help` still reads in document order. What the action adds is the reference,
+and OpenAPI 3.0 reads a `$ref` in preference to whatever sits beside it.
+
+What it buys is both halves at once. `typed-openapi` follows the `$ref` while
+it reduces the document, so `--total` refuses `1,50` with the document's own
+pattern; typify reads the schema *name*, so `Voucher.total` is a `Money`
+newtype whose `FromStr` runs the same pattern on the same engine. Neither half
+is written in Rust, and neither can drift from the other.
 
 **Nothing in this layer may be specific to this crate.** That is what makes the
 layer worth keeping separate: this file plus the vendor's document *is* the
@@ -234,47 +258,32 @@ a CLI concern into the layer that is meant to be consumable by anyone.
 **What is true of your client but not of the API.** The vendor is not wrong;
 you want something narrower, and only for yourself.
 
-The worked case is a newtype. `Voucher.currency` in
+The worked case is a tightening. `Voucher.currency` in
 [`examples/toy/spec/toy.yaml`](../examples/toy/spec/toy.yaml) is `type: string`
-described as "ISO 4217 code", with no `format` — which is a fair description of
-the API. If you want it to be a `Currency` in Rust rather than a `String`, tag
-it with a format of your own and hook the Rust type onto that tag. Both halves
-are needed and neither makes sense alone:
+described as "ISO 4217 code", with no rule — which is a fair description of an
+API that will take any string and answer 400. Your client only ever sends the
+three letters, so say so here:
 
 ```yaml
 # spec/client.yaml
   - target: "$.components.schemas.Voucher[?(@.currency.type == 'string')].currency"
-    description: A currency code is a Currency, not a string.
+    description: This client only sends ISO 4217 codes.
     update:
-      format: currency
       pattern: ^[A-Z]{3}$
 ```
 
-```rust,ignore
-Settings::new("spec/toy.yaml")
-    .overlay("spec/corrections.yaml")
-    .overlay("spec/client.yaml")
-    .overlay("spec/cli.yaml")
-    .replace("currency", "api_types::Currency")   // the other half
-    .write_to("api-generated")?;
-```
+The other kind is a **narrowing** of an `enum`: the API accepts five statuses
+and your client only ever deals in three, so you shrink the list. Either way it
+is a statement about your client, and it must never reach `corrections.yaml` —
+a narrowing handed back to the vendor is a bug report about an API that is
+behaving correctly.
 
-The other kind is a **narrowing**: the API accepts five statuses and your
-client only ever deals in three, so you shrink the `enum`. That is a statement
-about your client, and it must never reach `corrections.yaml` — a narrowing
-handed back to the vendor is a bug report about an API that is behaving
-correctly.
-
-**What this layer buys, and what it does not.** `replace` gives you the Rust
-type, and Rust enforces it: `Currency::from_str` runs wherever a `Voucher` is
-parsed or constructed. On the command line a `pattern` is documentation only.
-[`Scalar::parse`](../typed-openapi/src/scalar.rs) enforces `format: money` and
-enumerations and nothing else, because enforcing an arbitrary ECMA-262 pattern
-would cost a regex engine in every shipped binary. So `--currency gbp` reaches
-`Invocation::new`; it is refused afterwards by the generated type, on the
-`toy raw` path that vets bodies, and not at all on a `dispatch`-only CLI. When
-a value must be refused *at the parser*, the document's own `enum` is the tool
-that does it — which is the narrowing above, doing double duty.
+**What this layer buys.** Exactly what layer 1 buys, aimed at yourself: the rule
+is enforced on the command line and, if you name the schema rather than writing
+the rule inline, carried by a generated newtype too. `--currency gbp` is refused
+at the parser, with the document's own pattern in the message. The difference is
+only who the statement is true of — see
+[validation.md](validation.md) for what each keyword buys.
 
 ### 3. Grouping and the command line
 
@@ -301,6 +310,57 @@ has the rule they overrule.
       x-cli-command: finalize
 ```
 
+## Owning the type yourself
+
+A named schema hands you a newtype the generator wrote. Sometimes you want one
+you wrote: a `Money` that adds, a `Currency` with a `const EUR`, a type whose
+rule is not expressible as JSON Schema at all. Tag the shape with a `format` of
+your own and hook a Rust path onto it with
+[`Settings::replace`](generating.md#settingsreplaceformat-rust_type---settings):
+
+```yaml
+# spec/client.yaml
+  - target: "$.components.schemas.Voucher[?(@.currency.type == 'string')].currency"
+    description: A currency code is a Currency, not a string.
+    update:
+      format: currency
+```
+
+```rust,ignore
+Settings::new("spec/toy.yaml")
+    .overlay("spec/corrections.yaml")
+    .overlay("spec/client.yaml")
+    .overlay("spec/cli.yaml")
+    .replace("currency", "api_types::Currency")   // the other half
+    .write_to("api-generated")?;
+```
+
+Both halves are needed and neither means anything alone: the document says
+which shape, the call says which type. `rust_type` is written into the
+generated source verbatim, so the crate owning it has to be a dependency of the
+generated crate — which usually means a small crate *below* it, since the
+generated code names it.
+
+The trade against the named-schema route above:
+
+| | named schema | `replace` and a type of your own |
+|---|---|---|
+| the rule lives in | the document, portable to any tool that reads OpenAPI | Rust, and only your Rust |
+| the type's name | the schema's | yours |
+| `Display`, arithmetic, conversions | what the generator emits | anything you write |
+| enforced on the command line | yes | no — a bare `format` states no rule |
+| the stripped binary | +810 KB for the engine ([validation.md](validation.md#what-it-costs)) | +0 |
+
+Reach for it when you need behaviour on the type. Reach for the named schema
+when you need the rule: it is the only one of the two that a command line can
+enforce, because a `format` names a rule without stating it. The two compose —
+a `format` tag *and* a `pattern` gives you both, at both costs.
+
+`replace` has no user in this repository's example, which prefers the document
+doing the naming; [`typed-openapi/tests/generate.rs`](../typed-openapi/tests/generate.rs)
+is where it is demonstrated and held. It is a candidate for removal if nobody
+needs it.
+
 ## CORRECTIONS, and the test that holds it
 
 YAML files of JSONPath targets are the mechanism, not the answer to "what have
@@ -310,7 +370,7 @@ row per decision, in Rust an adopter can read:
 
 ```rust,ignore
 pub const CORRECTIONS: &[Correction] = &[
-    Correction::Retyped { format: "money", rust: "Money" },
+    Correction::Retyped { schema: "Voucher", property: "total", named: "Money" },
     Correction::Undeclared { schema: "Voucher", property: "internal_ref" },
     Correction::Undocumented("archiveVoucher"),
     Correction::Gated("renderVoucher"),

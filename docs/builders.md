@@ -21,24 +21,28 @@ forms to the same rendered request.
 ## What it costs
 
 Measured on this repository's `examples/toy`, sequentially on an idle machine
-(load 0.84, no other compiler running), three repetitions per cell, median
+(load below 1, no other compiler running), three repetitions per cell, median
 reported. `api-generated` is the crate that holds the generated wrappers and
 therefore the crate the second `impl` block lands in.
 
 | | off | on | difference |
 |---|---|---|---|
 | crates in the normal dependency graph | 23 | 34 | **+11** |
-| clean `cargo build -p api-generated` | 3.78 s | 5.91 s | **+2.13 s (+56%)** |
-| warm `cargo check` after one edit to `ops.rs` | 0.108 s | 0.146 s | **+0.038 s (+35%)** |
-| clean `cargo build -p cli --release` | 10.49 s | 10.55 s | +0.06 s (noise) |
-| the stripped `toy` binary | 4 954 032 B | 4 955 584 B | **+1 552 B (+0.03%)** |
+| clean `cargo build -p api-generated` | 3.73 s | 5.73 s | **+2.00 s (+54%)** |
+| warm `cargo check` after one edit to `ops.rs` | 0.10 s | 0.14 s | **+0.04 s (+40%)** |
+| clean `cargo build -p cli --release` | 10.11 s | 10.37 s | +0.26 s (+3%) |
+| the stripped `toy` binary | 4 604 624 B | 4 608 656 B | **+4 032 B (+0.09%)** |
 
 **The cost is compile-time and local.** It lands on the crate holding the
 generated code — eleven more crates to fetch and build, and about two seconds
 on a clean build of that crate. A whole release build barely notices, because
-it is dominated by everything else, and the binary grows by a page and a half:
-`bon` is a proc-macro, so what reaches the binary is the code it wrote, and
-that code is thin.
+it is dominated by everything else, and the binary grows by a page: `bon` is a
+proc-macro, so what reaches the binary is the code it wrote, and that code is
+thin.
+
+The absolute binary figures are what [validation.md](validation.md#what-it-costs)
+measures in full: a fifth of those bytes is the regex engine the document's
+rules run on, and it is there in both columns.
 
 None of it reaches a build that leaves the feature off. The dependencies are
 optional, so they are not resolved, not downloaded and not compiled.
