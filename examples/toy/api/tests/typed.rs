@@ -213,7 +213,7 @@ fn a_nested_body_is_one_typed_argument() {
 }
 
 #[test]
-fn the_misspelled_upload_sends_the_vendors_own_media_type() {
+fn the_unassembled_upload_sends_the_documents_own_media_type() {
     let api = api();
     let request = api
         .upload_document(b"PDF-BYTES".to_vec())
@@ -222,7 +222,7 @@ fn the_misspelled_upload_sends_the_vendors_own_media_type() {
         .unwrap();
     assert_eq!(
         request.headers().get(http::header::CONTENT_TYPE).unwrap(),
-        "form-data"
+        "application/pdf"
     );
     assert_eq!(request.body(), b"PDF-BYTES");
 }

@@ -56,6 +56,13 @@ the generated type accepts by construction. No `format` is special-cased: a
 format names a rule and is not one, and a document that wants a rule states it
 in JSON Schema everything can read.
 
+**A shape the reduction cannot read is refused by name, never approximated.** A
+`pattern` no engine runs and a `content` key that is not a media type are both
+the document saying something this crate has no reading for, so both are a
+`LoadError` naming the operation and the thing that could not be read — guessing
+what the vendor meant is a correction, and a correction is the adopter's to
+write in an Overlay where a reviewer can see it.
+
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.

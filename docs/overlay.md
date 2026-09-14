@@ -195,6 +195,39 @@ An operation the vendor ships and documents nowhere:
             "200": { description: OK }
 ```
 
+A content type that is not one. A media type is `type/subtype`, so a body
+declared under the bare key `form-data` names none, and there is nothing to
+send that body under. `typed-openapi` refuses the document while it reduces it
+rather than putting the word on the wire as a `Content-Type`:
+
+```
+uploadAttachment: `form-data` is not a media type; an Overlay is where a document's content type is corrected
+```
+
+Which type the vendor meant is a judgement, which is why the crate leaves it to
+you. Two actions state it: `remove` takes the key out, `update` puts the one
+the vendor meant in its place.
+
+```yaml
+  - target: "$.paths['/attachments'].post.requestBody.content['form-data']"
+    description: The vendor means `multipart/form-data`.
+    remove: true
+
+  - target: $.paths['/attachments'].post.requestBody.content
+    description: Say it the way the wire spells it.
+    update:
+      multipart/form-data:
+        schema:
+          type: object
+          properties:
+            file: { type: string, format: binary }
+```
+
+This is the layer for it. The vendor's server reads a multipart body whatever
+its document says, so the repair is true of the API: a TypeScript generator, a
+mock server and a request validator all want it, and it is a correction worth
+handing back — the document is the thing that is wrong.
+
 A rule the vendor names and never states. There are two ways to name one
 without stating it, and the toy document has both.
 
@@ -227,6 +260,28 @@ carries an amount. Two actions, and the second is a tripwire:
 where the vendor put them and `total` keeps its place in `properties` —
 `--help` still reads in document order. What the action adds is the reference,
 and OpenAPI 3.0 reads a `$ref` in preference to whatever sits beside it.
+
+**Which is also what the reference costs: the field's own description.** What
+`--help` shows after the correction is the named schema's sentence, and that is
+the same sentence under every field sharing the rule. The 3.0 spelling that
+keeps both puts the reference inside an `allOf` of one element and the sentence
+outside it, where nothing overrides it:
+
+```yaml
+total:
+  allOf:
+    - $ref: "#/components/schemas/Money"
+  description: The gross total of this voucher.
+```
+
+`typed-openapi` reads a single-element `allOf` as the schema it wraps, so the
+rule still reaches `--total` and the field keeps its own words; a field that
+says nothing of its own takes the named schema's. The wrapper has to be the
+whole of the field's schema — a `type` or `format` left beside the `allOf`
+makes the node a composition of a different kind, and not a flag at all — so an
+Overlay writing this shape over a typed field removes the property and adds it
+back rather than merging into it. An `allOf` of two schemas is a real
+composition and is no flag either.
 
 The other way to name a rule without stating it is prose. `Voucher.currency` is
 `type: string` described as "ISO 4217 code" — a sentence a person can follow and

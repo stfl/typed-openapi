@@ -112,7 +112,7 @@ pub const CORRECTIONS: &[Correction] = &[
         op: "sendVoucherByEmail",
         gates: &["email"],
     },
-    // Nothing is skipped. Both uploads work — the misspelled `form-data` one
-    // through `--raw-body`, the correctly spelled one through `--file`/`--field`
-    // — so there is no operation this crate refuses to offer.
+    // Nothing is skipped. Both uploads work — the `application/pdf` one
+    // through `--raw-body`, the `multipart/form-data` one through
+    // `--file`/`--field` — so there is no operation this crate refuses to offer.
 ];

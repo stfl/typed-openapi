@@ -118,9 +118,11 @@ fn every_body_is_exactly_one_flag_set() {
         body("createContact"),
         Body::JsonWhole { required: true }
     ));
+    // A media type nothing here assembles: the bytes go through `--raw-body`
+    // under the document's own `Content-Type`.
     assert!(matches!(
         body("uploadDocument"),
-        Body::Opaque { ref media_type, .. } if media_type == "form-data"
+        Body::Opaque { ref media_type, .. } if media_type == "application/pdf"
     ));
     assert!(matches!(
         body("uploadDocumentMultipart"),
@@ -330,6 +332,192 @@ fn a_pattern_no_engine_can_read_is_refused_while_the_document_is_reduced() {
         error.to_string(),
         "listVouchers: `since`: `[unterminated` is not a regular expression: Unbalanced bracket"
     );
+}
+
+/// One operation with a body, under whatever `content` key is handed in.
+fn upload(content_key: &str) -> String {
+    synthetic(&format!(
+        "  /documents:\n\
+         \x20   post:\n\
+         \x20     operationId: uploadDocument\n\
+         \x20     requestBody:\n\
+         \x20       required: true\n\
+         \x20       content:\n\
+         \x20         '{content_key}':\n\
+         \x20           schema: {{ type: string, format: binary }}\n\
+         \x20     responses: {{ \"201\": {{ description: Created }} }}\n"
+    ))
+}
+
+/// A `content` key with no `/` in it names no media type, so there is nothing
+/// to send the body under: carrying it would put a `Content-Type` on the wire
+/// that no server parses. Which type the vendor meant is a judgement, and the
+/// refusal is what leaves that judgement to an adopter writing an Overlay a
+/// reviewer can read.
+#[test]
+fn a_content_key_that_is_not_a_media_type_is_refused_while_the_document_is_reduced() {
+    // The way out the message names: `remove` takes the key out, `update` puts
+    // the one the vendor meant in its place.
+    const REPAIR: &str = "overlay: 1.1.0\n\
+         info: { title: t, version: \"1\" }\n\
+         actions:\n\
+         \x20 - target: \"$.paths['/documents'].post.requestBody.content['form-data']\"\n\
+         \x20   description: The vendor means `multipart/form-data`.\n\
+         \x20   remove: true\n\
+         \x20 - target: $.paths['/documents'].post.requestBody.content\n\
+         \x20   description: Say it the way the wire spells it.\n\
+         \x20   update:\n\
+         \x20     multipart/form-data:\n\
+         \x20       schema: { type: object, properties: { file: { type: string } } }\n";
+
+    let error =
+        Document::load(&upload("form-data"), &[]).expect_err("`form-data` names no media type");
+    assert_eq!(
+        error.to_string(),
+        "uploadDocument: `form-data` is not a media type; \
+         an Overlay is where a document's content type is corrected"
+    );
+
+    let repaired = Document::load(&upload("form-data"), &[REPAIR]).expect("the Overlay repairs it");
+    assert!(matches!(
+        repaired
+            .get("uploadDocument")
+            .expect("the operation")
+            .body(),
+        Body::Multipart { .. }
+    ));
+}
+
+/// What `Opaque` is for, and what the refusal above must not swallow: a media
+/// type this crate cannot assemble is still a media type, so the body goes
+/// through `--raw-body` under the document's own spelling of it.
+#[test]
+fn a_media_type_this_crate_cannot_assemble_is_carried_rather_than_refused() {
+    let body = |key: &str| {
+        Document::load(&upload(key), &[])
+            .unwrap_or_else(|error| panic!("{key}: {error}"))
+            .get("uploadDocument")
+            .expect("the operation")
+            .body()
+            .clone()
+    };
+    assert!(matches!(
+        body("application/pdf"),
+        Body::Opaque { ref media_type, .. } if media_type == "application/pdf"
+    ));
+    // The parameters travel too: they are part of the `Content-Type` the
+    // document asks for.
+    assert!(matches!(
+        body("text/csv; charset=utf-8"),
+        Body::Opaque { ref media_type, .. } if media_type == "text/csv; charset=utf-8"
+    ));
+    assert!(matches!(
+        body("application/x-www-form-urlencoded"),
+        Body::Opaque { .. }
+    ));
+}
+
+/// One JSON body whose properties are handed in, over a named schema stating a
+/// rule: the route `docs/overlay.md` recommends, written out for both spellings
+/// OpenAPI 3.0 offers. Every property line is indented to sit under
+/// `properties:`.
+fn pointing(properties: &str) -> String {
+    format!(
+        "openapi: 3.0.3\n\
+         info: {{ title: t, version: \"1\" }}\n\
+         servers: [{{ url: 'http://localhost:9999' }}]\n\
+         paths:\n\
+         \x20 /notes:\n\
+         \x20   post:\n\
+         \x20     operationId: createNote\n\
+         \x20     requestBody:\n\
+         \x20       required: true\n\
+         \x20       content:\n\
+         \x20         application/json:\n\
+         \x20           schema:\n\
+         \x20             type: object\n\
+         \x20             properties:\n\
+         {properties}\
+         \x20     responses: {{ \"201\": {{ description: Created }} }}\n\
+         components:\n\
+         \x20 schemas:\n\
+         \x20   Day:\n\
+         \x20     type: string\n\
+         \x20     description: A calendar day.\n\
+         \x20     pattern: '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$'\n"
+    )
+}
+
+/// A `$ref` erases everything written beside it, so the only way a 3.0 document
+/// names a rule *and* keeps a sentence about the field pointing at it is to
+/// wrap the reference in an `allOf` of one element. The wrapper composes
+/// nothing, so it is read as the element it wraps: the rule reaches the flag,
+/// and the field keeps its own words.
+#[test]
+fn a_single_element_all_of_is_read_as_the_schema_it_wraps() {
+    let doc = Document::load(
+        &pointing(
+            "\x20               booked:\n\
+             \x20                 allOf: [{ $ref: '#/components/schemas/Day' }]\n\
+             \x20                 description: The day this note is booked under.\n\
+             \x20               due:\n\
+             \x20                 allOf: [{ $ref: '#/components/schemas/Day' }]\n",
+        ),
+        &[],
+    )
+    .expect("a document");
+    let Body::JsonFields(fields) = doc.get("createNote").unwrap().body() else {
+        panic!("both properties are scalars, so both are flags");
+    };
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|f| f.name() == name)
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+
+    // The rule the named schema states arrives through the wrapper.
+    assert_eq!(
+        field("booked").scalar().note().as_deref(),
+        Some(r"matches ^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+    );
+    assert!(field("booked").scalar().parse("2026-09-14").is_ok());
+    assert!(field("booked").scalar().parse("14.09.2026").is_err());
+
+    // The sentence about this field, which a bare `$ref` would have erased.
+    assert_eq!(
+        field("booked").description(),
+        Some("The day this note is booked under.")
+    );
+    // And the named schema's, for the field that says nothing of its own.
+    assert_eq!(field("due").description(), Some("A calendar day."));
+}
+
+/// An `allOf` that is more than a wrapper composes schemas, and a composition
+/// is not one value: the whole body goes through `--json-body` rather than a
+/// flag standing for something the request builder would have to invent. Two
+/// schemas is one way to be more than a wrapper; a keyword of the node's own
+/// beside the `allOf` is the other.
+#[test]
+fn an_all_of_that_is_more_than_a_wrapper_is_not_a_scalar() {
+    let whole = |properties: &str| {
+        let doc = Document::load(&pointing(properties), &[]).expect("a document");
+        matches!(
+            doc.get("createNote").expect("createNote").body(),
+            Body::JsonWhole { required: true }
+        )
+    };
+    assert!(whole(
+        "\x20               booked:\n\
+         \x20                 allOf:\n\
+         \x20                   - { $ref: '#/components/schemas/Day' }\n\
+         \x20                   - { type: string, minLength: 1 }\n"
+    ));
+    assert!(whole(
+        "\x20               booked:\n\
+         \x20                 type: string\n\
+         \x20                 allOf: [{ $ref: '#/components/schemas/Day' }]\n"
+    ));
 }
 
 /// The two doors onto one reduction. A bless step writes the blob, a binary

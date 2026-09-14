@@ -163,24 +163,21 @@ paths:
   /documents:
     post:
       operationId: uploadDocument
-      summary: Upload a document (vendor misspells the media type)
+      summary: Upload a document as a PDF
       requestBody:
         required: true
         content:
-          form-data:
+          application/pdf:
             schema:
-              type: object
-              properties:
-                file:
-                  type: string
-                  format: binary
+              type: string
+              format: binary
       responses:
         '201':
           description: Created
   /documents-multipart:
     post:
       operationId: uploadDocumentMultipart
-      summary: Upload a document (correctly spelled media type)
+      summary: Upload a document as multipart parts
       requestBody:
         required: true
         content:
