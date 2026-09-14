@@ -26,7 +26,9 @@ use crate::names::{CommandName, renamed};
 use crate::names::{Grouping, NameError, Namespace, kebab};
 use crate::scalar::Scalar;
 #[cfg(feature = "document")]
-use crate::schema::{RefError, is_json, is_multipart, resolve, resolve_schema, scalar_of};
+use crate::schema::{
+    RefError, is_json, is_media_type, is_multipart, resolve, resolve_schema, scalar_of,
+};
 
 /// The three extensions this crate reads, all of them an adopter's say over
 /// something the document alone cannot settle. An Overlay is where they are
@@ -139,7 +141,9 @@ pub enum Body {
     /// nobody.
     Multipart { names: Vec<String>, required: bool },
     /// A media type this CLI does not assemble. `--raw-body FILE` sends the
-    /// bytes verbatim under this `Content-Type`.
+    /// bytes verbatim under this `Content-Type` — and a media type is what it
+    /// is, because a `content` key that is not one is refused while the
+    /// document is reduced rather than carried here.
     Opaque { media_type: String, required: bool },
 }
 
@@ -204,6 +208,15 @@ pub enum LoadError {
         name: String,
         reason: &'static str,
     },
+    /// A `requestBody` whose `content` key names no media type — `form-data`
+    /// where `multipart/form-data` was meant. Refused while the document is
+    /// reduced, because the alternative is a request sent under a
+    /// `Content-Type` no server can read.
+    #[error(
+        "{op}: `{media_type}` is not a media type; \
+         an Overlay is where a document's content type is corrected"
+    )]
+    MediaType { op: String, media_type: String },
     /// A rule the document states that cannot be run — a `pattern` no regex
     /// engine here reads. Refused while the document is reduced, because a rule
     /// that cannot run is one every value would otherwise pass.
@@ -741,7 +754,7 @@ impl Body {
         )?;
         let required = body.required;
         // The JSON entry if the document offers one, else whatever it offers
-        // first: a vendor who misspells `multipart/form-data` lands here.
+        // first.
         let entry = body
             .content
             .iter()
@@ -750,6 +763,15 @@ impl Body {
         let Some((media_type, media)) = entry else {
             return Ok(Self::None);
         };
+        // The key this operation would be sent under, and only that one: a key
+        // beside it that nothing here ever reads is the vendor's business, and
+        // refusing over it would refuse documents this crate serves correctly.
+        if !is_media_type(media_type) {
+            return Err(LoadError::MediaType {
+                op: id.to_owned(),
+                media_type: media_type.clone(),
+            });
+        }
         if is_multipart(media_type) {
             return Ok(Self::Multipart {
                 names: part_names(media, components),

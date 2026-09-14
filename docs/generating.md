@@ -251,6 +251,11 @@ Three things are worth knowing:
   becomes `serde_json::Value`, because there was no name to generate a type
   under. `requestBody` `$ref`s are not followed, and only
   `#/components/schemas/` references are.
+- **A `content` key must be a media type.** A request body declared under a key
+  with no `type/subtype` in it — `form-data` where `multipart/form-data` was
+  meant — is a `LoadError` naming the operation and the key, rather than bytes
+  sent under a `Content-Type` no server reads. The repair is an Overlay action,
+  and [overlay.md](overlay.md#1-plain-corrections) writes one out.
 - **Parameters must be scalars.** A parameter declared with `content` rather
   than `schema`, or one whose schema is an object or an array, is a
   `GenerateError::Unsupported` rather than a guess.

@@ -156,6 +156,12 @@ partly mounted: `in: cookie`, a parameter described by `content` instead of
 `schema`, and a parameter whose schema is not one of the six scalar kinds each
 produce a `LoadError::Parameter` when the document is read.
 
+A body is refused the same way when its `content` key is not a media type at
+all — `form-data` where `multipart/form-data` was meant is a
+`LoadError::MediaType`, not a `--raw-body` sent under a `Content-Type` no server
+parses. [docs/overlay.md](overlay.md#1-plain-corrections) has the action that
+repairs one.
+
 ### Per-field flags are merged over `--json-body`
 
 `--json-body` is the base document and the per-field flags are applied on top,

@@ -125,6 +125,39 @@ fn limit<T>(value: Option<T>, exclusive: bool) -> Option<Limit<T>> {
     })
 }
 
+/// Whether this is a media type at all: `type/subtype`, with optional
+/// parameters after a `;`.
+///
+/// The question every other one here presumes. A `content` key with no `/` in
+/// it names nothing a server can read, so a body sent under it cannot arrive —
+/// which makes it a shape to refuse rather than one to carry.
+///
+/// Only the essence is held to a grammar, and it is RFC 9110's own: two
+/// non-empty `token`s either side of one `/`. That is deliberately the whole
+/// of the rule. The parameters after the `;` are not checked, because a
+/// parameter value may be a quoted string carrying a `;` or a `/`, and a rule
+/// strict enough to judge one would refuse bodies servers accept — the defect
+/// this question exists to catch is a key that was never a media type, not a
+/// parameter spelled unusually. The token rule is the wire's, not a register
+/// of types this crate knows: `application/x-www-form-urlencoded`,
+/// `application/vnd.api+json` and every vendor type anyone coins pass it.
+#[must_use]
+pub fn is_media_type(media_type: &str) -> bool {
+    essence(media_type)
+        .split_once('/')
+        .is_some_and(|(ty, subtype)| is_token(ty) && is_token(subtype))
+}
+
+/// RFC 9110's `token`: one or more of the characters a field value carries
+/// unquoted. `/` is not one of them, which is what makes the split above the
+/// whole of the parse.
+fn is_token(word: &str) -> bool {
+    !word.is_empty()
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+}
+
 /// `application/json`, `application/merge-patch+json`, and anything with
 /// parameters after the essence.
 #[must_use]
@@ -150,6 +183,32 @@ fn essence(media_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The grammar has to be wide enough to admit everything a server reads
+    /// and narrow enough to catch a key that names no type at all. The first
+    /// half is the one worth guarding: a rule that turned away
+    /// `application/x-www-form-urlencoded` would be worse than the defect.
+    #[test]
+    fn a_media_type_is_a_type_and_a_subtype_and_a_bare_word_is_neither() {
+        assert!(is_media_type("application/pdf"));
+        assert!(is_media_type("text/csv; charset=utf-8"));
+        assert!(is_media_type("application/vnd.api+json"));
+        assert!(is_media_type("multipart/form-data; boundary=x"));
+        assert!(is_media_type("application/x-www-form-urlencoded"));
+        // A parameter is the vendor's to spell, and is read no further than
+        // the `;` that starts it.
+        assert!(is_media_type(r#"multipart/form-data; boundary="a/b;c""#));
+
+        // The vendor's misspelling: one word, and a word is not a type over a
+        // subtype.
+        assert!(!is_media_type("form-data"));
+        assert!(!is_media_type(""));
+        assert!(!is_media_type("application/"));
+        assert!(!is_media_type("/json"));
+        assert!(!is_media_type("application/ld/json"));
+        // A space is not a `token` character, so neither of these is one type.
+        assert!(!is_media_type("application/json charset=utf-8"));
+    }
 
     #[test]
     fn json_is_recognised_through_suffixes_and_parameters() {

@@ -239,17 +239,17 @@ impl Api {
             Values::new().json(crate::to_json(body)?),
         )
     }
-    ///Upload a document (vendor misspells the media type)
+    ///Upload a document as a PDF
     ///
     ///POST /documents
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     ///
-    ///`body` is sent verbatim under the document's own `form-data`, which this crate does not assemble.
+    ///`body` is sent verbatim under the document's own `application/pdf`, which this crate does not assemble.
     pub fn upload_document(&self, body: Vec<u8>) -> Result<Call<'_, NoContent>, Error> {
         self.call(OperationId::UploadDocument, Values::new().raw(body))
     }
-    ///Upload a document (correctly spelled media type)
+    ///Upload a document as multipart parts
     ///
     ///POST /documents-multipart
     ///

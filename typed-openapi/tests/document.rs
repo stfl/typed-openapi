@@ -67,9 +67,11 @@ fn every_body_is_exactly_one_flag_set() {
         body("createContact"),
         Body::JsonWhole { required: true }
     ));
+    // A media type nothing here assembles: the bytes go through `--raw-body`
+    // under the document's own `Content-Type`.
     assert!(matches!(
         body("uploadDocument"),
-        Body::Opaque { ref media_type, .. } if media_type == "form-data"
+        Body::Opaque { ref media_type, .. } if media_type == "application/pdf"
     ));
     assert!(matches!(
         body("uploadDocumentMultipart"),
@@ -279,6 +281,89 @@ fn a_pattern_no_engine_can_read_is_refused_while_the_document_is_reduced() {
         error.to_string(),
         "listVouchers: `since`: `[unterminated` is not a regular expression: Unbalanced bracket"
     );
+}
+
+/// One operation with a body, under whatever `content` key is handed in.
+fn upload(content_key: &str) -> String {
+    synthetic(&format!(
+        "  /documents:\n\
+         \x20   post:\n\
+         \x20     operationId: uploadDocument\n\
+         \x20     requestBody:\n\
+         \x20       required: true\n\
+         \x20       content:\n\
+         \x20         '{content_key}':\n\
+         \x20           schema: {{ type: string, format: binary }}\n\
+         \x20     responses: {{ \"201\": {{ description: Created }} }}\n"
+    ))
+}
+
+/// A `content` key with no `/` in it names no media type, so there is nothing
+/// to send the body under: carrying it would put a `Content-Type` on the wire
+/// that no server parses. Which type the vendor meant is a judgement, and the
+/// refusal is what leaves that judgement to an adopter writing an Overlay a
+/// reviewer can read.
+#[test]
+fn a_content_key_that_is_not_a_media_type_is_refused_while_the_document_is_reduced() {
+    // The way out the message names: `remove` takes the key out, `update` puts
+    // the one the vendor meant in its place.
+    const REPAIR: &str = "overlay: 1.1.0\n\
+         info: { title: t, version: \"1\" }\n\
+         actions:\n\
+         \x20 - target: \"$.paths['/documents'].post.requestBody.content['form-data']\"\n\
+         \x20   description: The vendor means `multipart/form-data`.\n\
+         \x20   remove: true\n\
+         \x20 - target: $.paths['/documents'].post.requestBody.content\n\
+         \x20   description: Say it the way the wire spells it.\n\
+         \x20   update:\n\
+         \x20     multipart/form-data:\n\
+         \x20       schema: { type: object, properties: { file: { type: string } } }\n";
+
+    let error =
+        Document::load(&upload("form-data"), &[]).expect_err("`form-data` names no media type");
+    assert_eq!(
+        error.to_string(),
+        "uploadDocument: `form-data` is not a media type; \
+         an Overlay is where a document's content type is corrected"
+    );
+
+    let repaired = Document::load(&upload("form-data"), &[REPAIR]).expect("the Overlay repairs it");
+    assert!(matches!(
+        repaired
+            .get("uploadDocument")
+            .expect("the operation")
+            .body(),
+        Body::Multipart { .. }
+    ));
+}
+
+/// What `Opaque` is for, and what the refusal above must not swallow: a media
+/// type this crate cannot assemble is still a media type, so the body goes
+/// through `--raw-body` under the document's own spelling of it.
+#[test]
+fn a_media_type_this_crate_cannot_assemble_is_carried_rather_than_refused() {
+    let body = |key: &str| {
+        Document::load(&upload(key), &[])
+            .unwrap_or_else(|error| panic!("{key}: {error}"))
+            .get("uploadDocument")
+            .expect("the operation")
+            .body()
+            .clone()
+    };
+    assert!(matches!(
+        body("application/pdf"),
+        Body::Opaque { ref media_type, .. } if media_type == "application/pdf"
+    ));
+    // The parameters travel too: they are part of the `Content-Type` the
+    // document asks for.
+    assert!(matches!(
+        body("text/csv; charset=utf-8"),
+        Body::Opaque { ref media_type, .. } if media_type == "text/csv; charset=utf-8"
+    ));
+    assert!(matches!(
+        body("application/x-www-form-urlencoded"),
+        Body::Opaque { .. }
+    ));
 }
 
 /// The two doors onto one reduction. A bless step writes the blob, a binary

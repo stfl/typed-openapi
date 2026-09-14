@@ -86,7 +86,7 @@ third layer this adoption has no need of.
 | returns an `internal_ref` it never documented | an `update` adding the property | a struct field and a `--internal-ref` flag |
 | ships `archiveVoucher` and documents it nowhere | an `update` adding the path | a wrapper and a subcommand, for no Rust at all |
 | serves a `GET` that stores a PDF | `x-cli-writes: true`, in `spec/cli.yaml` | `vouchers render` is behind `--commit` |
-| misspells a multipart media type | left alone, and both uploads work | `--raw-body` for one, `--file` / `--field` for the other |
+| serves one upload under a media type nothing here assembles | left alone, and both uploads work | `--raw-body` for the `application/pdf` one, `--file` / `--field` for the multipart one |
 
 Three of those actions are **tripwires** — two in the vendor layer, one in the
 CLI layer: their JSONPath states what the vendor currently says, so under

@@ -195,6 +195,39 @@ An operation the vendor ships and documents nowhere:
             "200": { description: OK }
 ```
 
+A content type that is not one. A media type is `type/subtype`, so a body
+declared under the bare key `form-data` names none, and there is nothing to
+send that body under. `typed-openapi` refuses the document while it reduces it
+rather than putting the word on the wire as a `Content-Type`:
+
+```
+uploadAttachment: `form-data` is not a media type; an Overlay is where a document's content type is corrected
+```
+
+Which type the vendor meant is a judgement, which is why the crate leaves it to
+you. Two actions state it: `remove` takes the key out, `update` puts the one
+the vendor meant in its place.
+
+```yaml
+  - target: "$.paths['/attachments'].post.requestBody.content['form-data']"
+    description: The vendor means `multipart/form-data`.
+    remove: true
+
+  - target: $.paths['/attachments'].post.requestBody.content
+    description: Say it the way the wire spells it.
+    update:
+      multipart/form-data:
+        schema:
+          type: object
+          properties:
+            file: { type: string, format: binary }
+```
+
+This is the layer for it. The vendor's server reads a multipart body whatever
+its document says, so the repair is true of the API: a TypeScript generator, a
+mock server and a request validator all want it, and it is a correction worth
+handing back — the document is the thing that is wrong.
+
 A rule the vendor names and never states. There are two ways to name one
 without stating it, and the toy document has both.
 
