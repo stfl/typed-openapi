@@ -10,9 +10,9 @@ when a correction later stops fitting is [docs/drift.md](drift.md).
 - [Action kinds](#action-kinds)
 - [The tripwire form](#the-tripwire-form)
 - [Layers](#layers)
-  - [The vendor layer](#the-vendor-layer)
-  - [The type layer](#the-type-layer)
-  - [The CLI layer](#the-cli-layer)
+  - [1. Plain corrections](#1-plain-corrections)
+  - [2. Type validations and newtypes](#2-type-validations-and-newtypes)
+  - [3. Grouping and the command line](#3-grouping-and-the-command-line)
 - [CORRECTIONS, and the test that holds it](#corrections-and-the-test-that-holds-it)
 
 ## Why an Overlay
@@ -60,7 +60,8 @@ An action is a `target` — an RFC 9535 JSONPath — plus exactly one of three
 verbs.
 
 **`update`** merges a value into every node the target selects. All four actions
-in the example adoption are updates; the one above adds a property to a schema.
+the example adoption commits are updates; the one above adds a property to a
+schema.
 
 **`remove: true`** deletes the selected nodes from their container. This is how
 an operation leaves the API — drop it from `paths` and it has no wrapper, no
@@ -138,68 +139,149 @@ Settings::new("spec/toy.yaml")
     .write_to("api-generated")?;
 ```
 
-The library reads an ordered list of standard Overlay documents and nothing
-more. It has no idea what any layer is *for*, and there is no enum, no schema
-and no naming rule to satisfy. What follows is a convention worth keeping, and
-the failure message is the practical argument for it: a tripwire that stops the
-bless names the file it is in, so splitting by purpose means the message points
-at the person whose problem it is.
+**The library reads an ordered list of standard Overlay documents and nothing
+else.** No layer names, no enum, no schema, and no check that a given action
+belongs in a given file. Everything below is a recommendation for how to use
+it, kept by the example's file names and by one test — not a rule the crate
+enforces.
 
-Three kinds of thing end up in a layer. The example adoption commits two files,
-because its one type rule is a single line and rides along with the vendor
-layer; an adoption with a dozen of them wants the third file.
+The split is by **audience**, and the question that sorts an action is: *who
+else could use this?*
 
-### The vendor layer
+| layer | holds | audience |
+|---|---|---|
+| `corrections.yaml` | what is true of the API and the vendor got wrong or left out | anyone — the vendor, a TypeScript generator, a mock server, a request validator |
+| `client.yaml` | what is true of *your* client but not of the API | you, in any language |
+| `cli.yaml` | `x-cli-writes`, `x-cli-group`, `x-cli-command` | the command-line half of this crate |
 
-**What the vendor got wrong** — an undocumented field, an operation the vendor
-ships and never documented, a `required` list that does not match what the
-server actually demands.
-[`examples/toy/spec/corrections.yaml`](../examples/toy/spec/corrections.yaml)
-is this layer.
+Later layers may say things earlier ones must not, so the order is not a
+preference. The practical argument is also small and immediate: a tripwire that
+stops the bless names the file it is in, so a failure points at whoever owns
+that layer.
 
-Applying it alone yields the document the vendor *should* have shipped. That is
-worth having on its own: it can go back to the vendor, or into a generator for
-another language, or to a mock server, and it says nothing about how you
-happen to consume the API. An `x-cli-` marker in it would spoil exactly that,
-which is why `api/tests/corrections.rs` asserts there is none.
+The example adoption commits two of the three. Writing the third with nothing
+in it is not possible — an Overlay with no actions is not a valid Overlay 1.1
+document, and an empty file is a worse artefact than none — so what a
+`client.yaml` action looks like is written out below instead.
 
-### The type layer
+### 1. Plain corrections
 
-**Formats and validation rules** — what the vendor declares a format for and
-never says the rule for. The money `pattern` above is one; it lives in the
-vendor layer in the example only because there is one of it.
+**What is true of the API.** The vendor's document is wrong or silent, and a
+consumer who never heard of this crate would want the correction too.
 
-This layer is what [`Settings::replace`](generating.md#settingsreplaceformat-rust_type---settings)
-keys on. Give `Voucher.currency` a `format: currency` and pair it with
-`.replace("currency", "api_types::Currency")`, and the generated `Voucher.currency`
-is your own newtype rather than a `String` — parsed once, at the boundary,
-with no mirror type and no conversion:
+A property the vendor returns and accepts and never documented:
 
 ```yaml
+  - target: $.components.schemas.Voucher.properties
+    description: Add the undocumented `internal_ref` field.
+    update:
+      internal_ref:
+        type: string
+        description: Vendor's internal bookkeeping reference (undocumented)
+```
+
+An operation the vendor ships and documents nowhere:
+
+```yaml
+  - target: $.paths
+    description: Add the undocumented `archiveVoucher` operation.
+    update:
+      /vouchers/{id}/archive:
+        post:
+          operationId: archiveVoucher
+          summary: Archive a voucher (undocumented; vendor ships it)
+          responses:
+            "200": { description: OK }
+```
+
+A rule the vendor declares a `format` for and never states. `pattern` is plain
+JSON Schema, so this belongs here and not in a client layer: a TypeScript
+generator honours it and a request validator honours it, and leaving it out
+would hand the vendor back a document that still does not say what an amount
+is.
+
+```yaml
+  - target: "$.components.schemas.Voucher[?(@.total.format == 'money')].total"
+    description: Say what an amount looks like; the vendor declares the format and not the rule.
+    update:
+      pattern: ^-?[0-9]+(\.[0-9]{1,2})?$
+```
+
+**Nothing in this layer may be specific to this crate.** That is what makes the
+layer worth keeping separate: this file plus the vendor's document *is* the
+document the vendor should have shipped, and any Overlay 1.1 implementation
+will produce it — the file is not special to `typed-openapi`. With this crate:
+
+```rust,ignore
+let vendor = fs::read_to_string("spec/toy.yaml")?;
+let corrections = fs::read_to_string("spec/corrections.yaml")?;
+let corrected = overlay::apply(overlay::parse(&vendor)?, &corrections)?;
+print!("{}", serde_yaml_ng::to_string(&corrected)?);
+```
+
+This repository does not commit that output. It is derived data with no reader
+here, and a committed file nothing reads is a file that rots. (Contrast
+`api-generated/spec/toy.overlaid.yaml`, which stays: it is embedded as
+`DOCUMENT` and `api/tests/typed.rs` holds the reduced blob to it. An in-repo
+consumer is what earns a generated file its place.)
+
+`api/tests/corrections.rs` asserts this layer carries no `x-cli-` key anywhere.
+The test is on the file a person edits, so it fails at the moment someone drops
+a CLI concern into the layer that is meant to be consumable by anyone.
+
+### 2. Type validations and newtypes
+
+**What is true of your client but not of the API.** The vendor is not wrong;
+you want something narrower, and only for yourself.
+
+The worked case is a newtype. `Voucher.currency` in
+[`examples/toy/spec/toy.yaml`](../examples/toy/spec/toy.yaml) is `type: string`
+described as "ISO 4217 code", with no `format` — which is a fair description of
+the API. If you want it to be a `Currency` in Rust rather than a `String`, tag
+it with a format of your own and hook the Rust type onto that tag. Both halves
+are needed and neither makes sense alone:
+
+```yaml
+# spec/client.yaml
   - target: "$.components.schemas.Voucher[?(@.currency.type == 'string')].currency"
-    description: The vendor types an ISO 4217 code as a bare string.
+    description: A currency code is a Currency, not a string.
     update:
       format: currency
       pattern: ^[A-Z]{3}$
 ```
 
-**What this layer does not buy you is CLI-side enforcement of the `pattern`.**
-The Rust type is enforced by Rust: `Currency::from_str` runs wherever a
-`Voucher` is parsed or constructed. But the command line's own value check —
-[`Scalar::parse`](../typed-openapi/src/scalar.rs) — enforces only `format:
-money` and enumerations. An arbitrary ECMA-262 `pattern` reaches the help line
-and nothing else, because enforcing one would cost a regex engine in every
-shipped binary. So `--currency GBP` and `--currency gbp` both reach
-`Invocation::new`; the second is refused later, by the generated type, on the
-`toy raw` path that vets bodies — and not at all on a `dispatch`-only CLI. If a
-value must be refused at the parser, the document's own `enum` is the tool that
-does it.
+```rust,ignore
+Settings::new("spec/toy.yaml")
+    .overlay("spec/corrections.yaml")
+    .overlay("spec/client.yaml")
+    .overlay("spec/cli.yaml")
+    .replace("currency", "api_types::Currency")   // the other half
+    .write_to("api-generated")?;
+```
 
-### The CLI layer
+The other kind is a **narrowing**: the API accepts five statuses and your
+client only ever deals in three, so you shrink the `enum`. That is a statement
+about your client, and it must never reach `corrections.yaml` — a narrowing
+handed back to the vendor is a bug report about an API that is behaving
+correctly.
 
-**What only a command line needs** — the three `x-cli-` extensions, under the
-`x-` prefix OpenAPI reserves for exactly this.
-[`examples/toy/spec/cli.yaml`](../examples/toy/spec/cli.yaml) is this layer.
+**What this layer buys, and what it does not.** `replace` gives you the Rust
+type, and Rust enforces it: `Currency::from_str` runs wherever a `Voucher` is
+parsed or constructed. On the command line a `pattern` is documentation only.
+[`Scalar::parse`](../typed-openapi/src/scalar.rs) enforces `format: money` and
+enumerations and nothing else, because enforcing an arbitrary ECMA-262 pattern
+would cost a regex engine in every shipped binary. So `--currency gbp` reaches
+`Invocation::new`; it is refused afterwards by the generated type, on the
+`toy raw` path that vets bodies, and not at all on a `dispatch`-only CLI. When
+a value must be refused *at the parser*, the document's own `enum` is the tool
+that does it — which is the narrowing above, doing double duty.
+
+### 3. Grouping and the command line
+
+**What only this crate reads** — the three `x-cli-` extensions, under the `x-`
+prefix OpenAPI reserves for exactly this.
+[`examples/toy/spec/cli.yaml`](../examples/toy/spec/cli.yaml) is this layer,
+and it is last because nothing else has any use for what is in it.
 
 | marker | on | says |
 |---|---|---|

@@ -68,14 +68,16 @@ Every correction is a standard [OpenAPI Overlay][overlay] action, in one of two
 layers applied in order. [`spec/toy.yaml`](spec/toy.yaml) — the vendor's
 document — is never edited.
 
-| layer | holds | worth on its own |
-|---|---|---|
-| [`spec/corrections.yaml`](spec/corrections.yaml) | what the vendor got wrong | applied alone it yields the document the vendor should have shipped, which anything that reads OpenAPI can read |
-| [`spec/cli.yaml`](spec/cli.yaml) | what only a command line needs — the `x-cli-` markers | nothing outside this CLI |
-
-`api/tests/corrections.rs` asserts the first layer carries no `x-cli-` marker,
-because a marker in it would make it a document about this CLI rather than
-about the vendor's API.
+There are two files rather than one because they have different audiences.
+[`spec/corrections.yaml`](spec/corrections.yaml) holds what is true of the API
+and the vendor got wrong or left out, so applying it to the vendor's document
+with any Overlay tool yields the document the vendor should have shipped —
+useful to the vendor, to a generator for another language, or to a mock server.
+[`spec/cli.yaml`](spec/cli.yaml) holds the `x-cli-` markers, which only this
+crate reads. `api/tests/corrections.rs` asserts the first file carries no
+`x-cli-` key, because one there would quietly spoil that.
+[`../../docs/overlay.md`](../../docs/overlay.md) is the how-to, including the
+third layer this adoption has no need of.
 
 | the vendor | the correction | what it buys |
 |---|---|---|

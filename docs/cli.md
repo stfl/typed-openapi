@@ -58,7 +58,7 @@ A group holding one operation stays a group, so every operation is reachable as
 Two `x-cli-` markers on an operation overrule the rule: `x-cli-command`
 replaces the operation's own name, `x-cli-group` replaces its group. Both are
 written in an Overlay, like every other correction — see
-[overlay.md](overlay.md#the-cli-layer).
+[overlay.md](overlay.md#3-grouping-and-the-command-line).
 
 They are also the only way out of a collision. Two operations reducing to one
 `<group> <name>` is a `LoadError` at bless time, naming both `operationId`s:

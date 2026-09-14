@@ -105,9 +105,9 @@ blessed:
     #!/usr/bin/env bash
     set -euo pipefail
     just bless
-    if ! git diff --quiet -- examples/toy/api-generated; then
+    if ! git diff --quiet HEAD -- examples/toy/api-generated; then
         echo "bless changed committed output:" >&2
-        git --no-pager diff --stat -- examples/toy/api-generated >&2
+        git --no-pager diff --stat HEAD -- examples/toy/api-generated >&2
         exit 1
     fi
     echo "bless reproduces every committed artefact"
