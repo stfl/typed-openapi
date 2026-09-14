@@ -5,12 +5,12 @@ with every write behind a dry-run gate.
 
 What comes out is `api.get_voucher(5)?.send(&client)?` returning your own
 `Voucher`, and `toy get-voucher --id 5` on a command line nobody wrote. What
-goes in is the vendor's document plus an [OpenAPI Overlay][overlay] holding your
-corrections to it. This is not a typed model *of* an OpenAPI document — for
+goes in is the vendor's document plus an [OpenAPI Overlay 1.1][overlay] holding
+your corrections to it. This is not a typed model *of* an OpenAPI document — for
 that, use [`openapiv3`].
 
 ```console
-$ toy create-voucher --total 12.50 --currency EUR --status open
+$ toy create-voucher --total 12.50 --currency EUR --status open   # operations at the root
 POST /vouchers HTTP/1.1
 host: localhost:9999
 content-type: application/json
@@ -69,8 +69,10 @@ The generator ships inside this crate behind the `generate` feature, so your
 `xtask` is about twenty lines. See [docs/generating.md][gen].
 
 A vendor revision that moves something you corrected fails the bless step
-instead of silently overwriting the correction, and one that moves something you
-*use* fails the compiler. See [docs/drift.md][drift].
+instead of silently overwriting the correction, and one that moves or withdraws
+an operation or a field your code names fails the compiler. What is *not* caught
+— an operation the vendor adds, a field nobody destructures — is listed in
+[docs/drift.md][drift] beside what is.
 
 ## Features
 
@@ -131,7 +133,7 @@ recipes rather than a copy of them.
 
 Licensed under either of Apache-2.0 or MIT, at your option.
 
-[overlay]: https://spec.openapis.org/overlay/v1.0.0.html
+[overlay]: https://spec.openapis.org/overlay/v1.1.0.html
 [`openapiv3`]: https://docs.rs/openapiv3
 [gen]: https://github.com/stfl/typed-openapi/blob/main/docs/generating.md
 [drift]: https://github.com/stfl/typed-openapi/blob/main/docs/drift.md

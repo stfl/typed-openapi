@@ -113,4 +113,4 @@ Settings::new(adoption.join("spec/toy.yaml"), adoption.join("spec/overlay.yaml")
     .write_to(adoption.join("api-generated"))
 ```
 
-[overlay]: https://spec.openapis.org/overlay/v1.0.0.html
+[overlay]: https://spec.openapis.org/overlay/v1.1.0.html

@@ -38,6 +38,9 @@ jobs:
       # select, and proves the typed half of the example links no clap.
       - run: just features
       - run: just test
+      # Runs the generator and fails if it no longer reproduces what is
+      # committed. Nothing else in the gate executes the bless step.
+      - run: just blessed
       # `package` builds the crate from its own tarball, which is the only
       # check that it stands up outside this workspace.
       - run: just package

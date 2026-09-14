@@ -92,7 +92,25 @@ test:
     cargo test --workspace --doc
 
 # Everything CI runs, in the order CI runs it.
-gate: check features test package
+gate: check features test blessed package
+
+# The four artefacts under `api-generated` are committed, so the generator has
+# to be able to reproduce them. A diff here is either the vendor's document
+# moving or the generator's output changing — both worth looking at, and
+# neither should reach main unnoticed. Without this recipe nothing in the gate
+# runs the generator at all.
+
+# Regenerate, and fail if anything committed changed.
+blessed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just bless
+    if ! git diff --quiet -- examples/toy/api-generated; then
+        echo "bless changed committed output:" >&2
+        git --no-pager diff --stat -- examples/toy/api-generated >&2
+        exit 1
+    fi
+    echo "bless reproduces every committed artefact"
 
 # What crates.io will receive. `--list` is the cheap half — it fails on missing
 # metadata and prints the file set — and the build proves the crate stands up
