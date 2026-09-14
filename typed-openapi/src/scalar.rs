@@ -144,7 +144,7 @@ impl Scalar {
     /// up at a user's flag.
     pub fn runnable(&self) -> Result<(), ScalarError> {
         match self {
-            Self::Text(text) => text.regex().map(drop),
+            Self::Text(text) => text.pattern.as_deref().map(compiled).transpose().map(drop),
             Self::Integer(_) | Self::Number(_) | Self::Boolean | Self::Choice(_) => Ok(()),
         }
     }
@@ -198,28 +198,16 @@ impl Text {
                 format!("is longer than {most} characters"),
             ));
         }
+        let Some(pattern) = self.pattern.as_deref() else {
+            return Ok(());
+        };
         // JSON Schema's `pattern` is a search rather than a whole-string match,
         // so an unanchored pattern matches anywhere in the value. Anchoring it
         // here would refuse values the document allows.
-        match (&self.pattern, self.regex()?) {
-            (Some(pattern), Some(regex)) if regex.find(raw).is_none() => {
-                Err(ScalarError::rule(raw, format!("does not match {pattern}")))
-            }
-            _ => Ok(()),
+        if compiled(pattern)?.find(raw).is_none() {
+            return Err(ScalarError::rule(raw, format!("does not match {pattern}")));
         }
-    }
-
-    /// The document's `pattern`, compiled.
-    fn regex(&self) -> Result<Option<Regex>, ScalarError> {
-        self.pattern
-            .as_deref()
-            .map(|pattern| {
-                Regex::new(pattern).map_err(|error| ScalarError::Pattern {
-                    pattern: pattern.to_owned(),
-                    message: error.to_string(),
-                })
-            })
-            .transpose()
+        Ok(())
     }
 
     fn notes(&self) -> Vec<String> {
@@ -307,6 +295,14 @@ impl<T: Numeric> Limit<T> {
     }
 }
 
+/// One ECMA-262 pattern, ready to run.
+fn compiled(pattern: &str) -> Result<Regex, ScalarError> {
+    Regex::new(pattern).map_err(|error| ScalarError::Pattern {
+        pattern: pattern.to_owned(),
+        message: error.to_string(),
+    })
+}
+
 /// One argument as a number the document's rules admit.
 fn bounded<T: Numeric>(bounds: &Bounds<T>, raw: &str) -> Result<serde_json::Value, ScalarError> {
     let (value, json) = T::read(raw).ok_or_else(|| ScalarError::Kind {
@@ -321,7 +317,9 @@ fn bounded<T: Numeric>(bounds: &Bounds<T>, raw: &str) -> Result<serde_json::Valu
 ///
 /// A trait rather than two copies of [`Bounds`] and its rules: the comparisons
 /// are the same sentence in both, and only reading a value out of an argument
-/// and dividing by one differ.
+/// and dividing by one differ. It is public because [`Bounds`] is, and there is
+/// no third kind to implement it for — `i64` and `f64` are what OpenAPI's
+/// `integer` and `number` are.
 pub trait Numeric: Copy + PartialOrd + fmt::Display {
     /// What a refusal calls this kind.
     const KIND: &'static str;

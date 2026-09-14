@@ -93,17 +93,17 @@ name. [`tree::select`](cli.md#mounting-the-tree) is the seam for it, and
 [`examples/toy/cli/src/raw.rs`](../examples/toy/cli/src/raw.rs) is that check in
 nine lines.
 
-Two more things are read and not enforced: an `enum` on a numeric schema, and
-every keyword that describes a shape no flag carries — `minItems`,
-`minProperties` and the rest belong to bodies, which go through a file.
+Two things are not read at all: an `enum` on a numeric schema, and every
+keyword that describes a shape no flag carries — `minItems`, `minProperties`
+and the rest belong to bodies, which go through a file.
 
 ## What it costs
 
 `regress` is a dependency in every feature set, because a shipped binary
 enforces `pattern` and so does a generated newtype. Measured on this
 repository's `examples/toy`, sequentially on an idle machine, three repetitions
-per cell, median reported; the second column is the same example with the engine
-and the rule it runs taken out.
+per cell, median reported; the second column is the same example built with no
+regex engine linked at all.
 
 | | enforced | not enforced | the engine |
 |---|---|---|---|
