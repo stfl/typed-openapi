@@ -78,6 +78,14 @@ pub mod scalar;
 pub mod transport;
 pub mod values;
 
+/// `bon`, for generated code to name the builder macro through.
+///
+/// A generated `ops.rs` writes `#[bon(crate = ::typed_openapi::bon)]`, so the
+/// crate holding it turns the builder on with one feature and adds no
+/// dependency of its own — and the proc-macro version stays the one the
+/// generator emitted syntax for.
+#[cfg(feature = "builder")]
+pub use bon;
 pub use client::{Call, Client, NoContent};
 #[cfg(feature = "document")]
 pub use model::LoadError;

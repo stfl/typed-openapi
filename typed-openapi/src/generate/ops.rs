@@ -56,6 +56,10 @@ pub(super) fn emit(api: &OpenAPI, model: &Document, header: &str) -> Result<Stri
         #operation_id
         #inventory
 
+        #[cfg_attr(
+            feature = "builder",
+            ::typed_openapi::bon::bon(crate = ::typed_openapi::bon)
+        )]
         impl Api {
             #(#methods)*
         }
@@ -284,6 +288,7 @@ fn wrapper(
         #[doc = ""]
         #[doc = #gate]
         #(#notes)*
+        #[cfg_attr(feature = "builder", builder)]
         pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
             self.call(OperationId::#variant, Values::new() #(#builder)*)
         }

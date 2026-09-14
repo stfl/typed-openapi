@@ -155,12 +155,14 @@ pub const fn documented(id: &str, method: &str, path: &str) -> bool {
     }
     false
 }
+#[cfg_attr(feature = "builder", ::typed_openapi::bon::bon(crate = ::typed_openapi::bon))]
 impl Api {
     ///List vouchers
     ///
     ///GET /vouchers
     ///
     ///A read.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn list_vouchers(
         &self,
         status: Option<crate::types::VoucherStatus>,
@@ -176,6 +178,7 @@ impl Api {
     ///POST /vouchers
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn create_voucher(
         &self,
         body: &crate::types::Voucher,
@@ -190,6 +193,7 @@ impl Api {
     ///GET /vouchers/{id}
     ///
     ///A read.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn get_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::GetVoucher, Values::new().param("id", id))
     }
@@ -198,6 +202,7 @@ impl Api {
     ///PUT /vouchers/{id}
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn update_voucher(
         &self,
         id: i64,
@@ -213,6 +218,7 @@ impl Api {
     ///POST /vouchers/{id}/enshrine
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn enshrine_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::EnshrineVoucher, Values::new().param("id", id))
     }
@@ -221,6 +227,7 @@ impl Api {
     ///GET /vouchers/{id}/render
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn render_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::RenderVoucher, Values::new().param("id", id))
     }
@@ -229,6 +236,7 @@ impl Api {
     ///POST /contacts
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn create_contact(
         &self,
         body: &crate::types::Contact,
@@ -245,6 +253,7 @@ impl Api {
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     ///
     ///`body` is sent verbatim under the document's own `form-data`, which this crate does not assemble.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn upload_document(&self, body: Vec<u8>) -> Result<Call<'_, NoContent>, Error> {
         self.call(OperationId::UploadDocument, Values::new().raw(body))
     }
@@ -255,6 +264,7 @@ impl Api {
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     ///
     ///`parts` are assembled into a `multipart/form-data` body. The document declares: file.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn upload_document_multipart(
         &self,
         parts: Vec<Part>,
@@ -269,6 +279,7 @@ impl Api {
     ///POST /vouchers/{id}/archive
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    #[cfg_attr(feature = "builder", builder)]
     pub fn archive_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::ArchiveVoucher, Values::new().param("id", id))
     }

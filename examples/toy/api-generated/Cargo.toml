@@ -5,6 +5,19 @@ version.workspace = true
 publish = false
 description = "Everything the bless step writes: the corrected document, the reduced CLI model, the Rust types and one typed wrapper per operation."
 
+[features]
+# A named-argument builder on every generated wrapper: `api.update_voucher()
+# .id(5).body(&v).call()`, with a missing required argument a compile error.
+#
+# Off by default, and flipping it never regenerates: `src/ops.rs` carries the
+# attribute under `cfg_attr` in every build, so the committed file is the same
+# bytes either way and this feature is the whole difference. `bon` arrives
+# re-exported through `typed-openapi`, which is what keeps the proc-macro
+# version the one the generator emitted syntax for.
+#
+# What it costs to compile is in `docs/builders.md`.
+builder = ["typed-openapi/builder"]
+
 [dependencies]
 api-types = { path = "../api-types" }
 typed-openapi = { path = "../../../typed-openapi", default-features = false }

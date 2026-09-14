@@ -31,3 +31,52 @@ pub mod ops;
 pub mod types;
 
 pub use client::{Api, BodyError, Call, DOCUMENT, Error, MODEL, NoContent, to_json};
+
+/// The named-argument builder the `builder` feature puts on every generated
+/// wrapper.
+///
+/// It holds nothing; it is where the feature is documented and demonstrated,
+/// because the wrappers themselves live in a generated file that says nothing
+/// about style.
+///
+/// A wrapper with four arguments reads as four positional values at the call
+/// site, and two `i64`s in a row are a bug waiting to be written. With the
+/// feature on, every argument is named and every required one is enforced by
+/// the type system rather than by argument order.
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use api_generated::Api;
+/// use api_generated::types::{Voucher, VoucherStatus};
+///
+/// let api = Api::new()?;
+/// let voucher = Voucher {
+///     currency: "EUR".to_owned(),
+///     id: Some(5),
+///     internal_ref: None,
+///     status: VoucherStatus::Draft,
+///     total: "12.50".parse()?,
+/// };
+///
+/// let call = api.update_voucher().id(5).body(&voucher).call()?;
+/// assert_eq!(call.request()?.uri().path(), "/vouchers/5");
+/// # Ok(())
+/// # }
+/// ```
+///
+/// A required argument left out does not compile, so the builder cannot turn a
+/// four-argument call into a three-argument one that sends the wrong request:
+///
+/// ```compile_fail
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let api = api_generated::Api::new()?;
+/// let call = api.update_voucher().id(5).call()?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Turning the feature off costs nothing but the names: `src/ops.rs` carries
+/// the attribute under `cfg_attr` in every build, so the committed file is the
+/// same bytes either way and no regeneration is involved.
+#[cfg(feature = "builder")]
+pub mod builder {}

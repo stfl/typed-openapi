@@ -27,7 +27,9 @@ check:
 # A feature that adds or removes items has to be compiled in every combination
 # a consumer can ask for, because nothing else finds an item that only exists
 # in one of them. These are the combinations: the default, nothing, each
-# feature alone, and everything at once.
+# feature alone, and everything at once. The `builder` runs go further than a
+# compile: the example's demonstration of it is a pair of doctests that only
+# exist when the feature is on, so this is the only recipe that can run them.
 
 # Compile the library under every feature combination a consumer can select.
 features:
@@ -41,7 +43,29 @@ features:
     RUSTDOCFLAGS="-D warnings" cargo doc -p typed-openapi --no-deps --no-default-features
     cargo check -p cli --features reqwest-client
     cargo check -p api-generated --features builder
+    cargo test -p api-generated --features builder --doc
+    just bon-free
     just clap-free
+
+# `bon` is what the `builder` feature costs, so it must be absent without it.
+# `cargo tree -e normal` is the build a consumer gets; a proc-macro crate that
+# only a dev-dependency pulls in would not show here, and should not.
+
+# Prove `bon` reaches the generated crate only with the builder feature on.
+bon-free:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if cargo tree -p api-generated -e normal --prefix none | grep -q '^bon'; then
+        echo "bon reached api-generated without the builder feature:" >&2
+        cargo tree -p api-generated -e normal | grep -i bon >&2
+        exit 1
+    fi
+    cargo tree -p api-generated -e normal --features builder --prefix none \
+        | grep -q '^bon' || {
+        echo "bon is absent even with the builder feature on" >&2
+        exit 1
+    }
+    echo "bon reaches api-generated only with the builder feature"
 
 # The typed half of an adoption must link no argument parser: `api` takes the
 # library with `default-features = false`, so a clap in its tree is a
