@@ -95,7 +95,7 @@ an operation or a field your code names fails the compiler. What is *not* caught
 | `clap` | yes | `tree`: the command tree, and `ArgMatches` back to a sent request |
 | `document` | no | `Document::load`, the Overlay engine, the `$ref` resolver |
 | `generate` | no | the code generator a bless step calls. Implies `document` |
-| `builder` | no | a named-argument builder on the generated wrappers |
+| `builder` | no | a named-argument builder **beside** each generated wrapper |
 
 Each feature adds and removes whole items and never changes one, so a match that
 is exhaustive in one build is exhaustive in all of them.
