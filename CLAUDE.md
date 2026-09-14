@@ -1,7 +1,7 @@
 # Working on typed-openapi
 
 `typed-openapi/` is the published crate. `examples/toy/` is one worked adoption
-of it, five crates, all `publish = false`, built and tested with the rest so
+of it, four crates, all `publish = false`, built and tested with the rest so
 that the example cannot rot.
 
 Run `just gate` before saying anything is done. It is `check` (fmt, compile,
@@ -36,6 +36,17 @@ recommends and the example keeps — there is no enum, no schema and no naming
 rule in the library. `examples/toy/api/tests/corrections.rs` is what holds the
 example to its own convention.
 
+**Every rule the document states about a value is enforced, in one place.**
+`Scalar` carries what the schema said — `pattern`, `minLength`/`maxLength`, the
+bounds, `multipleOf` — and `Scalar::parse` is the only thing that checks any of
+them. A rule that reaches `--help` and not the parser is the defect this
+invariant exists to prevent, so `Scalar::note` and the refusal are one
+rendering. `pattern` runs on `regress`, the engine typify puts inside a
+generated newtype's `FromStr`, so a value the command line accepts is a value
+the generated type accepts by construction. No `format` is special-cased: a
+format names a rule and is not one, and a document that wants a rule states it
+in JSON Schema everything can read.
+
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
@@ -52,8 +63,8 @@ same match in every build.
 not turn a status code into an error: the body that came with a 4xx is what a
 caller needs.
 
-**The typed half of an adoption links no argument parser.** `api`, `api-types`
-and `api-generated` take the library with `default-features = false`.
+**The typed half of an adoption links no argument parser.** `api` and
+`api-generated` take the library with `default-features = false`.
 `just clap-free` is the check.
 
 **Generated files are never edited.** `examples/toy/api-generated/src/{types,ops}.rs`,

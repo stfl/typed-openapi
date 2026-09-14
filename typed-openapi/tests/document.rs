@@ -173,6 +173,114 @@ fn a_path_value_cannot_smuggle_a_segment_into_the_url() {
     assert_eq!(request.uri().path(), "/vouchers/1%2F..%2F..%2Fetc");
 }
 
+/// A property pointed at a named schema carries that schema's rules onto the
+/// flag. Only following the `$ref` while the document is reduced can put them
+/// there: the rule is a hop away from the property that has to obey it.
+#[test]
+fn a_rule_a_named_schema_states_reaches_the_property_pointing_at_it() {
+    let doc = document();
+    let Body::JsonFields(fields) = doc.get("updateVoucher").unwrap().body() else {
+        panic!("updateVoucher takes a flat JSON body");
+    };
+    let total = fields.iter().find(|f| f.name() == "total").unwrap();
+    assert_eq!(
+        total.scalar().note().as_deref(),
+        Some(r"matches ^-?[0-9]+(\.[0-9]{1,2})?$"),
+        "the rule the `Money` schema states did not reach `total`"
+    );
+    assert_eq!(
+        total
+            .scalar()
+            .parse("1,50")
+            .expect_err("a comma is not a decimal point")
+            .to_string(),
+        r"`1,50` does not match ^-?[0-9]+(\.[0-9]{1,2})?$"
+    );
+    assert!(total.scalar().parse("12.50").is_ok());
+}
+
+/// A parameter never passes through a generated body type, so what the document
+/// says about one is the only thing that can ever check it. All of it is
+/// checked, and every refusal carries the document's own number.
+#[test]
+fn every_rule_a_parameter_states_is_checked_because_nothing_else_can_check_it() {
+    const PARAMETERS: &str = "  /vouchers:\n\
+         \x20   get:\n\
+         \x20     operationId: listVouchers\n\
+         \x20     parameters:\n\
+         \x20       - { name: since, in: query, schema: { type: string, pattern: '^[0-9]{4}-[0-9]{2}$' } }\n\
+         \x20       - { name: code, in: query, schema: { type: string, minLength: 3, maxLength: 3 } }\n\
+         \x20       - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, multipleOf: 5 } }\n\
+         \x20     responses: { \"200\": { description: OK } }\n";
+
+    let doc = Document::load(&synthetic(PARAMETERS), &[]).expect("a document");
+    let op = doc.get("listVouchers").unwrap();
+    let refused = |name: &str, value: &str| {
+        Invocation::new(op, Values::new().param(name, value))
+            .expect_err("the document refuses it")
+            .to_string()
+    };
+
+    assert_eq!(
+        refused("since", "2026-9"),
+        "listVouchers: `since`: `2026-9` does not match ^[0-9]{4}-[0-9]{2}$"
+    );
+    assert_eq!(
+        refused("code", "EU"),
+        "listVouchers: `code`: `EU` is shorter than 3 characters"
+    );
+    assert_eq!(
+        refused("code", "EURO"),
+        "listVouchers: `code`: `EURO` is longer than 3 characters"
+    );
+    assert_eq!(
+        refused("limit", "0"),
+        "listVouchers: `limit`: `0` is not at least 1"
+    );
+    assert_eq!(
+        refused("limit", "105"),
+        "listVouchers: `limit`: `105` is not at most 100"
+    );
+    assert_eq!(
+        refused("limit", "7"),
+        "listVouchers: `limit`: `7` is not a multiple of 5"
+    );
+    assert!(
+        Invocation::new(
+            op,
+            Values::new()
+                .param("since", "2026-09")
+                .param("code", "EUR")
+                .param("limit", "25"),
+        )
+        .is_ok()
+    );
+}
+
+/// A `pattern` the engine cannot read would refuse every value at the flag,
+/// which is a command line nothing can satisfy. The document is refused while
+/// it is reduced instead, naming the operation and the value it was stated
+/// about.
+#[test]
+fn a_pattern_no_engine_can_read_is_refused_while_the_document_is_reduced() {
+    let error = Document::load(
+        &synthetic(
+            "  /vouchers:\n\
+             \x20   get:\n\
+             \x20     operationId: listVouchers\n\
+             \x20     parameters:\n\
+             \x20       - { name: since, in: query, schema: { type: string, pattern: '[unterminated' } }\n\
+             \x20     responses: { \"200\": { description: OK } }\n",
+        ),
+        &[],
+    )
+    .expect_err("`[unterminated` is not a regular expression");
+    assert_eq!(
+        error.to_string(),
+        "listVouchers: `since`: `[unterminated` is not a regular expression: Unbalanced bracket"
+    );
+}
+
 /// The two doors onto one reduction. A bless step writes the blob, a binary
 /// reads it, and nothing between them may change what the document said —
 /// including the flag renames, which are decided while reducing and would be a

@@ -86,6 +86,51 @@ fn a_read_is_sent_on_sight() {
     assert_eq!(sent.method(), "GET");
 }
 
+/// A `dispatch`-only CLI has no seam to vet a body in, so what the document
+/// says about a value is the only thing between a typo and the wire. It is
+/// enough: the flag's value parser is the document's own rule, and the rule
+/// lives in a schema `total` points at rather than in any Rust here.
+#[test]
+fn a_value_the_documents_rule_refuses_never_becomes_a_request() {
+    let doc = document();
+    let refused = root(&doc)
+        .try_get_matches_from([
+            "toy",
+            "vouchers",
+            "create",
+            "--total",
+            "1,50",
+            "--currency",
+            "EUR",
+            "--status",
+            "open",
+        ])
+        .expect_err("a comma is not a decimal point");
+    let refused = refused.to_string();
+    assert!(
+        refused.contains(r"invalid value '1,50' for '--total <STRING>'"),
+        "{refused}"
+    );
+    assert!(
+        refused.contains(r"`1,50` does not match ^-?[0-9]+(\.[0-9]{1,2})?$"),
+        "{refused}"
+    );
+
+    // And the same flag takes an amount, so the rule is a rule rather than a
+    // refusal of everything.
+    let client = Recorder::new();
+    let outcome = tree::dispatch(&doc, doc.base(), &client, &parse(&doc, CREATE))
+        .expect("a valid amount dispatches");
+    let Outcome::DryRun(request) = outcome else {
+        panic!("a create is a write, so it is a dry run without --commit");
+    };
+    assert!(
+        render(&request).contains(r#""total":"12.50""#),
+        "{}",
+        render(&request)
+    );
+}
+
 #[test]
 fn a_write_nobody_confirmed_sends_nothing() {
     let doc = document();

@@ -204,6 +204,16 @@ pub enum LoadError {
         name: String,
         reason: &'static str,
     },
+    /// A rule the document states that cannot be run — a `pattern` no regex
+    /// engine here reads. Refused while the document is reduced, because a rule
+    /// that cannot run is one every value would otherwise pass.
+    #[error("{op}: `{name}`: {source}")]
+    Unrunnable {
+        op: String,
+        name: String,
+        #[source]
+        source: crate::scalar::ScalarError,
+    },
 }
 
 /// A generated inventory and the document it was generated from disagree.
@@ -412,7 +422,7 @@ impl Operation {
         let params = params
             .map(|p| Param::build(id, p, whole.components, &mut flags))
             .collect::<Result<Vec<_>, _>>()?;
-        let body = Body::build(op, whole.components, &mut flags)?;
+        let body = Body::build(id, op, whole.components, &mut flags)?;
         let effect = effect_of(&method, op);
 
         Ok(Self {
@@ -628,6 +638,7 @@ impl Param {
         };
         let scalar = scalar_of(schema, components)?
             .ok_or_else(|| reject(&data.name, "not a scalar, so it cannot be one flag"))?;
+        runnable(&scalar, op, &data.name)?;
         Ok(Self {
             flag: flags.claim(&kebab(&data.name), "param"),
             name: data.name.clone(),
@@ -715,6 +726,7 @@ impl Field {
 impl Body {
     #[cfg(feature = "document")]
     fn build(
+        id: &str,
         op: &openapiv3::Operation,
         components: &Components,
         flags: &mut Namespace,
@@ -767,6 +779,7 @@ impl Body {
                 // would then throw away.
                 return Ok(Self::JsonWhole { required });
             };
+            runnable(&scalar, id, name)?;
             let described = resolve_schema(&property, components)?;
             fields.push(Field {
                 flag: flags.claim(&kebab(name), "body"),
@@ -778,6 +791,22 @@ impl Body {
         }
         Ok(Self::JsonFields(fields))
     }
+}
+
+/// Refuse a rule that cannot be run, naming the operation and the value it was
+/// stated about.
+///
+/// A `pattern` the engine cannot read refuses every value, so a document that
+/// states one describes a flag nothing can satisfy. Saying so while the
+/// document is reduced is what keeps that a bless-time failure rather than a
+/// user's.
+#[cfg(feature = "document")]
+fn runnable(scalar: &Scalar, op: &str, name: &str) -> Result<(), LoadError> {
+    scalar.runnable().map_err(|source| LoadError::Unrunnable {
+        op: op.to_owned(),
+        name: name.to_owned(),
+        source,
+    })
 }
 
 /// The part names a multipart schema declares, in document order.

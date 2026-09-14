@@ -11,7 +11,7 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use api::{CORRECTIONS, Correction, Money, OPERATIONS, Voucher};
 use typed_openapi::{Document, Effect};
@@ -61,6 +61,23 @@ fn mounted(id: &str) -> bool {
     OPERATIONS.iter().any(|(mounted, _, _)| *mounted == id)
 }
 
+/// One `Correction::Retyped` row, unpacked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Retype {
+    schema: &'static str,
+    property: &'static str,
+    named: &'static str,
+}
+
+/// Every schema name a document declares.
+fn schema_names(document: &serde_json::Value) -> BTreeSet<String> {
+    document
+        .pointer("/components/schemas")
+        .and_then(serde_json::Value::as_object)
+        .map(|schemas| schemas.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 /// The rows, sorted into the question each kind of correction answers.
 ///
 /// One exhaustive match, with no wildcard arm, so a `Correction` variant added
@@ -71,7 +88,7 @@ struct Rows {
     undocumented: Vec<&'static str>,
     skipped: Vec<&'static str>,
     gated: Vec<&'static str>,
-    retyped: Vec<&'static str>,
+    retyped: Vec<Retype>,
     undeclared: Vec<(&'static str, &'static str)>,
 }
 
@@ -82,7 +99,15 @@ fn rows() -> Rows {
             Correction::Undocumented(id) => rows.undocumented.push(id),
             Correction::Skipped(id) => rows.skipped.push(id),
             Correction::Gated(id) => rows.gated.push(id),
-            Correction::Retyped { format, .. } => rows.retyped.push(format),
+            Correction::Retyped {
+                schema,
+                property,
+                named,
+            } => rows.retyped.push(Retype {
+                schema,
+                property,
+                named,
+            }),
             Correction::Undeclared { schema, property } => {
                 rows.undeclared.push((schema, property));
             }
@@ -167,18 +192,50 @@ fn every_gate_still_corrects_something() {
     }
 }
 
-/// A retype is a correction only while the vendor still declares the format it
-/// keys on, and only while the generated field really is the adopter's type.
+/// A retype is a correction only while the vendor leaves the rule unsaid and
+/// the schema that says it is the Overlay's own — and only while the generated
+/// field really is that newtype.
 #[test]
 fn every_retype_still_corrects_something() {
-    for format in rows().retyped {
+    let (before, after) = (json(VENDOR), json(api::DOCUMENT));
+    let (vendor, corrected) = (properties(&before), properties(&after));
+
+    for Retype {
+        schema,
+        property,
+        named,
+    } in rows().retyped
+    {
+        let key = (schema.to_owned(), property.to_owned());
+        let was = vendor.get(&key).unwrap_or_else(|| {
+            panic!("`{schema}.{property}` is listed as retyped but the vendor does not declare it")
+        });
         assert!(
-            VENDOR.contains(&format!("format: {format}")),
-            "no schema declares `format: {format}` any more"
+            was.get("pattern").is_none(),
+            "`{schema}.{property}` is listed as retyped but the vendor now states its own rule"
+        );
+        assert!(
+            !schema_names(&before).contains(named),
+            "`{named}` is listed as a schema the Overlay adds, and the vendor now declares it"
+        );
+        assert!(
+            after
+                .pointer(&format!("/components/schemas/{named}/pattern"))
+                .is_some(),
+            "the corrected document's `{named}` states no rule, so the newtype enforces nothing"
+        );
+        assert_eq!(
+            corrected
+                .get(&key)
+                .and_then(|declaration| declaration.get("$ref"))
+                .and_then(serde_json::Value::as_str),
+            Some(format!("#/components/schemas/{named}").as_str()),
+            "`{schema}.{property}` does not point at `{named}`"
         );
     }
-    // And the substitution landed: this line does not compile if `total` is
-    // typify's own `String` rather than the adopter's newtype.
+
+    // And the name landed in Rust: this line does not compile if `total` is
+    // typify's own `String` rather than the generated newtype.
     let total: fn(&Voucher) -> &Money = |voucher| &voucher.total;
     let _ = total;
 }
@@ -239,16 +296,11 @@ fn every_difference_between_the_documents_has_a_row() {
                 "`{schema}.{property}` is in the corrected document and not the vendor's, \
                  and no row says so"
             ),
-            Some(was) if was != declaration => {
-                let format = declaration
-                    .get("format")
-                    .and_then(serde_json::Value::as_str);
-                assert!(
-                    format.is_some_and(|format| retyped.contains(&format)),
-                    "`{schema}.{property}` is declared differently from the vendor's \
-                     document and no row says so"
-                );
-            }
+            Some(was) if was != declaration => assert!(
+                retyped.iter().any(|row| (row.schema, row.property) == pair),
+                "`{schema}.{property}` is declared differently from the vendor's \
+                 document and no row says so"
+            ),
             Some(_) => {}
         }
     }
@@ -257,6 +309,16 @@ fn every_difference_between_the_documents_has_a_row() {
             after.contains_key(&(schema.clone(), property.clone())),
             "`{schema}.{property}` was removed from the document, which no `Correction` \
              variant describes"
+        );
+    }
+
+    // A whole schema the corrected document has and the vendor's does not is
+    // the Overlay writing a rule down under a name, and a row has to name it.
+    let added = schema_names(&json(api::DOCUMENT));
+    for schema in added.difference(&schema_names(&json(VENDOR))) {
+        assert!(
+            retyped.iter().any(|row| row.named == schema),
+            "`{schema}` is a schema the Overlay adds and no row says so"
         );
     }
 }

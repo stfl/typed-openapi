@@ -37,10 +37,6 @@ fn out(name: &str) -> PathBuf {
 
 /// The vendor's document and both layers over it, in the order a bless step
 /// applies them.
-fn settings() -> Settings {
-    layered().replace("money", "api_types::Money")
-}
-
 fn layered() -> Settings {
     Settings::new(TOY).overlay(CORRECTIONS).overlay(CLI)
 }
@@ -121,7 +117,7 @@ fn a_generated_newtype_over_a_string_prints_and_needs_no_engine_of_its_own() {
 #[test]
 fn the_written_model_is_the_written_documents_reduction() {
     let dir = out("agree");
-    let written = settings().write_to(&dir).expect("the fixtures generate");
+    let written = layered().write_to(&dir).expect("the fixtures generate");
 
     assert_eq!(
         written,
@@ -144,23 +140,63 @@ fn the_written_model_is_the_written_documents_reduction() {
     );
 }
 
-/// `replace` is the whole of the adopter's say over the generated types, so
-/// both halves are worth pinning: with it the adopter's path appears, and
-/// without it nothing in the file mentions a type the document never named.
+/// A document tagging a value with a `format` the adopter owns a Rust type for.
+/// The document never says what that type is: `Settings::replace` is the other
+/// half, and neither half is any use alone.
+const FORMATTED: &str = r#"
+openapi: 3.0.3
+info: { title: Formatted, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /prices:
+    get:
+      operationId: listPrices
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Price:
+      type: object
+      required: [currency]
+      properties:
+        currency: { type: string, format: currency }
+"#;
+
+/// The route for an adopter who wants a type of their own rather than the one
+/// a named schema would generate: the document tags the shape with a `format`
+/// and `replace` says which Rust path stands for it. It is the whole of the
+/// adopter's say over the generated types, so both halves are worth pinning —
+/// with it their path appears and typify defines nothing, and without it
+/// nothing in the file mentions a type the document never named.
 #[test]
-fn a_replaced_format_becomes_the_adopters_own_type() {
+fn a_replaced_format_becomes_a_type_the_generated_code_never_defines() {
     let with = out("replaced");
-    settings().write_to(&with).expect("the fixtures generate");
+    Settings::new(wrote(&with, "prices.yaml", FORMATTED))
+        .replace("currency", "crate::Currency")
+        .write_to(&with)
+        .expect("the document generates");
+    let types = read(&with.join("src/types.rs"));
     assert!(
-        read(&with.join("src/types.rs")).contains("api_types::Money"),
-        "`format: money` did not become the adopter's own type"
+        types.contains("crate::Currency"),
+        "`format: currency` did not become the adopter's own type:\n{types}"
+    );
+    assert!(
+        !types.contains("struct Currency"),
+        "typify defined a type the adopter owns:\n{types}"
     );
 
     let without = out("unreplaced");
-    layered().write_to(&without).expect("the fixtures generate");
+    Settings::new(wrote(&without, "prices.yaml", FORMATTED))
+        .write_to(&without)
+        .expect("the document generates");
+    let types = read(&without.join("src/types.rs"));
     assert!(
-        !read(&without.join("src/types.rs")).contains("api_types::Money"),
-        "a type the adopter never asked for"
+        !types.contains("crate::Currency"),
+        "a type the adopter never asked for:\n{types}"
+    );
+    assert!(
+        types.contains("pub currency: ::std::string::String"),
+        "an unreplaced format is the string the document declares:\n{types}"
     );
 }
 
@@ -170,7 +206,7 @@ fn a_replaced_format_becomes_the_adopters_own_type() {
 #[test]
 fn every_generated_file_names_the_command_that_rewrites_it() {
     let dir = out("header");
-    settings()
+    layered()
         .regenerated_by("just bless")
         .write_to(&dir)
         .expect("the fixtures generate");

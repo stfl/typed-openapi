@@ -27,7 +27,6 @@ fn main() -> ExitCode {
     let blessed = Settings::new(adoption.join("spec/toy.yaml"))
         .overlay(adoption.join("spec/corrections.yaml"))
         .overlay(adoption.join("spec/cli.yaml"))
-        .replace("money", "api_types::Money")
         .write_to(adoption.join("api-generated"));
 
     match blessed {

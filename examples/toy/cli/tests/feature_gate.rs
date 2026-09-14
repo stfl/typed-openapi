@@ -20,7 +20,6 @@ use std::path::{Path, PathBuf};
 /// None of them reads documents.
 const PRODUCT: &[&str] = &[
     "typed-openapi",
-    "examples/toy/api-types",
     "examples/toy/api-generated",
     "examples/toy/api",
     "examples/toy/cli",

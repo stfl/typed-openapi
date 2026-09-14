@@ -6,14 +6,16 @@
 //! either fits on one flag — it is a [`Scalar`] — or it does not, and then the
 //! body goes through a file. Nothing richer is modelled, because nothing richer
 //! has a command-line spelling.
+//!
+//! A `$ref` is followed before the schema is read, so a property pointed at a
+//! named schema carries that schema's rules onto the flag.
 
 use openapiv3::{
-    Components, ReferenceOr, Schema, SchemaKind, StringFormat, StringType, Type,
-    VariantOrUnknownOrEmpty,
+    Components, IntegerType, NumberType, ReferenceOr, Schema, SchemaKind, StringType, Type,
 };
 use thiserror::Error;
 
-use crate::scalar::Scalar;
+use crate::scalar::{Bounds, Limit, Scalar, Text};
 
 /// A `$ref` that does not lead anywhere.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -69,34 +71,58 @@ pub fn scalar_of(
     };
     Ok(match ty {
         Type::String(s) => Some(string_scalar(s)),
-        Type::Number(_) => Some(Scalar::Number),
-        Type::Integer(_) => Some(Scalar::Integer),
+        Type::Number(n) => Some(Scalar::Number(number_bounds(n))),
+        Type::Integer(i) => Some(Scalar::Integer(integer_bounds(i))),
         Type::Boolean(_) => Some(Scalar::Boolean),
         Type::Object(_) | Type::Array(_) => None,
     })
 }
 
-/// An enumeration completes; `format: money` is checked; everything else is
-/// text, carrying whatever `pattern` the document states for the help line.
+/// An enumeration completes; everything else is text carrying the rules the
+/// document states about it.
+///
+/// `format` is not read at all. A format is a name for a rule, and a name is
+/// not a rule: the document that says what an amount looks like says so with
+/// `pattern`, which every consumer of the document can run.
 fn string_scalar(s: &StringType) -> Scalar {
     let choices: Vec<String> = s.enumeration.iter().flatten().cloned().collect();
-    if !choices.is_empty() {
-        return Scalar::Choice(choices);
+    if choices.is_empty() {
+        Scalar::Text(Text {
+            pattern: s.pattern.clone(),
+            min_length: s.min_length,
+            max_length: s.max_length,
+        })
+    } else {
+        Scalar::Choice(choices)
     }
-    match &s.format {
-        VariantOrUnknownOrEmpty::Unknown(format) if format == "money" => {
-            Scalar::Money(s.pattern.clone())
+}
+
+fn number_bounds(n: &NumberType) -> Bounds<f64> {
+    Bounds {
+        low: limit(n.minimum, n.exclusive_minimum),
+        high: limit(n.maximum, n.exclusive_maximum),
+        multiple_of: n.multiple_of,
+    }
+}
+
+fn integer_bounds(i: &IntegerType) -> Bounds<i64> {
+    Bounds {
+        low: limit(i.minimum, i.exclusive_minimum),
+        high: limit(i.maximum, i.exclusive_maximum),
+        multiple_of: i.multiple_of,
+    }
+}
+
+/// One end of a range. OpenAPI 3.0 states exclusivity as a flag beside the
+/// number, so a flag with no number beside it states nothing.
+fn limit<T>(value: Option<T>, exclusive: bool) -> Option<Limit<T>> {
+    value.map(|value| {
+        if exclusive {
+            Limit::Exclusive(value)
+        } else {
+            Limit::Inclusive(value)
         }
-        VariantOrUnknownOrEmpty::Unknown(_)
-        | VariantOrUnknownOrEmpty::Empty
-        | VariantOrUnknownOrEmpty::Item(
-            StringFormat::Date
-            | StringFormat::DateTime
-            | StringFormat::Password
-            | StringFormat::Byte
-            | StringFormat::Binary,
-        ) => Scalar::Text(s.pattern.clone()),
-    }
+    })
 }
 
 /// `application/json`, `application/merge-patch+json`, and anything with

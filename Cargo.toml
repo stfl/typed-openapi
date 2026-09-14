@@ -4,7 +4,6 @@ members = [
     "typed-openapi",
     "examples/toy/api",
     "examples/toy/api-generated",
-    "examples/toy/api-types",
     "examples/toy/cli",
     "examples/toy/xtask",
 ]
@@ -22,7 +21,6 @@ default-members = [
     "typed-openapi",
     "examples/toy/api",
     "examples/toy/api-generated",
-    "examples/toy/api-types",
     "examples/toy/cli",
 ]
 

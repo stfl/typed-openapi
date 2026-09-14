@@ -211,7 +211,7 @@ components:
           type: string
           format: money
           description: Decimal amount as a string
-          pattern: ^-?[0-9]+(\.[0-9]{1,2})?$
+          $ref: '#/components/schemas/Money'
         currency:
           type: string
           description: ISO 4217 code
@@ -243,3 +243,7 @@ components:
           type: string
         address:
           $ref: '#/components/schemas/Address'
+    Money:
+      type: string
+      description: A decimal amount carried in a string.
+      pattern: ^-?[0-9]+(\.[0-9]{1,2})?$

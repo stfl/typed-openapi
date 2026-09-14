@@ -14,17 +14,17 @@
 //!   needs. The CLI builds its whole command tree from it at startup, so the
 //!   CLI and this crate cannot disagree about the API and neither one parses
 //!   YAML to find out.
-//! - `src/types.rs` — the schemas as Rust types, with [`Money`] substituted in
-//!   wherever the document declares `format: money`. There is no hand-written
-//!   mirror: the generated types *are* this crate's types.
+//! - `src/types.rs` — the schemas as Rust types. The Overlay names a `Money`
+//!   schema and states its rule, so [`Money`] is generated with the rule inside
+//!   its `FromStr`. There is no hand-written mirror: the generated types *are*
+//!   this crate's types.
 //! - `src/ops.rs` — [`OperationId`], one typed method per operation, and the
 //!   `(operationId, method, path)` inventory [`ops::documented`] reads.
 //!
 //! They live one crate down so that an edit here recompiles the lines written
-//! here and not the emitted volume; [`api_types`] holds [`Money`] one crate
-//! further down so that the emitted types can name it. Everything the four
-//! artefacts offer is re-exported from this crate, which is the only one an
-//! adopter's own code needs to name.
+//! here and not the emitted volume. Everything the four artefacts offer is
+//! re-exported from this crate, which is the only one an adopter's own code
+//! needs to name.
 //!
 //! There is no hand-written list of operations to keep beside those: the
 //! document is the list. What the adopter does keep by hand is [`CORRECTIONS`]
@@ -64,6 +64,5 @@ pub use api_generated::ops;
 pub use api_generated::ops::{OPERATION_COUNT, OPERATIONS, OperationId, documented};
 pub use api_generated::types::*;
 pub use api_generated::{Api, BodyError, Call, DOCUMENT, Error, NoContent, to_json};
-pub use api_types::{Money, MoneyError};
 pub use corrections::{CORRECTIONS, Correction};
 pub use posting::Posting;

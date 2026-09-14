@@ -12,7 +12,6 @@ builder = ["api-generated/builder"]
 
 [dependencies]
 api-generated = { path = "../api-generated" }
-api-types = { path = "../api-types" }
 typed-openapi = { path = "../../../typed-openapi", default-features = false }
 
 [dev-dependencies]

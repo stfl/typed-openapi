@@ -81,7 +81,7 @@ third layer this adoption has no need of.
 
 | the vendor | the correction | what it buys |
 |---|---|---|
-| declares `format: money` and never says what an amount is | an Overlay `update` adding the pattern | `Voucher.total` is a `Money`, and `--total` rejects `1,50` |
+| declares `format: money` and never says what an amount is | an Overlay `update` naming a `Money` schema with the rule in it, and pointing `total` at it | `Voucher.total` is a `Money`, and `--total` rejects `1,50` |
 | returns an `internal_ref` it never documented | an `update` adding the property | a struct field and a `--internal-ref` flag |
 | ships `archiveVoucher` and documents it nowhere | an `update` adding the path | a wrapper and a subcommand, for no Rust at all |
 | serves a `GET` that stores a PDF | `x-cli-writes: true`, in `spec/cli.yaml` | `vouchers render` is behind `--commit` |
@@ -99,24 +99,24 @@ one line each, and `api/tests/corrections.rs` holds that list to both documents
 in both directions — a row that no longer describes a real difference fails, and
 a real difference with no row fails.
 
-## Why five crates
+## Why four crates
 
 | crate | lines | written by | holds |
 |---|---|---|---|
-| [`api-types`](api-types) | 93 | the adopter | `Money`. Generated code names it, so it sits below the generated code |
-| [`api-generated`](api-generated) | 590 | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
-| [`api`](api) | 876 | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
-| [`cli`](cli) | 1309 | the adopter | the `toy` binary, and `examples/root.rs` beside it |
-| [`xtask`](xtask) | 45 | the adopter | the bless step — the generator itself ships in `typed-openapi` |
+| [`api-generated`](api-generated) | 730 | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
+| [`api`](api) | 964 | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
+| [`cli`](cli) | 1310 | the adopter | the `toy` binary, and `examples/root.rs` beside it |
+| [`xtask`](xtask) | 44 | the adopter | the bless step — the generator itself ships in `typed-openapi` |
 
 The split is about what recompiles. An edit to `api` rebuilds the adopter's own
 lines and not the generated volume beneath them, and `api-generated`'s whole
-dependency list is `serde`, `http`, `api-types` and the library — nothing about
-a generator reaches it.
+dependency list is `serde`, `http` and the library — nothing about a generator
+reaches it.
 
-There is no hand-written mirror of the generated types. The generated
-`Voucher.total` *is* `Money`, substituted in by the bless step, with no
-conversion at the boundary. Where an adopter does own a type by hand —
+There is no hand-written type for an amount, and no mirror of the generated
+ones. The Overlay says what an amount is under the name `Money`, so the bless
+step emits a `Money` whose `FromStr` enforces the document's own pattern and a
+`Voucher.total` of that type. Where an adopter does own a type by hand —
 [`api/src/posting.rs`](api/src/posting.rs) — two clippy lints scoped to that
 crate forbid both ways of writing a struct pattern that skips a field, so a
 conversion out of a generated type cannot quietly ignore something the vendor
@@ -142,14 +142,13 @@ the generated type that operation takes — and it shows where the seam between
 
 ## What to copy
 
-The Overlay layers, the five-crate split, and `xtask/src/main.rs`. That last one
+The Overlay layers, the four-crate split, and `xtask/src/main.rs`. That last one
 is the whole of a bless step:
 
 ```rust
 Settings::new(adoption.join("spec/toy.yaml"))
     .overlay(adoption.join("spec/corrections.yaml"))
     .overlay(adoption.join("spec/cli.yaml"))
-    .replace("money", "api_types::Money")
     .write_to(adoption.join("api-generated"))
 ```
 

@@ -25,6 +25,60 @@ pub struct Contact {
     pub id: ::std::option::Option<i64>,
     pub name: ::std::string::String,
 }
+///A decimal amount carried in a string.
+#[derive(::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[serde(transparent)]
+pub struct Money(::std::string::String);
+impl ::std::ops::Deref for Money {
+    type Target = ::std::string::String;
+    fn deref(&self) -> &::std::string::String {
+        &self.0
+    }
+}
+impl ::std::convert::From<Money> for ::std::string::String {
+    fn from(value: Money) -> Self {
+        value.0
+    }
+}
+impl ::std::str::FromStr for Money {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::typed_openapi::regress::Regex> =
+            ::std::sync::LazyLock::new(|| {
+                ::typed_openapi::regress::Regex::new("^-?[0-9]+(\\.[0-9]{1,2})?$").unwrap()
+            });
+        if PATTERN.find(value).is_none() {
+            return Err("doesn't match pattern \"^-?[0-9]+(\\.[0-9]{1,2})?$\"".into());
+        }
+        Ok(Self(value.to_string()))
+    }
+}
+impl ::std::convert::TryFrom<&str> for Money {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for Money {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for Money {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        ::std::string::String::deserialize(deserializer)?
+            .parse()
+            .map_err(|e: self::error::ConversionError| {
+                <D::Error as ::serde::de::Error>::custom(e.to_string())
+            })
+    }
+}
 ///`Voucher`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
 pub struct Voucher {
@@ -37,8 +91,7 @@ pub struct Voucher {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub internal_ref: ::std::option::Option<::std::string::String>,
     pub status: VoucherStatus,
-    ///Decimal amount as a string
-    pub total: api_types::Money,
+    pub total: Money,
 }
 ///`VoucherStatus`
 #[derive(
@@ -119,5 +172,10 @@ pub mod error {
         fn from(value: String) -> Self {
             Self(value.into())
         }
+    }
+}
+impl ::std::fmt::Display for Money {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::std::fmt::Display::fmt(&self.0, f)
     }
 }

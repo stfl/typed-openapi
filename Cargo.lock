@@ -28,7 +28,6 @@ name = "api"
 version = "0.1.0"
 dependencies = [
  "api-generated",
- "api-types",
  "http",
  "serde_json",
  "typed-openapi",
@@ -39,20 +38,9 @@ dependencies = [
 name = "api-generated"
 version = "0.1.0"
 dependencies = [
- "api-types",
  "http",
  "serde",
  "serde_json",
- "typed-openapi",
-]
-
-[[package]]
-name = "api-types"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.20",
  "typed-openapi",
 ]
 

@@ -265,6 +265,29 @@ fn a_sync_client_and_an_async_client_send_the_same_bytes() {
     );
 }
 
+/// A value that came back from the API has to be printable, and what comes out
+/// has to be what went in: the document states the rule, the generated `FromStr`
+/// enforces it, and `Display` hands the same bytes back.
+#[test]
+fn a_generated_newtype_prints_what_it_was_parsed_from() {
+    let total: Money = "12.50".parse().expect("a valid amount");
+    assert_eq!(format!("{total}"), "12.50");
+    assert_eq!(
+        format!("{total}").parse::<Money>().ok(),
+        Some(total.clone())
+    );
+
+    let voucher = voucher(VoucherStatus::Open);
+    assert_eq!(
+        format!("{} {}", voucher.total, voucher.currency),
+        "12.50 EUR"
+    );
+
+    // The rule the document states is the rule the type carries.
+    assert!("1,50".parse::<Money>().is_err());
+    assert!("12.505".parse::<Money>().is_err());
+}
+
 #[test]
 fn a_non_success_status_keeps_the_body_and_never_deserialises_the_success_type() {
     let api = api();

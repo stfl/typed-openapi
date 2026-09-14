@@ -32,12 +32,15 @@ pub enum Correction {
     /// nevertheless holds behind `--commit`, marked `x-cli-writes` by the
     /// Overlay. HTTP cannot say "this GET writes"; the document has to.
     Gated(&'static str),
-    /// A vendor `format` whose Rust type is the adopter's own. The bless step
-    /// substitutes `rust` wherever the document declares `format`, so the
-    /// generated types carry it with no mirror and no conversion.
+    /// A property the vendor types as a bare string under a `format` it never
+    /// states the rule for. The Overlay writes the rule down as the named
+    /// schema `named` and points the property at it, so the rule travels with
+    /// the document — and the generated Rust carries it as a newtype rather
+    /// than a `String`.
     Retyped {
-        format: &'static str,
-        rust: &'static str,
+        schema: &'static str,
+        property: &'static str,
+        named: &'static str,
     },
     /// A property the vendor accepts and returns and never documented, added to
     /// a schema by the Overlay. It becomes a struct field, a CLI flag and a
@@ -59,11 +62,12 @@ pub enum Correction {
 /// [`OPERATIONS`]: crate::OPERATIONS
 pub const CORRECTIONS: &[Correction] = &[
     // The vendor types an amount as a bare string and gives it `format: money`
-    // without saying what an amount looks like. The Overlay adds the rule; the
-    // bless step reads the format and emits the newtype.
+    // without saying what an amount looks like. The Overlay says it, under a
+    // name, and the bless step turns the name into a type.
     Correction::Retyped {
-        format: "money",
-        rust: "Money",
+        schema: "Voucher",
+        property: "total",
+        named: "Money",
     },
     // Returned and accepted on every voucher; documented nowhere.
     Correction::Undeclared {
