@@ -21,7 +21,11 @@ use typed_openapi::Document;
 use typed_openapi::generate::{GenerateError, Settings};
 
 const TOY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml");
-const OVERLAY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/overlay.yaml");
+const CORRECTIONS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/corrections.yaml"
+);
+const CLI: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cli.yaml");
 
 /// A directory of this test's own, emptied first so that nothing it asserts
 /// about can be left over from a previous run.
@@ -31,8 +35,14 @@ fn out(name: &str) -> PathBuf {
     dir
 }
 
+/// The vendor's document and both layers over it, in the order a bless step
+/// applies them.
 fn settings() -> Settings {
-    Settings::new(TOY, OVERLAY).replace("money", "api_types::Money")
+    layered().replace("money", "api_types::Money")
+}
+
+fn layered() -> Settings {
+    Settings::new(TOY).overlay(CORRECTIONS).overlay(CLI)
 }
 
 fn read(path: &Path) -> String {
@@ -61,7 +71,8 @@ fn the_written_model_is_the_written_documents_reduction() {
 
     let blob = std::fs::read(&written[3]).expect("the reduced model");
     let shipped = Document::from_blob(&blob).expect("the written blob is a reduction");
-    let fresh = Document::load(&read(&written[0]), "").expect("the written document is a document");
+    let fresh =
+        Document::load(&read(&written[0]), &[]).expect("the written document is a document");
     assert!(
         shipped == fresh,
         "the reduction a binary reads is not the written document's"
@@ -81,9 +92,7 @@ fn a_replaced_format_becomes_the_adopters_own_type() {
     );
 
     let without = out("unreplaced");
-    Settings::new(TOY, OVERLAY)
-        .write_to(&without)
-        .expect("the fixtures generate");
+    layered().write_to(&without).expect("the fixtures generate");
     assert!(
         !read(&without.join("src/types.rs")).contains("api_types::Money"),
         "a type the adopter never asked for"
@@ -108,7 +117,8 @@ fn every_generated_file_names_the_command_that_rewrites_it() {
         );
     }
     assert!(
-        read(&dir.join("src/ops.rs")).contains("belongs in `fixtures/overlay.yaml`"),
+        read(&dir.join("src/ops.rs"))
+            .contains("belongs in `fixtures/corrections.yaml` and `fixtures/cli.yaml`"),
         "the generated Rust does not point at the Overlay it was corrected by"
     );
 }
@@ -117,7 +127,8 @@ fn every_generated_file_names_the_command_that_rewrites_it() {
 /// `No such file or directory` from somewhere inside the generator.
 #[test]
 fn a_document_that_is_not_there_is_named() {
-    let error = Settings::new("nowhere.yaml", OVERLAY)
+    let error = Settings::new("nowhere.yaml")
+        .overlay(CORRECTIONS)
         .write_to(out("missing"))
         .expect_err("no document to generate from");
     assert!(

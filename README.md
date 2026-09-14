@@ -5,8 +5,8 @@ with every write behind a dry-run gate.
 
 What comes out is `api.get_voucher(5)?.send(&client)?` returning your own
 `Voucher`, and `toy vouchers get --id 5` on a command line nobody wrote. What
-goes in is the vendor's document plus an [OpenAPI Overlay 1.1][overlay] holding
-your corrections to it. This is not a typed model *of* an OpenAPI
+goes in is the vendor's document plus [OpenAPI Overlay 1.1][overlay] documents
+holding your corrections to it. This is not a typed model *of* an OpenAPI
 document — for that, use [`openapiv3`].
 
 ```console
@@ -61,17 +61,29 @@ from the tool rather than bring it.
 
 ## The bless step
 
-One command turns the vendor's document and your Overlay into four committed
+One command turns the vendor's document and your Overlays into four committed
 files: the corrected document, the schemas as Rust types, one typed wrapper per
 operation, and the document already reduced to what a command line needs. A
 shipped binary reads that reduction — it parses no YAML and links no OpenAPI
 object model.
 
+Corrections come in layers, applied in the order you name them, so the one that
+repairs the vendor's mistakes can stay a document worth handing back to the
+vendor while the one that marks operations for a command line sits above it:
+
+```rust,ignore
+Settings::new("spec/vendor.yaml")
+    .overlay("spec/corrections.yaml")   // what the vendor got wrong
+    .overlay("spec/cli.yaml")           // what only a command line needs
+    .replace("money", "api_types::Money")
+    .write_to("api-generated")?;
+```
+
 The generator ships inside this crate behind the `generate` feature, so your
 `xtask` is about twenty lines. See [docs/generating.md][gen].
 
-A vendor revision that moves something you corrected fails the bless step
-instead of silently overwriting the correction, and one that moves or withdraws
+A vendor revision that moves something you corrected fails the bless step —
+naming the layer it is in — instead of silently overwriting the correction, and one that moves or withdraws
 an operation or a field your code names fails the compiler. What is *not* caught
 — an operation the vendor adds, a field nobody destructures — is listed in
 [docs/drift.md][drift] beside what is.

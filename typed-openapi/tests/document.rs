@@ -18,10 +18,14 @@ use typed_openapi::model::Body;
 use typed_openapi::{Document, Effect, Invocation, Values, render, tree};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
-const OVERLAY: &str = include_str!("fixtures/overlay.yaml");
+const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
+const CLI: &str = include_str!("fixtures/cli.yaml");
+
+/// The layers, in the order a bless step applies them.
+const OVERLAYS: &[&str] = &[CORRECTIONS, CLI];
 
 fn document() -> Document {
-    Document::load(TOY, OVERLAY).expect("the vendor's document plus the adopter's Overlay")
+    Document::load(TOY, OVERLAYS).expect("the vendor's document plus the adopter's Overlay")
 }
 
 #[test]
@@ -158,7 +162,7 @@ fn a_path_value_cannot_smuggle_a_segment_into_the_url() {
             "        schema:\n          type: integer\n          format: int64",
             "        schema:\n          type: string",
         ),
-        OVERLAY,
+        OVERLAYS,
     )
     .expect("a document whose ids are strings");
     let op = doc.get("getVoucher").unwrap();
@@ -201,7 +205,7 @@ fn synthetic(paths: &str) -> String {
 
 /// What the tree calls every operation, in document order.
 fn placements(document: &str) -> Vec<String> {
-    Document::load(document, "")
+    Document::load(document, &[])
         .expect("a document")
         .iter()
         .map(|op| format!("{} {}", op.group(), op.command()))
@@ -231,7 +235,7 @@ fn two_operations_under_one_name_are_refused_by_both_ids() {
          \x20 /vouchers/{id}/pdf/render:\n\
          \x20   get: { operationId: renderVoucherPdf, responses: { \"200\": { description: OK } } }\n";
 
-    let error = Document::load(&synthetic(COLLIDING), "").expect_err("both are `vouchers render`");
+    let error = Document::load(&synthetic(COLLIDING), &[]).expect_err("both are `vouchers render`");
 
     assert_eq!(
         error.to_string(),
@@ -281,7 +285,7 @@ fn a_marker_that_is_not_a_name_is_refused() {
              \x20     x-cli-command: [a, b]\n\
              \x20     responses: { \"200\": { description: OK } }\n",
         ),
-        "",
+        &[],
     )
     .expect_err("a list is not a name");
     assert_eq!(
@@ -302,7 +306,7 @@ fn an_override_that_is_not_spellable_names_itself() {
              \x20     x-cli-group: \"???\"\n\
              \x20     responses: { \"200\": { description: OK } }\n",
         ),
-        "",
+        &[],
     )
     .expect_err("`???` is not a name");
     assert_eq!(

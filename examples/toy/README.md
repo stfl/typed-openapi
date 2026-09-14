@@ -1,8 +1,8 @@
 # The toy adoption
 
 One adoption of [`typed-openapi`](../../typed-openapi) from end to end: a vendor
-document that is wrong in five ways, an Overlay that corrects it, a bless step,
-and two CLIs over the result. It is built, linted and tested with the library on
+document that is wrong in five ways, two Overlay layers that correct it, a bless
+step, and two CLIs over the result. It is built, linted and tested with the library on
 every push, so it cannot rot into an example that no longer compiles.
 
 The Toy Accounting API is invented, and nothing here reaches the network: the
@@ -64,22 +64,31 @@ with `x-cli-writes` — and the gate treats it like any `POST`.
 
 ## What the vendor gets wrong, and where it is fixed
 
-Every correction is a standard [OpenAPI Overlay][overlay] action in
-[`spec/overlay.yaml`](spec/overlay.yaml). [`spec/toy.yaml`](spec/toy.yaml) — the
-vendor's document — is never edited.
+Every correction is a standard [OpenAPI Overlay][overlay] action, in one of two
+layers applied in order. [`spec/toy.yaml`](spec/toy.yaml) — the vendor's
+document — is never edited.
+
+| layer | holds | worth on its own |
+|---|---|---|
+| [`spec/corrections.yaml`](spec/corrections.yaml) | what the vendor got wrong | applied alone it yields the document the vendor should have shipped, which anything that reads OpenAPI can read |
+| [`spec/cli.yaml`](spec/cli.yaml) | what only a command line needs — the `x-cli-` markers | nothing outside this CLI |
+
+`api/tests/corrections.rs` asserts the first layer carries no `x-cli-` marker,
+because a marker in it would make it a document about this CLI rather than
+about the vendor's API.
 
 | the vendor | the correction | what it buys |
 |---|---|---|
 | declares `format: money` and never says what an amount is | an Overlay `update` adding the pattern | `Voucher.total` is a `Money`, and `--total` rejects `1,50` |
 | returns an `internal_ref` it never documented | an `update` adding the property | a struct field and a `--internal-ref` flag |
 | ships `archiveVoucher` and documents it nowhere | an `update` adding the path | a wrapper and a subcommand, for no Rust at all |
-| serves a `GET` that stores a PDF | `x-cli-writes: true` | `vouchers render` is behind `--commit` |
+| serves a `GET` that stores a PDF | `x-cli-writes: true`, in `spec/cli.yaml` | `vouchers render` is behind `--commit` |
 | misspells a multipart media type | left alone, and both uploads work | `--raw-body` for one, `--file` / `--field` for the other |
 
-Two of those actions are **tripwires**: their JSONPath states what the vendor
-currently says, so under `ErrorOnZeroMatch` a vendor revision that moves the
-thing being corrected fails the bless step instead of being silently
-overwritten. [`../../docs/overlay.md`](../../docs/overlay.md) explains the form;
+Two of those actions are **tripwires** — one per layer: their JSONPath states
+what the vendor currently says, so under `ErrorOnZeroMatch` a vendor revision
+that moves the thing being corrected fails the bless step instead of being
+silently overwritten, naming the layer it is in. [`../../docs/overlay.md`](../../docs/overlay.md) explains the form;
 [`../../docs/drift.md`](../../docs/drift.md) is the whole table of what is
 caught where.
 
@@ -131,11 +140,13 @@ the generated type that operation takes — and it shows where the seam between
 
 ## What to copy
 
-The Overlay, the five-crate split, and `xtask/src/main.rs`. That last one is the
-whole of a bless step:
+The Overlay layers, the five-crate split, and `xtask/src/main.rs`. That last one
+is the whole of a bless step:
 
 ```rust
-Settings::new(adoption.join("spec/toy.yaml"), adoption.join("spec/overlay.yaml"))
+Settings::new(adoption.join("spec/toy.yaml"))
+    .overlay(adoption.join("spec/corrections.yaml"))
+    .overlay(adoption.join("spec/cli.yaml"))
     .replace("money", "api_types::Money")
     .write_to(adoption.join("api-generated"))
 ```

@@ -28,6 +28,13 @@ rename, because a name that moves when a *second* operation arrives is a name
 that moved without anyone asking. `x-cli-group` and `x-cli-command` are the way
 out, and they are read in the same place the rule runs.
 
+**Corrections are an ordered list of Overlays, and the library reads nothing
+into it.** `Settings::overlay` and `Document::load` take layers and apply them
+in order. What an adoption puts in which layer is a convention `docs/overlay.md`
+recommends and the example keeps — there is no enum, no schema and no naming
+rule in the library. `examples/toy/api/tests/corrections.rs` is what holds the
+example to its own convention.
+
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
@@ -50,16 +57,17 @@ and `api-generated` take the library with `default-features = false`.
 
 **Generated files are never edited.** `examples/toy/api-generated/src/{types,ops}.rs`,
 `src/model.postcard` and `spec/toy.overlaid.yaml` are written by `just bless`.
-A correction belongs in `examples/toy/spec/overlay.yaml`. `just bless` must
+A correction belongs in `examples/toy/spec/corrections.yaml` or, where only a
+command line cares, `examples/toy/spec/cli.yaml`. `just bless` must
 leave `git diff` empty when nothing upstream has changed — a non-empty diff
 means either the vendor moved or the generator did.
 
 **The library never reads the example's files.** `typed-openapi/tests/fixtures/`
-holds this crate's own copies of the toy document and Overlay. They have the
-same content as `examples/toy/spec/` and a different owner: there the document
-is the vendor's and the example is free to evolve it. Pointing the library's
-tests at that copy would let a change to the example break the library, and the
-fixtures would stop shipping in the published tarball.
+holds this crate's own copies of the toy document and both Overlay layers. They
+have the same content as `examples/toy/spec/` and a different owner: there the
+document is the vendor's and the example is free to evolve it. Pointing the
+library's tests at that copy would let a change to the example break the
+library, and the fixtures would stop shipping in the published tarball.
 
 ## Style
 

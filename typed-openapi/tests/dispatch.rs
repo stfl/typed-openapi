@@ -20,7 +20,11 @@ use typed_openapi::tree::{self, DispatchError, Outcome};
 use typed_openapi::{Document, HttpRequest, Recorder, render};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
-const OVERLAY: &str = include_str!("fixtures/overlay.yaml");
+const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
+const CLI: &str = include_str!("fixtures/cli.yaml");
+
+/// The layers, in the order a bless step applies them.
+const OVERLAYS: &[&str] = &[CORRECTIONS, CLI];
 
 const CREATE: &[&str] = &[
     "toy",
@@ -35,7 +39,7 @@ const CREATE: &[&str] = &[
 ];
 
 fn document() -> Document {
-    Document::load(TOY, OVERLAY).expect("the vendor's document plus the adopter's Overlay")
+    Document::load(TOY, OVERLAYS).expect("the vendor's document plus the adopter's Overlay")
 }
 
 /// The groups as the whole CLI — the shape the README opens with.

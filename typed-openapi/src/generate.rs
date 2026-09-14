@@ -26,7 +26,9 @@
 //!
 //! ```no_run
 //! # fn main() -> Result<(), typed_openapi::generate::GenerateError> {
-//! typed_openapi::generate::Settings::new("spec/vendor.yaml", "spec/overlay.yaml")
+//! typed_openapi::generate::Settings::new("spec/vendor.yaml")
+//!     .overlay("spec/corrections.yaml")
+//!     .overlay("spec/cli.yaml")
 //!     .replace("money", "api_types::Money")
 //!     .write_to("api-generated")?;
 //! # Ok(())
@@ -35,12 +37,21 @@
 //!
 //! `examples/toy/xtask` is that call in a binary, written to be copied.
 //!
-//! # The Overlay is applied strictly
+//! # Corrections come in layers
+//!
+//! [`Settings::overlay`] may be called more than once, and the order of the
+//! calls is the order the Overlays are applied: each one corrects the document
+//! the ones before it produced. What an adoption puts in which layer is its
+//! own affair — this crate reads an ordered list of standard Overlay documents
+//! and nothing more. `docs/overlay.md` recommends a split, and the example
+//! keeps it.
+//!
+//! # Every Overlay is applied strictly
 //!
 //! [`overlay::apply`] uses `ErrorOnZeroMatch`, so a correction whose target the
 //! vendor has renamed or retyped fails here rather than lapsing quietly. A
 //! correction that stops applying is the loudest thing a vendor revision can
-//! do, and this is where it is heard.
+//! do, and this is where it is heard. The failure names the layer it is in.
 
 mod ops;
 mod types;
@@ -83,7 +94,7 @@ const ALLOW: &str = "\
 
 /// What a bless step generates, and the two things only the adopter can say.
 ///
-/// The vendor's document and the adopter's Overlay are the input and a
+/// The vendor's document and the adopter's Overlays are the input and a
 /// directory is the output; everything between them is derived. The two
 /// settings are the two facts the documents do not carry: which Rust types the
 /// adopter already owns for which vendor formats, and what command regenerates
@@ -91,25 +102,42 @@ const ALLOW: &str = "\
 #[derive(Debug, Clone)]
 pub struct Settings {
     document: PathBuf,
-    overlay: PathBuf,
+    overlays: Vec<PathBuf>,
     replacements: Vec<(String, String)>,
     command: String,
 }
 
 impl Settings {
-    /// Generate from the vendor's document, corrected by the adopter's Overlay.
+    /// Generate from the vendor's document, uncorrected.
     ///
-    /// Both are paths rather than contents: the generated files name the two
-    /// documents so that a reader can find them, and the corrected document is
-    /// written beside its source under the vendor document's own name.
+    /// A path rather than contents: the generated files name every document
+    /// they came from so that a reader can find them, and the corrected
+    /// document is written under the vendor document's own name.
+    ///
+    /// Corrections are layers over it — [`Settings::overlay`], once per layer.
     #[must_use]
-    pub fn new(document: impl Into<PathBuf>, overlay: impl Into<PathBuf>) -> Self {
+    pub fn new(document: impl Into<PathBuf>) -> Self {
         Self {
             document: document.into(),
-            overlay: overlay.into(),
+            overlays: Vec::new(),
             replacements: Vec::new(),
             command: DEFAULT_COMMAND.to_owned(),
         }
+    }
+
+    /// Lay one Overlay over the document, after every Overlay already named.
+    ///
+    /// Call it once per layer. The order of the calls is the order the layers
+    /// are applied, because a later layer corrects the document the earlier
+    /// ones produced — so two layers that touch the same node are not
+    /// interchangeable, and the last one wins.
+    ///
+    /// A layer that fails names itself, which is the practical reason to have
+    /// more than one: a tripwire that stops the bless says which file to open.
+    #[must_use]
+    pub fn overlay(mut self, overlay: impl Into<PathBuf>) -> Self {
+        self.overlays.push(overlay.into());
+        self
     }
 
     /// Emit `rust_type` wherever the document declares `format`.
@@ -172,17 +200,23 @@ impl Settings {
         Ok(vec![spec, types, ops, model])
     }
 
-    /// One Overlay application, in the three views the artefacts need.
+    /// Every layer, laid over the document in order, in the three views the
+    /// artefacts need.
     fn correct(&self) -> Result<Corrected, GenerateError> {
-        let document = read(&self.document)?;
-        let overlay = read(&self.overlay)?;
+        let fault = |path: &Path| {
+            let path = path.to_path_buf();
+            move |source| GenerateError::Overlay { path, source }
+        };
 
-        let overlaid = overlay::apply(&document, &overlay).map_err(GenerateError::Overlay)?;
+        let mut overlaid = overlay::parse(&read(&self.document)?).map_err(fault(&self.document))?;
+        for layer in &self.overlays {
+            overlaid = overlay::apply(overlaid, &read(layer)?).map_err(fault(layer))?;
+        }
         let yaml = serde_yaml_ng::to_string(&overlaid).map_err(GenerateError::Yaml)?;
 
         // Refuse to emit against a document this crate cannot build a CLI from.
         // Everything below trusts that this succeeded.
-        let model = Document::load(&yaml, "").map_err(GenerateError::Unusable)?;
+        let model = Document::load(&yaml, &[]).map_err(GenerateError::Unusable)?;
         let api = serde_json::from_value(overlaid).map_err(GenerateError::NotOpenApi)?;
 
         Ok(Corrected { yaml, model, api })
@@ -198,14 +232,15 @@ impl Settings {
         format!("{stem}.overlaid.yaml")
     }
 
-    /// What the corrected document says above its first line.
+    /// What the corrected document says above its first line: the command
+    /// that rewrites it, and every document it was built from in the order
+    /// they were applied — which is what a reader needs to reproduce it.
     fn document_header(&self) -> String {
         format!(
-            "# Generated by `{}` from {} and {}.\n\
-             # Do not edit: every correction belongs in the Overlay.\n",
+            "# Generated by `{}` from {}.\n\
+             # Do not edit: every correction belongs in an Overlay.\n",
             self.command,
-            file_name(&self.document),
-            file_name(&self.overlay),
+            listed(&self.inputs(file_name)),
         )
     }
 
@@ -213,14 +248,41 @@ impl Settings {
     /// it, where a correction belongs instead, and the one exemption generated
     /// source gets from an adopter's lints.
     fn rust_header(&self, corrected: &Path) -> String {
+        let belongs = match self.overlays.as_slice() {
+            [] => format!("is generated from `{}`", locator(&self.document)),
+            layers => {
+                let named: Vec<String> = layers
+                    .iter()
+                    .map(|path| format!("`{}`", locator(path)))
+                    .collect();
+                format!("belongs in {}", listed(&named))
+            }
+        };
         format!(
             "//! Generated by `{}` from `{}`.\n\
-             //! Do not edit: every correction belongs in `{}`.\n\
+             //! Do not edit: every correction {belongs}.\n\
              {ALLOW}",
             self.command,
             locator(corrected),
-            locator(&self.overlay),
         )
+    }
+
+    /// The vendor's document and every layer over it, in the order they are
+    /// applied, named the way `name` names a path.
+    fn inputs(&self, name: impl Fn(&Path) -> String) -> Vec<String> {
+        std::iter::once(&self.document)
+            .chain(&self.overlays)
+            .map(|path| name(path))
+            .collect()
+    }
+}
+
+/// A list as prose: `a`, then `a and b`, then `a, b and c`.
+fn listed(items: &[String]) -> String {
+    match items.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -352,8 +414,15 @@ pub enum GenerateError {
         #[source]
         source: io::Error,
     },
-    #[error("applying the Overlay to the vendor's document: {0}")]
-    Overlay(#[source] OverlayError),
+    /// A document or a layer over it that does not read, or does not apply.
+    /// `path` is the file to go and open: with corrections split across
+    /// layers, which one stopped the bless is the first thing to know.
+    #[error("{path}: {source}")]
+    Overlay {
+        path: PathBuf,
+        #[source]
+        source: OverlayError,
+    },
     #[error("the overlaid document is not representable as YAML: {0}")]
     Yaml(#[source] serde_yaml_ng::Error),
     #[error("the overlaid document does not describe a usable CLI: {0}")]

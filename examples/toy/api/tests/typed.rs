@@ -41,7 +41,7 @@ fn voucher(status: VoucherStatus) -> Voucher {
 /// committed without the blob beside it: all of them are this assertion.
 #[test]
 fn the_embedded_model_is_the_committed_documents_reduction() {
-    let reduced = typed_openapi::Document::load(api::DOCUMENT, "")
+    let reduced = typed_openapi::Document::load(api::DOCUMENT, &[])
         .expect("the committed document is a document");
     let api = api();
     let embedded = api.document();
@@ -79,7 +79,7 @@ fn a_document_that_has_drifted_from_the_inventory_is_refused_at_startup() {
 
     let renamed =
         api::DOCUMENT.replace("operationId: renderVoucher", "operationId: reRenderVoucher");
-    let drifted = typed_openapi::Document::load(&renamed, "").expect("still a document");
+    let drifted = typed_openapi::Document::load(&renamed, &[]).expect("still a document");
     let error = drifted
         .matches(api::OPERATIONS)
         .expect_err("the inventory still says renderVoucher");

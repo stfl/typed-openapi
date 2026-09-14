@@ -1,20 +1,21 @@
 //! Every way this crate's API differs from the vendor's document, in one list.
 //!
-//! The corrections themselves live in `spec/overlay.yaml`, because a standard
-//! Overlay is what the eight tools in the exploration could all read. That
-//! makes the Overlay the mechanism — but a YAML file of JSONPath targets is not
-//! what a reviewer wants to read to answer "what have we changed, and is it
-//! still needed?". [`CORRECTIONS`] is that answer, one line per decision.
+//! The corrections themselves live in `spec/corrections.yaml` and
+//! `spec/cli.yaml`, because a standard Overlay is what the eight tools in the
+//! exploration could all read. That makes the Overlay the mechanism — but two
+//! YAML files of JSONPath targets are not what a reviewer wants to read to
+//! answer "what have we changed, and is it still needed?". [`CORRECTIONS`] is
+//! that answer, one line per decision.
 //!
-//! It is not a second copy of the Overlay, because every row is checked against
+//! It is not a second copy of the Overlays, because every row is checked against
 //! both documents by `tests/corrections.rs`:
 //!
 //! - a row that no longer describes a real difference fails — the vendor has
 //!   caught up, and the correction should go;
-//! - a real difference with no row fails — someone changed the Overlay without
+//! - a real difference with no row fails — someone changed an Overlay without
 //!   saying so here.
 //!
-//! So the list cannot drift from the Overlay in either direction, and the
+//! So the list cannot drift from the Overlays in either direction, and the
 //! survey a regeneration owes the adopter is a test rather than a diff.
 
 /// One difference between the vendor's document and the API this crate offers.

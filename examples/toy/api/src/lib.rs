@@ -2,9 +2,10 @@
 //! document.
 //!
 //! The document the vendor ships is wrong in five ways, and every correction
-//! lives in `spec/overlay.yaml` as standard OpenAPI Overlay actions.
-//! `cargo run -p xtask -- bless` applies them once and writes four things into
-//! the `api-generated` crate beneath this one:
+//! lives in an Overlay as standard OpenAPI Overlay actions: `spec/corrections.yaml`
+//! for what the vendor got wrong, then `spec/cli.yaml` for what only a command
+//! line needs. `cargo run -p xtask -- bless` applies them in that order and
+//! writes four things into the `api-generated` crate beneath this one:
 //!
 //! - `spec/toy.overlaid.yaml` — the corrected document, embedded as
 //!   [`DOCUMENT`]. It is the reviewable record of what the rest was emitted

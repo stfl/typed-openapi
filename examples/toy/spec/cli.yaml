@@ -1,0 +1,32 @@
+overlay: 1.1.0
+info:
+  title: Command-line markers for the Toy Accounting API
+  version: "1.0"
+  description: >-
+    What only a command line needs, as standard OpenAPI Overlay 1.1 actions.
+    Applied after `corrections.yaml`, over the document that layer produced.
+
+    Everything here is an `x-cli-` extension, under the `x-` prefix OpenAPI
+    reserves for exactly this: facts about how an operation is offered on a
+    command line, which are the adopter's to state and no business of the
+    vendor's. Keeping them out of `corrections.yaml` is what leaves that layer
+    a document about the vendor's API rather than about this CLI.
+
+    `x-cli-writes` marks an operation the gate must hold behind `--commit`.
+    `x-cli-group` and `x-cli-command` name an operation on the command line
+    where the path spells it badly, or where two operations reduce to the same
+    name; the toy document needs neither.
+
+    Applied with `ErrorOnZeroMatch`, like every layer, and the action below
+    uses that deliberately as a tripwire.
+extends: toy.yaml
+actions:
+  # ------------------------------------------------------ The writing GET ---
+  # TRIPWIRE. HTTP cannot say "this GET writes", so the document has to.
+  # Targeting `.get` rather than the path item means a vendor who moves the
+  # operation to POST fails the bless — which is the right outcome, because a
+  # POST is already gated and the correction has become redundant.
+  - target: $.paths['/vouchers/{id}/render'].get
+    description: Mark the rendering GET as a write, so `--commit` gates it.
+    update:
+      x-cli-writes: true

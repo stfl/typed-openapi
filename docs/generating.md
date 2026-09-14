@@ -12,6 +12,7 @@ the only thing you write is a binary that calls it.
 
 - [The four artefacts](#the-four-artefacts)
 - [`Settings`](#settings)
+- [Layers](#layers)
 - [Wiring your own `xtask`](#wiring-your-own-xtask)
 - [The crate it writes into](#the-crate-it-writes-into)
 - [The `builder` feature](#the-builder-feature)
@@ -19,7 +20,7 @@ the only thing you write is a binary that calls it.
 
 ## The four artefacts
 
-All four come out of a single Overlay application, which is why none of them can
+All four come out of one run of the Overlay chain, which is why none of them can
 describe a different API from the others. `<name>` is the vendor document's own
 file stem.
 
@@ -46,17 +47,30 @@ with a wrapping module.
 ```rust
 use typed_openapi::generate::Settings;
 
-Settings::new("spec/vendor.yaml", "spec/overlay.yaml")
+Settings::new("spec/vendor.yaml")
+    .overlay("spec/corrections.yaml")
+    .overlay("spec/cli.yaml")
     .replace("money", "api_types::Money")
     .regenerated_by("just bless")
     .write_to("api-generated")?;
 ```
 
-### `Settings::new(document, overlay) -> Settings`
+### `Settings::new(document) -> Settings`
 
-The vendor's document and your Overlay, as paths. Both are read when
-`write_to` runs, and both are named in the header of every file written, so a
-reader of a generated file can find what it came from.
+The vendor's document, as a path. It is read when `write_to` runs, and it is
+named in the header of every file written, so a reader of a generated file can
+find what it came from.
+
+### `Settings::overlay(overlay) -> Settings`
+
+Lay one Overlay over the document, after every Overlay already named. Call it
+once per layer; calls accumulate, and the order of the calls is the order the
+layers are applied.
+
+Every layer is named in the headers too, in that order. A layer that does not
+read, or does not apply, names itself in the error — which is the practical
+reason to have more than one. [overlay.md](overlay.md#layers) has the split
+this repository recommends, and what each layer buys.
 
 ### `Settings::replace(format, rust_type) -> Settings`
 
@@ -103,12 +117,12 @@ worth knowing about in advance:
 
 | Case | Means |
 |---|---|
-| `Overlay` | a correction did not apply — see [drift.md](drift.md) |
+| `Overlay` | a document did not read, or a correction did not apply — the message opens with the file. See [drift.md](drift.md) |
 | `Unusable` | the corrected document does not describe a usable CLI |
 | `Unsupported` | the document declares something the generator has no Rust spelling for |
 | `RustfmtMissing` | `rustfmt` is not on `PATH` |
 
-The Overlay is applied with `ErrorOnZeroMatch`. A correction whose target the
+Every Overlay is applied with `ErrorOnZeroMatch`. A correction whose target the
 vendor has renamed or retyped fails here rather than lapsing quietly, which is
 the loudest thing a vendor revision can do.
 
@@ -139,12 +153,11 @@ fn main() -> ExitCode {
     let adoption = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or_else(|| Path::new("."));
-    let blessed = Settings::new(
-        adoption.join("spec/vendor.yaml"),
-        adoption.join("spec/overlay.yaml"),
-    )
-    .replace("money", "api_types::Money")
-    .write_to(adoption.join("api-generated"));
+    let blessed = Settings::new(adoption.join("spec/vendor.yaml"))
+        .overlay(adoption.join("spec/corrections.yaml"))
+        .overlay(adoption.join("spec/cli.yaml"))
+        .replace("money", "api_types::Money")
+        .write_to(adoption.join("api-generated"));
 
     match blessed {
         Ok(written) => {

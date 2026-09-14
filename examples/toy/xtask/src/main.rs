@@ -1,5 +1,5 @@
 //! The bless step for this adoption: the vendor's document plus the adopter's
-//! Overlay in, the `api-generated` crate out.
+//! Overlays in, the `api-generated` crate out.
 //!
 //! ```text
 //! cargo run -p xtask -- bless
@@ -24,12 +24,11 @@ fn main() -> ExitCode {
     let adoption = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or_else(|| Path::new("."));
-    let blessed = Settings::new(
-        adoption.join("spec/toy.yaml"),
-        adoption.join("spec/overlay.yaml"),
-    )
-    .replace("money", "api_types::Money")
-    .write_to(adoption.join("api-generated"));
+    let blessed = Settings::new(adoption.join("spec/toy.yaml"))
+        .overlay(adoption.join("spec/corrections.yaml"))
+        .overlay(adoption.join("spec/cli.yaml"))
+        .replace("money", "api_types::Money")
+        .write_to(adoption.join("api-generated"));
 
     match blessed {
         Ok(written) => {

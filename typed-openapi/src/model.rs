@@ -224,13 +224,15 @@ pub struct DriftError {
 }
 
 impl Document {
-    /// Parse the vendor's document, apply the adopter's Overlay to it, and
-    /// resolve the result into operations.
+    /// Parse the vendor's document, lay the adopter's Overlays over it in
+    /// order, and resolve the result into operations.
     ///
     /// *Requires the `document` feature.*
     ///
-    /// Both arguments are file contents, YAML or JSON. Pass `""` as `overlay`
-    /// to run a document that is already corrected.
+    /// Every argument is a file's contents, YAML or JSON. `overlays` is a list
+    /// because corrections come in layers — each one corrects the document the
+    /// ones before it produced, so the order they are given in is the order
+    /// they happen. An empty list runs a document that is already corrected.
     ///
     /// This is the expensive door, and the `document` feature is what opens it.
     /// A bless step calls it once and writes [`Document::to_blob`] beside the
@@ -242,7 +244,10 @@ impl Document {
     ///
     /// let doc = Document::load(
     ///     include_str!("../tests/fixtures/toy.yaml"),
-    ///     include_str!("../tests/fixtures/overlay.yaml"),
+    ///     &[
+    ///         include_str!("../tests/fixtures/corrections.yaml"),
+    ///         include_str!("../tests/fixtures/cli.yaml"),
+    ///     ],
     /// )?;
     /// let op = doc.get("getVoucher").expect("the document describes it");
     /// let request = Invocation::new(op, Values::new().param("id", 5))?.request(doc.base())?;
@@ -250,8 +255,11 @@ impl Document {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[cfg(feature = "document")]
-    pub fn load(document: &str, overlay: &str) -> Result<Self, LoadError> {
-        let doc = crate::overlay::apply(document, overlay)?;
+    pub fn load(document: &str, overlays: &[&str]) -> Result<Self, LoadError> {
+        let mut doc = crate::overlay::parse(document)?;
+        for overlay in overlays {
+            doc = crate::overlay::apply(doc, overlay)?;
+        }
         let doc: OpenAPI = serde_json::from_value(doc).map_err(LoadError::Shape)?;
         Self::from_openapi(&doc)
     }

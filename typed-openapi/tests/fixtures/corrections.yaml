@@ -3,18 +3,21 @@ info:
   title: Corrections to the Toy Accounting API
   version: "1.0"
   description: >-
-    Every correction the adopter makes to the vendor's document, as standard
-    OpenAPI Overlay 1.1 actions. `spec/toy.yaml` is never edited. `cargo xtask
-    bless` applies this file to it and writes the result to
-    `api-generated/spec/toy.overlaid.yaml`, which is the one document the
-    generated Rust types, the generated wrappers and the reduced model the
-    CLI's command tree is built from all come from.
+    What the vendor got wrong, as standard OpenAPI Overlay 1.1 actions.
+    `spec/toy.yaml` is never edited.
+
+    This layer is about the vendor's API and nothing else: an undocumented
+    field, an undocumented operation, and a declared format the vendor never
+    said the rule for. Applying it alone yields the document the vendor should
+    have shipped — which is worth having on its own, because anything that
+    reads OpenAPI can read it, including the vendor. Nothing here mentions a
+    command line; `cli.yaml` is the layer that does.
 
     Applied with `ErrorOnZeroMatch`: an action that matches nothing fails the
-    bless instead of lapsing quietly. Two actions below use that deliberately
-    as a tripwire — their JSONPath states what the vendor currently says, so a
-    vendor revision that changes it fails the bless rather than being silently
-    overwritten.
+    bless instead of lapsing quietly. The first action below uses that
+    deliberately as a tripwire — its JSONPath states what the vendor currently
+    says, so a vendor revision that changes it fails the bless rather than
+    being silently overwritten.
 extends: toy.yaml
 actions:
   # ---------------------------------------------------------------- Money ---
@@ -67,13 +70,3 @@ actions:
                 application/json:
                   schema:
                     $ref: "#/components/schemas/Voucher"
-
-  # ------------------------------------------------------- The writing GET ---
-  # TRIPWIRE. HTTP cannot say "this GET writes", so the document has to.
-  # `x-cli-writes` is the one extension this design adds, under the `x-`
-  # prefix OpenAPI reserves for exactly this. Targeting `.get` rather than the
-  # path item means a vendor who moves the operation to POST fails the bless.
-  - target: $.paths['/vouchers/{id}/render'].get
-    description: Mark the rendering GET as a write, so `--commit` gates it.
-    update:
-      x-cli-writes: true

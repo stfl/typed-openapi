@@ -22,7 +22,11 @@
 use typed_openapi::Document;
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
-const OVERLAY: &str = include_str!("fixtures/overlay.yaml");
+const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
+const CLI: &str = include_str!("fixtures/cli.yaml");
+
+/// The layers, in the order a bless step applies them.
+const OVERLAYS: &[&str] = &[CORRECTIONS, CLI];
 
 /// The vendor's document with one line replaced.
 fn mutated(from: &str, to: &str) -> String {
@@ -33,8 +37,13 @@ fn mutated(from: &str, to: &str) -> String {
     TOY.replacen(from, to, 1)
 }
 
+/// Every layer over `document`, in the order a bless step applies them.
 fn bless(document: &str) -> Result<serde_json::Value, typed_openapi::overlay::OverlayError> {
-    typed_openapi::overlay::apply(document, OVERLAY)
+    let mut doc = typed_openapi::overlay::parse(document)?;
+    for layer in OVERLAYS {
+        doc = typed_openapi::overlay::apply(doc, layer)?;
+    }
+    Ok(doc)
 }
 
 #[test]
@@ -77,7 +86,7 @@ fn removing_an_operation_the_overlay_does_not_mention_passes_the_bless() {
             .split("  /vouchers/{id}/render:")
             .nth(1)
             .expect("the fixture declares the render operation");
-    let doc = Document::load(&without, OVERLAY).expect("the document still loads");
+    let doc = Document::load(&without, OVERLAYS).expect("the document still loads");
     assert!(doc.get("enshrineVoucher").is_none());
     assert!(doc.get("renderVoucher").is_some());
 }
@@ -91,7 +100,7 @@ fn adding_or_removing_an_unrelated_field_passes_the_bless() {
         "        currency:\n",
         "        note:\n          type: string\n        currency:\n",
     );
-    let doc = Document::load(&added, OVERLAY).expect("the document still loads");
+    let doc = Document::load(&added, OVERLAYS).expect("the document still loads");
     let typed_openapi::model::Body::JsonFields(fields) =
         doc.get("createVoucher").expect("createVoucher").body()
     else {
@@ -103,5 +112,5 @@ fn adding_or_removing_an_unrelated_field_passes_the_bless() {
         "        currency:\n          type: string\n          description: ISO 4217 code\n",
         "",
     );
-    assert!(Document::load(&removed, OVERLAY).is_ok());
+    assert!(Document::load(&removed, OVERLAYS).is_ok());
 }

@@ -8,9 +8,9 @@ The document moves without asking. What matters is not that a change is
 that names the thing that moved. There are three such places, in order of how
 early they bite:
 
-- **bless time** — `just bless` applies the Overlay to the vendor's document
-  and rewrites the generated crate. An Overlay action that no longer matches
-  fails here.
+- **bless time** — `just bless` lays every Overlay over the vendor's document
+  in order and rewrites the generated crate. An Overlay action that no longer
+  matches fails here, naming the layer it is in.
 - **compile time** — the generated types and inventory are ordinary Rust. Code
   that names a field, a variant or an operation stops compiling.
 - **test time** — `just test` holds the committed artefacts to each other and
@@ -20,7 +20,7 @@ early they bite:
 
 | the vendor… | what fails | when | and says |
 |---|---|---|---|
-| renames or retypes a field an Overlay action corrects | the Overlay, under `ErrorOnZeroMatch` | bless | target matched zero nodes, quoting the JSONPath |
+| renames or retypes a field an Overlay action corrects | that layer, under `ErrorOnZeroMatch` | bless | the layer's file name, then target matched zero nodes, quoting the JSONPath |
 | moves a corrected operation to another method | the same | bless | the same, quoting the other JSONPath |
 | adds an operation that reduces to a command another one already has | `Document::load` | bless | both `operationId`s, and that one needs an `x-cli-command` |
 | withdraws an operation something depends on | `const _: () = assert!(documented(..))` | compile | E0080, quoting the whole assertion |
@@ -39,14 +39,16 @@ The verbatim messages are in the sections below.
 ## Bless time: the Overlay as an assertion
 
 `ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Two of
-the four actions in
-[`examples/toy/spec/overlay.yaml`](../examples/toy/spec/overlay.yaml) are
-written as JSONPath filters that state what the vendor currently says, so a
-revision that changes the thing being corrected fails the bless rather than
-being silently overwritten:
+the example adoption's four actions — one in
+[`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml), one in
+[`spec/cli.yaml`](../examples/toy/spec/cli.yaml) — are written as JSONPath
+filters that state what the vendor currently says, so a revision that changes
+the thing being corrected fails the bless rather than being silently
+overwritten. The message opens with the layer, because with corrections split
+by purpose that is the first thing to know:
 
 ```
-the Overlay does not apply: actions[0] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
+spec/corrections.yaml: the Overlay does not apply: actions[0] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
 ```
 
 The form and its cost are in [docs/overlay.md](overlay.md#the-tripwire-form);
@@ -215,8 +217,8 @@ enforce it. Only a `format: money` field has a rule the CLI applies.
 the vendor document that is committed here. `just blessed` re-runs the bless
 step and fails on a non-empty `git diff`, so the committed artefacts cannot
 drift from the committed document — but nothing fetches a *newer* document.
-Until someone updates `examples/toy/spec/toy.yaml`, the committed document *is*
-the API as far as this workspace is concerned.
+Until someone updates `spec/toy.yaml`, the committed document *is* the API as
+far as this workspace is concerned.
 
 The honest summary: drift in something you **use** is loud, drift in something
 you **corrected** is loud, and drift in everything else is a diff someone has to

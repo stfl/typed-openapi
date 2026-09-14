@@ -21,17 +21,17 @@ use typed_openapi::{Document, Effect};
 const VENDOR: &str = include_str!("../../spec/toy.yaml");
 
 fn vendor() -> Document {
-    Document::load(VENDOR, "").expect("the vendor's document")
+    Document::load(VENDOR, &[]).expect("the vendor's document")
 }
 
 fn corrected() -> Document {
-    Document::load(api::DOCUMENT, "").expect("the embedded, corrected document")
+    Document::load(api::DOCUMENT, &[]).expect("the embedded, corrected document")
 }
 
 /// A document as plain JSON, for the comparisons the model does not carry —
 /// what a schema property is declared as, rather than what the CLI makes of it.
 fn json(document: &str) -> serde_json::Value {
-    typed_openapi::overlay::apply(document, "").expect("a document")
+    typed_openapi::overlay::parse(document).expect("a document")
 }
 
 /// Every schema property of a document, keyed by `(schema, property)`.
@@ -206,7 +206,7 @@ fn every_undeclared_property_is_still_undeclared() {
 
 /// The other direction, and the one that keeps [`api::CORRECTIONS`] from being
 /// a second copy of the Overlay: a difference between the two documents that no
-/// row explains fails here. Editing `spec/overlay.yaml` without editing the list
+/// row explains fails here. Editing an Overlay without editing the list
 /// does not compile away, it turns red.
 #[test]
 fn every_difference_between_the_documents_has_a_row() {
@@ -259,4 +259,30 @@ fn every_difference_between_the_documents_has_a_row() {
              variant describes"
         );
     }
+}
+
+/// The corrections are split into layers by purpose, and this is the half of
+/// that split worth enforcing rather than merely intending.
+///
+/// `corrections.yaml` is about the vendor's API: applying it alone yields the
+/// document the vendor should have shipped, which is worth having on its own
+/// — it can go back to the vendor, or into a generator for another language.
+/// An `x-cli-` marker in it would make it a document about this CLI instead.
+/// `cli.yaml` is where those live, and it is applied after.
+#[test]
+fn the_vendor_layer_says_nothing_about_a_command_line() {
+    const CORRECTIONS: &str = include_str!("../../spec/corrections.yaml");
+    const CLI: &str = include_str!("../../spec/cli.yaml");
+
+    assert!(
+        !CORRECTIONS.contains("x-cli-"),
+        "`spec/corrections.yaml` carries a marker only this CLI reads, so applying \
+         it alone no longer yields a document about the vendor's API"
+    );
+    // The other half: a check that cannot say yes has not said no above.
+    assert!(
+        CLI.contains("x-cli-writes"),
+        "`spec/cli.yaml` no longer carries the marker the gate reads, so either \
+         the gate is uncorrected or this check can no longer see it"
+    );
 }
