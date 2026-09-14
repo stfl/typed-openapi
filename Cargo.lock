@@ -25,7 +25,7 @@ checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
 name = "api"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "api-generated",
  "http",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "api-generated"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "http",
  "money",
@@ -218,7 +218,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "api",
  "clap",
@@ -888,7 +888,7 @@ dependencies = [
 
 [[package]]
 name = "money"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "num-bigint",
  "serde",
@@ -1788,7 +1788,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "typed-openapi"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bon",
  "clap",
@@ -2218,7 +2218,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "typed-openapi",
 ]

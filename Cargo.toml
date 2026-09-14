@@ -36,7 +36,7 @@ edition = "2024"
 # hashbrown 0.17 sit below it at 1.85. Derived from what those crates declare —
 # CI builds and tests on current stable rather than against an old toolchain.
 rust-version = "1.88"
-version = "0.1.0"
+version = "0.0.1"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/stfl/typed-openapi"
 authors = ["Stefan Lendl <git@stfl.dev>"]
