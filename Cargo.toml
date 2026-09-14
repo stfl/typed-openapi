@@ -28,6 +28,10 @@ default-members = [
 
 [workspace.package]
 edition = "2024"
+# The floor the dependencies set between them: edition 2024 wants 1.85, and so
+# do clap 4.6 and hashbrown 0.17, which are the highest in the default closure.
+# CI builds and tests the crate on current stable; this number is derived from
+# what the dependencies declare rather than measured against an old toolchain.
 rust-version = "1.85"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"

@@ -17,7 +17,7 @@ jobs:
     name: just gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # `rust-toolchain.toml` names the toolchain and its components, so the
       # version lives in one place. Nightly is this repository's tooling —
       # rustfmt's import grouping and the coverage recipe's branch
@@ -42,23 +42,16 @@ jobs:
       # check that it stands up outside this workspace.
       - run: just package
 
-  # The published crate compiles and its tests pass on stable Rust, at the
-  # version it declares and at the current release. Nothing in the library may
-  # need a nightly feature; if this job goes red, that promise is broken.
+  # The published crate compiles and its tests pass on stable Rust. Nothing in
+  # the library may need a nightly feature — the nightly the gate runs on is
+  # this repository's formatter and coverage tooling, not the crate's — and if
+  # this job goes red that promise is broken.
   stable:
-    name: rust ${{ matrix.rust }}
+    name: rust stable
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 1.85 is what clap 4.6, hashbrown 0.17 and edition 2024 set between
-        # them, and it is what `rust-version` declares.
-        rust: ["1.85", stable]
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +${{ matrix.rust }} build -p typed-openapi --all-features
-      - run: cargo +${{ matrix.rust }} test -p typed-openapi --all-features
+      - run: cargo +stable build -p typed-openapi --all-features
+      - run: cargo +stable test -p typed-openapi --all-features

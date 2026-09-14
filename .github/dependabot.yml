@@ -9,6 +9,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # typify pins schemars 0.8, so a 1.x bump here cannot resolve. Take it
+      # when typify does.
+      - dependency-name: schemars
+        update-types: [version-update:semver-major]
     groups:
       # One pull request for the routine bumps; anything that breaks a build
       # gets its own, because that is the one worth reading.
