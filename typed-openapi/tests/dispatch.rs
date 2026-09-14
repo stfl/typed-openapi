@@ -216,3 +216,49 @@ fn no_subcommand_at_all_is_its_own_error() {
     assert!(matches!(error, DispatchError::NoCommand));
     assert_eq!(error.to_string(), "no command given");
 }
+
+/// The one argument of `command` with this long flag.
+fn flag<'c>(command: &'c Command, long: &str) -> &'c clap::Arg {
+    command
+        .get_arguments()
+        .find(|arg| arg.get_long() == Some(long))
+        .unwrap_or_else(|| panic!("no --{long} on `{}`", command.get_name()))
+}
+
+fn command_for(doc: &Document, id: &str) -> Command {
+    tree::command(doc.get(id).unwrap_or_else(|| panic!("{id} is documented")))
+}
+
+#[test]
+fn an_enum_in_the_document_reaches_the_command_line_as_choices() {
+    let doc = document();
+    let choices: Vec<String> = flag(&command_for(&doc, "createVoucher"), "status")
+        .get_possible_values()
+        .iter()
+        .map(|value| value.get_name().to_owned())
+        .collect();
+
+    // This is what a shell offers for `--status <TAB>`, and what the parser
+    // refuses anything else against: one list, from the document.
+    assert_eq!(choices, ["draft", "open", "paid"]);
+}
+
+#[test]
+fn only_an_operation_that_writes_carries_the_commit_flag() {
+    let doc = document();
+    let has_commit = |id: &str| {
+        command_for(&doc, id)
+            .get_arguments()
+            .any(|arg| arg.get_long() == Some("commit"))
+    };
+
+    assert!(!has_commit("listVouchers"), "a read runs on sight");
+    assert!(!has_commit("getVoucher"), "a read runs on sight");
+    assert!(has_commit("createVoucher"), "a POST is gated");
+    // The gate does not come from the method: this one is a GET the document
+    // marks `x-cli-writes`, and the flag has to be there for a user to pass.
+    assert!(
+        has_commit("renderVoucher"),
+        "a documented writing GET is gated"
+    );
+}

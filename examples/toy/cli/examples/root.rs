@@ -9,15 +9,16 @@
 //! ```text
 //! cargo run -p cli --example root -- --help
 //! cargo run -p cli --example root -- get-voucher --id 5
-//! cargo run -p cli --example root -- create-voucher --total 12.50 --currency EUR
+//! cargo run -p cli --example root -- create-voucher --total 12.50 --currency EUR --status open
 //! ```
 
 use std::process::ExitCode;
 
 use clap::Command;
+use clap_complete::CompleteEnv;
 use cli::client::Ureq;
-use typed_openapi::render;
 use typed_openapi::tree::{self, Outcome};
+use typed_openapi::{Document, render};
 
 fn main() -> ExitCode {
     match run() {
@@ -32,15 +33,27 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<String, Box<dyn std::error::Error>> {
-    let api = api::Api::new()?;
-    let matches = Command::new("toy")
+/// The tree, built twice from one function: once for the shell to ask what
+/// completes, once to parse what the user typed. Both see the same document,
+/// so what the shell offers is always what the CLI accepts.
+fn root(doc: &Document) -> Command {
+    Command::new("toy")
         .about("Every operation in the document, mounted as the CLI itself")
         .subcommand_required(true)
         .arg_required_else_help(true)
-        .subcommands(tree::commands(api.document()))
-        .get_matches();
+        .subcommands(tree::commands(doc))
+}
 
+fn run() -> Result<String, Box<dyn std::error::Error>> {
+    let api = api::Api::new()?;
+
+    // Dynamic completion: the shell asks this binary what completes, so the
+    // document's own enums arrive as choices and there is nothing to
+    // regenerate on the user's machine. `complete()` returns at once unless
+    // the shell set the environment variable that asks for a completion.
+    CompleteEnv::with_factory(|| root(api.document())).complete();
+
+    let matches = root(api.document()).get_matches();
     Ok(
         match tree::dispatch(api.document(), api.base(), &Ureq::new(), &matches)? {
             Outcome::Sent(response) => String::from_utf8_lossy(response.body()).into_owned(),
