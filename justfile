@@ -97,10 +97,14 @@ gate: check features test package
 # What crates.io will receive. `--list` is the cheap half — it fails on missing
 # metadata and prints the file set — and the build proves the crate stands up
 # outside this workspace.
+#
+# `--allow-dirty` so the recipe answers the same question while work is in
+# progress. It is not a licence to publish a dirty tree: `cargo publish` is
+# run by the release workflow from a tag, never from here.
 
 # Verify the published crate packages and builds from its own tarball.
 package:
-    cargo package -p typed-openapi --list
+    cargo package -p typed-openapi --list --allow-dirty
     cargo package -p typed-openapi --allow-dirty
 
 # Regenerate the example adoption from the vendor document and the Overlay.

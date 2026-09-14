@@ -1,16 +1,10 @@
-//! An OpenAPI document, read once, serving a clap command tree and a typed
-//! Rust caller from the same request builder.
+//! <!-- The primer is the repository's README, which is also this crate's
+//! front page on crates.io and docs.rs. What follows it here is the part a
+//! reader wants *after* deciding to use the crate: the map of the API, and
+//! what a feature is allowed to do to it. -->
+#![doc = include_str!("../README.md")]
 //!
-//! There is no generator in the shipped path. The document is data: an
-//! operation is a value in a list, not a branch someone wrote, so there is no
-//! chance of the CLI disagreeing with the document it shipped with, and the
-//! tree, the completion and the request builder all read the same list.
-//!
-//! Reading that list out of YAML is not, however, something a shipped binary
-//! should do on every invocation, and under the default feature set it is not
-//! something a shipped binary compiles. `Document::load` is the expensive door;
-//! [`Document::from_blob`] is the door a binary uses, and it takes the
-//! reduction a bless step already wrote down.
+//! # The API
 //!
 //! The six things a caller learns:
 //!
@@ -28,34 +22,30 @@
 //! - `tree::commands` and `tree::dispatch` — the clap tree, and the trip back.
 //! - [`SyncClient`] / [`AsyncClient`] — where the request meets the network.
 //!
-//! # Features
+//! The document is data: an operation is a value in a list, not a branch
+//! someone wrote, so there is no chance of the CLI disagreeing with the
+//! document it shipped with, and the tree, the completion and the request
+//! builder all read the same list.
 //!
-//! | feature | default | adds |
-//! |---|---|---|
-//! | `clap` | yes | `tree`: the command tree, and `ArgMatches` back to a sent request |
-//! | `document` | no | `Document::load`, `overlay`, `schema`, `names::Namespace`, `model::LoadError` |
-//! | `generate` | no | `generate`: the bless step's code generator. Implies `document` |
-//! | `builder` | no | a named-argument builder on the generated wrappers |
+//! Reading that list out of YAML is not, however, something a shipped binary
+//! should do on every invocation, and under the default feature set it is not
+//! something a shipped binary compiles. `Document::load` is the expensive door
+//! and `document` is what opens it; [`Document::from_blob`] is the door a
+//! binary uses, and it takes the reduction a bless step already wrote down.
 //!
-//! Every feature adds and removes whole items and never changes one. No type on
-//! this page gains a variant or a field with one, so a caller who matches an
-//! error of this crate exhaustively writes the same match in every build, and
-//! what the docs say about a type they can see is true of every build that has
-//! it.
+//! # What a feature may do
 //!
-//! `clap` is on by default because most adopters want the command tree; a crate
-//! that only wants typed calls turns it off and links no argument parser.
-//! `document` and `generate` belong to the bless step, and a shipping binary
-//! that enabled either would compile a YAML parser, an OpenAPI object model and
-//! a code generator it can never reach.
+//! Every feature adds and removes whole items and never changes one. No type
+//! on this page gains a variant or a field with one, so a caller who matches
+//! an error of this crate exhaustively writes the same match in every build,
+//! and what the docs say about a type they can see is true of every build that
+//! has it.
 //!
-//! # No HTTP client
-//!
-//! This crate depends on no HTTP client in any feature combination. The seam is
-//! [`SyncClient`] / [`AsyncClient`] over `http::Request<Vec<u8>>`, and an
-//! adapter for a real client is about ten lines:
-//! `examples/toy/cli/src/client.rs` has one for ureq 3 and one for
-//! `reqwest::Client`, written to be copied rather than depended on.
+//! `clap` is on by default because most adopters want the command tree; a
+//! crate that only wants typed calls turns it off and links no argument
+//! parser. `document` and `generate` belong to the bless step, and a shipping
+//! binary that enabled either would compile a YAML parser, an OpenAPI object
+//! model and a code generator it can never reach.
 
 #[cfg(feature = "clap")]
 pub mod tree;

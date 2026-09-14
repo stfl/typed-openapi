@@ -15,7 +15,7 @@ info:
     as a tripwire — their JSONPath states what the vendor currently says, so a
     vendor revision that changes it fails the bless rather than being silently
     overwritten.
-extends: ../../../spec/toy.yaml
+extends: toy.yaml
 actions:
   # ---------------------------------------------------------------- Money ---
   # TRIPWIRE. The filter selects `Voucher.properties` only while `total` is
