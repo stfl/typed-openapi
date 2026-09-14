@@ -128,7 +128,11 @@ socket, no runtime and no fixture server. It is a `SyncClient` and an
 - **No authentication.** Sign the `http::Request` in your own adapter.
 - **No `oneOf` / `allOf` / `anyOf` request bodies.** A nested body is
   `--json-body FILE`; per-field flags exist only for flat ones.
-- **No array or object query parameters**, and no `style` / `explode`.
+- **No object parameters.** A list of scalars is a repeatable flag, laid out by
+  the parameter's own `style` and `explode`. An object, an `in: cookie`, a
+  `content`-described parameter and anything declaring a `style` this crate does
+  not serialise carry no flag at all: each is named on its subcommand's help,
+  and refuses the document only where the document requires it.
 - **No async CLI.** The command tree is sync; `AsyncClient` is for the typed
   caller.
 - **No check on a whole-body file.** `--json-body FILE` is held to being JSON

@@ -200,6 +200,77 @@ fn a_replaced_format_becomes_a_type_the_generated_code_never_defines() {
     );
 }
 
+/// One operation declaring both a list this crate can spell and an object it
+/// cannot.
+const SHAPED: &str = r##"
+openapi: 3.0.3
+info: { title: Shaped, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /vouchers:
+    get:
+      operationId: listVouchers
+      parameters:
+        - name: tag
+          in: query
+          schema: { type: array, items: { type: string } }
+        - name: filter
+          in: query
+          schema:
+            type: object
+            properties:
+              opened:
+                type: object
+                properties:
+                  from: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Voucher" }
+components:
+  schemas:
+    Voucher:
+      type: object
+      properties:
+        id: { type: integer }
+"##;
+
+/// A CLI and a Rust caller reach one request builder, so a parameter has to
+/// mean the same thing on both roads: a list is a `Vec` argument filled the way
+/// a repeated flag fills it, and a parameter neither can supply is an argument
+/// on neither — said in the wrapper's own documentation rather than left for a
+/// reader to notice.
+#[test]
+fn a_list_parameter_is_a_vec_argument_and_one_with_no_flag_is_no_argument() {
+    let dir = out("shaped");
+    Settings::new(wrote(&dir, "shaped.yaml", SHAPED))
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = read(&dir.join("src/ops.rs"));
+
+    assert!(
+        ops.contains("tag: Vec<&str>"),
+        "the list is not a Vec:\n{ops}"
+    );
+    assert!(
+        ops.contains(r#".each("tag", tag)"#),
+        "the list does not reach the request builder repeated:\n{ops}"
+    );
+    assert!(
+        !ops.contains("filter:"),
+        "an argument the wrapper has nowhere to put:\n{ops}"
+    );
+    assert!(
+        ops.contains(
+            "The document's `filter` parameter is not an argument: it is neither a value \
+             nor a list of values."
+        ),
+        "the wrapper does not say what it does not carry:\n{ops}"
+    );
+}
+
 /// Every generated file opens by telling its reader how to rewrite it and
 /// where a correction belongs. Both are read off the settings, so an adoption
 /// that spells its bless step differently gets its own spelling back.

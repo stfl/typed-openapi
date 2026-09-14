@@ -27,9 +27,9 @@ use thiserror::Error;
 
 use crate::model::{
     Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, JSON_BODY, Location, Operation,
-    Param, RAW_BODY,
+    Param, RAW_BODY, Shape,
 };
-use crate::names::CommandName;
+use crate::names::{CommandName, renamed};
 use crate::plan::{Plan, PlanError};
 use crate::scalar::Scalar;
 use crate::transport::{HttpRequest, HttpResponse, SyncClient};
@@ -89,8 +89,8 @@ pub fn command(op: &Operation) -> Command {
         cmd = cmd.about(summary.to_owned());
     }
     cmd = cmd.long_about(long_about(op));
-    for param in op.params() {
-        cmd = cmd.arg(param_arg(param));
+    for arg in op.params().iter().filter_map(param_arg) {
+        cmd = cmd.arg(arg);
     }
     cmd = body_args(cmd, op.body());
     if op.effect() == Effect::Write {
@@ -125,6 +125,18 @@ fn long_about(op: &Operation) -> String {
     if op.effect() == Effect::Write {
         out.push_str("\n\nThis operation writes. Without --commit it is a dry run.");
     }
+    // A parameter with no flag is said here, where a flag would have been. The
+    // document declares it and this CLI cannot supply it, and a user reading
+    // `--help` is owed both halves of that.
+    for param in op.params() {
+        if let Shape::Unreachable(why) = param.shape() {
+            let _ = write!(
+                out,
+                "\n\n`{}` has no flag: it is {why}. The request goes out without it.",
+                param.name()
+            );
+        }
+    }
     out
 }
 
@@ -140,7 +152,13 @@ pub fn confirmed(op: &Operation, matches: &ArgMatches) -> bool {
 pub fn values(op: &Operation, matches: &ArgMatches) -> Result<Values, ArgError> {
     let mut values = Values::new();
     for param in op.params() {
-        if let Some(raw) = matches.get_one::<String>(param.flag()) {
+        let Shape::Flag { flag, .. } = param.shape() else {
+            continue;
+        };
+        // `get_many` serves both kinds: a flag given once yields one value, and
+        // a repeatable one yields every occurrence, in the order they were
+        // typed — which is the order they go on the wire in.
+        for raw in strings(matches, flag) {
             values = values.param(param.name(), raw);
         }
     }
@@ -337,7 +355,19 @@ fn split_part<'r>(flag: &'static str, raw: &'r str) -> Result<(&'r str, &'r str)
     }
 }
 
-fn param_arg(param: &Param) -> Arg {
+/// The flag one parameter grows — and nothing at all for one this CLI cannot
+/// supply, which the subcommand's long help names instead, where a dead flag
+/// would otherwise have stood.
+fn param_arg(param: &Param) -> Option<Arg> {
+    let Shape::Flag {
+        flag,
+        location,
+        scalar,
+        join,
+    } = param.shape()
+    else {
+        return None;
+    };
     // A document that describes nothing still knows where the value goes, and
     // a help page with an empty line beside a flag helps nobody.
     let described = param.description().map_or_else(
@@ -345,7 +375,7 @@ fn param_arg(param: &Param) -> Arg {
             Some(format!(
                 "The `{}` {} parameter",
                 param.name(),
-                match param.location() {
+                match location {
                     Location::Path => "path",
                     Location::Query => "query",
                     Location::Header => "header",
@@ -354,16 +384,20 @@ fn param_arg(param: &Param) -> Arg {
         },
         |text| Some(text.to_owned()),
     );
-    value_arg(
-        param.flag(),
-        param.scalar(),
-        help_line(
-            described.as_deref(),
-            param.scalar(),
-            wire(param.renamed(), param.name()),
-        ),
+    let notes = join
+        .map(|join| join.note().to_owned())
+        .into_iter()
+        .chain(wire(renamed(flag, param.name()), param.name()));
+    let mut arg = value_arg(
+        flag,
+        scalar,
+        help_line(described.as_deref(), scalar, notes),
         param.required(),
-    )
+    );
+    if join.is_some() {
+        arg = arg.action(ArgAction::Append);
+    }
+    Some(arg)
 }
 
 /// A flag that had to move aside says which wire name it carries.
@@ -484,10 +518,15 @@ fn file_arg(flag: &'static str, required: bool) -> Arg {
         .value_hint(ValueHint::FilePath)
 }
 
-/// The description, then whatever the document constrains, then the wire name
-/// if the flag had to move aside — each in brackets, none of them invented.
-fn help_line(description: Option<&str>, scalar: &Scalar, wire: Option<String>) -> Option<String> {
-    let notes: Vec<String> = scalar.note().into_iter().chain(wire).collect();
+/// The description, then whatever the document constrains, then whatever else
+/// the caller has to add — how a repeatable flag is joined, the wire name a flag
+/// that moved aside carries — each in brackets, none of them invented.
+fn help_line(
+    description: Option<&str>,
+    scalar: &Scalar,
+    extra: impl IntoIterator<Item = String>,
+) -> Option<String> {
+    let notes: Vec<String> = scalar.note().into_iter().chain(extra).collect();
     match (description, notes.is_empty()) {
         (Some(text), true) => Some(text.to_owned()),
         (Some(text), false) => Some(format!("{text} ({})", notes.join("; "))),

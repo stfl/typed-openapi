@@ -16,7 +16,8 @@
 use http::{Method, Uri};
 #[cfg(feature = "document")]
 use openapiv3::{
-    Components, OpenAPI, Parameter, ParameterSchemaOrContent, ReferenceOr, SchemaKind,
+    Components, OpenAPI, Parameter, ParameterData, ParameterSchemaOrContent, PathStyle, QueryStyle,
+    ReferenceOr, Schema, SchemaKind,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -97,15 +98,130 @@ pub enum Location {
     Header,
 }
 
-/// One path, query, or header parameter.
+/// One parameter the document declares.
+///
+/// Everything that only a parameter with a flag has — the flag, where its value
+/// goes, what the flag accepts — hangs off [`Shape`], because a parameter this
+/// CLI cannot spell has none of it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Param {
     name: String,
-    flag: String,
-    location: Location,
     required: bool,
-    scalar: Scalar,
+    shape: Shape,
     description: Option<String>,
+}
+
+/// What one parameter is worth on a command line.
+///
+/// Either the subcommand grows a flag and the request builder knows what to do
+/// with its values, or it grows nothing at all. Everything a flag needs lives on
+/// the variant that has one, so a parameter this CLI cannot supply cannot leave
+/// a flag behind that the request builder would then ignore — which is the shape
+/// [`Body`] already has, where one nested property sends a whole body through
+/// `--json-body` rather than offering dead per-field flags beside it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Shape {
+    /// The flag this parameter grows, where its value goes, and what the flag
+    /// accepts. `join` is `None` for a parameter that takes one value, and
+    /// `Some` for a list — a flag that may be given again.
+    Flag {
+        flag: String,
+        location: Location,
+        scalar: Scalar,
+        join: Option<Join>,
+    },
+    /// Nothing a flag carries. The subcommand names the parameter in its long
+    /// help and grows nothing for it, and the request goes out without it.
+    Unreachable(Unsupported),
+}
+
+/// How the values of a list parameter reach the request.
+///
+/// Read off the `style` and `explode` the parameter declares, and obeyed by the
+/// request builder and by the flag's help line alike — so what `--help` says a
+/// repeated flag does is what it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Join {
+    /// One field per value: `?embed=a&embed=b`. A query parameter's
+    /// `style: form` with `explode: true`, which is what OpenAPI defaults a
+    /// query parameter to.
+    Pairs,
+    /// One field, values separated by commas: `?embed=a,b`, and `a,b` in a path
+    /// segment or a header. A query parameter's `style: form` with
+    /// `explode: false`, and `style: simple` everywhere else.
+    Commas,
+}
+
+/// Why a parameter carries no flag.
+///
+/// Four shapes, one answer, because they cost a document the same thing: an
+/// operation nobody can express sits beside a hundred that are expressible, and
+/// refusing the document for it makes those hundred unreachable too. So an
+/// unsupported parameter is carried rather than refused, and only a *required*
+/// one — an operation that could never be invoked correctly — is named as a
+/// `LoadError` while the document is reduced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Unsupported {
+    /// `in: cookie`. This CLI sends no cookies.
+    Cookie,
+    /// Described by `content` rather than `schema`: what the document asks for
+    /// is a document in some media type, not a value.
+    Encoded,
+    /// A schema that is neither a value nor a list of values — an object, or an
+    /// array of them.
+    ///
+    /// There is no spelling here to be exact about. OpenAPI states how a *flat*
+    /// object serialises under `deepObject` and states nothing at all for a
+    /// nested one; under the `form` a query parameter defaults to, an object's
+    /// properties become top-level fields that collide with the operation's own
+    /// parameters. A rendering this crate invented would produce a request that
+    /// looks sent and is not read, which is worse than one that was never built.
+    Structured,
+    /// A `style` this crate does not serialise, named as the document spells
+    /// it. Writing it out as some other style would put the value on the wire
+    /// in a shape the server does not read.
+    Style(String),
+}
+
+impl std::fmt::Display for Unsupported {
+    /// The sentence a refusal and a subcommand's long help both use, so that
+    /// what a user is told about a missing flag is what a bless step was told.
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cookie => out.write_str("`in: cookie`, which this CLI does not send"),
+            Self::Encoded => {
+                out.write_str("described by `content`, which this CLI does not encode")
+            }
+            Self::Structured => out.write_str("neither a value nor a list of values"),
+            Self::Style(style) => {
+                write!(
+                    out,
+                    "declared with `style: {style}`, which this CLI does not serialise"
+                )
+            }
+        }
+    }
+}
+
+impl Join {
+    /// What a repeated flag does, for its help line. The same fact the request
+    /// builder obeys, written once.
+    #[must_use]
+    pub fn note(self) -> &'static str {
+        match self {
+            Self::Pairs => "repeatable; each value is sent as its own field",
+            Self::Commas => "repeatable; the values are sent comma-separated in one field",
+        }
+    }
+}
+
+impl Shape {
+    /// Whether this parameter takes more than one value: a flag that may be
+    /// given again, and a list on the wire.
+    #[must_use]
+    pub fn repeatable(&self) -> bool {
+        matches!(self, Self::Flag { join: Some(_), .. })
+    }
 }
 
 /// One scalar property of a flat JSON body.
@@ -198,11 +314,20 @@ pub enum LoadError {
     },
     #[error(transparent)]
     Reference(#[from] RefError),
-    #[error("{op}: parameter `{name}` is {reason}")]
+    /// A parameter this CLI cannot supply that the document says a caller must.
+    ///
+    /// Every other unsupported parameter is carried as [`Shape::Unreachable`]
+    /// and costs the document nothing. This one is an operation that could never
+    /// be invoked correctly, so it is named here rather than mounted as a
+    /// subcommand that is guaranteed to build a request the server refuses.
+    #[error(
+        "{op}: parameter `{name}` is {why}, and the document requires it; \
+         correct the parameter in an Overlay, or drop its `required`"
+    )]
     Parameter {
         op: String,
         name: String,
-        reason: &'static str,
+        why: Unsupported,
     },
     /// A rule the document states that cannot be run — a `pattern` no regex
     /// engine here reads. Refused while the document is reduced, because a rule
@@ -614,37 +739,21 @@ impl Param {
         flags: &mut Namespace,
     ) -> Result<Self, LoadError> {
         let param = resolve(param, |key| components.parameters.get(key), "parameters")?;
-        let reject = |name: &str, reason: &'static str| LoadError::Parameter {
-            op: op.to_owned(),
-            name: name.to_owned(),
-            reason,
-        };
-        let (location, data) = match param {
-            Parameter::Path { parameter_data, .. } => (Location::Path, parameter_data),
-            Parameter::Query { parameter_data, .. } => (Location::Query, parameter_data),
-            Parameter::Header { parameter_data, .. } => (Location::Header, parameter_data),
-            Parameter::Cookie { parameter_data, .. } => {
-                return Err(reject(
-                    &parameter_data.name,
-                    "in: cookie, which this CLI does not send",
-                ));
-            }
-        };
-        let ParameterSchemaOrContent::Schema(schema) = &data.format else {
-            return Err(reject(
-                &data.name,
-                "described by `content`, which this CLI does not encode",
-            ));
-        };
-        let scalar = scalar_of(schema, components)?
-            .ok_or_else(|| reject(&data.name, "not a scalar, so it cannot be one flag"))?;
-        runnable(&scalar, op, &data.name)?;
+        let data = param.parameter_data_ref();
+        let shape = shape_of(op, param, data, components, flags)?;
+        if let Shape::Unreachable(why) = &shape
+            && data.required
+        {
+            return Err(LoadError::Parameter {
+                op: op.to_owned(),
+                name: data.name.clone(),
+                why: why.clone(),
+            });
+        }
         Ok(Self {
-            flag: flags.claim(&kebab(&data.name), "param"),
             name: data.name.clone(),
-            location,
             required: data.required,
-            scalar,
+            shape,
             description: data.description.clone(),
         })
     }
@@ -655,22 +764,11 @@ impl Param {
         &self.name
     }
 
-    /// The flag name, without the leading `--`.
+    /// What this parameter is worth on a command line: a flag and everything
+    /// that goes with one, or nothing.
     #[must_use]
-    pub fn flag(&self) -> &str {
-        &self.flag
-    }
-
-    /// The flag is not the plain kebab-case of the wire name, because that name
-    /// was already taken in this subcommand.
-    #[must_use]
-    pub fn renamed(&self) -> bool {
-        renamed(&self.flag, &self.name)
-    }
-
-    #[must_use]
-    pub fn location(&self) -> Location {
-        self.location
+    pub fn shape(&self) -> &Shape {
+        &self.shape
     }
 
     #[must_use]
@@ -679,14 +777,118 @@ impl Param {
     }
 
     #[must_use]
-    pub fn scalar(&self) -> &Scalar {
-        &self.scalar
-    }
-
-    #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
+}
+
+/// What one parameter is worth on a command line, and the flag it claims when it
+/// is worth one.
+///
+/// Every way of not being worth a flag lands in the same place. The blast radius
+/// of a shape this CLI cannot spell is the operation that declares it, never the
+/// document that holds it.
+#[cfg(feature = "document")]
+fn shape_of(
+    op: &str,
+    param: &Parameter,
+    data: &ParameterData,
+    components: &Components,
+    flags: &mut Namespace,
+) -> Result<Shape, LoadError> {
+    let Some((location, style)) = sent_in(param) else {
+        return Ok(Shape::Unreachable(Unsupported::Cookie));
+    };
+    let ParameterSchemaOrContent::Schema(schema) = &data.format else {
+        return Ok(Shape::Unreachable(Unsupported::Encoded));
+    };
+    // One value, or a list of them: the schema is asked first, and an array is
+    // asked again about its items.
+    let (scalar, repeats) = if let Some(scalar) = scalar_of(schema, components)? {
+        (scalar, false)
+    } else if let Some(scalar) = items_of(schema, components)? {
+        (scalar, true)
+    } else {
+        return Ok(Shape::Unreachable(Unsupported::Structured));
+    };
+    runnable(&scalar, op, &data.name)?;
+    // The style is read whatever the schema is, because it is not only about
+    // delimiters: `matrix` puts a `;name=` in front of one path value as surely
+    // as in front of a list. A style written out as `form` instead would be a
+    // request in a shape the server does not read.
+    let join = match style {
+        Ok(join) => join,
+        Err(style) => return Ok(Shape::Unreachable(Unsupported::Style(style.to_owned()))),
+    };
+    Ok(Shape::Flag {
+        flag: flags.claim(&kebab(&data.name), "param"),
+        location,
+        scalar,
+        join: repeats.then_some(join),
+    })
+}
+
+/// Where a parameter goes, and how a list of its values would reach it there.
+///
+/// One answer, because the second is read off the first: `style` means different
+/// things in a query and in a path, and `in: cookie` has no answer at all. The
+/// `Err` carries the document's own spelling of a style this crate does not
+/// write, so that whatever refuses it can name it — `form` in a query and
+/// `simple` everywhere else are the two it writes, and they are also the two
+/// OpenAPI defaults, so a document that says nothing lands on them.
+#[cfg(feature = "document")]
+fn sent_in(param: &Parameter) -> Option<(Location, Result<Join, &'static str>)> {
+    Some(match param {
+        Parameter::Query {
+            parameter_data,
+            style,
+            ..
+        } => (Location::Query, query_join(style, parameter_data.explode)),
+        Parameter::Path { style, .. } => (
+            Location::Path,
+            match style {
+                PathStyle::Simple => Ok(Join::Commas),
+                PathStyle::Matrix => Err("matrix"),
+                PathStyle::Label => Err("label"),
+            },
+        ),
+        // `simple` is the only style a header has, and a list under it is
+        // comma-separated whether or not it explodes.
+        Parameter::Header { .. } => (Location::Header, Ok(Join::Commas)),
+        Parameter::Cookie { .. } => return None,
+    })
+}
+
+/// `form` is what a query parameter defaults to and `explode: true` is what
+/// `form` defaults to, which is one field per value. The three other styles name
+/// themselves rather than being written as `form`.
+#[cfg(feature = "document")]
+fn query_join(style: &QueryStyle, explode: Option<bool>) -> Result<Join, &'static str> {
+    match style {
+        QueryStyle::Form => Ok(match explode {
+            Some(false) => Join::Commas,
+            None | Some(true) => Join::Pairs,
+        }),
+        QueryStyle::SpaceDelimited => Err("spaceDelimited"),
+        QueryStyle::PipeDelimited => Err("pipeDelimited"),
+        QueryStyle::DeepObject => Err("deepObject"),
+    }
+}
+
+/// The scalar a `type: array` parameter's items are, when its items are one.
+#[cfg(feature = "document")]
+fn items_of(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+) -> Result<Option<Scalar>, RefError> {
+    let schema = resolve_schema(schema, components)?;
+    let SchemaKind::Type(openapiv3::Type::Array(array)) = &schema.schema_kind else {
+        return Ok(None);
+    };
+    let Some(items) = &array.items else {
+        return Ok(None);
+    };
+    scalar_of(&items.clone().unbox(), components)
 }
 
 impl Field {

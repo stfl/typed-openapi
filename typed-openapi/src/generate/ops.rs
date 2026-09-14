@@ -19,7 +19,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::GenerateError;
-use crate::model::Body;
+use crate::model::{Body, Shape};
 use crate::{Document, Operation};
 
 /// What one operation contributes to the generated file.
@@ -361,17 +361,7 @@ fn signature_of(
         notes: Vec::new(),
     };
     for param in op.params() {
-        let ident = format_ident!("{}", param.name().to_snake_case());
-        let ty = param_type(item, operation, param.name())?;
-        let wire = param.name();
-        out.names.push(ident.clone());
-        if param.required() {
-            out.args.push(quote! { #ident: #ty });
-            out.builder.push(quote! { .param(#wire, #ident) });
-        } else {
-            out.args.push(quote! { #ident: Option<#ty> });
-            out.builder.push(quote! { .maybe(#wire, #ident) });
-        }
+        add_param(&mut out, param, item, operation)?;
     }
     match op.body() {
         Body::None => {}
@@ -400,6 +390,49 @@ fn signature_of(
     Ok(out)
 }
 
+/// What one parameter adds to a wrapper: an argument and the `Values` call that
+/// fills it — or, for a parameter with no command-line spelling, a note saying
+/// the wrapper does not carry it either. A Rust caller and a command line reach
+/// one request builder, so what neither can supply is missing from both.
+fn add_param(
+    out: &mut Signature,
+    param: &crate::Param,
+    item: &openapiv3::PathItem,
+    operation: &openapiv3::Operation,
+) -> Result<(), GenerateError> {
+    let join = match param.shape() {
+        Shape::Flag { join, .. } => join,
+        Shape::Unreachable(why) => {
+            out.notes.push(format!(
+                "The document's `{}` parameter is not an argument: it is {why}. \
+                 A request built here does not carry it.",
+                param.name()
+            ));
+            return Ok(());
+        }
+    };
+    let ident = format_ident!("{}", param.name().to_snake_case());
+    let schema = param_schema(item, operation, param.name())?;
+    let wire = param.name();
+    out.names.push(ident.clone());
+    if join.is_some() {
+        // A list parameter is the wire name given once per value, which is the
+        // repetition a repeated flag reaches the request builder with.
+        let ty = list_type(param.name(), schema)?;
+        out.args.push(quote! { #ident: Vec<#ty> });
+        out.builder.push(quote! { .each(#wire, #ident) });
+    } else if param.required() {
+        let ty = scalar_type(schema)?;
+        out.args.push(quote! { #ident: #ty });
+        out.builder.push(quote! { .param(#wire, #ident) });
+    } else {
+        let ty = scalar_type(schema)?;
+        out.args.push(quote! { #ident: Option<#ty> });
+        out.builder.push(quote! { .maybe(#wire, #ident) });
+    }
+    Ok(())
+}
+
 fn multipart_note(names: &[String]) -> String {
     let assembled = "`parts` are assembled into a `multipart/form-data` body.";
     if names.is_empty() {
@@ -409,12 +442,12 @@ fn multipart_note(names: &[String]) -> String {
     }
 }
 
-/// The Rust type for one parameter, keyed on the document's own name.
-fn param_type(
-    item: &openapiv3::PathItem,
-    operation: &openapiv3::Operation,
+/// The schema one parameter declares, keyed on the document's own name.
+fn param_schema<'d>(
+    item: &'d openapiv3::PathItem,
+    operation: &'d openapiv3::Operation,
     name: &str,
-) -> Result<TokenStream, GenerateError> {
+) -> Result<&'d ReferenceOr<Schema>, GenerateError> {
     let declared = item
         .parameters
         .iter()
@@ -430,7 +463,31 @@ fn param_type(
             "`{name}` is declared with `content`, not `schema`"
         )));
     };
-    scalar_type(schema)
+    Ok(schema)
+}
+
+/// The Rust spelling of a list parameter's items.
+///
+/// Only an inline `type: array` has one here. Following a `$ref` to an array
+/// schema would mean resolving against `components`, which this generator does
+/// not carry, so the parameter names itself rather than being guessed at.
+fn list_type(name: &str, schema: &ReferenceOr<Schema>) -> Result<TokenStream, GenerateError> {
+    let ReferenceOr::Item(schema) = schema else {
+        return Err(unsupported(format!(
+            "`{name}` is a list, and a list parameter must declare `items` inline"
+        )));
+    };
+    let SchemaKind::Type(Type::Array(array)) = &schema.schema_kind else {
+        return Err(unsupported(format!(
+            "`{name}` is a list that is not an array"
+        )));
+    };
+    let Some(items) = &array.items else {
+        return Err(unsupported(format!(
+            "`{name}` is an array declaring no `items`"
+        )));
+    };
+    scalar_type(&items.clone().unbox())
 }
 
 /// A scalar schema's Rust spelling. A `$ref` to a named schema keeps its name,

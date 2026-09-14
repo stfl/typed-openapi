@@ -137,6 +137,8 @@ toy: createVoucher: the request body does not fit the schema the document declar
 | what the document says | what the subcommand grows |
 |---|---|
 | a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is |
+| the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode` |
+| a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
 | a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE` |
 | any other JSON body — nested, an array, no schema | `--json-body FILE` alone |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
@@ -151,10 +153,60 @@ for one is a clap error rather than a value silently dropped.
 
 `-` as the path to `--json-body` or `--raw-body` reads stdin.
 
-Some parameters have no flag at all, and the document is refused rather than
-partly mounted: `in: cookie`, a parameter described by `content` instead of
-`schema`, and a parameter whose schema is not one of the six scalar kinds each
-produce a `LoadError::Parameter` when the document is read.
+### Lists
+
+A parameter whose schema is an array of scalars is one flag given more than
+once. What the repeats become is the parameter's own `style` and `explode`, not
+a preference of this crate's:
+
+| the parameter declares | `--tag a --tag b` sends |
+|---|---|
+| in a query, `style: form` with `explode: true` — OpenAPI's default | `?tag=a&tag=b` |
+| in a query, `style: form` with `explode: false` | `?tag=a,b` |
+| in a path, `style: simple` — the default there, and its only implemented one | the segment `a,b` |
+| in a header, `style: simple` — its only style at all | the value `a,b` |
+
+Each value is percent-encoded before the comma is written, so `--tag "a,b" --tag c`
+under `explode: false` sends `?tag=a%2Cb,c`: the comma *between* two values and
+a comma *inside* one are not the same character on the wire. The flag's help
+line says which of the two layouts it has, written by the code that lays it out.
+
+Every value goes through the item schema's own rule, so a list is checked the
+way a single value is — once at the flag, once again in `Invocation::new`.
+
+`form` in a query and `simple` everywhere else are the two styles this CLI
+writes, and they are also the two OpenAPI defaults, so a document declaring
+nothing lands on them.
+
+### Parameters with no flag
+
+Four shapes have no command-line spelling: `in: cookie`, a parameter described
+by `content` instead of `schema`, one whose schema is neither a value nor a list
+of values, and one declaring a `style` this CLI does not write —
+`spaceDelimited`, `pipeDelimited` or `deepObject` in a query, `matrix` or
+`label` in a path. The style is read whatever the schema is, because it is not
+only about delimiters: `matrix` puts a `;name=` in front of a single value too.
+
+None of them refuses the document. The parameter stays in the reduction, the
+subcommand grows nothing for it, and its long help carries a line of its own
+below the method, the path and the `operationId`:
+
+```
+`filter` has no flag: it is neither a value nor a list of values. The request
+goes out without it.
+```
+
+The one exception is a parameter the document marks `required: true`. That
+operation could never build a correct request, so it is a `LoadError::Parameter`
+naming the parameter and the reason when the document is read, and an
+[Overlay](overlay.md) is the way out — retype the parameter, or drop its
+`required`.
+
+An object is refused a spelling rather than given a guessed one. OpenAPI says
+how a *flat* object serialises under `deepObject` and says nothing about a
+nested one, and under the `form` a query parameter defaults to an object's
+properties become top-level fields that collide with the operation's own
+parameters. A request built on a guess looks sent and is not read.
 
 ### Per-field flags are merged over `--json-body`
 
