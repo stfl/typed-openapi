@@ -1,0 +1,7 @@
+# `rustfmt.toml` sets `unstable_features = true` and the coverage recipe asks
+# rustc for branch instrumentation, so the repository's own tooling is nightly.
+# The published library is not: it compiles on the stable toolchain its
+# `rust-version` names, and CI proves that on every push.
+[toolchain]
+channel = "nightly"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

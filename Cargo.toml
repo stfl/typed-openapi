@@ -1,0 +1,84 @@
+[workspace]
+resolver = "3"
+members = [
+    "typed-openapi",
+    "examples/toy/api",
+    "examples/toy/api-generated",
+    "examples/toy/api-types",
+    "examples/toy/cli",
+    "examples/toy/xtask",
+]
+# `typed-openapi` is the product; everything under `examples/toy` is one
+# worked adoption of it, built, linted and tested with the rest so that the
+# example cannot rot. Only the first is published.
+#
+# `xtask` is a member — it is linted, formatted and tested with everything
+# else — but it is not what a bare `cargo build` is for, and cargo resolves
+# features once per invocation over the packages it builds. Leaving `xtask` out
+# of that set is what lets the everyday build resolve `typed-openapi` without
+# `generate` and compile 61 crates instead of 235. `--workspace` still selects
+# all six.
+default-members = [
+    "typed-openapi",
+    "examples/toy/api",
+    "examples/toy/api-generated",
+    "examples/toy/api-types",
+    "examples/toy/cli",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/stfl/typed-openapi"
+authors = ["Stefan Lendl <git@stfl.dev>"]
+
+[workspace.dependencies]
+anyhow = "1"
+bon = "3.8"
+clap = { version = "4.6", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions", "wrap_help", "string"] }
+clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
+heck = "0.5"
+http = "1.5"
+openapiv3 = "2.2"
+postcard = { version = "1.1", default-features = false, features = ["use-std"] }
+prettyplease = "0.3"
+proc-macro2 = "1"
+quote = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots"] }
+roas-overlay = "0.3"
+schemars = "0.8.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml_ng = "0.10"
+syn = { version = "3", features = ["parsing", "printing", "full"] }
+thiserror = "2"
+typify = "0.8"
+ureq = "3.4"
+
+# The lint block is here from the first commit so that no code is ever written
+# against a looser setting and grandfathered in afterwards.
+[workspace.lints.rust]
+# `forbid`, not `deny`: this crate talks to an HTTP API and holds no FFI shim or
+# allocator that could need an override, so nothing anywhere in it — tests
+# included — may switch unsafe back on.
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "warn"
+bare_urls = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+wildcard_enum_match_arm = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+string_slice = "warn"
+allow_attributes_without_reason = "warn"
