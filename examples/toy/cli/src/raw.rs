@@ -35,12 +35,12 @@ fn vet_body(selected: &Selection<'_>) -> Result<(), Error> {
     let Some(Payload::Json(body)) = selected.values().payload() else {
         return Ok(());
     };
-    let command = selected.operation().command().as_str();
+    let op = selected.operation();
     // The operation came out of the same document the wrappers were generated
     // from, so the inventory has it; saying so costs one line and beats an
     // unwrap that would be a panic if that ever stopped being true.
-    let id =
-        OperationId::from_command(command).ok_or_else(|| Error::Unknown(command.to_owned()))?;
+    let id = OperationId::from_command(op.group().as_str(), op.command().as_str())
+        .ok_or_else(|| Error::Unknown(format!("{} {}", op.group(), op.command())))?;
     Ok(id.check_body(body)?)
 }
 

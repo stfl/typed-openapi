@@ -24,7 +24,8 @@ const OVERLAY: &str = include_str!("fixtures/overlay.yaml");
 
 const CREATE: &[&str] = &[
     "toy",
-    "create-voucher",
+    "vouchers",
+    "create",
     "--total",
     "12.50",
     "--currency",
@@ -37,7 +38,7 @@ fn document() -> Document {
     Document::load(TOY, OVERLAY).expect("the vendor's document plus the adopter's Overlay")
 }
 
-/// The operations as the whole CLI — the shape the README opens with.
+/// The groups as the whole CLI — the shape the README opens with.
 fn root(doc: &Document) -> Command {
     Command::new("toy")
         .subcommand_required(true)
@@ -71,7 +72,7 @@ fn operations_mounted_as_the_cli_itself_are_a_valid_clap_command() {
 fn a_read_is_sent_on_sight() {
     let doc = document();
     let client = Recorder::new();
-    let matches = parse(&doc, &["toy", "get-voucher", "--id", "5"]);
+    let matches = parse(&doc, &["toy", "vouchers", "get", "--id", "5"]);
 
     let outcome = tree::dispatch(&doc, doc.base(), &client, &matches).expect("a read dispatches");
 
@@ -135,7 +136,7 @@ fn a_gated_get_is_held_back_like_any_write() {
     let client = Recorder::new();
     // A GET the document marks `x-cli-writes`. HTTP cannot say this operation
     // writes, so the method alone would send it.
-    let matches = parse(&doc, &["toy", "render-voucher", "--id", "5"]);
+    let matches = parse(&doc, &["toy", "vouchers", "render", "--id", "5"]);
 
     let outcome = tree::dispatch(&doc, doc.base(), &client, &matches).expect("dispatches");
 
@@ -149,7 +150,7 @@ fn the_shortcut_and_the_seam_reach_the_same_request() {
 
     let long_way = {
         let client = Recorder::new();
-        let matches = parse(&doc, &["toy", "get-voucher", "--id", "5"]);
+        let matches = parse(&doc, &["toy", "vouchers", "get", "--id", "5"]);
         let selected = tree::select(&doc, &matches).expect("the subcommand names an operation");
         // What the seam exists for: an adopter reads the operation and the
         // values here, and holds the body to a type this crate cannot see.
@@ -161,7 +162,7 @@ fn the_shortcut_and_the_seam_reach_the_same_request() {
 
     let short_way = {
         let client = Recorder::new();
-        let matches = parse(&doc, &["toy", "get-voucher", "--id", "5"]);
+        let matches = parse(&doc, &["toy", "vouchers", "get", "--id", "5"]);
         tree::dispatch(&doc, doc.base(), &client, &matches).expect("sends");
         only(&client)
     };
@@ -177,7 +178,7 @@ fn the_tree_mounts_under_any_name_and_never_looks_above_itself() {
     // command the operations hang off, and reads only below them.
     let matches = Command::new("app")
         .subcommand(Command::new("passthrough").subcommands(tree::commands(&doc)))
-        .get_matches_from(["app", "passthrough", "get-voucher", "--id", "5"]);
+        .get_matches_from(["app", "passthrough", "vouchers", "get", "--id", "5"]);
     let mounted = matches
         .subcommand_matches("passthrough")
         .expect("the subcommand parsed");
@@ -188,21 +189,64 @@ fn the_tree_mounts_under_any_name_and_never_looks_above_itself() {
 }
 
 #[test]
-fn a_name_the_document_does_not_describe_is_refused_by_name() {
+fn a_name_the_document_does_not_describe_is_refused_by_both_halves() {
     let doc = document();
-    // Built by hand rather than parsed, because clap would reject the name
-    // before `select` ever saw it. This is the path a caller reaches by
+    // Built by hand rather than parsed, because clap would reject the names
+    // before `select` ever saw them. This is the path a caller reaches by
     // mounting a subcommand of their own beside the generated ones.
     let matches = Command::new("toy")
-        .subcommand(Command::new("not-an-operation"))
-        .get_matches_from(["toy", "not-an-operation"]);
+        .subcommand(Command::new("vouchers").subcommand(Command::new("not-an-operation")))
+        .get_matches_from(["toy", "vouchers", "not-an-operation"]);
 
     let error = tree::select(&doc, &matches).expect_err("no such operation");
 
-    assert!(matches!(&error, DispatchError::Unknown(name) if name == "not-an-operation"));
+    assert!(matches!(&error, DispatchError::Unknown { group, command }
+            if group == "vouchers" && command == "not-an-operation"));
     assert_eq!(
         error.to_string(),
-        "no operation named `not-an-operation` in the document"
+        "no operation named `vouchers not-an-operation` in the document"
+    );
+}
+
+/// The tree the document builds: one subcommand per resource it groups its
+/// paths under, and one under that per operation. The names are the document's
+/// paths and methods, not its `operationId`s — `PUT /vouchers/{id}` is
+/// `vouchers update` however the vendor spelled `updateVoucher`.
+#[test]
+fn operations_are_mounted_under_the_resource_their_path_names() {
+    let doc = document();
+    let tree: Vec<(String, Vec<String>)> = tree::commands(&doc)
+        .iter()
+        .map(|group| {
+            (
+                group.get_name().to_owned(),
+                group
+                    .get_subcommands()
+                    .map(|op| op.get_name().to_owned())
+                    .collect(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        tree,
+        [
+            (
+                "vouchers".to_owned(),
+                vec![
+                    "list".to_owned(),
+                    "create".to_owned(),
+                    "get".to_owned(),
+                    "update".to_owned(),
+                    "enshrine".to_owned(),
+                    "render".to_owned(),
+                    "archive".to_owned(),
+                ]
+            ),
+            ("contacts".to_owned(), vec!["create".to_owned()]),
+            ("documents".to_owned(), vec!["create".to_owned()]),
+            ("documents-multipart".to_owned(), vec!["create".to_owned()]),
+        ]
     );
 }
 
@@ -215,6 +259,22 @@ fn no_subcommand_at_all_is_its_own_error() {
 
     assert!(matches!(error, DispatchError::NoCommand));
     assert_eq!(error.to_string(), "no command given");
+}
+
+/// A group with nothing named under it is the same answer. The tree `commands`
+/// builds requires the second name, so a user meets clap's own help instead;
+/// this is the path a caller reaches by mounting a group of their own.
+#[test]
+fn a_group_with_no_operation_under_it_is_the_same_error() {
+    let doc = document();
+    let matches = Command::new("toy")
+        .subcommand(Command::new("vouchers"))
+        .get_matches_from(["toy", "vouchers"]);
+
+    assert!(matches!(
+        tree::select(&doc, &matches).expect_err("no operation was named"),
+        DispatchError::NoCommand
+    ));
 }
 
 /// The one argument of `command` with this long flag.

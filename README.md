@@ -4,13 +4,13 @@ Typed Rust calls and a clap command tree, both built from one OpenAPI document,
 with every write behind a dry-run gate.
 
 What comes out is `api.get_voucher(5)?.send(&client)?` returning your own
-`Voucher`, and `toy get-voucher --id 5` on a command line nobody wrote. What
+`Voucher`, and `toy vouchers get --id 5` on a command line nobody wrote. What
 goes in is the vendor's document plus an [OpenAPI Overlay 1.1][overlay] holding
-your corrections to it. This is not a typed model *of* an OpenAPI document — for
-that, use [`openapiv3`].
+your corrections to it. This is not a typed model *of* an OpenAPI
+document — for that, use [`openapiv3`].
 
 ```console
-$ toy create-voucher --total 12.50 --currency EUR --status open   # operations at the root
+$ toy vouchers create --total 12.50 --currency EUR --status open  # operations at the root
 POST /vouchers HTTP/1.1
 host: localhost:9999
 content-type: application/json
@@ -26,10 +26,12 @@ dry run: nothing was sent. Add --commit to send it.
 newtypes substituted in: `Voucher.total` is a `Money`, not a `String`, with no
 mirror type and no conversion at the boundary.
 
-**The CLI consumer** gets a subcommand per operation, flags from the parameters
+**The CLI consumer** gets a two-level tree — one subcommand per resource the
+document's paths name, one per operation under it, so `PUT /vouchers/{id}` is
+`vouchers update` whatever the vendor called it — with flags from the parameters
 and the request body, values checked against the document's own formats and
-enums, and dynamic shell completion. Mount the operations under `raw`, under any
-other name, or as the whole CLI:
+enums, and dynamic shell completion. Mount the tree under `raw`, under any other
+name, or as the whole CLI:
 
 ```rust,ignore
 let matches = Command::new("toy")

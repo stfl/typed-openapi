@@ -86,20 +86,25 @@ fn a_document_that_has_drifted_from_the_inventory_is_refused_at_startup() {
     assert!(error.to_string().contains("renderVoucher"), "{error}");
 }
 
-/// Every subcommand name the CLI can read off a command line is one of the
-/// operations the document describes, and nothing else is.
+/// Every `<group> <command>` pair the CLI can read off a command line is one
+/// of the operations the document describes, and nothing else is.
 #[test]
 fn a_subcommand_name_maps_to_exactly_one_operation() {
     let api = api();
     for (op, (id, _, _)) in api::OperationId::ALL.iter().zip(api::OPERATIONS) {
-        let command = api.operation(*op).command().as_str().to_owned();
+        let described = api.operation(*op);
+        let (group, command) = (described.group().as_str(), described.command().as_str());
         assert_eq!(
-            api::OperationId::from_command(&command),
+            api::OperationId::from_command(group, command),
             Some(*op),
-            "`{command}` (`{id}`)"
+            "`{group} {command}` (`{id}`)"
         );
     }
-    assert_eq!(api::OperationId::from_command("no-such-thing"), None);
+    assert_eq!(
+        api::OperationId::from_command("vouchers", "no-such-thing"),
+        None
+    );
+    assert_eq!(api::OperationId::from_command("no-such-group", "get"), None);
 }
 
 /// And the reverse: the inventory `documented()` reads describes exactly the

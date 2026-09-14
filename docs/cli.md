@@ -4,10 +4,75 @@ What a generated command tree offers a user, and how to mount it. The primer is
 [the README](../README.md); this page is the reference for someone looking one
 thing up.
 
+## The shape of the tree
+
+[`tree::commands`](../typed-openapi/src/tree.rs) turns a `Document` into a
+two-level tree: one `clap::Command` per group, in document order, holding one
+subcommand per operation, also in document order.
+
+**The group** is a path segment — the first, unless every path shares it, in
+which case the rule descends: a document served entirely under `/v1` does not
+collapse into one group named `v1`. Descending stops at the first segment that
+tells operations apart, and never onto a path parameter.
+
+**The operation's own name** is the last literal segment below the group. Where
+the path has none left to spend, the method decides:
+
+| method | path addresses one resource | name |
+|---|---|---|
+| `GET` | yes | `get` |
+| `GET` | no | `list` |
+| `POST` | either | `create` |
+| `PUT` | either | `update` |
+| `PATCH` | either | `patch` |
+| `DELETE` | either | `delete` |
+
+So `PUT /vouchers/{id}` is `vouchers update` and `GET /vouchers/{id}/render` is
+`vouchers render`, whatever the vendor called them. The name a vendor repeats
+in every `operationId` — `renderVoucher`, `getVoucherById` — is the group, and
+it is said once:
+
+```console
+$ toy raw vouchers --help
+Operations on vouchers
+
+Usage: toy raw vouchers [OPTIONS] <COMMAND>
+
+Commands:
+  list      List vouchers
+  create    Create a voucher
+  get       Fetch one voucher
+  update    Replace a voucher
+  enshrine  Finalize a voucher (irreversible)
+  render    Render the voucher to PDF and store it on the server (this GET
+            writes)
+  archive   Archive a voucher (undocumented; vendor ships it)
+  help      Print this message or the help of the given subcommand(s)
+```
+
+A group holding one operation stays a group, so every operation is reachable as
+`<group> <name>` with no exception to learn.
+
+### Naming an operation yourself
+
+Two `x-cli-` markers on an operation overrule the rule: `x-cli-command`
+replaces the operation's own name, `x-cli-group` replaces its group. Both are
+written in an Overlay, like every other correction — see
+[overlay.md](overlay.md#the-cli-layer).
+
+They are also the only way out of a collision. Two operations reducing to one
+`<group> <name>` is a `LoadError` at bless time, naming both `operationId`s:
+
+```
+`renderVoucher` and `renderVoucherPdf` are both `vouchers render` on the command line; give one of them an `x-cli-command`
+```
+
+Never a silent rename: a name that moves because a *second* operation arrived
+is a name that moved without anyone asking.
+
 ## Mounting the tree
 
-[`tree::commands`](../typed-openapi/src/tree.rs) turns a `Document` into one
-`clap::Command` per operation, in document order. Where you hang them is yours.
+Where you hang the tree is yours.
 
 **As the whole CLI.** [`examples/toy/cli/examples/root.rs`](../examples/toy/cli/examples/root.rs)
 is the entire adopter-written surface — `commands` to build the tree,
@@ -26,8 +91,9 @@ match tree::dispatch(api.document(), api.base(), &client, &matches)? {
 
 **Under a name.** [`examples/toy/cli/src/app.rs`](../examples/toy/cli/src/app.rs)
 mounts the same tree under `raw` and puts hand-written verbs beside it.
-`tree::select` and `tree::dispatch` read the `ArgMatches` they are given and
-never look above it, which is what lets the tree sit anywhere:
+`tree::select` and `tree::dispatch` read the group below the `ArgMatches` they
+are given and the operation below that, and never look above, which is what
+lets the tree sit anywhere:
 
 ```rust,ignore
 .subcommand(Command::new("raw").subcommands(tree::commands(api.document())))
@@ -49,7 +115,7 @@ through both CLIs — `root` is the `dispatch` one, `toy raw` the `select` one:
 ```console
 $ echo '{"total":"1.00","currency":"USD","status":"nope"}' > bad.json
 
-$ root create-voucher --json-body bad.json
+$ root vouchers create --json-body bad.json
 POST /vouchers HTTP/1.1
 host: localhost:9999
 content-type: application/json
@@ -58,7 +124,7 @@ content-type: application/json
 
 dry run: nothing was sent. Add --commit to send it.
 
-$ toy raw create-voucher --json-body bad.json
+$ toy raw vouchers create --json-body bad.json
 toy: createVoucher: the request body does not fit the schema the document declares
   caused by: unknown variant `nope`, expected one of `draft`, `open`, `paid`
 ```
@@ -79,7 +145,7 @@ toy: createVoucher: the request body does not fit the schema the document declar
 | an operation that writes | `--commit` |
 
 One nested property is enough to make the whole body `--json-body` only: no
-sibling gets a flag the request builder would then throw away. `create-contact`
+sibling gets a flag the request builder would then throw away. `contacts create`
 is the case — its `address` is an object, so there is no `--name`, and asking
 for one is a clap error rather than a value silently dropped.
 
@@ -99,7 +165,7 @@ so a flag beside a file is an edit rather than a value the CLI drops:
 $ cat voucher.json
 {"total":"1.00","currency":"USD","status":"draft","internal_ref":"AB-7"}
 
-$ toy raw create-voucher --json-body voucher.json --currency EUR --total 99.99
+$ toy raw vouchers create --json-body voucher.json --currency EUR --total 99.99
 POST /vouchers HTTP/1.1
 host: localhost:9999
 content-type: application/json
@@ -121,7 +187,7 @@ body field becomes `--body-id`, and the flag that moved says which wire name it
 carries.
 
 ```console
-$ toy raw update-voucher --help
+$ toy raw vouchers update --help
       --id <INT>
           The `id` path parameter
 
@@ -156,10 +222,10 @@ constraint this crate does enforce is the money rule, in
 [`src/scalar.rs`](../typed-openapi/src/scalar.rs).
 
 ```console
-$ toy raw create-voucher --total 12.505 --currency EUR --status open
+$ toy raw vouchers create --total 12.505 --currency EUR --status open
 error: invalid value '12.505' for '--total <AMOUNT>': `12.505` is not an amount (digits, optionally `.` and one or two decimals)
 
-$ toy raw create-voucher --total 12.50 --currency EUR --status void
+$ toy raw vouchers create --total 12.50 --currency EUR --status void
 error: invalid value 'void' for '--status <STRING>'
   [possible values: draft, open, paid]
 ```
@@ -178,7 +244,7 @@ so the gate is default-closed. `renderVoucher` is a `GET` that stores a PDF,
 and it is gated:
 
 ```console
-$ toy raw render-voucher --id 5
+$ toy raw vouchers render --id 5
 GET /vouchers/5/render HTTP/1.1
 host: localhost:9999
 dry run: nothing was sent. Add --commit to send it.
@@ -203,7 +269,7 @@ user's machine to regenerate when the document moves.
 
 ```console
 $ COMPLETE=bash toy >> ~/.bashrc
-$ toy raw create-voucher --status <TAB>
+$ toy raw vouchers create --status <TAB>
 draft  open  paid
 ```
 
@@ -229,11 +295,11 @@ then walks the `source` chain, because the cause is where the detail is and an
 agent reading stderr cannot ask for it afterwards:
 
 ```console
-$ toy raw create-contact --json-body notes.txt
+$ toy raw contacts create --json-body notes.txt
 toy: notes.txt does not hold JSON: expected ident at line 1 column 2
   caused by: expected ident at line 1 column 2
 
-$ toy raw get-voucher --id 5
+$ toy raw vouchers get --id 5
 toy: transport: io: Connection refused (os error 111)
   caused by: io: Connection refused (os error 111)
 ```

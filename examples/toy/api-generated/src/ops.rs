@@ -59,23 +59,24 @@ impl OperationId {
         OperationId::UploadDocumentMultipart,
         OperationId::ArchiveVoucher,
     ];
-    ///The subcommand name the CLI mounts this operation under.
+    ///The `<group> <command>` pair the CLI mounts this
+    ///operation under.
     ///
     ///This is the one place a name off the command line becomes
     ///a typed operation; everything past it is exhaustive.
     #[must_use]
-    pub fn from_command(name: &str) -> Option<Self> {
-        match name {
-            "list-vouchers" => Some(Self::ListVouchers),
-            "create-voucher" => Some(Self::CreateVoucher),
-            "get-voucher" => Some(Self::GetVoucher),
-            "update-voucher" => Some(Self::UpdateVoucher),
-            "enshrine-voucher" => Some(Self::EnshrineVoucher),
-            "render-voucher" => Some(Self::RenderVoucher),
-            "create-contact" => Some(Self::CreateContact),
-            "upload-document" => Some(Self::UploadDocument),
-            "upload-document-multipart" => Some(Self::UploadDocumentMultipart),
-            "archive-voucher" => Some(Self::ArchiveVoucher),
+    pub fn from_command(group: &str, command: &str) -> Option<Self> {
+        match (group, command) {
+            ("vouchers", "list") => Some(Self::ListVouchers),
+            ("vouchers", "create") => Some(Self::CreateVoucher),
+            ("vouchers", "get") => Some(Self::GetVoucher),
+            ("vouchers", "update") => Some(Self::UpdateVoucher),
+            ("vouchers", "enshrine") => Some(Self::EnshrineVoucher),
+            ("vouchers", "render") => Some(Self::RenderVoucher),
+            ("contacts", "create") => Some(Self::CreateContact),
+            ("documents", "create") => Some(Self::UploadDocument),
+            ("documents-multipart", "create") => Some(Self::UploadDocumentMultipart),
+            ("vouchers", "archive") => Some(Self::ArchiveVoucher),
             _ => None,
         }
     }

@@ -50,7 +50,7 @@ pub struct Invocation<'a> {
 impl<'a> Invocation<'a> {
     /// Check `values` against `op`.
     pub fn new(op: &'a Operation, values: Values) -> Result<Self, ValueError> {
-        let name = || op.command().to_string();
+        let name = || op.id().to_owned();
         for (wire, raw) in values.params() {
             let param = op.param(wire).ok_or_else(|| ValueError::UnknownParam {
                 op: name(),
@@ -171,7 +171,7 @@ impl<'a> Invocation<'a> {
 
 /// Does the body the caller brought match the body the operation asks for?
 fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> {
-    let name = || op.command().to_string();
+    let name = || op.id().to_owned();
     let wrong = |expected: &str| {
         Err(ValueError::WrongBodyKind {
             op: name(),

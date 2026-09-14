@@ -187,3 +187,126 @@ fn a_blob_that_is_not_a_reduction_is_refused_by_name() {
     let error = Document::from_blob(b"not a reduction").expect_err("not a reduction");
     assert!(error.to_string().contains("reduced model"), "{error}");
 }
+
+/// A document of this test's own, `paths` and nothing else — for the naming
+/// rules, which are about shapes the toy fixture does not have.
+fn synthetic(paths: &str) -> String {
+    format!(
+        "openapi: 3.0.3\n\
+         info: {{ title: t, version: \"1\" }}\n\
+         servers: [{{ url: 'http://localhost:9999' }}]\n\
+         paths:\n{paths}"
+    )
+}
+
+/// What the tree calls every operation, in document order.
+fn placements(document: &str) -> Vec<String> {
+    Document::load(document, "")
+        .expect("a document")
+        .iter()
+        .map(|op| format!("{} {}", op.group(), op.command()))
+        .collect()
+}
+
+/// A segment every path shares tells nothing apart, so it is not the group: a
+/// document served entirely under `/v1` must not collapse into one group
+/// named `v1`.
+#[test]
+fn a_prefix_every_path_shares_is_not_the_group() {
+    let placed = placements(&synthetic(
+        "  /v1/vouchers:\n\
+         \x20   get: { operationId: listVouchers, responses: { \"200\": { description: OK } } }\n\
+         \x20 /v1/contacts:\n\
+         \x20   post: { operationId: createContact, responses: { \"201\": { description: OK } } }\n",
+    ));
+    assert_eq!(placed, ["vouchers list", "contacts create"]);
+}
+
+/// Two operations under one name would silently shadow each other. The
+/// document is refused instead, naming both and the way out.
+#[test]
+fn two_operations_under_one_name_are_refused_by_both_ids() {
+    const COLLIDING: &str = "  /vouchers/{id}/render:\n\
+         \x20   get: { operationId: renderVoucher, responses: { \"200\": { description: OK } } }\n\
+         \x20 /vouchers/{id}/pdf/render:\n\
+         \x20   get: { operationId: renderVoucherPdf, responses: { \"200\": { description: OK } } }\n";
+
+    let error = Document::load(&synthetic(COLLIDING), "").expect_err("both are `vouchers render`");
+
+    assert_eq!(
+        error.to_string(),
+        "`renderVoucher` and `renderVoucherPdf` are both `vouchers render` on the \
+         command line; give one of them an `x-cli-command`"
+    );
+
+    // And the way out the message names is the way out.
+    let resolved = COLLIDING.replace(
+        "operationId: renderVoucherPdf",
+        "operationId: renderVoucherPdf, x-cli-command: render-pdf",
+    );
+    assert_eq!(
+        placements(&synthetic(&resolved)),
+        ["vouchers render", "vouchers render-pdf"]
+    );
+}
+
+/// The path is where a name comes from; the document is where it is overruled.
+/// `x-cli-group` and `x-cli-command` are the adopter's say, written in the
+/// same Overlay as every other correction.
+#[test]
+fn the_document_may_name_its_own_group_and_command() {
+    let placed = placements(&synthetic(
+        "  /vouchers/{id}/render:\n\
+         \x20   get:\n\
+         \x20     operationId: renderVoucher\n\
+         \x20     x-cli-group: reports\n\
+         \x20     x-cli-command: pdf\n\
+         \x20     responses: { \"200\": { description: OK } }\n\
+         \x20 /contacts:\n\
+         \x20   post: { operationId: createContact, responses: { \"201\": { description: OK } } }\n",
+    ));
+    assert_eq!(placed, ["reports pdf", "contacts create"]);
+}
+
+/// A marker that is there and is not a name is the document saying something
+/// this crate has no reading for — refused, rather than passed over in favour
+/// of the name it was meant to override.
+#[test]
+fn a_marker_that_is_not_a_name_is_refused() {
+    let error = Document::load(
+        &synthetic(
+            "  /vouchers:\n\
+             \x20   get:\n\
+             \x20     operationId: listVouchers\n\
+             \x20     x-cli-command: [a, b]\n\
+             \x20     responses: { \"200\": { description: OK } }\n",
+        ),
+        "",
+    )
+    .expect_err("a list is not a name");
+    assert_eq!(
+        error.to_string(),
+        "listVouchers: `x-cli-command` is not a string"
+    );
+}
+
+/// An override that will not reduce to a command name is rejected rather than
+/// mangled, and the message says which of the document's own words to look at.
+#[test]
+fn an_override_that_is_not_spellable_names_itself() {
+    let error = Document::load(
+        &synthetic(
+            "  /vouchers:\n\
+             \x20   get:\n\
+             \x20     operationId: listVouchers\n\
+             \x20     x-cli-group: \"???\"\n\
+             \x20     responses: { \"200\": { description: OK } }\n",
+        ),
+        "",
+    )
+    .expect_err("`???` is not a name");
+    assert_eq!(
+        error.to_string(),
+        "the x-cli-group `???` does not kebab-case into [a-z0-9-]"
+    );
+}

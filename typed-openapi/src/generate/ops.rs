@@ -30,7 +30,9 @@ struct Emitted {
     variant: Ident,
     /// The `operationId`, as the document spells it.
     id: String,
-    /// The subcommand name a CLI mounts it under.
+    /// The group a CLI mounts it under.
+    group: String,
+    /// The subcommand name under that group.
     command: String,
     /// The Rust type of its JSON request body, when it has one.
     body: Option<TokenStream>,
@@ -85,6 +87,7 @@ fn gather(api: &OpenAPI, model: &Document) -> Result<Vec<Emitted>, GenerateError
                 row: quote! { (#id, #method, #path) },
                 variant: variant_of(op),
                 id: id.to_owned(),
+                group: op.group().as_str().to_owned(),
                 command: op.command().as_str().to_owned(),
                 body: json_body_type(op, operation)?,
                 method: wrapper(op, path_item, operation)?,
@@ -103,8 +106,8 @@ fn operation_id(ops: &[Emitted]) -> TokenStream {
     });
     let idents = ops.iter().map(|op| &op.variant);
     let from_command = ops.iter().map(|op| {
-        let (command, variant) = (&op.command, &op.variant);
-        quote! { #command => Some(Self::#variant) }
+        let (group, command, variant) = (&op.group, &op.command, &op.variant);
+        quote! { (#group, #command) => Some(Self::#variant) }
     });
     let check_body = check_body(ops);
 
@@ -126,13 +129,14 @@ fn operation_id(ops: &[Emitted]) -> TokenStream {
             #[doc = "`OPERATIONS`' order and this enum's discriminant order."]
             pub const ALL: &'static [OperationId] = &[#(OperationId::#idents),*];
 
-            #[doc = "The subcommand name the CLI mounts this operation under."]
+            #[doc = "The `<group> <command>` pair the CLI mounts this"]
+            #[doc = "operation under."]
             #[doc = ""]
             #[doc = "This is the one place a name off the command line becomes"]
             #[doc = "a typed operation; everything past it is exhaustive."]
             #[must_use]
-            pub fn from_command(name: &str) -> Option<Self> {
-                match name {
+            pub fn from_command(group: &str, command: &str) -> Option<Self> {
+                match (group, command) {
                     #(#from_command,)*
                     _ => None,
                 }

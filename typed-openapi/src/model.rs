@@ -23,15 +23,26 @@ use thiserror::Error;
 
 use crate::names::{CommandName, renamed};
 #[cfg(feature = "document")]
-use crate::names::{IdError, Namespace, kebab};
+use crate::names::{Grouping, NameError, Namespace, kebab};
 use crate::scalar::Scalar;
 #[cfg(feature = "document")]
 use crate::schema::{RefError, is_json, is_multipart, resolve, resolve_schema, scalar_of};
 
-/// The one extension this crate reads. HTTP cannot say "this GET writes", so
-/// the document has to, and an Overlay is where an adopter says it.
+/// The three extensions this crate reads, all of them an adopter's say over
+/// something the document alone cannot settle. An Overlay is where they are
+/// written.
+///
+/// HTTP cannot say "this GET writes", so the document has to.
 #[cfg(feature = "document")]
 const WRITES: &str = "x-cli-writes";
+/// The command name to mount an operation under, where the path spells one
+/// badly — or where two operations reduce to the same name.
+#[cfg(feature = "document")]
+const COMMAND: &str = "x-cli-command";
+/// The group to mount an operation under, where the path's own segment is not
+/// the resource the operation belongs to.
+#[cfg(feature = "document")]
+const GROUP: &str = "x-cli-group";
 
 /// Whole-body flag, for every operation that takes JSON.
 pub const JSON_BODY: &str = "json-body";
@@ -53,10 +64,11 @@ pub struct Document {
     ops: Vec<Operation>,
 }
 
-/// One operation: one subcommand, one request.
+/// One operation: one subcommand under one group, one request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Operation {
     id: String,
+    group: CommandName,
     command: CommandName,
     #[serde(with = "method_string")]
     method: Method,
@@ -171,9 +183,19 @@ pub enum LoadError {
     #[error("{method} {path} has no operationId")]
     NoOperationId { method: String, path: String },
     #[error(transparent)]
-    OperationId(#[from] IdError),
-    #[error("two operations are both named `{0}` on the command line")]
-    DuplicateCommand(CommandName),
+    Name(#[from] NameError),
+    #[error("{op}: `{key}` is not a string")]
+    Override { op: String, key: &'static str },
+    #[error(
+        "`{first}` and `{second}` are both `{group} {command}` on the command line; \
+         give one of them an `x-cli-command`"
+    )]
+    DuplicateCommand {
+        group: CommandName,
+        command: CommandName,
+        first: String,
+        second: String,
+    },
     #[error(transparent)]
     Reference(#[from] RefError),
     #[error("{op}: parameter `{name}` is {reason}")]
@@ -263,7 +285,13 @@ impl Document {
             source,
         })?;
         let empty = Components::default();
-        let components = doc.components.as_ref().unwrap_or(&empty);
+        // Which segment groups this document is a fact about all of its paths,
+        // so it is read once and then applied one path at a time.
+        let paths: Vec<&str> = doc.paths.paths.keys().map(String::as_str).collect();
+        let whole = Reading {
+            components: doc.components.as_ref().unwrap_or(&empty),
+            grouping: Grouping::of(&paths),
+        };
 
         let mut ops: Vec<Operation> = Vec::new();
         for (path, item) in &doc.paths.paths {
@@ -272,11 +300,11 @@ impl Document {
             })?;
             for (method, op) in item.iter() {
                 let params = item.parameters.iter().chain(op.parameters.iter());
-                ops.push(Operation::build(path, method, op, params, components)?);
+                ops.push(Operation::build(path, method, op, params, whole)?);
             }
         }
-        if let Some(duplicate) = first_duplicate(&ops) {
-            return Err(LoadError::DuplicateCommand(duplicate));
+        if let Some(collision) = first_collision(&ops) {
+            return Err(collision);
         }
         Ok(Self { base, ops })
     }
@@ -298,10 +326,12 @@ impl Document {
         self.ops.iter().find(|op| op.id == operation_id)
     }
 
-    /// By subcommand name, as the user types it.
+    /// By the two names the user types, `<group> <command>`.
     #[must_use]
-    pub fn by_command(&self, command: &str) -> Option<&Operation> {
-        self.ops.iter().find(|op| op.command.as_str() == command)
+    pub fn by_command(&self, group: &str, command: &str) -> Option<&Operation> {
+        self.ops
+            .iter()
+            .find(|op| op.group.as_str() == group && op.command.as_str() == command)
     }
 
     /// Every operation, in document order. The order is the one a generated
@@ -356,7 +386,7 @@ impl Operation {
         method: &str,
         op: &openapiv3::Operation,
         params: impl Iterator<Item = &'d ReferenceOr<Parameter>>,
-        components: &Components,
+        whole: Reading<'_>,
     ) -> Result<Self, LoadError> {
         let id = op
             .operation_id
@@ -365,20 +395,21 @@ impl Operation {
                 method: method.to_owned(),
                 path: path.to_owned(),
             })?;
-        let command = CommandName::from_operation_id(id)?;
         let method = method_of(method);
+        let (group, command) = placement(op, id, path, &method, whole.grouping)?;
 
         // One namespace per subcommand: the gate's own flags are claimed first.
         let mut flags =
             Namespace::with_reserved([COMMIT, JSON_BODY, RAW_BODY, FILE_PART, FIELD_PART]);
         let params = params
-            .map(|p| Param::build(command.as_str(), p, components, &mut flags))
+            .map(|p| Param::build(id, p, whole.components, &mut flags))
             .collect::<Result<Vec<_>, _>>()?;
-        let body = Body::build(op, components, &mut flags)?;
+        let body = Body::build(op, whole.components, &mut flags)?;
         let effect = effect_of(&method, op);
 
         Ok(Self {
             id: id.to_owned(),
+            group,
             command,
             method,
             path: path.to_owned(),
@@ -396,7 +427,13 @@ impl Operation {
         &self.id
     }
 
-    /// The subcommand name, as the user types it.
+    /// The group this operation is mounted under, as the user types it.
+    #[must_use]
+    pub fn group(&self) -> &CommandName {
+        &self.group
+    }
+
+    /// The subcommand name under that group, as the user types it.
     #[must_use]
     pub fn command(&self) -> &CommandName {
         &self.command
@@ -445,15 +482,80 @@ impl Operation {
     }
 }
 
-/// Two operations under one subcommand name would silently shadow each other,
-/// so the document is refused instead.
+/// What the whole document supplies while one of its operations is read: the
+/// schemas every `$ref` resolves against, and the rule that places operations
+/// in the command tree. Both are facts about the document rather than about
+/// the operation, so both are read once and handed down.
 #[cfg(feature = "document")]
-fn first_duplicate(ops: &[Operation]) -> Option<CommandName> {
+#[derive(Debug, Clone, Copy)]
+struct Reading<'d> {
+    components: &'d Components,
+    grouping: Grouping,
+}
+
+/// Where an operation sits in the command tree: the grouping rule, with the
+/// document's own overrides over it.
+///
+/// `x-cli-group` and `x-cli-command` are the adopter's say over a name a path
+/// spells badly, and the only way out of a collision — so they are read here,
+/// where the name is decided, and nowhere else.
+#[cfg(feature = "document")]
+fn placement(
+    op: &openapiv3::Operation,
+    id: &str,
+    path: &str,
+    method: &Method,
+    grouping: Grouping,
+) -> Result<(CommandName, CommandName), LoadError> {
+    let group = match named(op, id, GROUP)? {
+        Some(raw) => CommandName::new(GROUP, raw)?,
+        None => grouping.group(path)?,
+    };
+    let command = match named(op, id, COMMAND)? {
+        Some(raw) => CommandName::new(COMMAND, raw)?,
+        None => grouping.leaf(path, method)?,
+    };
+    Ok((group, command))
+}
+
+/// One `x-cli-` name the document offers, if it offers one.
+///
+/// A marker that is present and is not a string is the document saying
+/// something this crate has no reading for, and is refused rather than passed
+/// over — an adopter who writes a list where a name goes would otherwise get
+/// the name they were overriding.
+#[cfg(feature = "document")]
+fn named<'o>(
+    op: &'o openapiv3::Operation,
+    id: &str,
+    key: &'static str,
+) -> Result<Option<&'o str>, LoadError> {
+    match op.extensions.get(key) {
+        None => Ok(None),
+        Some(serde_json::Value::String(raw)) => Ok(Some(raw)),
+        Some(_) => Err(LoadError::Override {
+            op: id.to_owned(),
+            key,
+        }),
+    }
+}
+
+/// Two operations under one `<group> <command>` would silently shadow each
+/// other, so the document is refused instead — never resolved by renaming one
+/// of them, which would move a name nobody asked to move.
+#[cfg(feature = "document")]
+fn first_collision(ops: &[Operation]) -> Option<LoadError> {
     ops.iter().enumerate().find_map(|(index, op)| {
-        ops.get(index + 1..)?
+        let later = ops
+            .get(index + 1..)?
             .iter()
-            .any(|later| later.command == op.command)
-            .then(|| op.command.clone())
+            .find(|later| later.group == op.group && later.command == op.command)?;
+        Some(LoadError::DuplicateCommand {
+            group: op.group.clone(),
+            command: op.command.clone(),
+            first: op.id.clone(),
+            second: later.id.clone(),
+        })
     })
 }
 

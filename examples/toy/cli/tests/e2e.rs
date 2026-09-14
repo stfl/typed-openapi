@@ -19,7 +19,8 @@ use typed_openapi::Recorder;
 const UPDATE: &[&str] = &[
     "toy",
     "raw",
-    "update-voucher",
+    "vouchers",
+    "update",
     "--id",
     "5",
     "--total",
@@ -195,7 +196,7 @@ fn a_read_carries_no_flag_and_runs_on_sight() {
     let client = Recorder::new().answering(StatusCode::OK, &serde_json::json!([voucher("paid")]));
     let out = run(
         &client,
-        &["toy", "raw", "list-vouchers", "--status", "paid"],
+        &["toy", "raw", "vouchers", "list", "--status", "paid"],
     );
     let sent = client.take();
     assert_eq!(sent.len(), 1);
@@ -210,7 +211,7 @@ fn a_read_carries_no_flag_and_runs_on_sight() {
 #[test]
 fn the_writing_get_is_gated_like_any_other_write() {
     let client = Recorder::new();
-    let out = run(&client, &["toy", "raw", "render-voucher", "--id", "5"]);
+    let out = run(&client, &["toy", "raw", "vouchers", "render", "--id", "5"]);
     assert!(
         out.stdout.starts_with("GET /vouchers/5/render"),
         "{}",
@@ -234,7 +235,8 @@ fn a_flag_beside_json_body_is_an_edit_not_a_value_that_is_dropped() {
         &[
             "toy",
             "raw",
-            "create-voucher",
+            "vouchers",
+            "create",
             "--json-body",
             path.to_str().expect("a UTF-8 path"),
             "--total",
@@ -263,7 +265,8 @@ fn a_json_body_that_does_not_fit_the_document_is_refused_with_nothing_sent() {
     let matches = app::root(&api).get_matches_from([
         "toy",
         "raw",
-        "create-contact",
+        "contacts",
+        "create",
         "--json-body",
         path.to_str().expect("a UTF-8 path"),
         "--commit",
@@ -295,7 +298,8 @@ fn a_nested_body_goes_through_a_file_and_no_dead_flags_are_offered() {
         &[
             "toy",
             "raw",
-            "create-contact",
+            "contacts",
+            "create",
             "--json-body",
             path.to_str().expect("a UTF-8 path"),
             "--commit",
@@ -308,7 +312,7 @@ fn a_nested_body_goes_through_a_file_and_no_dead_flags_are_offered() {
     // this CLI will not take apart.
     let api = api();
     let refused =
-        app::root(&api).try_get_matches_from(["toy", "raw", "create-contact", "--name", "Ada"]);
+        app::root(&api).try_get_matches_from(["toy", "raw", "contacts", "create", "--name", "Ada"]);
     assert!(refused.is_err(), "a flag the request builder would ignore");
 }
 
@@ -323,7 +327,8 @@ fn the_multipart_upload_is_assembled_from_parts() {
         &[
             "toy",
             "raw",
-            "upload-document-multipart",
+            "documents-multipart",
+            "create",
             "--file",
             &format!("file={}", path.to_str().expect("a UTF-8 path")),
             "--field",
@@ -460,12 +465,7 @@ fn commit_runs_the_whole_chain_in_order() {
 #[test]
 fn a_static_completion_script_covers_the_whole_tree() {
     let script = run(&Recorder::new(), &["toy", "completions", "bash"]).stdout;
-    for name in [
-        "raw",
-        "finalize-voucher",
-        "update-voucher",
-        "archive-voucher",
-    ] {
+    for name in ["raw", "finalize-voucher", "vouchers", "update", "archive"] {
         assert!(script.contains(name), "`{name}` is missing from the script");
     }
 }
@@ -477,40 +477,16 @@ fn the_document_refuses_bad_values_before_a_request_is_built() {
         // Not an amount; not a `VoucherStatus`; not an integer; and a PUT
         // missing two fields the document marks required.
         vec![
-            "toy",
-            "raw",
-            "update-voucher",
-            "--id",
-            "5",
-            "--total",
-            "12.5x",
+            "toy", "raw", "vouchers", "update", "--id", "5", "--total", "12.5x",
         ],
         vec![
-            "toy",
-            "raw",
-            "update-voucher",
-            "--id",
-            "5",
-            "--status",
-            "bogus",
+            "toy", "raw", "vouchers", "update", "--id", "5", "--status", "bogus",
         ],
         vec![
-            "toy",
-            "raw",
-            "update-voucher",
-            "--id",
-            "x",
-            "--total",
-            "1.00",
+            "toy", "raw", "vouchers", "update", "--id", "x", "--total", "1.00",
         ],
         vec![
-            "toy",
-            "raw",
-            "update-voucher",
-            "--id",
-            "5",
-            "--total",
-            "12.50",
+            "toy", "raw", "vouchers", "update", "--id", "5", "--total", "12.50",
         ],
     ] {
         assert!(

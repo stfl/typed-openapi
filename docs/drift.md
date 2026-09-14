@@ -22,6 +22,7 @@ early they bite:
 |---|---|---|---|
 | renames or retypes a field an Overlay action corrects | the Overlay, under `ErrorOnZeroMatch` | bless | target matched zero nodes, quoting the JSONPath |
 | moves a corrected operation to another method | the same | bless | the same, quoting the other JSONPath |
+| adds an operation that reduces to a command another one already has | `Document::load` | bless | both `operationId`s, and that one needs an `x-cli-command` |
 | withdraws an operation something depends on | `const _: () = assert!(documented(..))` | compile | E0080, quoting the whole assertion |
 | adds a field to a schema the adopter destructures | the exhaustive `let Voucher { … }` | compile | E0027, naming the added field |
 | renames or removes such a field | the same | compile | E0026, naming the missing field and suggesting the new one |
@@ -210,11 +211,12 @@ reaches `--help` and nothing objects. Neither does a changed `pattern` on a
 plain string: `Scalar::Text` carries the pattern into the help line and does not
 enforce it. Only a `format: money` field has a rule the CLI applies.
 
-**A vendor revision nobody blesses.** Every bless-time check above runs when
-`just bless` runs, and `just bless` is a person's decision — `just gate` and CI
-do not run it, and do not check that re-running it would leave `git diff` empty.
-Until someone blesses, the committed document *is* the API as far as this
-workspace is concerned.
+**A vendor revision nobody fetches.** Every bless-time check above runs against
+the vendor document that is committed here. `just blessed` re-runs the bless
+step and fails on a non-empty `git diff`, so the committed artefacts cannot
+drift from the committed document — but nothing fetches a *newer* document.
+Until someone updates `examples/toy/spec/toy.yaml`, the committed document *is*
+the API as far as this workspace is concerned.
 
 The honest summary: drift in something you **use** is loud, drift in something
 you **corrected** is loud, and drift in everything else is a diff someone has to

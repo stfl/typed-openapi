@@ -13,17 +13,44 @@ with no socket.
 ## Try it
 
 ```sh
-cargo run -p cli -- --help                      # raw, finalize-voucher, completions
-cargo run -p cli -- raw --help                  # one subcommand per operation
-cargo run -p cli -- raw get-voucher --help      # flags from the document
-cargo run -p cli --example root -- --help       # the same operations as the whole CLI
-just bless                                      # regenerate; the diff must be empty
+cargo run -p cli -- --help                       # raw, finalize-voucher, completions
+cargo run -p cli -- raw --help                   # one subcommand per resource
+cargo run -p cli -- raw vouchers --help          # one per operation under it
+cargo run -p cli -- raw vouchers get --help      # flags from the document
+cargo run -p cli --example root -- --help        # the same operations as the whole CLI
+just bless                                       # regenerate; the diff must be empty
 ```
+
+The tree is two levels, and the names are the document's paths and methods
+rather than its `operationId`s — `PUT /vouchers/{id}` is `vouchers update`
+however the vendor spelled it, and the resource word the vendor repeats in
+every name is said once, by the group:
+
+```console
+$ cargo run -p cli -- raw vouchers --help
+Operations on vouchers
+
+Usage: toy raw vouchers [OPTIONS] <COMMAND>
+
+Commands:
+  list      List vouchers
+  create    Create a voucher
+  get       Fetch one voucher
+  update    Replace a voucher
+  enshrine  Finalize a voucher (irreversible)
+  render    Render the voucher to PDF and store it on the server (this GET
+            writes)
+  archive   Archive a voucher (undocumented; vendor ships it)
+  help      Print this message or the help of the given subcommand(s)
+```
+
+[`../../docs/cli.md`](../../docs/cli.md) has the rule, and the two `x-cli-`
+markers that overrule it.
 
 A write prints what it would send and stops:
 
 ```console
-$ cargo run -p cli -- raw render-voucher --id 5
+$ cargo run -p cli -- raw vouchers render --id 5
 GET /vouchers/5/render HTTP/1.1
 host: localhost:9999
 dry run: nothing was sent. Add --commit to send it.
@@ -46,7 +73,7 @@ vendor's document — is never edited.
 | declares `format: money` and never says what an amount is | an Overlay `update` adding the pattern | `Voucher.total` is a `Money`, and `--total` rejects `1,50` |
 | returns an `internal_ref` it never documented | an `update` adding the property | a struct field and a `--internal-ref` flag |
 | ships `archiveVoucher` and documents it nowhere | an `update` adding the path | a wrapper and a subcommand, for no Rust at all |
-| serves a `GET` that stores a PDF | `x-cli-writes: true` | `render-voucher` is behind `--commit` |
+| serves a `GET` that stores a PDF | `x-cli-writes: true` | `vouchers render` is behind `--commit` |
 | misspells a multipart media type | left alone, and both uploads work | `--raw-body` for one, `--file` / `--field` for the other |
 
 Two of those actions are **tripwires**: their JSONPath states what the vendor
@@ -66,10 +93,10 @@ a real difference with no row fails.
 | crate | lines | written by | holds |
 |---|---|---|---|
 | [`api-types`](api-types) | 93 | the adopter | `Money`. Generated code names it, so it sits below the generated code |
-| [`api-generated`](api-generated) | 529 | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
-| [`api`](api) | 843 | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
-| [`cli`](cli) | 1320 | the adopter | the `toy` binary, and `examples/root.rs` beside it |
-| [`xtask`](xtask) | 46 | the adopter | the bless step — the generator itself ships in `typed-openapi` |
+| [`api-generated`](api-generated) | 590 | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
+| [`api`](api) | 876 | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
+| [`cli`](cli) | 1309 | the adopter | the `toy` binary, and `examples/root.rs` beside it |
+| [`xtask`](xtask) | 45 | the adopter | the bless step — the generator itself ships in `typed-openapi` |
 
 The split is about what recompiles. An edit to `api` rebuilds the adopter's own
 lines and not the generated volume beneath them, and `api-generated`'s whole

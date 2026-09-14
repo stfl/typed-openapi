@@ -1,6 +1,11 @@
 //! The clap tree, and the trip back from `ArgMatches` to a sent request.
 //!
-//! [`commands`] turns the document into subcommands and [`dispatch`] runs
+//! The tree is two levels: one subcommand per resource the document groups its
+//! paths into, and one subcommand under that per operation — `vouchers update`
+//! rather than `update-voucher`. Both names are decided while the document is
+//! reduced and travel in the reduced model, so nothing here derives them.
+//!
+//! [`commands`] turns the document into those subcommands and [`dispatch`] runs
 //! whichever one the user typed, so an adopter who wants the generated surface
 //! and nothing else writes those two calls and renders the [`Outcome`].
 //!
@@ -24,6 +29,7 @@ use crate::model::{
     Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, JSON_BODY, Location, Operation,
     Param, RAW_BODY,
 };
+use crate::names::CommandName;
 use crate::plan::{Plan, PlanError};
 use crate::scalar::Scalar;
 use crate::transport::{HttpRequest, HttpResponse, SyncClient};
@@ -48,10 +54,31 @@ pub enum ArgError {
     PartSyntax { flag: &'static str, raw: String },
 }
 
-/// One subcommand per operation, in document order.
+/// One subcommand per group, in document order, holding the operations under
+/// it in document order.
 #[must_use]
 pub fn commands(doc: &Document) -> Vec<Command> {
-    doc.iter().map(command).collect()
+    let mut groups: Vec<(&CommandName, Vec<&Operation>)> = Vec::new();
+    for op in doc {
+        match groups.iter_mut().find(|(name, _)| *name == op.group()) {
+            Some((_, under)) => under.push(op),
+            None => groups.push((op.group(), vec![op])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(name, under)| group(name, under))
+        .collect()
+}
+
+/// The subcommand for one group: a name the document grouped by, and every
+/// operation it grouped under it.
+fn group(name: &CommandName, under: Vec<&Operation>) -> Command {
+    Command::new(name.as_str().to_owned())
+        .about(format!("Operations on {name}"))
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommands(under.into_iter().map(command))
 }
 
 /// The subcommand for one operation.
@@ -145,8 +172,8 @@ pub enum Outcome {
 pub enum DispatchError {
     #[error("no command given")]
     NoCommand,
-    #[error("no operation named `{0}` in the document")]
-    Unknown(String),
+    #[error("no operation named `{group} {command}` in the document")]
+    Unknown { group: String, command: String },
     #[error(transparent)]
     Arg(#[from] ArgError),
     #[error(transparent)]
@@ -201,18 +228,22 @@ impl<'d> Selection<'d> {
     }
 }
 
-/// Read the subcommand the user typed, whichever command the operations were
+/// Read the two subcommands the user typed, whichever command the groups were
 /// mounted on.
 ///
 /// `matches` belongs to that command: the root itself when the operations are
 /// the whole CLI, or the `raw` subcommand when they sit under one. This
-/// function never looks above it, which is what lets the same tree mount
-/// anywhere.
+/// function reads the group below it and the operation below that, and never
+/// looks above it, which is what lets the same tree mount anywhere.
 pub fn select<'d>(doc: &'d Document, matches: &ArgMatches) -> Result<Selection<'d>, DispatchError> {
-    let (name, args) = matches.subcommand().ok_or(DispatchError::NoCommand)?;
+    let (group, under) = matches.subcommand().ok_or(DispatchError::NoCommand)?;
+    let (command, args) = under.subcommand().ok_or(DispatchError::NoCommand)?;
     let operation = doc
-        .by_command(name)
-        .ok_or_else(|| DispatchError::Unknown(name.to_owned()))?;
+        .by_command(group, command)
+        .ok_or_else(|| DispatchError::Unknown {
+            group: group.to_owned(),
+            command: command.to_owned(),
+        })?;
     Ok(Selection {
         values: values(operation, args)?,
         confirmed: confirmed(operation, args),

@@ -19,6 +19,15 @@ would send — the same value, so the two cannot drift. Whether an operation
 writes comes from the HTTP method plus the document's `x-cli-writes` marker,
 never from a name or a heuristic.
 
+**Both command names are decided while the document is reduced.** `Grouping` in
+`src/names.rs` reads the rule off every path once; an `Operation` carries the
+group and the command it was placed under, and both travel in the postcard blob.
+A shipped binary reads them and derives nothing. Two operations reducing to one
+`<group> <command>` is a `LoadError` naming both `operationId`s — never a silent
+rename, because a name that moves when a *second* operation arrives is a name
+that moved without anyone asking. `x-cli-group` and `x-cli-command` are the way
+out, and they are read in the same place the rule runs.
+
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.

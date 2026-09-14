@@ -8,8 +8,8 @@
 //!
 //! ```text
 //! cargo run -p cli --example root -- --help
-//! cargo run -p cli --example root -- get-voucher --id 5
-//! cargo run -p cli --example root -- create-voucher --total 12.50 --currency EUR --status open
+//! cargo run -p cli --example root -- vouchers get --id 5
+//! cargo run -p cli --example root -- vouchers create --total 12.50 --currency EUR --status open
 //! ```
 
 use std::process::ExitCode;
