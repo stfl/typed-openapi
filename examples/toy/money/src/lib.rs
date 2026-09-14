@@ -34,7 +34,7 @@
 
 use std::fmt;
 use std::iter::Sum;
-use std::ops::{Add, Neg, Sub};
+use std::ops::{Add, AddAssign, Neg, Sub};
 use std::str::FromStr;
 
 use num_bigint::{BigUint, Sign};
@@ -187,11 +187,24 @@ impl fmt::Display for Money {
     }
 }
 
+// Arithmetic comes in an owned pair and a borrowed pair, because an amount is
+// a heap value and a caller should never have to clone one to read it. The
+// owned form consumes what it was given; the borrowed form reads two amounts a
+// caller still owns. Neither can fail, so neither is spelled with an `Option`.
+
 impl Add for Money {
     type Output = Self;
 
     fn add(self, addend: Self) -> Self {
         Self(self.0 + addend.0)
+    }
+}
+
+impl Add<&Money> for &Money {
+    type Output = Money;
+
+    fn add(self, addend: &Money) -> Money {
+        Money(&self.0 + &addend.0)
     }
 }
 
@@ -203,11 +216,27 @@ impl Sub for Money {
     }
 }
 
+impl Sub<&Money> for &Money {
+    type Output = Money;
+
+    fn sub(self, subtrahend: &Money) -> Money {
+        Money(&self.0 - &subtrahend.0)
+    }
+}
+
 impl Neg for Money {
     type Output = Self;
 
     fn neg(self) -> Self {
         Self(-self.0)
+    }
+}
+
+impl AddAssign<&Money> for Money {
+    /// Accumulating in place, which is what a running total wants: the digits
+    /// already allocated are reused instead of a fresh amount per row.
+    fn add_assign(&mut self, addend: &Self) {
+        self.0 += &addend.0;
     }
 }
 
@@ -220,8 +249,14 @@ impl Sum for Money {
 impl<'a> Sum<&'a Money> for Money {
     /// The shape a ledger actually has: a column of amounts read out of a
     /// collection nobody wants to consume.
+    ///
+    /// It accumulates through [`AddAssign`] rather than cloning each row into
+    /// an owned sum, so the only allocation that grows is the total's.
     fn sum<I: Iterator<Item = &'a Self>>(amounts: I) -> Self {
-        amounts.cloned().sum()
+        amounts.fold(Self::zero(), |mut total, amount| {
+            total += amount;
+            total
+        })
     }
 }
 
@@ -398,6 +433,26 @@ mod tests {
         assert_eq!(column.iter().sum::<Money>(), money("1.00"));
         assert_eq!(column.into_iter().sum::<Money>(), money("1.00"));
         assert_eq!(std::iter::empty::<Money>().sum::<Money>(), Money::zero());
+    }
+
+    /// The borrowed pair, so that reading two amounts a caller still owns costs
+    /// no clone. Every line here is a compile error without it.
+    #[test]
+    fn amounts_a_caller_still_owns_add_and_subtract_without_being_cloned() {
+        let (gross, tax) = (money("12.50"), money("2.08"));
+        assert_eq!(&gross + &tax, money("14.58"));
+        assert_eq!(&gross - &tax, money("10.42"));
+        assert_eq!(&tax - &gross, money("-10.42"));
+
+        let mut running = Money::zero();
+        for amount in &[money("0.10"), money("0.20"), money("0.03")] {
+            running += amount;
+        }
+        assert_eq!(running, money("0.33"));
+
+        // And the two amounts are still the caller's afterwards.
+        assert_eq!(gross.wire(), "12.50");
+        assert_eq!(tax.wire(), "2.08");
     }
 
     /// Ordering is the count of cents, so amounts sort and compare the way the

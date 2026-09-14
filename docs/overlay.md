@@ -420,13 +420,24 @@ The trade against the named-schema route above:
 | `Display`, arithmetic, conversions | what the generator emits | anything you write |
 | enforced on the command line | yes | only if the document states the rule too |
 | held to the document | by construction — typify compiles the same `pattern` | by a test you write |
-| the stripped binary | +0 — the engine is linked either way ([validation.md](validation.md#what-it-costs)) | +0 |
+| your dependency tree | nothing — the generator writes the type | whatever your type is built from |
+| the regex engine | linked either way ([validation.md](validation.md#what-it-costs)) | linked either way |
 
-Neither row buys or saves the regex engine: `typed-openapi` links `regress`
+Neither route buys or saves the regex engine: `typed-openapi` links `regress`
 unconditionally so that a command line can enforce whatever pattern the
 document states, and it is in the tree of every crate here — `api`'s included,
 which links no argument parser. The 810 KB is the price of enforcing rules at
 all, not of choosing one of these two routes.
+
+**The dependency row is a real cost, and it is yours alone.** Exact money over
+an integer that cannot overflow means `num-bigint` and its `num-integer` /
+`num-traits` tail — three crates the adoption would not otherwise compile, and
+what arbitrary precision costs. They land in `examples/toy/money`'s manifest and
+travel up into the binary that uses it; `just bigint-free` asserts they never
+reach `typed-openapi` in any feature set, because the crate that is published
+has no business knowing what a replaced type is made of. Choosing a narrower
+count, or a different crate, or no crate at all, is the adopter's call to make
+and the library never learns it was made.
 
 **The price of `replace` is the *held to the document* row.** A generated
 newtype cannot drift from the document; a hand-written one can, and nothing
