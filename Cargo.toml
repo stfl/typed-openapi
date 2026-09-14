@@ -28,16 +28,14 @@ default-members = [
 
 [workspace.package]
 edition = "2024"
-# The floor for the feature sets a binary ships: edition 2024 wants 1.85, and so
-# do clap 4.6 and hashbrown 0.17, the highest in the default closure. Derived
-# from what those crates declare — CI builds and tests on current stable rather
-# than against an old toolchain.
-#
-# `generate` is above it: typify reaches regress, which uses let-chains and
-# therefore wants 1.88 or newer while declaring no `rust-version` of its own.
-# That costs a shipping binary nothing, because a shipping binary never enables
-# the feature.
-rust-version = "1.85"
+# The floor for every feature set, and it is set by the regex engine: regress
+# uses let-chains and therefore wants 1.88 or newer while declaring no
+# `rust-version` of its own. A shipped binary enforces the document's patterns
+# and a generated newtype enforces its own, so both reach that engine and both
+# inherit the floor — this is not a bless-time cost. Edition 2024, clap 4.6 and
+# hashbrown 0.17 sit below it at 1.85. Derived from what those crates declare —
+# CI builds and tests on current stable rather than against an old toolchain.
+rust-version = "1.88"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/stfl/typed-openapi"
@@ -54,13 +52,14 @@ postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 prettyplease = "0.3"
 proc-macro2 = "1"
 quote = "1"
+regress = "0.12"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots"] }
 roas-overlay = "0.3"
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = "0.10"
-syn = { version = "3", features = ["parsing", "printing", "full"] }
+syn = { version = "3", features = ["parsing", "printing", "full", "visit-mut"] }
 thiserror = "2"
 typify = "0.8"
 ureq = "3.4"

@@ -85,6 +85,14 @@ pub use model::{
 };
 pub use names::{CommandName, kebab};
 pub use plan::{Plan, PlanError};
+/// `regress`, for generated code to name the regex engine through.
+///
+/// A generated `types.rs` enforces a schema's `pattern` inside `FromStr`, and
+/// the generator points every such check at `::typed_openapi::regress`, so the
+/// crate holding the generated code adds no dependency of its own — and the
+/// engine stays the one the generator emitted syntax for, which is the same one
+/// [`Scalar::parse`] runs the command line's values through.
+pub use regress;
 pub use request::{Invocation, ValueError, render};
 pub use scalar::Scalar;
 pub use transport::{AsyncClient, HttpRequest, HttpResponse, Recorder, SyncClient};

@@ -49,6 +49,71 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).expect("a file the bless step reported writing")
 }
 
+/// A document this test owns outright, written where the output goes.
+///
+/// The fixtures are copies of the example adoption's files and stay that way; a
+/// test about one generator behaviour wants the smallest document that shows
+/// it, beside the assertion, where a reader sees both at once.
+fn wrote(dir: &Path, name: &str, contents: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::create_dir_all(dir).expect("a directory to write the document into");
+    std::fs::write(&path, contents).expect("a document this test writes");
+    path
+}
+
+/// A named schema that states a `pattern`: typify turns it into a newtype whose
+/// `FromStr` enforces the rule.
+const PATTERNED: &str = r##"
+openapi: 3.0.3
+info: { title: Patterned, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things/{sku}:
+    get:
+      operationId: getThing
+      parameters:
+        - name: sku
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Sku" }
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Sku:
+      type: string
+      pattern: "^[A-Z]{3}-[0-9]{4}$"
+"##;
+
+/// A newtype that came back from an API and cannot be written to a `format!` is
+/// half a type. typify emits `Deref`, `FromStr` and two `TryFrom`s and stops
+/// there, so the missing half is this crate's to emit — and the engine the
+/// emitted rule runs on is reached through this crate, so the crate holding the
+/// generated code declares no dependency on it.
+#[test]
+fn a_generated_newtype_over_a_string_prints_and_needs_no_engine_of_its_own() {
+    let dir = out("patterned");
+    let document = wrote(&dir, "sku.yaml", PATTERNED);
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the document generates");
+
+    let types = read(&dir.join("src/types.rs"));
+    assert!(
+        types.contains("impl ::std::fmt::Display for Sku"),
+        "a generated string newtype cannot be written to a `format!`:\n{types}"
+    );
+    assert!(
+        types.contains("::typed_openapi::regress::Regex"),
+        "the generated pattern check does not reach the engine through this crate:\n{types}"
+    );
+    assert!(
+        !types.contains("<::regress::Regex>"),
+        "the generated code names an engine the crate holding it would have to \
+         depend on:\n{types}"
+    );
+}
+
 /// The four artefacts are one Overlay application seen four ways, so the
 /// reduction a binary loads has to be the reduction of the document that was
 /// committed beside it. Reducing the written YAML again is the only check that

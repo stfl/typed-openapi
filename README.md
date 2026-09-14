@@ -116,11 +116,9 @@ without `clap`.
   caller.
 - **The reduced model is a binary blob.** It is diffable only by regenerating
   it, not by reading it.
-- **Rust 1.85** for the feature sets a binary ships, set between them by clap
-  4.6, hashbrown 0.17 and edition 2024. The bless-time `generate` feature wants
-  1.88 or newer, because typify reaches a regex engine that uses let-chains.
-  Stable throughout: only this repository's own formatter and coverage recipes
-  want nightly.
+- **Rust 1.88**, in every feature set. The floor is the regex engine a
+  `pattern` is checked with: `regress` uses let-chains. Stable throughout —
+  only this repository's own formatter and coverage recipes want nightly.
 
 ## This repository
 
