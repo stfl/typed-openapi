@@ -5,6 +5,7 @@ members = [
     "examples/toy/api",
     "examples/toy/api-generated",
     "examples/toy/cli",
+    "examples/toy/money",
     "examples/toy/xtask",
 ]
 # `typed-openapi` is the product; everything under `examples/toy` is one
@@ -22,6 +23,7 @@ default-members = [
     "examples/toy/api",
     "examples/toy/api-generated",
     "examples/toy/cli",
+    "examples/toy/money",
 ]
 
 [workspace.package]

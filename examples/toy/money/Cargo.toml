@@ -1,0 +1,20 @@
+[package]
+name = "money"
+edition.workspace = true
+version.workspace = true
+publish = false
+description = "A fixed-point decimal amount: the one type in this adoption an OpenAPI document cannot describe."
+
+[dependencies]
+# Everything this crate needs. It does not depend on `typed-openapi`: the rule
+# an amount obeys is the document's, and `api/tests/money.rs` is what holds the
+# two together — a dependency here would only let the type borrow a rule
+# instead of being checked against one.
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
