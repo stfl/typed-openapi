@@ -23,8 +23,10 @@ dry run: nothing was sent. Add --commit to send it.
 ## Two consumers, one document
 
 **The Rust caller** gets owned types and one method per operation, with a
-newtype wherever the document names a rule: `Voucher.total` is a `Money`, not a
-`String`, and it cannot be built out of something that is not an amount.
+newtype wherever the document names a rule — `Voucher.currency` is a `Currency`
+and cannot be built out of something that is not an ISO 4217 code — and a type
+of *your* own wherever it cannot: `Voucher.total` is a fixed-point `Money`,
+which no OpenAPI document has a way to describe.
 
 **The CLI consumer** gets a two-level tree — one subcommand per resource the
 document's paths name, one per operation under it, so `PUT /vouchers/{id}` is

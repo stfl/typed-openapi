@@ -29,7 +29,7 @@
 //! typed_openapi::generate::Settings::new("spec/vendor.yaml")
 //!     .overlay("spec/corrections.yaml")
 //!     .overlay("spec/cli.yaml")
-//!     .replace("money", "api_types::Money")
+//!     .replace("money", "money::Money")
 //!     .write_to("api-generated")?;
 //! # Ok(())
 //! # }

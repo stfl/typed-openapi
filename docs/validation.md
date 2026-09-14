@@ -47,7 +47,10 @@ cannot come apart.
 tells a consumer that somebody somewhere knows what an amount is, and a
 document that wants the rule enforced states it as `pattern`, which every
 consumer of the document can run — see
-[overlay.md](overlay.md#2-type-validations-and-newtypes).
+[overlay.md](overlay.md#1-plain-corrections). What a `format` *is* good for is
+naming a shape a Rust type of your own stands for, which is
+[`Settings::replace`](overlay.md#owning-the-type-yourself) and happens at bless
+time, nowhere near this page's parser.
 
 ## `pattern`
 
@@ -109,7 +112,7 @@ regex engine linked at all.
 |---|---|---|---|
 | the stripped `toy` binary | 4 604 624 B | 3 794 048 B | **+810 576 B (+21%)** |
 | clean `cargo build -p cli --release` | 10.23 s | 9.93 s | +0.30 s (+3%) |
-| crates in `cli`'s normal dependency graph | 61 | 61 | +`regress`, −a hand-written newtype crate |
+| crates in `cli`'s normal dependency graph | 62 | 61 | +`regress` |
 
 **The cost is the binary.** A fifth of the `toy` binary is a regular-expression
 engine, and there is no feature that removes it: a rule that is optional is a
@@ -131,7 +134,13 @@ cargo build -p cli --release && strip -o toy.stripped target/release/toy && stat
 If the document cannot state your rule — it is not expressible as JSON Schema,
 or it is your client's and not the API's — the route is
 [a `format` tag and `Settings::replace`](overlay.md#owning-the-type-yourself),
-which hands the value to a Rust type you write and costs no engine at all.
+which hands the value to a Rust type you write.
+
+It saves you nothing on this page. `regress` is linked either way, and a type
+that enforces its own rule is a type nothing holds to the document unless you
+write the test that does. Keep the `pattern` beside the `format` and you get
+both: the command line runs the document's rule, and Rust gets the type the
+document could not describe.
 
 [ecma]: https://tc39.es/ecma262/multipage/text-processing.html#sec-regexp-regular-expression-objects
 [regress]: https://docs.rs/regress

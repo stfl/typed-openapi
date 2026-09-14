@@ -30,17 +30,18 @@ early they bite:
 | ships half a bless — inventory and model from different runs | `Document::matches`, in `Api::new` | startup, so every test | which position disagrees, and both names |
 | leaves the committed blob and the committed document disagreeing | `api/tests/typed.rs` | test | which operation is not what the document says it is |
 | catches up with a correction, or drops something a correction names | `api/tests/corrections.rs` | test | which row no longer describes a difference |
+| widens the rule a hand-owned type stands for | `api/tests/money.rs` | test | which value the document now admits and `Money` refuses |
 | **adds an operation** | — | — | **nothing** |
 | **adds a field to a schema nothing destructures or constructs** | — | — | **nothing** |
 | **changes a summary or a description** | — | — | **nothing** |
-| **loosens a rule — a wider `pattern`, a higher `maximum`** | — | — | **nothing**, until a value the old rule refused arrives |
+| **loosens a rule nothing hand-written stands for** | — | — | **nothing**, until a value the old rule refused arrives |
 
 The verbatim messages are in the sections below.
 
 ## Bless time: the Overlay as an assertion
 
-`ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Two of
-the example adoption's five actions — one in
+`ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Three
+of the example adoption's seven actions — two in
 [`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml), one in
 [`spec/cli.yaml`](../examples/toy/spec/cli.yaml) — are written as JSONPath
 filters that state what the vendor currently says, so a revision that changes
@@ -144,7 +145,7 @@ crate that owns the decision.
 ## Test time: the committed artefacts
 
 A bless step writes four files and the CLI only ever reads one of them — the
-binary blob. Three checks hold the set together.
+binary blob. Four checks hold the set together.
 
 [`api/tests/typed.rs`](../examples/toy/api/tests/typed.rs) reduces the
 *committed document* again and compares it with the *committed blob*, operation
@@ -186,6 +187,25 @@ And in the other direction — `` `Voucher.note` is in the corrected document an
 not the vendor's, and no row says so `` — so an Overlay edit nobody wrote down
 fails too. [docs/overlay.md](overlay.md) has the detail.
 
+[`api/tests/money.rs`](../examples/toy/api/tests/money.rs) is the fourth, and it
+exists because one type in this adoption is hand-written. A generated newtype
+compiles the document's `pattern` into its own `FromStr`, so it cannot drift;
+`money::Money` is the adopter's, reached through
+[`Settings::replace`](overlay.md#owning-the-type-yourself), and it borrows
+nothing. The test reads the rule off the embedded document — the very `Scalar`
+that refuses a `--total` — and holds the type to it over every edge the pattern
+has, in both directions:
+
+```
+`12,50`: the document accepts it and `Money` refuses it
+the document's rule has moved: it now accepts `12,50`
+```
+
+The one value they cannot agree about is stated rather than hidden: the pattern
+admits any number of digits and `Money` counts cents in an `i64`, so an amount
+past `i64::MAX` cents is refused for its size. That gap has a test of its own,
+so it stays the only one.
+
 ## What is not caught
 
 A page that claims everything is caught is worth less than one that says where
@@ -215,6 +235,11 @@ a lower `maximum` — is enforced from the next bless step onwards, so a value
 that stops being allowed is refused at the flag. A *loosened* one is the quiet
 case: nothing was relying on the old rule, so nothing notices until a value the
 old rule refused turns up and is accepted.
+
+The exception is a rule a hand-owned type stands for. `Voucher.total`'s pattern
+has `api/tests/money.rs` reading it, so widening that one is loud. Every other
+rule in the document is on its own — which is an argument for writing such a
+test wherever a rule matters, not for believing the loosening is caught.
 
 **A vendor revision nobody fetches.** Every bless-time check above runs against
 the vendor document that is committed here. `just blessed` re-runs the bless

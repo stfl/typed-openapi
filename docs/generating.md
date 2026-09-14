@@ -50,7 +50,7 @@ use typed_openapi::generate::Settings;
 Settings::new("spec/vendor.yaml")
     .overlay("spec/corrections.yaml")
     .overlay("spec/cli.yaml")
-    .replace("currency", "api_types::Currency")
+    .replace("money", "money::Money")
     .regenerated_by("just bless")
     .write_to("api-generated")?;
 ```
@@ -78,8 +78,9 @@ Emit `rust_type` wherever the document declares `format`. Call it once per
 format; calls accumulate.
 
 This is where a type you already own replaces the `String` the document would
-otherwise produce. A `currency` field of `format: currency` becomes your own
-`Currency` newtype, with no hand-written mirror on top of the generated struct.
+otherwise produce. A schema of `format: money` becomes your own `Money`, with
+no hand-written mirror on top of the generated struct and no conversion at the
+boundary.
 
 The key is the format, not a schema name, so a document that spells one format
 two ways gets one substitution per spelling rather than a silent miss on the
@@ -89,9 +90,10 @@ second.
 the generated crate can name — which means the crate that owns the type is a
 dependency of the generated crate.
 
-It is the route for a type that needs *behaviour*. A rule needs no Rust at all:
-name the schema that states it and the generated newtype enforces it, on the
-command line as well as in Rust.
+It is the route for a type that needs *behaviour*, or one the document cannot
+describe — a fixed-point decimal, say. A rule needs no Rust at all: name the
+schema that states it and the generated newtype enforces it, on the command
+line as well as in Rust. The two compose, and
 [overlay.md](overlay.md#owning-the-type-yourself) has the trade written out.
 
 ### `Settings::regenerated_by(command) -> Settings`
@@ -195,8 +197,9 @@ type would not compile, so the handle has to live beside what is generated for
 it.
 
 Its dependencies are the runtime crate with `default-features = false`, `serde`,
-`http`, and whatever crate owns the types you passed to `replace`. Nothing about
-a generator reaches it.
+`http`, and whatever crate owns the types you passed to `replace` — which has to
+sit *below* it, because the generated source names it. Nothing about a generator
+reaches it.
 
 Make it a crate of its own rather than a module. An edit to your hand-written
 code then recompiles your lines and not the generated volume.

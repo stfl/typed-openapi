@@ -1,7 +1,7 @@
 # Working on typed-openapi
 
 `typed-openapi/` is the published crate. `examples/toy/` is one worked adoption
-of it, four crates, all `publish = false`, built and tested with the rest so
+of it, five crates, all `publish = false`, built and tested with the rest so
 that the example cannot rot.
 
 Run `just gate` before saying anything is done. It is `check` (fmt, compile,
@@ -73,6 +73,15 @@ A correction belongs in `examples/toy/spec/corrections.yaml` or, where only a
 command line cares, `examples/toy/spec/cli.yaml`. `just bless` must
 leave `git diff` empty when nothing upstream has changed — a non-empty diff
 means either the vendor moved or the generator did.
+
+**A type the adopter owns is held to the document by a test, because nothing
+else holds it.** A named schema's newtype compiles the document's `pattern`
+into its own `FromStr`, so it cannot drift. `examples/toy/money` is reached
+through `Settings::replace` instead and borrows nothing —
+`examples/toy/api/tests/money.rs` reads the rule off the embedded document and
+holds `Money::from_str` to it in both directions. Any future `replace` owes the
+same test; `Voucher.total` and `Voucher.currency` are the two routes kept side
+by side so that neither loses its demonstration.
 
 **The library never reads the example's files.** `typed-openapi/tests/fixtures/`
 holds this crate's own copies of the toy document and both Overlay layers. They
