@@ -7,17 +7,18 @@ info:
     `spec/toy.yaml` is never edited.
 
     This layer is about the vendor's API and nothing else: an undocumented
-    field, an undocumented operation, and a declared format the vendor never
-    said the rule for. Applying it alone yields the document the vendor should
-    have shipped — which is worth having on its own, because anything that
-    reads OpenAPI can read it, including the vendor. Nothing here mentions a
-    command line; `cli.yaml` is the layer that does.
+    field, an undocumented operation, and two values the vendor names a rule
+    for — one in a `format`, one in prose — and never states. Applying it alone
+    yields the document the vendor should have shipped — which is worth having
+    on its own, because anything that reads OpenAPI can read it, including the
+    vendor. Nothing here mentions a command line; `cli.yaml` is the layer that
+    does.
 
     Applied with `ErrorOnZeroMatch`: an action that matches nothing fails the
-    bless instead of lapsing quietly. The first action below uses that
-    deliberately as a tripwire — its JSONPath states what the vendor currently
-    says, so a vendor revision that changes it fails the bless rather than
-    being silently overwritten.
+    bless instead of lapsing quietly. Two actions below use that deliberately
+    as tripwires — their JSONPaths state what the vendor currently says, so a
+    vendor revision that changes it fails the bless rather than being silently
+    overwritten.
 extends: toy.yaml
 actions:
   # ---------------------------------------------------------------- Money ---
@@ -25,13 +26,21 @@ actions:
   # format is a name for a rule and not a rule, so nothing can run it. Writing
   # the rule down as `pattern` states it in plain JSON Schema, which every
   # consumer of this document can run; giving it a schema name states it once,
-  # for every field that carries an amount, and is what the bless step turns
-  # into a `Money` newtype in Rust.
+  # for every field that carries an amount.
+  #
+  # The vendor's `format` comes along onto the named schema, because it is the
+  # half of the pair that Rust reads: `xtask` calls `.replace("money", …)` and
+  # the bless step emits the adoption's own fixed-point type wherever the
+  # document declares the format. The document could not have described that
+  # type — OpenAPI has no fixed-point decimal — and the `replace` call could
+  # not have stated a rule, because a `format` is not one. The two compose, and
+  # neither is a substitute for the other.
   - target: $.components.schemas
     description: Say what an amount is, once, under a name.
     update:
       Money:
         type: string
+        format: money
         description: A decimal amount carried in a string.
         pattern: ^-?[0-9]+(\.[0-9]{1,2})?$
 
@@ -49,6 +58,36 @@ actions:
     description: Point the vendor's amount at that rule.
     update:
       $ref: "#/components/schemas/Money"
+
+  # ------------------------------------------------------------- Currency ---
+  # The vendor types the currency as a bare string and says "ISO 4217 code" in
+  # its description. Prose is a rule nothing can run either: the sentence that
+  # tells a person what to send tells no parser anything. An ISO 4217 code is
+  # three uppercase letters, so that is what the document says here — true of
+  # the API, useful to everything that reads this file, and no business of
+  # Rust's.
+  #
+  # This is the other route, on the field next door. `Money` above hands its
+  # type to `Settings::replace`; `Currency` keeps the one the generator writes,
+  # because a currency code wants the rule and no behaviour beyond it. One
+  # schema, two fields, both ways of arriving at a type.
+  - target: $.components.schemas
+    description: Say what a currency code is, once, under a name.
+    update:
+      Currency:
+        type: string
+        description: An ISO 4217 currency code.
+        pattern: ^[A-Z]{3}$
+
+  # TRIPWIRE. The filter selects `Voucher.properties` only while `currency` is
+  # still an undecorated string. A vendor who retypes it — as an `enum` of the
+  # codes they really accept, say — makes this a zero match, and the answer
+  # then is to drop the action rather than to point a string's rule at
+  # something that has stopped being a string.
+  - target: "$.components.schemas.Voucher[?(@.currency.type == 'string')].currency"
+    description: Point the vendor's currency code at that rule.
+    update:
+      $ref: "#/components/schemas/Currency"
 
   # -------------------------------------------------- Undocumented field ---
   # The vendor returns and accepts a bookkeeping reference it forgot to

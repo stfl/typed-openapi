@@ -13,7 +13,7 @@ use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
-use api::{Api, Contact, Money, Posting, Voucher, VoucherStatus};
+use api::{Api, Contact, Currency, Money, Posting, Voucher, VoucherStatus};
 use http::StatusCode;
 use typed_openapi::{Part, Recorder, render};
 
@@ -25,7 +25,7 @@ fn voucher(status: VoucherStatus) -> Voucher {
     Voucher {
         id: Some(5),
         total: "12.50".parse().expect("a valid amount"),
-        currency: "EUR".to_owned(),
+        currency: "EUR".parse().expect("a currency code"),
         status,
         internal_ref: Some("AB-7".to_owned()),
     }
@@ -265,27 +265,42 @@ fn a_sync_client_and_an_async_client_send_the_same_bytes() {
     );
 }
 
-/// A value that came back from the API has to be printable, and what comes out
-/// has to be what went in: the document states the rule, the generated `FromStr`
-/// enforces it, and `Display` hands the same bytes back.
+/// A value that came back from the API has to be printable, and for a type the
+/// generator wrote what comes out is what went in: the document states the
+/// rule, the emitted `FromStr` enforces it, and `Display` hands the same bytes
+/// back. typify writes neither of those last two, so both are this crate's to
+/// prove.
 #[test]
 fn a_generated_newtype_prints_what_it_was_parsed_from() {
-    let total: Money = "12.50".parse().expect("a valid amount");
-    assert_eq!(format!("{total}"), "12.50");
+    let currency: Currency = "EUR".parse().expect("a currency code");
+    assert_eq!(format!("{currency}"), "EUR");
     assert_eq!(
-        format!("{total}").parse::<Money>().ok(),
-        Some(total.clone())
-    );
-
-    let voucher = voucher(VoucherStatus::Open);
-    assert_eq!(
-        format!("{} {}", voucher.total, voucher.currency),
-        "12.50 EUR"
+        format!("{currency}").parse::<Currency>().ok(),
+        Some(currency.clone())
     );
 
     // The rule the document states is the rule the type carries.
-    assert!("1,50".parse::<Money>().is_err());
-    assert!("12.505".parse::<Money>().is_err());
+    assert!("eur".parse::<Currency>().is_err());
+    assert!("EURO".parse::<Currency>().is_err());
+}
+
+/// The other route, on the field next door. `Money` is a type this adoption
+/// owns, substituted in by `Settings::replace`, so it is free to print for a
+/// person — and the two directions stop being inverses. `tests/money.rs` is
+/// where its reading half is held to the document; this is what a caller sees.
+#[test]
+fn a_replaced_type_prints_for_a_person_and_sends_what_the_document_accepts() {
+    let voucher = voucher(VoucherStatus::Open);
+    assert_eq!(
+        format!("{} {}", voucher.total, voucher.currency),
+        "12,50 EUR"
+    );
+    assert_eq!(voucher.total.wire(), "12.50");
+    assert_eq!(voucher.total.minor_units(), 1250);
+    assert!(
+        voucher.total.to_string().parse::<Money>().is_err(),
+        "printing an amount and reading one are different jobs"
+    );
 }
 
 #[test]
@@ -322,7 +337,7 @@ fn a_posting_is_derived_from_the_whole_voucher() {
         Posting {
             reference: "AB-7".to_owned(),
             amount: "12.50".parse().unwrap(),
-            currency: "EUR".to_owned(),
+            currency: "EUR".parse().expect("a currency code"),
             booked: true,
         }
     );

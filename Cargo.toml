@@ -16,7 +16,7 @@ members = [
 # else — but it is not what a bare `cargo build` is for, and cargo resolves
 # features once per invocation over the packages it builds. Leaving `xtask` out
 # of that set is what lets the everyday build resolve `typed-openapi` without
-# `generate` and compile 61 crates instead of 235. `--workspace` still selects
+# `generate` and compile 62 crates instead of 236. `--workspace` still selects
 # all six.
 default-members = [
     "typed-openapi",

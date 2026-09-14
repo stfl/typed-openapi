@@ -128,7 +128,7 @@ mod tests {
         Voucher {
             id,
             total: "12.50".parse().expect("a valid amount"),
-            currency: "EUR".to_owned(),
+            currency: "EUR".parse().expect("a currency code"),
             status,
             internal_ref: None,
         }

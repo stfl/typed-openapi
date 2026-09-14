@@ -32,11 +32,12 @@ pub enum Correction {
     /// nevertheless holds behind `--commit`, marked `x-cli-writes` by the
     /// Overlay. HTTP cannot say "this GET writes"; the document has to.
     Gated(&'static str),
-    /// A property the vendor types as a bare string under a `format` it never
-    /// states the rule for. The Overlay writes the rule down as the named
-    /// schema `named` and points the property at it, so the rule travels with
-    /// the document — and the generated Rust carries it as a newtype rather
-    /// than a `String`.
+    /// A property the vendor types as a bare string and names a rule for
+    /// without ever stating it — in a `format`, or in a description a parser
+    /// cannot read. The Overlay writes the rule down as the named schema
+    /// `named` and points the property at it, so the rule travels with the
+    /// document, and the Rust carries the value as a type rather than as a
+    /// `String`.
     Retyped {
         schema: &'static str,
         property: &'static str,
@@ -63,11 +64,21 @@ pub enum Correction {
 pub const CORRECTIONS: &[Correction] = &[
     // The vendor types an amount as a bare string and gives it `format: money`
     // without saying what an amount looks like. The Overlay says it, under a
-    // name, and the bless step turns the name into a type.
+    // name — and keeps the format on that name, because the type the bless step
+    // emits for it is one this adoption owns rather than one the document could
+    // have described.
     Correction::Retyped {
         schema: "Voucher",
         property: "total",
         named: "Money",
+    },
+    // The same silence, said differently: the vendor types a currency code as a
+    // bare string and calls it an ISO 4217 code in prose. The Overlay states
+    // the rule, and the generator writes the type.
+    Correction::Retyped {
+        schema: "Voucher",
+        property: "currency",
+        named: "Currency",
     },
     // Returned and accepted on every voucher; documented nowhere.
     Correction::Undeclared {

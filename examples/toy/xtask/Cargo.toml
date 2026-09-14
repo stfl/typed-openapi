@@ -13,7 +13,7 @@ description = "Bless step: the vendor's document plus the adopter's Overlay in, 
 # `generate` implies `document`; both are named because this is the one manifest
 # in the workspace that may ask for the document reader from a section a build
 # without test targets reads, and `cli/tests/feature_gate.rs` reads these lines
-# as text to prove the other five do not.
+# as text to prove that no other member does.
 typed-openapi = { path = "../../../typed-openapi", features = ["document", "generate"] }
 
 [lints]

@@ -10,8 +10,11 @@
 //!   CLI needs, embedded as [`MODEL`]. This is what [`Api::new`] loads, so a
 //!   run of the CLI parses no YAML at all.
 //! - `src/types.rs` — `components.schemas` as Rust types. A named schema that
-//!   states a `pattern` becomes a newtype enforcing it, so [`types::Money`]
-//!   cannot be built out of something that is not an amount.
+//!   states a `pattern` becomes a newtype enforcing it, so
+//!   [`types::Currency`] cannot be built out of something that is not a
+//!   currency code. A schema tagged with a `format` the bless step was given a
+//!   Rust path for becomes that type instead, which is why `Voucher.total` is
+//!   a [`money::Money`] and this crate declares the crate holding it.
 //! - `src/ops.rs` — [`ops::OperationId`], one typed method per operation, and
 //!   the `(operationId, method, path)` inventory [`ops::documented`] reads.
 //!
@@ -22,10 +25,10 @@
 //! bless step never touches either.
 //!
 //! This is a separate crate so that an edit to `api` recompiles the adopter's
-//! lines and not this volume. Its whole dependency list is `serde`, `http` and
-//! the runtime crate — the regex engine a generated `pattern` check runs on
-//! arrives re-exported through that, so there is nothing here to declare and
-//! nothing about a generator reaches it.
+//! lines and not this volume. Its whole dependency list is `serde`, `http`, the
+//! runtime crate and `money` — the regex engine a generated `pattern` check
+//! runs on arrives re-exported through the runtime crate, so there is nothing
+//! to declare for that and nothing about a generator reaches this crate.
 
 mod client;
 
@@ -54,7 +57,7 @@ pub use client::{Api, BodyError, Call, DOCUMENT, Error, MODEL, NoContent, to_jso
 ///
 /// let api = Api::new()?;
 /// let voucher = Voucher {
-///     currency: "EUR".to_owned(),
+///     currency: "EUR".parse()?,
 ///     id: Some(5),
 ///     internal_ref: None,
 ///     status: VoucherStatus::Draft,

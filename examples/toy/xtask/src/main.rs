@@ -27,6 +27,12 @@ fn main() -> ExitCode {
     let blessed = Settings::new(adoption.join("spec/toy.yaml"))
         .overlay(adoption.join("spec/corrections.yaml"))
         .overlay(adoption.join("spec/cli.yaml"))
+        // The half of the `format: money` pair that no document can carry.
+        // OpenAPI has no fixed-point decimal, so `corrections.yaml` states the
+        // lexical rule and tags the shape, and this line says which Rust type
+        // stands for it. `Voucher.currency` beside it takes the other route: a
+        // named schema, and the newtype the generator writes.
+        .replace("money", "money::Money")
         .write_to(adoption.join("api-generated"));
 
     match blessed {

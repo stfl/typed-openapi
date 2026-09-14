@@ -20,6 +20,11 @@ builder = ["typed-openapi/builder"]
 
 [dependencies]
 typed-openapi = { path = "../../../typed-openapi", default-features = false }
+# The crate the generated source names. `xtask` hands `money::Money` to
+# `Settings::replace`, which writes that path into `src/types.rs` verbatim, so
+# the crate owning the type has to be reachable from here — which is why it
+# sits below this one rather than in `api` above it.
+money = { path = "../money" }
 http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 /// None of them reads documents.
 const PRODUCT: &[&str] = &[
     "typed-openapi",
+    "examples/toy/money",
     "examples/toy/api-generated",
     "examples/toy/api",
     "examples/toy/cli",
@@ -59,7 +60,7 @@ fn the_document_reader_stays_out_of_every_build_that_ships() {
     }
 
     // The same detector, pointed at the one manifest that should trip it: a
-    // check that cannot say yes has not said no about the five above.
+    // check that cannot say yes has not said no about the ones above.
     assert!(
         asks_for_the_reader_when_it_ships(&manifest(&root, BLESS)),
         "`{BLESS}` no longer enables `document`, so either the bless step cannot \

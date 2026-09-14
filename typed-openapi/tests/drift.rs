@@ -1,12 +1,12 @@
 //! The half of the drift story that happens before anything is compiled.
 //!
-//! Two of the Overlay's actions are written as assertions about what the vendor
-//! currently says. Applied with `ErrorOnZeroMatch`, a vendor revision that
-//! changes the thing being corrected fails here — at bless time — instead of
-//! being silently overwritten with a correction that no longer fits.
+//! Three of the Overlay's actions are written as assertions about what the
+//! vendor currently says. Applied with `ErrorOnZeroMatch`, a vendor revision
+//! that changes the thing being corrected fails here — at bless time — instead
+//! of being silently overwritten with a correction that no longer fits.
 //!
-//! The other three mutations pass this stage and are caught by the compiler
-//! instead; `docs/drift.md` has the whole table.
+//! The other mutations pass this stage and are caught by the compiler instead;
+//! `docs/drift.md` has the whole table.
 //!
 //! The fixtures under `tests/fixtures/` are this crate's own, not the example
 //! adoption's. `examples/toy/spec/` holds a document with the same content
@@ -71,7 +71,22 @@ fn retyping_the_corrected_field_fails_the_bless() {
     assert!(error.to_string().contains("does not apply"), "{error}");
 }
 
-/// Mutation 5: `enshrineVoucher` removed. The Overlay does not mention it, so
+/// Mutation 5: the vendor factors the currency code into a schema of their own.
+/// The correction states a rule for a bare string and there is no bare string
+/// left, so the filter stops matching — which is the right outcome, because
+/// merging this Overlay's `$ref` over the vendor's would quietly replace the
+/// schema the vendor now says is the right one.
+#[test]
+fn retyping_the_corrected_currency_fails_the_bless() {
+    let error = bless(&mutated(
+        "        currency:\n          type: string\n          description: ISO 4217 code\n",
+        "        currency:\n          $ref: '#/components/schemas/CurrencyCode'\n",
+    ))
+    .expect_err("the Overlay states a rule for a shape that is no longer there");
+    assert!(error.to_string().contains("does not apply"), "{error}");
+}
+
+/// Mutation 6: `enshrineVoucher` removed. The Overlay does not mention it, so
 /// the bless succeeds — this one is the compiler's to catch, through the
 /// `documented(..)` assertion in `cli/src/finalize.rs`.
 #[test]
@@ -109,7 +124,8 @@ fn adding_or_removing_an_unrelated_field_passes_the_bless() {
     assert!(fields.iter().any(|f| f.name() == "note"));
 
     let removed = mutated(
-        "        currency:\n          type: string\n          description: ISO 4217 code\n",
+        "        id:\n          type: integer\n          format: int64\n          \
+         description: Server-assigned id\n",
         "",
     );
     assert!(Document::load(&removed, OVERLAYS).is_ok());

@@ -1,9 +1,9 @@
 //! A type the adopter owns outright, derived from a generated one.
 //!
 //! Most types should be generated: the Overlay corrects the document and
-//! typify emits the result, so `internal_ref` and [`Money`] cost no hand-written
-//! Rust at all. But an adopter's own vocabulary is not the vendor's, and a
-//! ledger posting is not a voucher.
+//! typify emits the result, so `internal_ref` and [`Currency`] cost no
+//! hand-written Rust at all. But an adopter's own vocabulary is not the
+//! vendor's, and a ledger posting is not a voucher.
 //!
 //! The conversion is the interesting part. It destructures [`Voucher`] with
 //! every field named and no `..`, which is what turns a document change into a
@@ -19,10 +19,10 @@
 //! `field: _`. Neither compiles here, so the tripwire cannot be disarmed by
 //! accident.
 //!
-//! [`Money`]: crate::Money
+//! [`Currency`]: crate::Currency
 //! [`Voucher`]: crate::Voucher
 
-use crate::{Money, Voucher, VoucherStatus};
+use crate::{Currency, Money, Voucher, VoucherStatus};
 
 /// One line of the adopter's ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub struct Posting {
     /// id, else the literal `unbooked` — a posting always has a reference.
     pub reference: String,
     pub amount: Money,
-    pub currency: String,
+    pub currency: Currency,
     /// `true` once the voucher has been enshrined, which is what a draft has
     /// not been.
     pub booked: bool,
@@ -50,7 +50,7 @@ impl Posting {
         } = voucher;
         Self {
             reference: reference(internal_ref.as_deref(), *id),
-            amount: total.clone(),
+            amount: *total,
             currency: currency.clone(),
             // No `_` arm: a status the vendor adds is a compile error here,
             // where someone has to decide whether it counts as booked.
@@ -82,7 +82,7 @@ mod tests {
         Voucher {
             id,
             total: "12.50".parse().expect("a valid amount"),
-            currency: "EUR".to_owned(),
+            currency: "EUR".parse().expect("a currency code"),
             status,
             internal_ref: internal_ref.map(ToOwned::to_owned),
         }

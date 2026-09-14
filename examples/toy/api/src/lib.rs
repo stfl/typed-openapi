@@ -1,7 +1,7 @@
 //! The Toy Accounting API as Rust: owned types, typed operations, one embedded
 //! document.
 //!
-//! The document the vendor ships is wrong in five ways, and every correction
+//! The document the vendor ships is wrong in six ways, and every correction
 //! lives in an Overlay as standard OpenAPI Overlay actions: `spec/corrections.yaml`
 //! for what the vendor got wrong, then `spec/cli.yaml` for what only a command
 //! line needs. `cargo run -p xtask -- bless` applies them in that order and
@@ -14,10 +14,13 @@
 //!   needs. The CLI builds its whole command tree from it at startup, so the
 //!   CLI and this crate cannot disagree about the API and neither one parses
 //!   YAML to find out.
-//! - `src/types.rs` — the schemas as Rust types. The Overlay names a `Money`
-//!   schema and states its rule, so [`Money`] is generated with the rule inside
-//!   its `FromStr`. There is no hand-written mirror: the generated types *are*
-//!   this crate's types.
+//! - `src/types.rs` — the schemas as Rust types. Two fields of `Voucher` show
+//!   the two ways one gets a type: the Overlay names a `Currency` schema and
+//!   states its rule, so [`Currency`] is generated with that rule inside its
+//!   `FromStr`; the Overlay tags an amount `format: money` and the bless step
+//!   is told that [`Money`] stands for it, so `Voucher.total` is a fixed-point
+//!   type this adoption owns and no OpenAPI document could have described.
+//!   There is no hand-written mirror of a generated type anywhere.
 //! - `src/ops.rs` — [`OperationId`], one typed method per operation, and the
 //!   `(operationId, method, path)` inventory [`ops::documented`] reads.
 //!
@@ -45,11 +48,17 @@
 //!
 //! ## Owning a type by hand
 //!
-//! Nothing forces the adopter to take a generated type. When they write one
-//! themselves, two lints scoped to this crate keep it honest: together they
-//! forbid both ways of writing a struct pattern that does not name every field
-//! — `..` and `field: _` — so a conversion out of a generated type cannot
-//! quietly ignore a field the vendor added. [`Posting`] is the worked example.
+//! Nothing forces the adopter to take a generated type, and this adoption owns
+//! two. [`Money`] sits *below* the generated code, which names it: the document
+//! says which shape an amount is and `Settings::replace` says which Rust type
+//! that shape is, so a generated struct carries it with no conversion at the
+//! boundary. [`Posting`] sits *above*, derived from a whole [`Voucher`] by the
+//! adopter's own reading of it.
+//!
+//! Two lints scoped to this crate keep the second honest: together they forbid
+//! both ways of writing a struct pattern that does not name every field — `..`
+//! and `field: _` — so a conversion out of a generated type cannot quietly
+//! ignore a field the vendor added.
 #![warn(
     clippy::rest_pattern_accessible_field,
     clippy::unneeded_field_pattern,
@@ -65,4 +74,9 @@ pub use api_generated::ops::{OPERATION_COUNT, OPERATIONS, OperationId, documente
 pub use api_generated::types::*;
 pub use api_generated::{Api, BodyError, Call, DOCUMENT, Error, NoContent, to_json};
 pub use corrections::{CORRECTIONS, Correction};
+// The one type the generated code names rather than defines. It is re-exported
+// here beside the generated ones so that an adopter's own code names `api` and
+// nothing below it, and so that `Voucher.total`'s type is spelled the same way
+// wherever it is written down.
+pub use money::{Money, MoneyError};
 pub use posting::Posting;

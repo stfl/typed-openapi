@@ -25,41 +25,41 @@ pub struct Contact {
     pub id: ::std::option::Option<i64>,
     pub name: ::std::string::String,
 }
-///A decimal amount carried in a string.
+///An ISO 4217 currency code.
 #[derive(::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
-pub struct Money(::std::string::String);
-impl ::std::ops::Deref for Money {
+pub struct Currency(::std::string::String);
+impl ::std::ops::Deref for Currency {
     type Target = ::std::string::String;
     fn deref(&self) -> &::std::string::String {
         &self.0
     }
 }
-impl ::std::convert::From<Money> for ::std::string::String {
-    fn from(value: Money) -> Self {
+impl ::std::convert::From<Currency> for ::std::string::String {
+    fn from(value: Currency) -> Self {
         value.0
     }
 }
-impl ::std::str::FromStr for Money {
+impl ::std::str::FromStr for Currency {
     type Err = self::error::ConversionError;
     fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         static PATTERN: ::std::sync::LazyLock<::typed_openapi::regress::Regex> =
             ::std::sync::LazyLock::new(|| {
-                ::typed_openapi::regress::Regex::new("^-?[0-9]+(\\.[0-9]{1,2})?$").unwrap()
+                ::typed_openapi::regress::Regex::new("^[A-Z]{3}$").unwrap()
             });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^-?[0-9]+(\\.[0-9]{1,2})?$\"".into());
+            return Err("doesn't match pattern \"^[A-Z]{3}$\"".into());
         }
         Ok(Self(value.to_string()))
     }
 }
-impl ::std::convert::TryFrom<&str> for Money {
+impl ::std::convert::TryFrom<&str> for Currency {
     type Error = self::error::ConversionError;
     fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for Money {
+impl ::std::convert::TryFrom<::std::string::String> for Currency {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -67,7 +67,7 @@ impl ::std::convert::TryFrom<::std::string::String> for Money {
         value.parse()
     }
 }
-impl<'de> ::serde::Deserialize<'de> for Money {
+impl<'de> ::serde::Deserialize<'de> for Currency {
     fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
     where
         D: ::serde::Deserializer<'de>,
@@ -82,8 +82,7 @@ impl<'de> ::serde::Deserialize<'de> for Money {
 ///`Voucher`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
 pub struct Voucher {
-    ///ISO 4217 code
-    pub currency: ::std::string::String,
+    pub currency: Currency,
     ///Server-assigned id
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub id: ::std::option::Option<i64>,
@@ -91,7 +90,7 @@ pub struct Voucher {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub internal_ref: ::std::option::Option<::std::string::String>,
     pub status: VoucherStatus,
-    pub total: Money,
+    pub total: money::Money,
 }
 ///`VoucherStatus`
 #[derive(
@@ -174,7 +173,7 @@ pub mod error {
         }
     }
 }
-impl ::std::fmt::Display for Money {
+impl ::std::fmt::Display for Currency {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         ::std::fmt::Display::fmt(&self.0, f)
     }
