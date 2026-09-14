@@ -50,6 +50,7 @@ features:
     cargo check -p cli --features builder --all-targets
     just bon-free
     just clap-free
+    just bigint-free
 
 # `bon` is what the `builder` feature costs, so it must be absent without it.
 # `cargo tree -e normal` is the build a consumer gets; a proc-macro crate that
@@ -70,6 +71,29 @@ bon-free:
         exit 1
     }
     echo "bon reaches api-generated only with the builder feature"
+
+# `Settings::replace` exists so that an adopter can own a type the document
+# cannot describe — which means the library must not know what such a type is
+# made of. The example's `Money` counts cents in a `num-bigint` integer; that
+# choice belongs to `examples/toy/money` and must not reach the crate that is
+# published. `--all-features` is the widest build there is, so absence there is
+# absence in every combination.
+
+# Prove the published crate links no bignum, in any feature set.
+bigint-free:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if cargo tree -p typed-openapi --all-features -e normal --prefix none | grep -q '^num-bigint'; then
+        echo "num-bigint reached typed-openapi's normal dependency tree:" >&2
+        cargo tree -p typed-openapi --all-features -e normal | grep -i num-bigint >&2
+        exit 1
+    fi
+    # The same detector, pointed at the one crate that should trip it.
+    cargo tree -p money -e normal --prefix none | grep -q '^num-bigint' || {
+        echo "num-bigint is absent from the crate that owns the type" >&2
+        exit 1
+    }
+    echo "num-bigint reaches the example's own type and nothing else"
 
 # The typed half of an adoption must link no argument parser: `api` takes the
 # library with `default-features = false`, so a clap in its tree is a

@@ -74,9 +74,10 @@ pub use api_generated::ops::{OPERATION_COUNT, OPERATIONS, OperationId, documente
 pub use api_generated::types::*;
 pub use api_generated::{Api, BodyError, Call, DOCUMENT, Error, NoContent, to_json};
 pub use corrections::{CORRECTIONS, Correction};
-// The one type the generated code names rather than defines. It is re-exported
-// here beside the generated ones so that an adopter's own code names `api` and
-// nothing below it, and so that `Voucher.total`'s type is spelled the same way
-// wherever it is written down.
-pub use money::{Money, MoneyError};
+// The one type the generated code names rather than defines, with the two types
+// its own surface mentions: what a refusal is, and what a count of minor units
+// is. They are re-exported here beside the generated types so that an adopter's
+// own code names `api` and nothing below it, and so that `Voucher.total`'s type
+// is spelled the same way wherever it is written down.
+pub use money::{BigInt, Money, MoneyError};
 pub use posting::Posting;

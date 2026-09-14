@@ -112,7 +112,7 @@ regex engine linked at all.
 |---|---|---|---|
 | the stripped `toy` binary | 4 604 624 B | 3 794 048 B | **+810 576 B (+21%)** |
 | clean `cargo build -p cli --release` | 10.23 s | 9.93 s | +0.30 s (+3%) |
-| crates in `cli`'s normal dependency graph | 62 | 61 | +`regress` |
+| crates in `cli`'s normal dependency graph | 65 | 64 | +`regress` |
 
 **The cost is the binary.** A fifth of the `toy` binary is a regular-expression
 engine, and there is no feature that removes it: a rule that is optional is a

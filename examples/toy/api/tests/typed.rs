@@ -296,11 +296,18 @@ fn a_replaced_type_prints_for_a_person_and_sends_what_the_document_accepts() {
         "12,50 EUR"
     );
     assert_eq!(voucher.total.wire(), "12.50");
-    assert_eq!(voucher.total.minor_units(), 1250);
+    assert_eq!(voucher.total, Money::from_minor_units(1250));
     assert!(
         voucher.total.to_string().parse::<Money>().is_err(),
         "printing an amount and reading one are different jobs"
     );
+
+    // And it adds, which is the whole reason the adoption owns it. No
+    // `unwrap`, because an arbitrary-precision count of cents has no sum it
+    // has to refuse.
+    let twice = voucher.total.clone() + voucher.total;
+    assert_eq!(twice.wire(), "25.00");
+    assert_eq!(twice.to_string(), "25,00");
 }
 
 #[test]

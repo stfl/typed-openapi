@@ -201,10 +201,11 @@ has, in both directions:
 the document's rule has moved: it now accepts `12,50`
 ```
 
-The one value they cannot agree about is stated rather than hidden: the pattern
-admits any number of digits and `Money` counts cents in an `i64`, so an amount
-past `i64::MAX` cents is refused for its size. That gap has a test of its own,
-so it stays the only one.
+There is no value they disagree about, and the representation is why: the
+pattern admits an unbounded run of digits, so `Money` counts cents in an
+arbitrary-precision integer. A narrower one would refuse amounts the document
+allows, and this page would have to list the gap — a second test says so, at
+nineteen, twenty, forty and a hundred digits.
 
 ## What is not caught
 

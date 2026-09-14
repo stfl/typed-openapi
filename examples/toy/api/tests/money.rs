@@ -35,6 +35,7 @@ const VALUES: &[(&str, bool)] = &[
     ("-3.07", true),  // a sign
     ("-0.5", true),   // a sign and one decimal
     ("007.10", true), // leading zeros are digits like any other
+    ("99999999999999999999999999.99", true), // more digits than any fixed-width integer holds
     // What it is not for.
     ("12.505", false), // three decimals
     ("12.", false),    // a point with nothing after it
@@ -100,37 +101,39 @@ fn money_reads_exactly_what_the_documents_pattern_admits() {
             verdict(raw.parse::<Money>().is_ok())
         );
     }
+
+    // A refusal names the value and is the only failure an amount has, which is
+    // what an adopter handling one writes against.
+    assert_eq!(
+        "12,50".parse::<Money>(),
+        Err(MoneyError {
+            raw: "12,50".to_owned()
+        })
+    );
 }
 
-/// The one thing the two cannot agree about, pinned so that it stays the only
-/// one.
+/// Why the count of cents is arbitrary precision rather than an `i64`.
 ///
-/// The document's `pattern` admits an unbounded run of digits and `Money`
-/// counts cents in an `i64`, so no fixed-width type is the whole of that
-/// language. The gap is inherent rather than a rule somebody forgot to copy,
-/// and it is refused as a magnitude rather than as a shape — which is the
-/// distinction a caller can act on. A document that cared would bound the
-/// digits, and then this test would have nothing to say.
+/// The document's `pattern` admits an unbounded run of digits. Anything
+/// narrower would refuse amounts the document allows, and this file would have
+/// to record the gap instead of denying it — so there would be a value the
+/// command line accepts and the type does not, on a type whose whole job is to
+/// agree with the command line.
 #[test]
-fn an_amount_past_i64_cents_is_the_only_value_the_two_part_company_over() {
+fn no_amount_the_document_admits_is_too_large_for_the_type() {
     let rule = rule();
-
-    let beyond = "92233720368547758.08";
-    assert!(
-        rule.parse(beyond).is_ok(),
-        "the document's pattern admits any number of digits"
-    );
-    assert_eq!(
-        beyond.parse::<Money>(),
-        Err(MoneyError::TooLarge(beyond.to_owned())),
-        "and `Money` refuses it for its size, not its shape"
-    );
-
-    // One cent below, and they agree again.
-    let largest = "92233720368547758.07";
-    assert!(rule.parse(largest).is_ok());
-    assert_eq!(
-        largest.parse::<Money>().map(Money::minor_units),
-        Ok(i64::MAX)
-    );
+    // Past `i64`, past `u64`, and well past anything a fixed-width integer
+    // reaches.
+    for digits in [19_usize, 20, 40, 100] {
+        let raw = format!("{}.99", "9".repeat(digits));
+        assert!(
+            rule.parse(&raw).is_ok(),
+            "the document stopped admitting {digits} digits"
+        );
+        assert_eq!(
+            raw.parse::<Money>().map(|amount| amount.wire()),
+            Ok(raw.clone()),
+            "`Money` refuses an amount of {digits} digits that the document admits"
+        );
+    }
 }

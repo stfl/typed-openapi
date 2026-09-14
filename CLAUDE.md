@@ -79,9 +79,18 @@ else holds it.** A named schema's newtype compiles the document's `pattern`
 into its own `FromStr`, so it cannot drift. `examples/toy/money` is reached
 through `Settings::replace` instead and borrows nothing —
 `examples/toy/api/tests/money.rs` reads the rule off the embedded document and
-holds `Money::from_str` to it in both directions. Any future `replace` owes the
-same test; `Voucher.total` and `Voucher.currency` are the two routes kept side
-by side so that neither loses its demonstration.
+holds `Money::from_str` to it in both directions, which is also why `Money`
+counts cents in a `num-bigint` integer: the pattern admits an unbounded run of
+digits, and a narrower count would refuse values the document allows. Any
+future `replace` owes the same test; `Voucher.total` and `Voucher.currency` are
+the two routes kept side by side so that neither loses its demonstration.
+
+**What an owned type is made of never reaches the library.** `num-bigint` is
+declared in `examples/toy/money` and in no other manifest, and `just
+bigint-free` — inside `features`, beside `bon-free` and `clap-free` — asserts it
+is absent from `cargo tree -p typed-openapi --all-features`. `Settings::replace`
+exists precisely so that the crate does not have to know what a replaced type
+is built from.
 
 **The library never reads the example's files.** `typed-openapi/tests/fixtures/`
 holds this crate's own copies of the toy document and both Overlay layers. They

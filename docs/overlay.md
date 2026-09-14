@@ -385,14 +385,27 @@ generated source verbatim, so the crate owning it has to be a dependency of the
 generated crate — which usually means a small crate *below* it, since the
 generated code names it.
 [`examples/toy/money`](../examples/toy/money/src/lib.rs) is that crate: one
-type, `serde` and `thiserror`, and no dependency on `typed-openapi` at all.
-`Voucher.total` is a `money::Money`, and typify defines nothing for it.
+type, `serde`, `thiserror` and `num-bigint`, and no dependency on
+`typed-openapi` at all. `Voucher.total` is a `money::Money`, and typify defines
+nothing for it.
+
+What the owned type is made of stays the adopter's business. `num-bigint` is
+declared in that crate's manifest and in no other, and `just bigint-free`
+asserts it never reaches `typed-openapi` in any feature set — the library has no
+business knowing what a replaced type is built from, which is the premise
+`replace` rests on.
 
 **The two halves compose, and that is the point.** The `pattern` stays in the
 document, so `--total 12,50` is still refused on the command line with the
 document's own rule; `replace` supplies exact arithmetic over cents, which the
 document had no way to ask for. Neither is a substitute for the other: a
 `format` alone states no rule, and a `pattern` alone hands you a string.
+
+The type is free to pick a representation the document never mentions, and the
+choice pays for itself: an arbitrary-precision count of cents cannot overflow,
+so `+`, `-`, `-x` and `sum()` are plain total operations with no `Option` in
+sight — and the type accepts *every* value the pattern admits, which a
+fixed-width integer could not.
 
 What you buy with the second half is a type free to disagree with the wire.
 `money::Money` prints `12,50` for a person and sends `12.50`, so `Display` and

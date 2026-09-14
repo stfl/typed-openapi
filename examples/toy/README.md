@@ -105,9 +105,9 @@ a real difference with no row fails.
 
 | crate | lines | written by | holds |
 |---|---|---|---|
-| [`money`](money) | 385 | the adopter | one type: a fixed-point amount, which the generated code names |
+| [`money`](money) | 428 | the adopter | one type: a fixed-point amount, which the generated code names |
 | [`api-generated`](api-generated) | 732 | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
-| [`api`](api) | 1140 | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
+| [`api`](api) | 1151 | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
 | [`cli`](cli) | 1311 | the adopter | the `toy` binary, and `examples/root.rs` beside it |
 | [`xtask`](xtask) | 50 | the adopter | the bless step — the generator itself ships in `typed-openapi` |
 
@@ -119,13 +119,19 @@ library — nothing about a generator reaches it.
 
 One type here is hand-written, and it is the one no OpenAPI document can
 describe. OpenAPI has no fixed-point decimal, so [`money`](money/src/lib.rs)
-owns a `Money` over whole cents and `xtask` tells the bless step that
-`format: money` means that type. The document keeps the `pattern`, so a command
-line still refuses `1,50`; what `replace` adds is arithmetic, and a `Display`
-that prints `12,50` for a person while the wire keeps `12.50`.
-`Voucher.currency` next door goes the other way — the Overlay names a `Currency`
-schema and the generator writes the newtype, rule included — and the two fields
-are side by side because neither route replaces the other.
+owns a `Money` over whole cents — an arbitrary-precision count of them, so
+`+`, `-` and `sum()` are exact and total and nothing has to be unwrapped — and
+`xtask` tells the bless step that `format: money` means that type. The document
+keeps the `pattern`, so a command line still refuses `1,50`; what `replace` adds
+is the arithmetic, and a `Display` that prints `12,50` for a person while the
+wire keeps `12.50`. `Voucher.currency` next door goes the other way — the
+Overlay names a `Currency` schema and the generator writes the newtype, rule
+included — and the two fields are side by side because neither route replaces
+the other.
+
+`num-bigint` is declared in `money`'s manifest and nowhere else: what an owned
+type is made of is the adopter's business, never the library's, and
+`just bigint-free` is the check rather than the promise.
 
 [`api/tests/money.rs`](api/tests/money.rs) is the price of the first: a
 generated type cannot drift from the document, and a hand-written one can, so a

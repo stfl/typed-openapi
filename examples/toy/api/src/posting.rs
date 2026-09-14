@@ -50,7 +50,7 @@ impl Posting {
         } = voucher;
         Self {
             reference: reference(internal_ref.as_deref(), *id),
-            amount: *total,
+            amount: total.clone(),
             currency: currency.clone(),
             // No `_` arm: a status the vendor adds is a compile error here,
             // where someone has to decide whether it counts as booked.

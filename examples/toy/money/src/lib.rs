@@ -1,4 +1,5 @@
-//! An amount of money, as fixed point over a whole number of cents.
+//! An amount of money, as fixed point over an arbitrary-precision count of
+//! cents.
 //!
 //! # Why this is not a generated type
 //!
@@ -21,8 +22,10 @@
 //!
 //! The generated code names [`Money`], so the crate that owns it has to sit
 //! *below* the generated one. That is the whole of the arrangement: one type,
-//! `serde` and `thiserror`, and no way for an edit here to recompile anything
-//! it does not have to.
+//! `serde`, `thiserror` and `num-bigint`, and no way for an edit here to
+//! recompile anything it does not have to. The bignum stops here — the library
+//! has no business knowing what an adopter's own type is made of, and
+//! `just bigint-free` is what says so rather than promising it.
 //!
 //! The rule stays the document's. Nothing in this crate reads the document —
 //! `examples/toy/api/tests/money.rs` reads the `pattern` out of the embedded
@@ -30,27 +33,35 @@
 //! cannot come apart without a named failure.
 
 use std::fmt;
+use std::iter::Sum;
+use std::ops::{Add, Neg, Sub};
 use std::str::FromStr;
 
+use num_bigint::{BigUint, Sign};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
-/// Minor units in one major unit. An amount is fixed point at two decimal
-/// places, which is what the document's `pattern` admits and what the currencies
-/// this adoption sees are counted in.
-const MINOR_PER_MAJOR: u64 = 100;
+/// Minor units in one major unit. An amount is fixed point at **two** decimal
+/// places, and that 2 is not this crate's choice: it is what the `Money`
+/// schema's `pattern` admits, which is why `api/tests/money.rs` holds the two
+/// together.
+const MINOR_PER_MAJOR: u32 = 100;
+
+/// The integer an amount is counted in, for a caller who wants the number
+/// [`Money::minor_units`] hands back.
+pub use num_bigint::BigInt;
 
 /// An amount of money, held as a whole number of minor units — cents.
 ///
-/// Arithmetic is exact, and it is the reason the type exists: cents are
-/// integers, so [`checked_add`](Money::checked_add) and
-/// [`checked_sub`](Money::checked_sub) are `i64` addition with no rounding
-/// anywhere in them. They answer `None` rather than wrapping, because an amount
-/// that silently becomes its own negative is worse than an amount that is
-/// missing. There is no [`Add`](std::ops::Add) impl for the same reason: the
-/// operator has nowhere to put the refusal.
+/// The count is an arbitrary-precision **integer**, not a decimal. The scale is
+/// fixed at two places by the document's rule and lives in this type's
+/// arithmetic rather than travelling with each value, which is what makes that
+/// arithmetic both exact and total: cents are integers, so [`Add`] and [`Sub`]
+/// are integer addition with no rounding anywhere in them, and a [`BigInt`]
+/// does not overflow, so there is no sum to refuse and no panic path to route
+/// around.
 ///
-/// # `Display` and `FromStr` are not inverses
+/// # [`Display`](fmt::Display) and [`FromStr`] are not inverses
 ///
 /// **This is deliberate, and it is the whole point of the type.** The two
 /// directions answer different questions:
@@ -70,41 +81,38 @@ const MINOR_PER_MAJOR: u64 = 100;
 /// ```
 /// # use money::Money;
 /// let amount = Money::from_minor_units(1250);
-/// assert_eq!("12.50".parse(), Ok(amount)); // the form the document states
+/// assert_eq!("12.50".parse(), Ok(amount.clone())); // the form the document states
 /// assert_eq!(amount.wire(), "12.50"); // the form it goes back as
 /// assert_eq!(amount.to_string(), "12,50"); // the form a person reads
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Money(i64);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Money(BigInt);
 
-/// A string that is not an amount this type can hold.
+/// A string that is not an amount.
 ///
-/// Two variants because the document's `pattern` tells them apart: one is a
-/// string the pattern refuses too, the other is a string the pattern admits and
-/// no fixed-width integer can — an unbounded run of digits is a language
-/// [`Money`] is a strict subset of.
+/// One failure, so one type rather than an enum: an arbitrary-precision count
+/// of cents holds every value the document's `pattern` admits, and the only way
+/// left to fail is to hand this type something that is not an amount at all.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum MoneyError {
-    /// Not an amount at all: digits, then at most two decimals after a `.`.
-    #[error("`{0}` is not an amount: digits, then at most two decimals after a `.`")]
-    Malformed(String),
-    /// Shaped like an amount, and larger than `i64` cents.
-    #[error("`{0}` is more money than a 64-bit count of cents holds")]
-    TooLarge(String),
+#[error("`{raw}` is not an amount: digits, then at most two decimals after a `.`")]
+pub struct MoneyError {
+    /// What was handed to [`Money::from_str`].
+    pub raw: String,
 }
 
 impl Money {
-    /// No money at all — the identity of [`checked_add`](Money::checked_add).
+    /// No money at all — the identity of [`Add`], and what an empty column of
+    /// amounts sums to.
     #[must_use]
     pub const fn zero() -> Self {
-        Self(0)
+        Self(BigInt::ZERO)
     }
 
     /// An amount from a count of minor units. `Money::from_minor_units(1250)`
     /// is twelve fifty.
     #[must_use]
-    pub const fn from_minor_units(units: i64) -> Self {
-        Self(units)
+    pub fn from_minor_units(units: impl Into<BigInt>) -> Self {
+        Self(units.into())
     }
 
     /// This amount as a count of minor units, which is what it is.
@@ -113,8 +121,8 @@ impl Money {
     /// rounding rules and tax splits are the adopter's, and they all start
     /// here.
     #[must_use]
-    pub const fn minor_units(self) -> i64 {
-        self.0
+    pub const fn minor_units(&self) -> &BigInt {
+        &self.0
     }
 
     /// This amount in the form the document's `pattern` accepts: a dot, and
@@ -124,34 +132,27 @@ impl Money {
     /// machine. [`Display`](fmt::Display) is the other form and is not this
     /// one.
     #[must_use]
-    pub fn wire(self) -> String {
+    pub fn wire(&self) -> String {
         self.rendered('.')
-    }
-
-    /// The sum, or `None` if it is more money than an `i64` of cents holds.
-    #[must_use]
-    pub fn checked_add(self, addend: Self) -> Option<Self> {
-        self.0.checked_add(addend.0).map(Self)
-    }
-
-    /// The difference, or `None` if it is further from zero than an `i64` of
-    /// cents reaches.
-    #[must_use]
-    pub fn checked_sub(self, subtrahend: Self) -> Option<Self> {
-        self.0.checked_sub(subtrahend.0).map(Self)
     }
 
     /// This amount written out with `point` between the units, two decimals
     /// either way.
     ///
     /// The one rendering, so the form a person reads and the form the wire
-    /// takes differ in exactly the character that is meant to differ.
-    /// `unsigned_abs` rather than `abs` because the most negative `i64` has no
-    /// positive counterpart and a panic is not an answer.
-    fn rendered(self, point: char) -> String {
-        let sign = if self.0.is_negative() { "-" } else { "" };
-        let units = self.0.unsigned_abs();
-        let (major, minor) = (units / MINOR_PER_MAJOR, units % MINOR_PER_MAJOR);
+    /// takes differ in exactly the character that is meant to differ. The sign
+    /// is taken off the magnitude and put back in front by hand, because an
+    /// amount smaller than one major unit has a zero where the sign would
+    /// otherwise ride: minus five cents is `-0,05`, never `0,-05`.
+    fn rendered(&self, point: char) -> String {
+        let sign = if self.0.sign() == Sign::Minus {
+            "-"
+        } else {
+            ""
+        };
+        let per_major = BigUint::from(MINOR_PER_MAJOR);
+        let units = self.0.magnitude();
+        let (major, minor) = (units / &per_major, units % &per_major);
         format!("{sign}{major}{point}{minor:02}")
     }
 }
@@ -165,14 +166,16 @@ impl FromStr for Money {
     /// One decimal place is a whole amount — `12.5` is twelve fifty — because
     /// the document's `pattern` admits it.
     fn from_str(raw: &str) -> Result<Self, MoneyError> {
-        let malformed = || MoneyError::Malformed(raw.to_owned());
-        let (negative, unsigned) = match raw.strip_prefix('-') {
-            Some(rest) => (true, rest),
-            None => (false, raw),
+        let (sign, digits) = match raw.strip_prefix('-') {
+            Some(rest) => (Sign::Minus, rest),
+            None => (Sign::Plus, raw),
         };
-        let (major, minor) = split(unsigned).ok_or_else(malformed)?;
-        let units = magnitude(major, minor).ok_or_else(|| MoneyError::TooLarge(raw.to_owned()))?;
-        Ok(Self(if negative { -units } else { units }))
+        let units = minor_units(digits).ok_or_else(|| MoneyError {
+            raw: raw.to_owned(),
+        })?;
+        // `from_biguint` normalises a zero magnitude to no sign at all, so
+        // `-0.00` is zero rather than a negative nothing.
+        Ok(Self(BigInt::from_biguint(sign, units)))
     }
 }
 
@@ -181,6 +184,44 @@ impl fmt::Display for Money {
     /// [`Money::wire`].
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad(&self.rendered(','))
+    }
+}
+
+impl Add for Money {
+    type Output = Self;
+
+    fn add(self, addend: Self) -> Self {
+        Self(self.0 + addend.0)
+    }
+}
+
+impl Sub for Money {
+    type Output = Self;
+
+    fn sub(self, subtrahend: Self) -> Self {
+        Self(self.0 - subtrahend.0)
+    }
+}
+
+impl Neg for Money {
+    type Output = Self;
+
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
+}
+
+impl Sum for Money {
+    fn sum<I: Iterator<Item = Self>>(amounts: I) -> Self {
+        amounts.fold(Self::zero(), Add::add)
+    }
+}
+
+impl<'a> Sum<&'a Money> for Money {
+    /// The shape a ledger actually has: a column of amounts read out of a
+    /// collection nobody wants to consume.
+    fn sum<I: Iterator<Item = &'a Self>>(amounts: I) -> Self {
+        amounts.cloned().sum()
     }
 }
 
@@ -202,12 +243,15 @@ impl<'de> Deserialize<'de> for Money {
     }
 }
 
-/// The digits of an unsigned amount: everything before the point, and what
-/// follows it as minor units. `None` is a string that is not an amount.
-fn split(unsigned: &str) -> Option<(&str, u8)> {
-    let (major, fraction) = match unsigned.split_once('.') {
+/// What an unsigned run of digits is worth in minor units, or `None` when it is
+/// not an amount at all.
+///
+/// One decision — is this an amount, and how much — because the shape and the
+/// value are read off the same characters with nothing in between.
+fn minor_units(digits: &str) -> Option<BigUint> {
+    let (major, fraction) = match digits.split_once('.') {
         Some((major, fraction)) => (major, Some(fraction)),
-        None => (unsigned, None),
+        None => (digits, None),
     };
     if major.is_empty() || !major.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -216,7 +260,10 @@ fn split(unsigned: &str) -> Option<(&str, u8)> {
         Some(fraction) => scaled(fraction.as_bytes())?,
         None => 0,
     };
-    Some((major, minor))
+    // `major` is a non-empty run of ASCII digits, which is exactly what
+    // `BigUint`'s parser takes and the only thing it takes.
+    let major = major.parse::<BigUint>().ok()?;
+    Some(major * MINOR_PER_MAJOR + minor)
 }
 
 /// The digits after the point as minor units: one digit is tenths, two is
@@ -235,27 +282,14 @@ fn digit(byte: u8) -> Option<u8> {
     byte.is_ascii_digit().then(|| byte - b'0')
 }
 
-/// The magnitude of an amount in minor units, or `None` when it is more than an
-/// `i64` of them holds.
-///
-/// Counted unsigned and narrowed at the end, so the sign is applied to a value
-/// that is already known to fit.
-fn magnitude(major: &str, minor: u8) -> Option<i64> {
-    let units = major
-        .parse::<u64>()
-        .ok()?
-        .checked_mul(MINOR_PER_MAJOR)?
-        .checked_add(u64::from(minor))?;
-    i64::try_from(units).ok()
-}
-
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    reason = "a test that cannot build its fixture should fail loudly"
-)]
 mod tests {
     use super::*;
+
+    fn money(raw: &str) -> Money {
+        raw.parse()
+            .unwrap_or_else(|error| panic!("`{raw}` should be an amount: {error}"))
+    }
 
     /// The contract, as a table. `api/tests/money.rs` holds the left column to
     /// the document's own `pattern`; this holds the rest to what the type
@@ -274,8 +308,8 @@ mod tests {
             ("007.10", 710, "7,10"),
         ];
         for (raw, units, shown) in accepted {
-            let amount: Money = raw.parse().unwrap_or_else(|e| panic!("{raw}: {e}"));
-            assert_eq!(amount.minor_units(), units, "{raw}");
+            let amount = money(raw);
+            assert_eq!(amount, Money::from_minor_units(units), "{raw}");
             assert_eq!(amount.to_string(), shown, "{raw}");
             assert_eq!(format!("{amount}"), shown, "{raw}");
         }
@@ -283,7 +317,13 @@ mod tests {
         for raw in [
             "12,50", "12.505", "12.", "", ".5", "+12.50", " 12.50", "1e3",
         ] {
-            assert!(raw.parse::<Money>().is_err(), "`{raw}` is not an amount");
+            assert_eq!(
+                raw.parse::<Money>(),
+                Err(MoneyError {
+                    raw: raw.to_owned()
+                }),
+                "`{raw}` is not an amount"
+            );
         }
     }
 
@@ -291,7 +331,7 @@ mod tests {
     /// answer different questions and do not compose.
     #[test]
     fn display_is_not_the_wire_form_and_does_not_parse_back() {
-        let amount: Money = "12.50".parse().unwrap();
+        let amount = money("12.50");
         assert_eq!(amount.wire(), "12.50");
         assert_eq!(amount.to_string(), "12,50");
         assert!(amount.to_string().parse::<Money>().is_err());
@@ -304,57 +344,60 @@ mod tests {
     #[test]
     fn the_wire_form_is_canonical() {
         for raw in ["12.5", "12.50"] {
-            assert_eq!(raw.parse::<Money>().unwrap().wire(), "12.50");
+            assert_eq!(money(raw).wire(), "12.50");
         }
-        assert_eq!("-0.5".parse::<Money>().unwrap().wire(), "-0.50");
         assert_eq!(Money::zero().wire(), "0.00");
     }
 
+    /// An amount smaller than one major unit has a zero where the sign would
+    /// otherwise ride, and the sign has to survive that in both renderings.
     #[test]
-    fn a_string_the_shape_admits_and_an_i64_of_cents_does_not_is_refused_as_such() {
-        let huge = "92233720368547758.08";
+    fn a_negative_amount_under_one_unit_keeps_its_sign_in_front() {
+        let amount = money("-0.05");
+        assert_eq!(amount, Money::from_minor_units(-5));
+        assert_eq!(amount.to_string(), "-0,05");
+        assert_eq!(amount.wire(), "-0.05");
+        assert_eq!(money("-0.5").wire(), "-0.50");
+        // A negative nothing is not a thing, in either rendering.
+        assert_eq!(money("-0.00"), Money::zero());
+        assert_eq!(money("-0.00").to_string(), "0,00");
+        assert_eq!(money("-0.00").wire(), "0.00");
+    }
+
+    /// Why the count is arbitrary precision: an amount past every fixed-width
+    /// integer is read, added and printed like any other, and the document's
+    /// `pattern` never said there was a ceiling.
+    #[test]
+    fn an_amount_past_every_fixed_width_integer_is_an_amount_like_any_other() {
+        // Twenty-six digits of major units: more than a `u64` of cents by some
+        // seven orders of magnitude.
+        let huge = money("99999999999999999999999999.99");
+        assert_eq!(huge.wire(), "99999999999999999999999999.99");
+        assert_eq!(huge.to_string(), "99999999999999999999999999,99");
         assert_eq!(
-            huge.parse::<Money>(),
-            Err(MoneyError::TooLarge(huge.to_owned()))
+            (huge.clone() + money("0.01")).wire(),
+            "100000000000000000000000000.00"
         );
-        assert_eq!(
-            "12,50".parse::<Money>(),
-            Err(MoneyError::Malformed("12,50".to_owned()))
-        );
-        // One cent below the boundary is an amount.
-        assert_eq!(
-            "92233720368547758.07"
-                .parse::<Money>()
-                .map(Money::minor_units),
-            Ok(i64::MAX)
-        );
+        assert_eq!(huge.clone() - huge, Money::zero());
     }
 
     /// Arithmetic is why the type exists: cents are integers, so a column of
-    /// amounts adds up exactly, and a sum that will not fit is `None` rather
-    /// than a number pointing the wrong way.
+    /// amounts adds up exactly, and a `BigInt` does not overflow, so there is
+    /// nothing to refuse and nothing for a caller to unwrap.
     #[test]
-    fn amounts_add_and_subtract_exactly_or_not_at_all() {
-        let (ten_ten, twenty) = (Money::from_minor_units(1010), Money::from_minor_units(2000));
-        assert_eq!(
-            ten_ten.checked_add(ten_ten),
-            Some(Money::from_minor_units(2020))
-        );
-        assert_eq!(
-            twenty.checked_sub(ten_ten),
-            Some(Money::from_minor_units(990))
-        );
-        assert_eq!(ten_ten.checked_add(Money::zero()), Some(ten_ten));
+    fn amounts_add_and_subtract_exactly_and_totally() {
+        let (ten_ten, twenty) = (money("10.10"), money("20.00"));
+        assert_eq!(ten_ten.clone() + ten_ten.clone(), money("20.20"));
+        assert_eq!(twenty - ten_ten.clone(), money("9.90"));
+        assert_eq!(ten_ten.clone() + Money::zero(), ten_ten);
+        assert_eq!(-money("3.07"), money("-3.07"));
+        assert_eq!(money("1.00") - money("3.07"), money("-2.07"));
 
-        // The tenth of the sum that a binary float would lose.
-        let dime: Money = "0.10".parse().unwrap();
-        let sum = std::iter::repeat_n(dime, 10)
-            .try_fold(Money::zero(), Money::checked_add)
-            .unwrap();
-        assert_eq!(sum, "1.00".parse::<Money>().unwrap());
-
-        assert_eq!(Money::from_minor_units(i64::MAX).checked_add(dime), None);
-        assert_eq!(Money::from_minor_units(i64::MIN).checked_sub(dime), None);
+        // The tenth of the sum a binary float would lose.
+        let column = vec![money("0.10"); 10];
+        assert_eq!(column.iter().sum::<Money>(), money("1.00"));
+        assert_eq!(column.into_iter().sum::<Money>(), money("1.00"));
+        assert_eq!(std::iter::empty::<Money>().sum::<Money>(), Money::zero());
     }
 
     /// Ordering is the count of cents, so amounts sort and compare the way the
@@ -363,17 +406,17 @@ mod tests {
     fn amounts_order_by_what_they_are_worth() {
         let mut amounts: Vec<Money> = ["1.00", "-3.07", "0.5", "12.50"]
             .iter()
-            .map(|raw| raw.parse().unwrap())
+            .map(|raw| money(raw))
             .collect();
-        amounts.sort_unstable();
-        let sorted: Vec<String> = amounts.iter().map(|a| a.wire()).collect();
+        amounts.sort();
+        let sorted: Vec<String> = amounts.iter().map(Money::wire).collect();
         assert_eq!(sorted, ["-3.07", "0.50", "1.00", "12.50"]);
     }
 
     #[test]
     fn an_amount_is_a_string_on_the_wire_and_never_a_number() {
-        let amount: Money = "-3.07".parse().unwrap();
-        assert_eq!(serde_json::to_value(amount).ok(), Some("-3.07".into()));
+        let amount = money("-3.07");
+        assert_eq!(serde_json::to_value(&amount).ok(), Some("-3.07".into()));
         assert_eq!(
             serde_json::from_value::<Money>(serde_json::json!("12.5")).ok(),
             Some(Money::from_minor_units(1250))
