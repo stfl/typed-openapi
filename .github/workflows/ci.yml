@@ -18,7 +18,7 @@ jobs:
     name: fmt, clippy, docs, tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # `rust-toolchain.toml` names the toolchain and its components; rustup
       # reads it, so the version lives in one place rather than in every job.
       - uses: dtolnay/rust-toolchain@master
@@ -38,7 +38,7 @@ jobs:
     name: feature combinations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
@@ -79,7 +79,7 @@ jobs:
         # wants nightly.
         rust: ["1.85", stable]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
@@ -90,7 +90,7 @@ jobs:
     name: what crates.io would receive
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
