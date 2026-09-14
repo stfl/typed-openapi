@@ -1,0 +1,23 @@
+[package]
+name = "xtask"
+edition.workspace = true
+version.workspace = true
+publish = false
+description = "Bless step: the vendor's document plus the adopter's Overlay in, the overlaid document and the generated api source out."
+
+[dependencies]
+anyhow = { workspace = true }
+typed-openapi = { path = "../../../typed-openapi", features = ["document"] }
+heck = { workspace = true }
+openapiv3 = { workspace = true }
+prettyplease = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+schemars = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+syn = { workspace = true }
+typify = { workspace = true }
+
+[lints]
+workspace = true

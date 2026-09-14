@@ -1,0 +1,23 @@
+[package]
+name = "api"
+edition.workspace = true
+version.workspace = true
+publish = false
+description = "Owned Rust types and typed operations for the Toy Accounting API."
+
+[dependencies]
+api-generated = { path = "../api-generated" }
+api-types = { path = "../api-types" }
+typed-openapi = { path = "../../../typed-openapi", default-features = false }
+
+[dev-dependencies]
+# `tests/typed.rs` and `tests/corrections.rs` reduce the committed document
+# again and hold the committed blob to it, which is the one thing in this crate
+# that needs the reader. The library itself never does.
+typed-openapi = { path = "../../../typed-openapi", features = ["document"] }
+http = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+
+[lints]
+workspace = true

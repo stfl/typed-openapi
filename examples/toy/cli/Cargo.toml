@@ -1,0 +1,30 @@
+[package]
+name = "cli"
+edition.workspace = true
+version.workspace = true
+publish = false
+description = "The toy accounting CLI: every operation from the document, plus hand-written verbs."
+
+[[bin]]
+name = "toy"
+path = "src/main.rs"
+
+[features]
+default = ["ureq-client"]
+ureq-client = ["dep:ureq"]
+reqwest-client = ["dep:reqwest"]
+
+[dependencies]
+api = { path = "../api" }
+clap = { workspace = true }
+typed-openapi = { path = "../../../typed-openapi" }
+clap_complete = { workspace = true }
+http = { workspace = true }
+reqwest = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ureq = { workspace = true, optional = true }
+
+[lints]
+workspace = true

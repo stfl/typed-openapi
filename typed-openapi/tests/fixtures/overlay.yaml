@@ -1,0 +1,79 @@
+overlay: 1.1.0
+info:
+  title: Corrections to the Toy Accounting API
+  version: "1.0"
+  description: >-
+    Every correction the adopter makes to the vendor's document, as standard
+    OpenAPI Overlay 1.1 actions. `spec/toy.yaml` is never edited. `cargo xtask
+    bless` applies this file to it and writes the result to
+    `api-generated/spec/toy.overlaid.yaml`, which is the one document the
+    generated Rust types, the generated wrappers and the reduced model the
+    CLI's command tree is built from all come from.
+
+    Applied with `ErrorOnZeroMatch`: an action that matches nothing fails the
+    bless instead of lapsing quietly. Two actions below use that deliberately
+    as a tripwire — their JSONPath states what the vendor currently says, so a
+    vendor revision that changes it fails the bless rather than being silently
+    overwritten.
+extends: ../../../spec/toy.yaml
+actions:
+  # ---------------------------------------------------------------- Money ---
+  # TRIPWIRE. The filter selects `Voucher.properties` only while `total` is
+  # still declared `format: money`, and the step after it names `total`; under
+  # ErrorOnZeroMatch a vendor who renames the field or retypes it as a number
+  # makes this a zero match and fails the bless rather than being silently
+  # overwritten.
+  #
+  # The action adds the rule the vendor left out and changes nothing else, so
+  # `total` keeps the place the vendor gave it and `--help` reads in document
+  # order. The bless step reads `format: money` off the corrected shape and
+  # emits `crate::Money` for it, which is why no `$ref` and no schema invented
+  # in the vendor's `components` are needed here.
+  - target: "$.components.schemas.Voucher[?(@.total.format == 'money')].total"
+    description: Say what an amount looks like; the vendor declares the format and not the rule.
+    update:
+      pattern: ^-?[0-9]+(\.[0-9]{1,2})?$
+
+  # -------------------------------------------------- Undocumented field ---
+  # The vendor returns and accepts a bookkeeping reference it forgot to
+  # document. Adding it here puts it on the generated `Voucher` and on the
+  # CLI's `--internal-ref` at once; the adopter writes nothing.
+  - target: $.components.schemas.Voucher.properties
+    description: Add the undocumented `internal_ref` field.
+    update:
+      internal_ref:
+        type: string
+        description: Vendor's internal bookkeeping reference (undocumented)
+
+  # ---------------------------------------------- Undocumented operation ---
+  - target: $.paths
+    description: Add the undocumented `archiveVoucher` operation.
+    update:
+      /vouchers/{id}/archive:
+        post:
+          operationId: archiveVoucher
+          summary: Archive a voucher (undocumented; vendor ships it)
+          parameters:
+            - name: id
+              in: path
+              required: true
+              schema:
+                type: integer
+                format: int64
+          responses:
+            "200":
+              description: OK
+              content:
+                application/json:
+                  schema:
+                    $ref: "#/components/schemas/Voucher"
+
+  # ------------------------------------------------------- The writing GET ---
+  # TRIPWIRE. HTTP cannot say "this GET writes", so the document has to.
+  # `x-cli-writes` is the one extension this design adds, under the `x-`
+  # prefix OpenAPI reserves for exactly this. Targeting `.get` rather than the
+  # path item means a vendor who moves the operation to POST fails the bless.
+  - target: $.paths['/vouchers/{id}/render'].get
+    description: Mark the rendering GET as a write, so `--commit` gates it.
+    update:
+      x-cli-writes: true

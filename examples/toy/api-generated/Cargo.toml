@@ -1,0 +1,16 @@
+[package]
+name = "api-generated"
+edition.workspace = true
+version.workspace = true
+publish = false
+description = "Everything the bless step writes: the corrected document, the reduced CLI model, the Rust types and one typed wrapper per operation."
+
+[dependencies]
+api-types = { path = "../api-types" }
+typed-openapi = { path = "../../../typed-openapi", default-features = false }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
