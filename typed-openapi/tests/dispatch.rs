@@ -516,3 +516,52 @@ fn a_committed_write_with_one_of_two_gates_answered_sends_nothing() {
         Plan::Send(_)
     ));
 }
+
+/// One definition, two callers. A command of the caller's own carries exactly
+/// the gate flags the generated subcommand carries — same spelling, same help,
+/// same required-ness — because both are `tree::gates`, and a hand-written verb
+/// over a gated operation spells nothing itself.
+#[test]
+fn a_command_of_your_own_carries_the_gate_the_subcommand_carries() {
+    let doc = document();
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+
+    let mine = tree::gates(Command::new("finalize-voucher"), op);
+    let generated = tree::command(op);
+
+    for gate in op.gates() {
+        let (mine, generated) = (flag(&mine, gate.as_str()), flag(&generated, gate.as_str()));
+        assert_eq!(
+            mine.get_help().map(ToString::to_string),
+            generated.get_help().map(ToString::to_string)
+        );
+        assert!(mine.is_required_set() && generated.is_required_set());
+    }
+
+    // And nothing else came with them: the gates are all this door adds, so a
+    // caller's own flags are theirs to choose.
+    let added: Vec<&str> = mine
+        .get_arguments()
+        .filter_map(|arg| arg.get_long())
+        .filter(|long| *long != "help")
+        .collect();
+    assert_eq!(added, ["enshrine"]);
+}
+
+/// An operation with no gate is handed back the command it was given, so a
+/// caller adds the flags unconditionally and asks the document nothing.
+#[test]
+fn an_operation_that_names_no_gate_adds_no_flag() {
+    let doc = document();
+    let op = doc.get("createVoucher").expect("the document describes it");
+
+    let mine = tree::gates(Command::new("create"), op);
+
+    assert!(
+        mine.get_arguments()
+            .filter_map(|arg| arg.get_long())
+            .all(|long| long == "help")
+    );
+}

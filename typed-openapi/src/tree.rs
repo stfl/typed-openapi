@@ -101,10 +101,29 @@ pub fn command(op: &Operation) -> Command {
                 .help("Send the request. Without it this is a dry run that prints it"),
         );
     }
-    for gate in op.gates() {
-        cmd = cmd.arg(gate_arg(gate));
-    }
-    cmd
+    gates(cmd, op)
+}
+
+/// The gate flags one operation names, added to a command of your own.
+///
+/// [`command`] puts them on the subcommand it builds, and this is that same
+/// door: a verb you write yourself — one that fetches, decides, and then calls a
+/// gated operation — adds them with this and spells nothing itself. One
+/// definition rather than two is what keeps the two command lines from coming to
+/// disagree about one operation, and an Overlay that renames a gate renames the
+/// flag on both.
+///
+/// An operation that names no gate is handed back unchanged, so a caller does
+/// not have to ask first:
+///
+/// ```rust,ignore
+/// tree::gates(Command::new("finalize-voucher").arg(id).arg(commit), op)
+/// ```
+#[must_use]
+pub fn gates(cmd: Command, op: &Operation) -> Command {
+    op.gates()
+        .iter()
+        .fold(cmd, |cmd, gate| cmd.arg(gate_arg(gate)))
 }
 
 /// One named gate: a flag that has to be typed in addition to `--commit`.

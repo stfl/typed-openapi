@@ -309,10 +309,10 @@ Named gates: --enshrine. Each one is required, and demanded in addition to
 --commit.
 ```
 
-A verb you write yourself joins in through the same two calls the generated
-surface uses: build the flags out of
-[`Operation::gates`](../typed-openapi/src/model.rs), read them back with
-`tree::answers`, and hand the result to `Plan::decide`.
+A verb you write yourself joins in through the same three calls the generated
+surface uses: `tree::gates` puts the flags on your command, `tree::answers`
+reads them back, and `Plan::decide` does the rest. The flags are spelled in one
+place, so the two command lines cannot come to disagree about one operation.
 [`examples/toy/cli/src/app.rs`](../examples/toy/cli/src/app.rs) does exactly
 that for `finalize-voucher`, whose chain calls the gated `enshrineVoucher` — so
 the same word is demanded whichever way the operation is reached.
