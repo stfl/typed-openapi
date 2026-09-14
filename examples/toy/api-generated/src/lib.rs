@@ -32,17 +32,18 @@ pub mod types;
 
 pub use client::{Api, BodyError, Call, DOCUMENT, Error, MODEL, NoContent, to_json};
 
-/// The named-argument builder the `builder` feature puts on every generated
-/// wrapper.
+/// The named-argument builder the `builder` feature adds beside every
+/// generated wrapper.
 ///
 /// It holds nothing; it is where the feature is documented and demonstrated,
 /// because the wrappers themselves live in a generated file that says nothing
 /// about style.
 ///
 /// A wrapper with four arguments reads as four positional values at the call
-/// site, and two `i64`s in a row are a bug waiting to be written. With the
-/// feature on, every argument is named and every required one is enforced by
-/// the type system rather than by argument order.
+/// site, and two `i64`s in a row are a bug waiting to be written. The feature
+/// adds a `_builder` method beside each wrapper, where every argument is named
+/// and every required one is enforced by the type system rather than by
+/// argument order:
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -58,8 +59,18 @@ pub use client::{Api, BodyError, Call, DOCUMENT, Error, MODEL, NoContent, to_jso
 ///     total: "12.50".parse()?,
 /// };
 ///
-/// let call = api.update_voucher().id(5).body(&voucher).call()?;
-/// assert_eq!(call.request()?.uri().path(), "/vouchers/5");
+/// let named = api.update_voucher_builder().id(5).body(&voucher).call()?;
+/// assert_eq!(named.request()?.uri().path(), "/vouchers/5");
+///
+/// // The positional wrapper is still there and still means what it meant.
+/// // That is the point of the suffix: cargo resolves features once for a
+/// // whole build, so a feature that *replaced* `update_voucher` would break
+/// // every other crate that shares this one.
+/// let positional = api.update_voucher(5, &voucher)?;
+/// assert_eq!(
+///     typed_openapi::render(&positional.request()?),
+///     typed_openapi::render(&named.request()?),
+/// );
 /// # Ok(())
 /// # }
 /// ```
@@ -70,13 +81,13 @@ pub use client::{Api, BodyError, Call, DOCUMENT, Error, MODEL, NoContent, to_jso
 /// ```compile_fail
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let api = api_generated::Api::new()?;
-/// let call = api.update_voucher().id(5).call()?;
+/// let call = api.update_voucher_builder().id(5).call()?;
 /// # Ok(())
 /// # }
 /// ```
 ///
 /// Turning the feature off costs nothing but the names: `src/ops.rs` carries
-/// the attribute under `cfg_attr` in every build, so the committed file is the
-/// same bytes either way and no regeneration is involved.
+/// the second `impl` block under `#[cfg]` in every build, so the committed
+/// file is the same bytes either way and no regeneration is involved.
 #[cfg(feature = "builder")]
 pub mod builder {}

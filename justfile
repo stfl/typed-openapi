@@ -44,6 +44,10 @@ features:
     cargo check -p cli --features reqwest-client
     cargo check -p api-generated --features builder
     cargo test -p api-generated --features builder --doc
+    # The line that catches a builder which replaces a wrapper instead of
+    # adding one: `api-generated` never calls its own wrappers, so only a
+    # crate that does can tell the difference.
+    cargo check -p cli --features builder --all-targets
     just bon-free
     just clap-free
 
@@ -105,9 +109,18 @@ blessed:
     #!/usr/bin/env bash
     set -euo pipefail
     just bless
-    if ! git diff --quiet HEAD -- examples/toy/api-generated; then
+    # Only what the generator writes. `api-generated/src/{lib,client}.rs` are
+    # hand-written and live in the same crate, and a recipe that failed on an
+    # edit to those would be answering a different question.
+    written=(
+        examples/toy/api-generated/spec/toy.overlaid.yaml
+        examples/toy/api-generated/src/types.rs
+        examples/toy/api-generated/src/ops.rs
+        examples/toy/api-generated/src/model.postcard
+    )
+    if ! git diff --quiet HEAD -- "${written[@]}"; then
         echo "bless changed committed output:" >&2
-        git --no-pager diff --stat HEAD -- examples/toy/api-generated >&2
+        git --no-pager diff --stat HEAD -- "${written[@]}" >&2
         exit 1
     fi
     echo "bless reproduces every committed artefact"

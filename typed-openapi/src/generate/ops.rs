@@ -38,6 +38,10 @@ struct Emitted {
     body: Option<TokenStream>,
     /// The typed wrapper, `impl Api`.
     method: TokenStream,
+    /// The same call with its arguments named, in the `builder` block beside
+    /// it. It delegates rather than repeating the body, so the two cannot
+    /// describe different requests.
+    builder_method: TokenStream,
 }
 
 /// A document element this generator has no Rust spelling for.
@@ -50,6 +54,7 @@ pub(super) fn emit(api: &OpenAPI, model: &Document, header: &str) -> Result<Stri
     let operation_id = operation_id(&ops);
     let inventory = inventory(&ops);
     let methods = ops.iter().map(|op| &op.method);
+    let builder_methods = ops.iter().map(|op| &op.builder_method);
     let file: syn::File = syn::parse2(quote! {
         use typed_openapi::{Part, Values};
 
@@ -58,12 +63,14 @@ pub(super) fn emit(api: &OpenAPI, model: &Document, header: &str) -> Result<Stri
         #operation_id
         #inventory
 
-        #[cfg_attr(
-            feature = "builder",
-            ::typed_openapi::bon::bon(crate = ::typed_openapi::bon)
-        )]
         impl Api {
             #(#methods)*
+        }
+
+        #[cfg(feature = "builder")]
+        #[::typed_openapi::bon::bon(crate = ::typed_openapi::bon)]
+        impl Api {
+            #(#builder_methods)*
         }
     })
     .map_err(|source| GenerateError::NotRust {
@@ -91,6 +98,7 @@ fn gather(api: &OpenAPI, model: &Document) -> Result<Vec<Emitted>, GenerateError
                 command: op.command().as_str().to_owned(),
                 body: json_body_type(op, operation)?,
                 method: wrapper(op, path_item, operation)?,
+                builder_method: builder_wrapper(op, path_item, operation)?,
             })
         })
         .collect()
@@ -279,6 +287,9 @@ fn wrapper(
         args,
         builder,
         notes,
+        // The delegate beside this one forwards the argument names; a
+        // positional call has no use for them.
+        names: _,
     } = signature_of(op, item, operation)?;
     let response = response_type(operation);
     let notes = notes
@@ -292,9 +303,39 @@ fn wrapper(
         #[doc = ""]
         #[doc = #gate]
         #(#notes)*
-        #[cfg_attr(feature = "builder", builder)]
         pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
             self.call(OperationId::#variant, Values::new() #(#builder)*)
+        }
+    })
+}
+
+/// The same operation with its arguments named at the call site.
+///
+/// The name carries a `_builder` suffix because this is an *addition*: the
+/// `builder` feature must not change what an existing call site means, and a
+/// feature that replaced `update_voucher` would break every crate that shares
+/// the generated code, since cargo resolves features once for a whole build.
+///
+/// It delegates to the plain wrapper rather than repeating its body, so the two
+/// cannot come to describe different requests.
+fn builder_wrapper(
+    op: &Operation,
+    item: &openapiv3::PathItem,
+    operation: &openapiv3::Operation,
+) -> Result<TokenStream, GenerateError> {
+    let plain = format_ident!("{}", op.id().to_snake_case());
+    let name = format_ident!("{}_builder", op.id().to_snake_case());
+    let Signature { args, names, .. } = signature_of(op, item, operation)?;
+    let response = response_type(operation);
+    let doc = format!(
+        "The same call as [`Api::{plain}`], with its arguments named. A missing \
+         required argument is a compile error."
+    );
+    Ok(quote! {
+        #[doc = #doc]
+        #[builder]
+        pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
+            self.#plain(#(#names),*)
         }
     })
 }
@@ -303,6 +344,7 @@ fn wrapper(
 /// about them the document can explain but the types cannot.
 struct Signature {
     args: Vec<TokenStream>,
+    names: Vec<Ident>,
     builder: Vec<TokenStream>,
     notes: Vec<String>,
 }
@@ -314,6 +356,7 @@ fn signature_of(
 ) -> Result<Signature, GenerateError> {
     let mut out = Signature {
         args: Vec::new(),
+        names: Vec::new(),
         builder: Vec::new(),
         notes: Vec::new(),
     };
@@ -321,6 +364,7 @@ fn signature_of(
         let ident = format_ident!("{}", param.name().to_snake_case());
         let ty = param_type(item, operation, param.name())?;
         let wire = param.name();
+        out.names.push(ident.clone());
         if param.required() {
             out.args.push(quote! { #ident: #ty });
             out.builder.push(quote! { .param(#wire, #ident) });
@@ -334,6 +378,7 @@ fn signature_of(
         Body::JsonFields(_) | Body::JsonWhole { .. } => {
             let ty = body_type(operation)?;
             out.args.push(quote! { body: &#ty });
+            out.names.push(format_ident!("body"));
             out.builder.push(quote! { .json(crate::to_json(body)?) });
         }
         Body::Opaque { media_type, .. } => {
@@ -342,11 +387,13 @@ fn signature_of(
                  which this crate does not assemble."
             ));
             out.args.push(quote! { body: Vec<u8> });
+            out.names.push(format_ident!("body"));
             out.builder.push(quote! { .raw(body) });
         }
         Body::Multipart { names, .. } => {
             out.notes.push(multipart_note(names));
             out.args.push(quote! { parts: Vec<Part> });
+            out.names.push(format_ident!("parts"));
             out.builder.push(quote! { .multipart(parts) });
         }
     }

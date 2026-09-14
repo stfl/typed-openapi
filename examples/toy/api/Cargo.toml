@@ -5,6 +5,11 @@ version.workspace = true
 publish = false
 description = "Owned Rust types and typed operations for the Toy Accounting API."
 
+[features]
+# Forwarded to the crate holding the generated wrappers; `api` has nothing of
+# its own to gate.
+builder = ["api-generated/builder"]
+
 [dependencies]
 api-generated = { path = "../api-generated" }
 api-types = { path = "../api-types" }

@@ -13,6 +13,11 @@ path = "src/main.rs"
 default = ["ureq-client"]
 ureq-client = ["dep:ureq"]
 reqwest-client = ["dep:reqwest"]
+# Forwarded so the gate compiles a crate that actually *calls* the generated
+# wrappers with the builder on. `cargo check -p api-generated --features
+# builder` cannot catch a wrapper whose signature changed, because that crate
+# never calls its own wrappers.
+builder = ["api/builder"]
 
 [dependencies]
 api = { path = "../api" }

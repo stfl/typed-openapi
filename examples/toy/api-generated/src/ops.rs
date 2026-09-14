@@ -156,14 +156,12 @@ pub const fn documented(id: &str, method: &str, path: &str) -> bool {
     }
     false
 }
-#[cfg_attr(feature = "builder", ::typed_openapi::bon::bon(crate = ::typed_openapi::bon))]
 impl Api {
     ///List vouchers
     ///
     ///GET /vouchers
     ///
     ///A read.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn list_vouchers(
         &self,
         status: Option<crate::types::VoucherStatus>,
@@ -179,7 +177,6 @@ impl Api {
     ///POST /vouchers
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn create_voucher(
         &self,
         body: &crate::types::Voucher,
@@ -194,7 +191,6 @@ impl Api {
     ///GET /vouchers/{id}
     ///
     ///A read.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn get_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::GetVoucher, Values::new().param("id", id))
     }
@@ -203,7 +199,6 @@ impl Api {
     ///PUT /vouchers/{id}
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn update_voucher(
         &self,
         id: i64,
@@ -219,7 +214,6 @@ impl Api {
     ///POST /vouchers/{id}/enshrine
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn enshrine_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::EnshrineVoucher, Values::new().param("id", id))
     }
@@ -228,7 +222,6 @@ impl Api {
     ///GET /vouchers/{id}/render
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn render_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::RenderVoucher, Values::new().param("id", id))
     }
@@ -237,7 +230,6 @@ impl Api {
     ///POST /contacts
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn create_contact(
         &self,
         body: &crate::types::Contact,
@@ -254,7 +246,6 @@ impl Api {
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     ///
     ///`body` is sent verbatim under the document's own `form-data`, which this crate does not assemble.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn upload_document(&self, body: Vec<u8>) -> Result<Call<'_, NoContent>, Error> {
         self.call(OperationId::UploadDocument, Values::new().raw(body))
     }
@@ -265,7 +256,6 @@ impl Api {
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     ///
     ///`parts` are assembled into a `multipart/form-data` body. The document declares: file.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn upload_document_multipart(
         &self,
         parts: Vec<Part>,
@@ -280,8 +270,87 @@ impl Api {
     ///POST /vouchers/{id}/archive
     ///
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    #[cfg_attr(feature = "builder", builder)]
     pub fn archive_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::ArchiveVoucher, Values::new().param("id", id))
+    }
+}
+#[cfg(feature = "builder")]
+#[::typed_openapi::bon::bon(crate = ::typed_openapi::bon)]
+impl Api {
+    ///The same call as [`Api::list_vouchers`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn list_vouchers_builder(
+        &self,
+        status: Option<crate::types::VoucherStatus>,
+        limit: Option<i64>,
+    ) -> Result<Call<'_, Vec<crate::types::Voucher>>, Error> {
+        self.list_vouchers(status, limit)
+    }
+    ///The same call as [`Api::create_voucher`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn create_voucher_builder(
+        &self,
+        body: &crate::types::Voucher,
+    ) -> Result<Call<'_, crate::types::Voucher>, Error> {
+        self.create_voucher(body)
+    }
+    ///The same call as [`Api::get_voucher`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn get_voucher_builder(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
+        self.get_voucher(id)
+    }
+    ///The same call as [`Api::update_voucher`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn update_voucher_builder(
+        &self,
+        id: i64,
+        body: &crate::types::Voucher,
+    ) -> Result<Call<'_, crate::types::Voucher>, Error> {
+        self.update_voucher(id, body)
+    }
+    ///The same call as [`Api::enshrine_voucher`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn enshrine_voucher_builder(
+        &self,
+        id: i64,
+    ) -> Result<Call<'_, crate::types::Voucher>, Error> {
+        self.enshrine_voucher(id)
+    }
+    ///The same call as [`Api::render_voucher`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn render_voucher_builder(
+        &self,
+        id: i64,
+    ) -> Result<Call<'_, crate::types::Voucher>, Error> {
+        self.render_voucher(id)
+    }
+    ///The same call as [`Api::create_contact`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn create_contact_builder(
+        &self,
+        body: &crate::types::Contact,
+    ) -> Result<Call<'_, crate::types::Contact>, Error> {
+        self.create_contact(body)
+    }
+    ///The same call as [`Api::upload_document`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn upload_document_builder(&self, body: Vec<u8>) -> Result<Call<'_, NoContent>, Error> {
+        self.upload_document(body)
+    }
+    ///The same call as [`Api::upload_document_multipart`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn upload_document_multipart_builder(
+        &self,
+        parts: Vec<Part>,
+    ) -> Result<Call<'_, NoContent>, Error> {
+        self.upload_document_multipart(parts)
+    }
+    ///The same call as [`Api::archive_voucher`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn archive_voucher_builder(
+        &self,
+        id: i64,
+    ) -> Result<Call<'_, crate::types::Voucher>, Error> {
+        self.archive_voucher(id)
     }
 }
