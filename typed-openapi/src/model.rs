@@ -27,7 +27,8 @@ use crate::names::{Grouping, NameError, Namespace, kebab};
 use crate::scalar::Scalar;
 #[cfg(feature = "document")]
 use crate::schema::{
-    RefError, is_json, is_media_type, is_multipart, resolve, resolve_schema, scalar_of,
+    RefError, description_of, is_json, is_media_type, is_multipart, resolve, resolve_schema,
+    scalar_of,
 };
 
 /// The three extensions this crate reads, all of them an adopter's say over
@@ -802,13 +803,12 @@ impl Body {
                 return Ok(Self::JsonWhole { required });
             };
             runnable(&scalar, id, name)?;
-            let described = resolve_schema(&property, components)?;
             fields.push(Field {
                 flag: flags.claim(&kebab(name), "body"),
                 name: name.clone(),
                 required: required && object.required.iter().any(|r| r == name),
                 scalar,
-                description: described.schema_data.description.clone(),
+                description: description_of(&property, components)?,
             });
         }
         Ok(Self::JsonFields(fields))

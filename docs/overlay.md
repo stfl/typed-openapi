@@ -261,6 +261,28 @@ where the vendor put them and `total` keeps its place in `properties` —
 `--help` still reads in document order. What the action adds is the reference,
 and OpenAPI 3.0 reads a `$ref` in preference to whatever sits beside it.
 
+**Which is also what the reference costs: the field's own description.** What
+`--help` shows after the correction is the named schema's sentence, and that is
+the same sentence under every field sharing the rule. The 3.0 spelling that
+keeps both puts the reference inside an `allOf` of one element and the sentence
+outside it, where nothing overrides it:
+
+```yaml
+total:
+  allOf:
+    - $ref: "#/components/schemas/Money"
+  description: The gross total of this voucher.
+```
+
+`typed-openapi` reads a single-element `allOf` as the schema it wraps, so the
+rule still reaches `--total` and the field keeps its own words; a field that
+says nothing of its own takes the named schema's. The wrapper has to be the
+whole of the field's schema — a `type` or `format` left beside the `allOf`
+makes the node a composition of a different kind, and not a flag at all — so an
+Overlay writing this shape over a typed field removes the property and adds it
+back rather than merging into it. An `allOf` of two schemas is a real
+composition and is no flag either.
+
 The other way to name a rule without stating it is prose. `Voucher.currency` is
 `type: string` described as "ISO 4217 code" — a sentence a person can follow and
 nothing can run. An ISO 4217 code is three uppercase letters, so the document

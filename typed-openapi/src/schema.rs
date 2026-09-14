@@ -60,12 +60,44 @@ pub fn resolve_schema<'c>(
     resolve(schema, |key| components.schemas.get(key), "schemas")
 }
 
+/// The schema that states the rules: `$ref` hops followed, and a single-element
+/// `allOf` read as the element it wraps.
+///
+/// OpenAPI 3.0 has a `$ref` erase everything written beside it, so a document
+/// that both names a rule and says something about the field pointing at it has
+/// exactly one spelling for the pair — the reference wrapped in an `allOf` of
+/// one element, with the sentence outside the wrapper. That wrapper composes
+/// nothing; it is a `$ref` that kept its siblings, and what it describes is
+/// what its element describes.
+///
+/// One element is where this stops. An `allOf` of two schemas is a real
+/// composition, and a composition is not a scalar: it comes back as itself, and
+/// [`scalar_of`] answers `None` for it.
+fn stated<'c>(
+    schema: &'c ReferenceOr<Schema>,
+    components: &'c Components,
+) -> Result<&'c Schema, RefError> {
+    let mut current = resolve_schema(schema, components)?;
+    for _ in 0..MAX_HOPS {
+        let SchemaKind::AllOf { all_of } = &current.schema_kind else {
+            return Ok(current);
+        };
+        let [only] = all_of.as_slice() else {
+            return Ok(current);
+        };
+        current = resolve_schema(only, components)?;
+    }
+    Err(RefError {
+        reference: "a reference cycle".to_owned(),
+    })
+}
+
 /// `Some(scalar)` when this schema fits on one flag, `None` when it does not.
 pub fn scalar_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
 ) -> Result<Option<Scalar>, RefError> {
-    let schema = resolve_schema(schema, components)?;
+    let schema = stated(schema, components)?;
     let SchemaKind::Type(ty) = &schema.schema_kind else {
         return Ok(None);
     };
@@ -76,6 +108,24 @@ pub fn scalar_of(
         Type::Boolean(_) => Some(Scalar::Boolean),
         Type::Object(_) | Type::Array(_) => None,
     })
+}
+
+/// What a property says about itself, and what it inherits by pointing
+/// somewhere else.
+///
+/// The field's own sentence wins: it is about this field, where the named
+/// schema's is about every field that shares the rule. A field that says
+/// nothing of its own takes the named schema's, which is better than nothing
+/// and is all a bare `$ref` can leave behind.
+pub fn description_of(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+) -> Result<Option<String>, RefError> {
+    let own = &resolve_schema(schema, components)?.schema_data.description;
+    if own.is_some() {
+        return Ok(own.clone());
+    }
+    Ok(stated(schema, components)?.schema_data.description.clone())
 }
 
 /// An enumeration completes; everything else is text carrying the rules the
