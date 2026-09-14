@@ -66,7 +66,9 @@ pub fn root(api: &Api) -> Command {
         )
         .subcommand(
             Command::new(RAW)
-                .about("One subcommand per operation in the document")
+                .about(
+                    "One subcommand per resource in the document, and one per operation under it",
+                )
                 .subcommand_required(true)
                 .arg_required_else_help(true)
                 .subcommands(tree::commands(api.document())),
