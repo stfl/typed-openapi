@@ -95,5 +95,7 @@ pub use plan::{Plan, PlanError};
 pub use regress;
 pub use request::{Invocation, ValueError, render};
 pub use scalar::Scalar;
-pub use transport::{AsyncClient, HttpRequest, HttpResponse, Recorder, RecorderError, SyncClient};
+pub use transport::{
+    AsyncClient, HttpRequest, HttpResponse, Recorder, RecorderError, SyncClient, json_response,
+};
 pub use values::{Part, Payload, Values};

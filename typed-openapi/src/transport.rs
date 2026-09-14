@@ -74,8 +74,57 @@
 //! [`Recorder::unused`] how many answers were never reached: a run that left
 //! answers behind did not do what the test set it up to do, and that is worth
 //! asserting on rather than inferring.
+//!
+//! # An answer that carries headers
+//!
+//! `answering` and `answering_route` are the short spelling of the common
+//! case, and they build a JSON response. A caller that branches on a *header* —
+//! a pager following `Link`, a backoff reading `Retry-After`, a create reading
+//! `Location` — queues a whole [`HttpResponse`] instead, through
+//! [`Recorder::answering_with`] or [`Recorder::answering_route_with`].
+//! [`json_response`] builds the one the short spelling builds, so "the same
+//! answer, plus a header" is two lines:
+//!
+//! ```
+//! use http::{Method, StatusCode, header};
+//! use serde_json::json;
+//! use typed_openapi::{Recorder, SyncClient, json_response};
+//!
+//! let mut page = json_response(StatusCode::OK, &json!([{"id": 5}]));
+//! page.headers_mut().insert(
+//!     header::LINK,
+//!     header::HeaderValue::from_static(r#"</vouchers?page=2>; rel="next""#),
+//! );
+//!
+//! let client = Recorder::new().answering_route_with(Method::GET, "/vouchers", page);
+//! let answer = client.send(http::Request::get("/vouchers").body(Vec::new()).unwrap()).unwrap();
+//!
+//! assert_eq!(answer.headers()[header::LINK], r#"</vouchers?page=2>; rel="next""#);
+//! ```
+//!
+//! # Refusing what nobody queued
+//!
+//! An empty script answers `200 {}`, which is what a test that only cares what
+//! went *out* wants: it queues nothing and asserts on [`Recorder::take`].
+//!
+//! A test that does care what came back wants the opposite, and asks for it
+//! with [`Recorder::strict`]. A strict recorder **panics** on a request no
+//! queue has an answer for, naming the route it was asked for and what it is
+//! still holding. That is a bug in the test rather than in the code under test,
+//! and a panic puts it on the line that caused it — where a plausible, empty,
+//! successful answer would surface as an assertion going red three layers away.
+//! It is a panic and not a [`RecorderError`] for the same reason: a failure the
+//! script asked for and a request the script forgot are different mistakes, and
+//! a test scripted to expect the first must not pass on the second.
+//!
+//! Strictness says nothing about what a queued answer is. A strict recorder
+//! answers, fails and records exactly as a lenient one does; only the empty
+//! case differs. Both `send` methods do their work when they are called, so the
+//! panic lands on the `send` line even on the async path, before anything is
+//! awaited.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use http::{Method, Request, Response, StatusCode, header};
@@ -140,6 +189,9 @@ impl RecorderError {
 #[derive(Debug, Default)]
 pub struct Recorder {
     held: Mutex<Held>,
+    /// What a request no queue has an answer for gets: `200 {}` when this is
+    /// false, a panic when [`Recorder::strict`] has set it.
+    strict: bool,
 }
 
 /// What a recorder is holding: what is left to answer, and what has been sent.
@@ -176,6 +228,14 @@ impl Route {
     }
 }
 
+/// How a route reads in the refusal a strict recorder panics with, and the
+/// spelling the two constructors that queue for one take it in.
+impl fmt::Display for Route {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.method, self.path)
+    }
+}
+
 /// One thing a recorder does when a request reaches it.
 #[derive(Debug)]
 enum Answer {
@@ -201,8 +261,20 @@ impl Recorder {
     ) -> Self {
         self.queue_for(
             Route::new(method, path),
-            Answer::Response(json(status, body)),
+            Answer::Response(json_response(status, body)),
         )
+    }
+
+    /// Queue `response` — headers and all — for the next request on
+    /// `method path`.
+    ///
+    /// The long spelling of [`Self::answering_route`], for a caller that
+    /// branches on something a status and a JSON body cannot carry.
+    /// [`json_response`] builds what the short spelling builds, to add a header
+    /// to.
+    #[must_use]
+    pub fn answering_route_with(self, method: Method, path: &str, response: HttpResponse) -> Self {
+        self.queue_for(Route::new(method, path), Answer::Response(response))
     }
 
     /// Queue a failure for the next request on `method path`.
@@ -221,13 +293,36 @@ impl Recorder {
     /// and stays one line per answer.
     #[must_use]
     pub fn answering(self, status: StatusCode, body: &serde_json::Value) -> Self {
-        self.queue_for_anything(Answer::Response(json(status, body)))
+        self.queue_for_anything(Answer::Response(json_response(status, body)))
+    }
+
+    /// Queue `response` — headers and all — for the next request whose own
+    /// route has nothing left.
+    ///
+    /// The long spelling of [`Self::answering`], for a caller that branches on
+    /// something a status and a JSON body cannot carry.
+    #[must_use]
+    pub fn answering_with(self, response: HttpResponse) -> Self {
+        self.queue_for_anything(Answer::Response(response))
     }
 
     /// Queue a failure for the next request whose own route has nothing left.
     #[must_use]
     pub fn failing(self, message: &str) -> Self {
         self.queue_for_anything(Answer::Failure(message.to_owned()))
+    }
+
+    /// Refuse a request no queue has an answer for, instead of answering
+    /// `200 {}`.
+    ///
+    /// The refusal is a panic naming the route and what the queues still hold,
+    /// because the mistake is in the test rather than in the code under test
+    /// and a panic reports it on the line that made it. Takes effect whenever
+    /// it is called: a script is the same script either way.
+    #[must_use]
+    pub fn strict(mut self) -> Self {
+        self.strict = true;
+        self
     }
 
     /// Every request sent so far, oldest first, and the recorder is left empty.
@@ -289,9 +384,31 @@ impl Recorder {
         match queued {
             Some(Answer::Response(response)) => Ok(response),
             Some(Answer::Failure(message)) => Err(RecorderError { message }),
-            None => Ok(json(StatusCode::OK, &serde_json::json!({}))),
+            None if self.strict => unscripted(&route, &held),
+            None => Ok(json_response(StatusCode::OK, &serde_json::json!({}))),
         }
     }
+}
+
+/// What a strict recorder says about a request it was never given an answer
+/// for.
+///
+/// The routes are sorted because they come out of a `HashMap`, and a message
+/// that reads differently on every run is a message a reader stops trusting.
+fn unscripted(route: &Route, held: &Held) -> ! {
+    let mut queued: Vec<String> = held
+        .per_route
+        .iter()
+        .filter(|(_, answers)| !answers.is_empty())
+        .map(|(route, answers)| format!("{route} ({} left)", answers.len()))
+        .collect();
+    queued.sort();
+    panic!(
+        "the recorder was asked for `{route}` and has no answer for it. It is holding {queued:?} \
+         and {} queued for anything. Queue one with `answering_route` or `answering`, or drop \
+         `strict()` to let it answer 200 {{}}.",
+        held.anything.len(),
+    );
 }
 
 impl SyncClient for Recorder {
@@ -313,7 +430,14 @@ impl AsyncClient for Recorder {
     }
 }
 
-fn json(status: StatusCode, body: &serde_json::Value) -> HttpResponse {
+/// A JSON response, which is what the short spelling of a scripted answer
+/// builds: `body` rendered into the body and `content-type: application/json`.
+///
+/// Public so that "the same answer, plus a header" does not start by rebuilding
+/// this — take one, insert the header, and queue it with
+/// [`Recorder::answering_with`] or [`Recorder::answering_route_with`].
+#[must_use]
+pub fn json_response(status: StatusCode, body: &serde_json::Value) -> HttpResponse {
     let mut response = Response::new(body.to_string().into_bytes());
     *response.status_mut() = status;
     response.headers_mut().insert(
@@ -339,6 +463,7 @@ mod tests {
 
     use super::{
         AsyncClient, HttpRequest, HttpResponse, Method, Recorder, Request, StatusCode, SyncClient,
+        header, json_response,
     };
 
     fn request(method: Method, uri: &str) -> HttpRequest {
@@ -521,5 +646,97 @@ mod tests {
                 .collect()
         };
         assert_eq!(routes(&synchronous), routes(&asynchronous));
+    }
+
+    #[test]
+    fn a_response_queued_whole_keeps_the_headers_it_was_built_with() {
+        let mut page = json_response(StatusCode::OK, &json!([{"id": 5}]));
+        page.headers_mut().insert(
+            header::LINK,
+            header::HeaderValue::from_static(r#"</vouchers?page=2>; rel="next""#),
+        );
+        let mut created = json_response(StatusCode::CREATED, &json!(null));
+        created.headers_mut().insert(
+            header::LOCATION,
+            header::HeaderValue::from_static("/vouchers/6"),
+        );
+
+        let client = Recorder::new()
+            .answering_route_with(Method::GET, "/vouchers", page)
+            .answering_with(created);
+
+        let listed = sent(&client, Method::GET, "/vouchers");
+        assert_eq!(
+            listed.headers()[header::LINK],
+            r#"</vouchers?page=2>; rel="next""#
+        );
+        assert_eq!(body(&listed), json!([{"id": 5}]));
+
+        // The anything queue carries a whole response too.
+        let made = sent(&client, Method::POST, "/vouchers");
+        assert_eq!(made.status(), StatusCode::CREATED);
+        assert_eq!(made.headers()[header::LOCATION], "/vouchers/6");
+    }
+
+    #[test]
+    fn the_long_spelling_of_an_answer_and_the_short_one_build_the_same_response() {
+        let short = Recorder::new().answering(StatusCode::OK, &json!({"id": 5}));
+        let long = Recorder::new().answering_with(json_response(StatusCode::OK, &json!({"id": 5})));
+
+        let from_short = sent(&short, Method::GET, "/vouchers");
+        let from_long = sent(&long, Method::GET, "/vouchers");
+
+        assert_eq!(from_short.status(), from_long.status());
+        assert_eq!(from_short.headers(), from_long.headers());
+        assert_eq!(from_short.body(), from_long.body());
+    }
+
+    /// Two routes are held, so the sort in the refusal is load-bearing: a
+    /// `HashMap` hands them over in a different order on every run, and this
+    /// test flakes without it.
+    #[test]
+    #[should_panic(
+        expected = "asked for `GET /vouchers` and has no answer for it. It is holding \
+                    [\"POST /vouchers (2 left)\", \"PUT /vouchers/5 (1 left)\"] and 0 queued \
+                    for anything"
+    )]
+    fn a_strict_recorder_refuses_what_nobody_queued_and_names_what_it_holds() {
+        let client = Recorder::new()
+            .strict()
+            .answering_route(Method::POST, "/vouchers", StatusCode::CREATED, &json!(null))
+            .answering_route(Method::POST, "/vouchers", StatusCode::CREATED, &json!(null))
+            .answering_route(Method::PUT, "/vouchers/5", StatusCode::OK, &json!(null));
+
+        let _refused = SyncClient::send(&client, request(Method::GET, "/vouchers"));
+    }
+
+    #[test]
+    fn a_strict_recorder_answers_and_fails_from_the_script_like_a_lenient_one() {
+        let client = Recorder::new()
+            .strict()
+            .answering_route(Method::GET, "/vouchers", StatusCode::OK, &json!("the list"))
+            .failing_route(Method::POST, "/vouchers", "the request never left");
+
+        assert_eq!(
+            body(&sent(&client, Method::GET, "/vouchers")),
+            json!("the list")
+        );
+        assert_eq!(
+            SyncClient::send(&client, request(Method::POST, "/vouchers"))
+                .expect_err("scripted")
+                .message(),
+            "the request never left"
+        );
+        assert_eq!(client.take().len(), 2, "both went out");
+    }
+
+    #[test]
+    #[should_panic(expected = "asked for `GET /vouchers`")]
+    fn the_async_path_refuses_when_send_is_called_rather_than_when_it_is_awaited() {
+        let client = Recorder::new().strict();
+
+        // Never awaited: the work happens in `send`, so the refusal lands on
+        // this line rather than wherever the future is polled.
+        let _refused = AsyncClient::send(&client, request(Method::GET, "/vouchers"));
     }
 }
