@@ -1,7 +1,14 @@
-# `rustfmt.toml` sets `unstable_features = true` and the coverage recipe asks
-# rustc for branch instrumentation, so the repository's own tooling is nightly.
-# The published library is not: it compiles on the stable toolchain its
-# `rust-version` names, and CI proves that on every push.
+# This repository's own tooling is nightly. The library is not: it compiles and
+# tests on the stable toolchain its `rust-version` names, and CI's `stable` job
+# proves that on every push.
+#
+# Four of `rustfmt.toml`'s settings are nightly-only options —
+# `group_imports`, `format_code_in_doc_comments`, `format_generated_files` and
+# `hex_literal_case`. Stable rustfmt warns and ignores them rather than
+# failing, so it will not undo the formatting; it also will not maintain it,
+# which is why `just fmt` wants this toolchain. The coverage recipe's
+# `--branch` rests on `-Z coverage-options=branch` and is nightly for the same
+# kind of reason.
 [toolchain]
 channel = "nightly"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]

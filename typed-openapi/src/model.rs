@@ -215,12 +215,12 @@ impl Document {
     /// rest of what it generates; a shipped binary compiles without the feature
     /// and reaches the same reduction through [`Document::from_blob`].
     ///
-    /// ```no_run
+    /// ```
     /// use typed_openapi::{Document, Invocation, Values};
     ///
     /// let doc = Document::load(
-    ///     include_str!("../../api-generated/spec/toy.overlaid.yaml"),
-    ///     "",
+    ///     include_str!("../tests/fixtures/toy.yaml"),
+    ///     include_str!("../tests/fixtures/overlay.yaml"),
     /// )?;
     /// let op = doc.get("getVoucher").expect("the document describes it");
     /// let request = Invocation::new(op, Values::new().param("id", 5))?.request(doc.base())?;

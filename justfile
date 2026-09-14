@@ -41,6 +41,22 @@ features:
     RUSTDOCFLAGS="-D warnings" cargo doc -p typed-openapi --no-deps --no-default-features
     cargo check -p cli --features reqwest-client
     cargo check -p api-generated --features builder
+    just clap-free
+
+# The typed half of an adoption must link no argument parser: `api` takes the
+# library with `default-features = false`, so a clap in its tree is a
+# regression and not a preference.
+
+# Prove the typed half of the example links no argument parser.
+clap-free:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if cargo tree -p api -e normal --prefix none | grep -q '^clap'; then
+        echo "clap reached api's normal dependency tree:" >&2
+        cargo tree -p api -e normal | grep -i clap >&2
+        exit 1
+    fi
+    echo "api links no argument parser"
 
 # Two runners because the first cannot do the second's job: nextest gives every
 # test its own process and has no doctest support at all, so an example in a

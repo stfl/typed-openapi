@@ -8,75 +8,51 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # A warning that only fails locally is not a gate. Every job below promotes
-  # the `warn` levels in `[workspace.lints]` the same way `just check` does.
-  RUSTFLAGS: -D warnings
-  RUSTDOCFLAGS: -D warnings
 
 jobs:
+  # The recipes are the gate, here and on a laptop. CI runs `just` itself rather
+  # than a copy of what the recipes say, so the two cannot drift and a
+  # contributor who runs `just gate` has run what CI will run.
   gate:
-    name: fmt, clippy, docs, tests
+    name: just gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      # `rust-toolchain.toml` names the toolchain and its components; rustup
-      # reads it, so the version lives in one place rather than in every job.
+      # `rust-toolchain.toml` names the toolchain and its components, so the
+      # version lives in one place. Nightly is this repository's tooling —
+      # rustfmt's import grouping and the coverage recipe's branch
+      # instrumentation are nightly-only options — and never the library's:
+      # the `stable` job below is what says the crate itself compiles there.
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
-
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets
-      - run: cargo doc --workspace --no-deps
-      - run: cargo nextest run --workspace
-      - run: cargo test --workspace --doc
-
-  features:
-    name: feature combinations
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
+      - uses: taiki-e/install-action@v2
         with:
-          toolchain: nightly
-      - uses: Swatinem/rust-cache@v2
+          tool: just,nextest
 
-      # A feature that adds or removes whole items has to be compiled in every
-      # combination a consumer can select, because nothing else finds an item
-      # that exists in only one of them.
-      - run: cargo check -p typed-openapi
-      - run: cargo check -p typed-openapi --no-default-features
-      - run: cargo check -p typed-openapi --no-default-features --features clap
-      - run: cargo check -p typed-openapi --no-default-features --features document
-      - run: cargo check -p typed-openapi --no-default-features --features generate
-      - run: cargo check -p typed-openapi --no-default-features --features builder
-      - run: cargo check -p typed-openapi --all-features --all-targets
-      - run: cargo doc -p typed-openapi --no-deps --no-default-features
-      - run: cargo check -p cli --features reqwest-client
+      # `check` is fmt, compile, clippy and rustdoc, each with warnings denied.
+      - run: just check
+      # `features` compiles the library in every combination a consumer can
+      # select, and proves the typed half of the example links no clap.
+      - run: just features
+      - run: just test
+      # `package` builds the crate from its own tarball, which is the only
+      # check that it stands up outside this workspace.
+      - run: just package
 
-      # The typed half of an adoption must link no argument parser. This is the
-      # command that proves it: `api` takes the library with
-      # `default-features = false`, so a `clap` in its tree is a regression.
-      - name: the typed half stays clap-free
-        run: |
-          if cargo tree -p api -e normal --prefix none | grep -q '^clap'; then
-            echo "::error::clap reached api's normal dependency tree"
-            cargo tree -p api -e normal | grep -i clap
-            exit 1
-          fi
-
-  msrv:
+  # The published crate compiles and its tests pass on stable Rust, at the
+  # version it declares and at the current release. Nothing in the library may
+  # need a nightly feature; if this job goes red, that promise is broken.
+  stable:
     name: rust ${{ matrix.rust }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        # The floor the published crate declares, and the current stable
-        # release. The library compiles on stable; only this repository's own
-        # tooling — the formatter's unstable options, the coverage recipe —
-        # wants nightly.
+        # 1.85 is what clap 4.6, hashbrown 0.17 and edition 2024 set between
+        # them, and it is what `rust-version` declares.
         rust: ["1.85", stable]
     steps:
       - uses: actions/checkout@v5
@@ -84,18 +60,5 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +${{ matrix.rust }} check -p typed-openapi --all-features
-
-  package:
-    name: what crates.io would receive
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo package -p typed-openapi --list
-      # Builds the crate from its own tarball, which is the only check that it
-      # stands up outside this workspace.
-      - run: cargo package -p typed-openapi
+      - run: cargo +${{ matrix.rust }} build -p typed-openapi --all-features
+      - run: cargo +${{ matrix.rust }} test -p typed-openapi --all-features
