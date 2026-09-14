@@ -7,7 +7,7 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
-use api::Api;
+use api::{Api, OperationId};
 use cli::app;
 use cli::output::Output;
 use http::StatusCode;
@@ -30,6 +30,13 @@ const UPDATE: &[&str] = &[
     "--status",
     "draft",
 ];
+
+/// The chain, with the word its irreversible step stands behind.
+///
+/// `--enshrine` is required even for a voucher that turns out not to need
+/// enshrining: which steps the chain reaches is the server's answer, and it
+/// arrives long after the command line is gone.
+const FINALIZE: &[&str] = &["toy", "finalize-voucher", "--id", "5", "--enshrine"];
 
 fn api() -> Api {
     Api::new().expect("the embedded document loads")
@@ -220,6 +227,43 @@ fn the_writing_get_is_gated_like_any_other_write() {
     assert!(client.take().is_empty());
 }
 
+/// The second question the document asks about this operation, beside "did you
+/// mean to write?": mail leaves the building and reaches someone other than the
+/// person at the keyboard, so `--commit` alone does not buy it.
+#[test]
+fn mailing_a_voucher_wants_its_own_word_beside_commit() {
+    const RECIPIENT: &[&str] = &[
+        "toy",
+        "raw",
+        "vouchers",
+        "send-by-email",
+        "--id",
+        "5",
+        "--recipient",
+        "auditor@example.test",
+    ];
+
+    let api = api();
+    let committed: Vec<&str> = RECIPIENT.iter().copied().chain(["--commit"]).collect();
+    let refused = app::root(&api)
+        .try_get_matches_from(&committed)
+        .expect_err("sendVoucherByEmail stands behind --email");
+    assert_eq!(
+        refused.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+    assert!(refused.to_string().contains("--email"), "{refused}");
+
+    let client = Recorder::new().answering(StatusCode::ACCEPTED, &serde_json::json!(null));
+    let both: Vec<&str> = committed.iter().copied().chain(["--email"]).collect();
+    let out = run(&client, &both);
+
+    let sent = client.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].uri().path(), "/vouchers/5/send-by-email");
+    assert!(out.success);
+}
+
 #[test]
 fn a_flag_beside_json_body_is_an_edit_not_a_value_that_is_dropped() {
     let dir = tempdir();
@@ -346,7 +390,7 @@ fn the_multipart_upload_is_assembled_from_parts() {
 #[test]
 fn the_chain_prints_every_request_it_would_make() {
     let client = Recorder::new().answering(StatusCode::OK, &voucher("open"));
-    let out = run(&client, &["toy", "finalize-voucher", "--id", "5"]);
+    let out = run(&client, FINALIZE);
     let lines: Vec<&str> = out
         .stdout
         .lines()
@@ -365,11 +409,52 @@ fn the_chain_prints_every_request_it_would_make() {
     assert!(out.stderr.contains("the writes did not"), "{}", out.stderr);
 }
 
+/// The hand-written verb is held to the same word the generated subcommand is,
+/// and asks for it at the parser: the chain may enshrine, so `--enshrine` is
+/// typed before the fetch that decides whether it will.
+#[test]
+fn the_chain_cannot_be_asked_for_without_naming_its_irreversible_step() {
+    let api = api();
+    let refused = app::root(&api)
+        .try_get_matches_from(["toy", "finalize-voucher", "--id", "5"])
+        .expect_err("the chain stands behind --enshrine");
+
+    assert_eq!(
+        refused.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+    assert!(refused.to_string().contains("--enshrine"), "{refused}");
+}
+
+/// And the flags it asks for are the document's words rather than this crate's.
+/// A verb that spelled them itself would go on offering `--enshrine` after an
+/// Overlay renamed the gate, and the chain would quietly become unanswerable.
+#[test]
+fn the_chain_offers_every_gate_the_operation_it_calls_names() {
+    let api = api();
+    let root = app::root(&api);
+    let verb = root
+        .find_subcommand("finalize-voucher")
+        .expect("the verb is mounted");
+
+    for gate in api.operation(OperationId::EnshrineVoucher).gates() {
+        assert!(
+            verb.get_arguments()
+                .any(|arg| arg.get_long() == Some(gate.as_str())),
+            "the chain calls an operation gated on `{gate}` and offers no flag for it"
+        );
+    }
+}
+
 #[test]
 fn the_chain_skips_the_irreversible_step_for_a_voucher_that_is_not_open() {
     let client = Recorder::new().answering(StatusCode::OK, &voucher("paid"));
-    let out = run(&client, &["toy", "finalize-voucher", "--id", "5"]);
-    assert!(!out.stdout.contains("enshrine"), "{}", out.stdout);
+    let out = run(&client, FINALIZE);
+    assert!(
+        !out.stdout.contains("/vouchers/5/enshrine"),
+        "{}",
+        out.stdout
+    );
     assert!(out.stdout.contains("/vouchers/5/render"), "{}", out.stdout);
 }
 
@@ -387,7 +472,15 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
     let dry = Recorder::new().answering(StatusCode::OK, &voucher("open"));
     let printed = run(
         &dry,
-        &["toy", "--base-url", BASE, "finalize-voucher", "--id", "5"],
+        &[
+            "toy",
+            "--base-url",
+            BASE,
+            "finalize-voucher",
+            "--id",
+            "5",
+            "--enshrine",
+        ],
     );
     let hosts: Vec<&str> = printed
         .stdout
@@ -418,6 +511,7 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
             "finalize-voucher",
             "--id",
             "5",
+            "--enshrine",
             "--commit",
         ],
     );
@@ -438,10 +532,8 @@ fn commit_runs_the_whole_chain_in_order() {
         .answering(StatusCode::OK, &voucher("open"))
         .answering(StatusCode::OK, &voucher("paid"))
         .answering(StatusCode::OK, &voucher("paid"));
-    let out = run(
-        &client,
-        &["toy", "finalize-voucher", "--id", "5", "--commit"],
-    );
+    let committed: Vec<&str> = FINALIZE.iter().copied().chain(["--commit"]).collect();
+    let out = run(&client, &committed);
     let sent: Vec<String> = client
         .take()
         .iter()

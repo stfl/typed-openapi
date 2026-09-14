@@ -26,11 +26,11 @@ use http::Uri;
 use thiserror::Error;
 
 use crate::model::{
-    Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, JSON_BODY, Location, Operation,
-    Param, RAW_BODY,
+    Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, Gate, JSON_BODY, Location,
+    Operation, Param, RAW_BODY,
 };
 use crate::names::CommandName;
-use crate::plan::{Plan, PlanError};
+use crate::plan::{Answers, Plan, PlanError};
 use crate::scalar::Scalar;
 use crate::transport::{HttpRequest, HttpResponse, SyncClient};
 use crate::values::{Part, Payload, Values};
@@ -101,7 +101,27 @@ pub fn command(op: &Operation) -> Command {
                 .help("Send the request. Without it this is a dry run that prints it"),
         );
     }
+    for gate in op.gates() {
+        cmd = cmd.arg(gate_arg(gate));
+    }
     cmd
+}
+
+/// One named gate: a flag that has to be typed in addition to `--commit`.
+///
+/// `required(true)` rather than merely read at the gate, and that is the whole
+/// point of naming a hazard: a dry run of the operation that mails a stranger
+/// is still a command line somebody had to write `--email` on. The word comes
+/// before the request exists, not after it is built.
+fn gate_arg(gate: &Gate) -> Arg {
+    Arg::new(gate.as_str().to_owned())
+        .long(gate.as_str().to_owned())
+        .action(ArgAction::SetTrue)
+        .required(true)
+        .help(format!(
+            "Required, and demanded in addition to --commit: this operation \
+             stands behind the `{gate}` gate"
+        ))
 }
 
 /// The long help: what the document says, then the wire request this
@@ -125,14 +145,43 @@ fn long_about(op: &Operation) -> String {
     if op.effect() == Effect::Write {
         out.push_str("\n\nThis operation writes. Without --commit it is a dry run.");
     }
+    if !op.gates().is_empty() {
+        let named: Vec<String> = op.gates().iter().map(|gate| format!("--{gate}")).collect();
+        let _ = write!(
+            out,
+            "\n\nNamed gates: {}. Each one is required, and demanded in \
+             addition to --commit.",
+            named.join(", ")
+        );
+    }
     out
 }
 
-/// Did the user confirm this operation? A read carries no `--commit` flag, so
-/// there is nothing to ask it.
+/// What the user answered at the gate, read off one operation's `ArgMatches`:
+/// the write confirmation, and every named gate the operation carries.
+///
+/// A read carries neither flag, so there is nothing to ask it.
+///
+/// `matches` has to carry the operation's own flags — the subcommand
+/// [`command`] built, or a hand-written verb offering the same ones — because a
+/// flag clap never heard of is a panic rather than an answer. A verb of your own
+/// builds them out of [`Operation::gates`] for exactly that reason: then there
+/// is nothing to keep in step.
 #[must_use]
-pub fn confirmed(op: &Operation, matches: &ArgMatches) -> bool {
-    op.effect() == Effect::Write && matches.get_flag(COMMIT)
+pub fn answers(op: &Operation, matches: &ArgMatches) -> Answers {
+    if op.effect() == Effect::Read {
+        return Answers::new();
+    }
+    let mut answered = Answers::new();
+    if matches.get_flag(COMMIT) {
+        answered = answered.commit();
+    }
+    for gate in op.gates() {
+        if matches.get_flag(gate.as_str()) {
+            answered = answered.gate(gate.as_str());
+        }
+    }
+    answered
 }
 
 /// Read one operation's arguments out of its `ArgMatches`, under the names the
@@ -191,7 +240,7 @@ pub enum DispatchError {
 pub struct Selection<'d> {
     operation: &'d Operation,
     values: Values,
-    confirmed: bool,
+    answers: Answers,
 }
 
 impl<'d> Selection<'d> {
@@ -209,16 +258,17 @@ impl<'d> Selection<'d> {
         &self.values
     }
 
-    /// Whether the gate was answered — `false` for every write the user did not
-    /// confirm, and for a read it does not apply.
+    /// What the user answered at the gate: the write confirmation, and each
+    /// named gate the operation carries. A read answers nothing, because a read
+    /// is asked nothing.
     #[must_use]
-    pub fn confirmed(&self) -> bool {
-        self.confirmed
+    pub fn answers(&self) -> &Answers {
+        &self.answers
     }
 
     /// Build the request, put it to the gate, and do what the gate decided.
     pub fn send<C: SyncClient>(self, client: &C, base: &Uri) -> Result<Outcome, DispatchError> {
-        match Plan::build(self.operation, base, self.values, self.confirmed)? {
+        match Plan::build(self.operation, base, self.values, &self.answers)? {
             Plan::Send(request) => client
                 .send(request)
                 .map(Outcome::Sent)
@@ -246,7 +296,7 @@ pub fn select<'d>(doc: &'d Document, matches: &ArgMatches) -> Result<Selection<'
         })?;
     Ok(Selection {
         values: values(operation, args)?,
-        confirmed: confirmed(operation, args),
+        answers: answers(operation, args),
         operation,
     })
 }

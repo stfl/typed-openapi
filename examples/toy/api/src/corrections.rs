@@ -32,6 +32,16 @@ pub enum Correction {
     /// nevertheless holds behind `--commit`, marked `x-cli-writes` by the
     /// Overlay. HTTP cannot say "this GET writes"; the document has to.
     Gated(&'static str),
+    /// An operation this crate holds behind words of its own as well as
+    /// `--commit`, named in `x-cli-gates` by the Overlay.
+    ///
+    /// The vendor's document says what an operation *is*; what it costs to be
+    /// wrong about it is a reading only the adopter can make, and each of these
+    /// words is one such reading written down.
+    Guarded {
+        op: &'static str,
+        gates: &'static [&'static str],
+    },
     /// A property the vendor types as a bare string and names a rule for
     /// without ever stating it — in a `format`, or in a description a parser
     /// cannot read. The Overlay writes the rule down as the named schema
@@ -89,6 +99,19 @@ pub const CORRECTIONS: &[Correction] = &[
     Correction::Undocumented("archiveVoucher"),
     // The vendor's own summary says this GET stores a PDF on the server.
     Correction::Gated("renderVoucher"),
+    // Finalizing is the one thing here that cannot be undone, so the word for
+    // it is typed out rather than covered by the same `--commit` a voucher
+    // update needs.
+    Correction::Guarded {
+        op: "enshrineVoucher",
+        gates: &["enshrine"],
+    },
+    // Mail cannot be recalled, and the person it reaches is not the person who
+    // ran the command.
+    Correction::Guarded {
+        op: "sendVoucherByEmail",
+        gates: &["email"],
+    },
     // Nothing is skipped. Both uploads work — the misspelled `form-data` one
     // through `--raw-body`, the correctly spelled one through `--file`/`--field`
     // — so there is no operation this crate refuses to offer.

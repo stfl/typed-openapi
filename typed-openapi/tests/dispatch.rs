@@ -18,7 +18,7 @@
 use clap::{ArgMatches, Command};
 use http::Method;
 use typed_openapi::tree::{self, DispatchError, Outcome};
-use typed_openapi::{Document, HttpRequest, Recorder, render};
+use typed_openapi::{Answers, Document, HttpRequest, Plan, Recorder, Values, render};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
 const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
@@ -225,7 +225,10 @@ fn the_shortcut_and_the_seam_reach_the_same_request() {
         // What the seam exists for: an adopter reads the operation and the
         // values here, and holds the body to a type this crate cannot see.
         assert_eq!(selected.operation().id(), "getVoucher");
-        assert!(!selected.confirmed(), "a read carries no --commit flag");
+        assert!(
+            !selected.answers().committed(),
+            "a read carries no --commit flag"
+        );
         selected.send(&client, doc.base()).expect("sends");
         only(&client)
     };
@@ -310,6 +313,7 @@ fn operations_are_mounted_under_the_resource_their_path_names() {
                     "update".to_owned(),
                     "enshrine".to_owned(),
                     "render".to_owned(),
+                    "send-by-email".to_owned(),
                     "archive".to_owned(),
                 ]
             ),
@@ -391,4 +395,124 @@ fn only_an_operation_that_writes_carries_the_commit_flag() {
         has_commit("renderVoucher"),
         "a documented writing GET is gated"
     );
+}
+
+/// A named gate is a flag of its own, and only where the document names one.
+#[test]
+fn only_an_operation_the_document_names_a_gate_on_carries_that_flag() {
+    let doc = document();
+    let has_gate = |id: &str, long: &str| {
+        command_for(&doc, id)
+            .get_arguments()
+            .any(|arg| arg.get_long() == Some(long))
+    };
+
+    assert!(has_gate("enshrineVoucher", "enshrine"));
+    assert!(has_gate("sendVoucherByEmail", "email"));
+    assert!(
+        !has_gate("createVoucher", "enshrine"),
+        "a gate belongs to the operation the document names it on"
+    );
+    assert!(
+        !has_gate("getVoucher", "enshrine"),
+        "a read carries no gate flag, exactly as it carries no --commit"
+    );
+}
+
+/// The gate flag is `required`, so the hazard is on the command line before a
+/// request exists — a dry run of it is still a command somebody had to write
+/// the word on. The refusal names the flag.
+#[test]
+fn a_write_whose_gate_is_unnamed_is_refused_before_a_request_is_built() {
+    let doc = document();
+    let refused = root(&doc)
+        .try_get_matches_from(["toy", "vouchers", "enshrine", "--id", "5"])
+        .expect_err("enshrineVoucher stands behind --enshrine")
+        .to_string();
+
+    assert!(refused.contains("--enshrine"), "{refused}");
+
+    // And with the word typed it parses, whether or not it is also committed:
+    // the gate holds the request back, it does not refuse the command line.
+    let client = Recorder::new();
+    let matches = parse(
+        &doc,
+        &["toy", "vouchers", "enshrine", "--id", "5", "--enshrine"],
+    );
+    let outcome = tree::dispatch(&doc, doc.base(), &client, &matches).expect("dispatches");
+    assert!(matches!(outcome, Outcome::DryRun(_)), "--commit is missing");
+    assert!(client.take().is_empty());
+}
+
+#[test]
+fn a_gated_write_goes_out_once_both_words_are_given() {
+    let doc = document();
+    let client = Recorder::new().answering(http::StatusCode::OK, &serde_json::json!({}));
+    let matches = parse(
+        &doc,
+        &[
+            "toy",
+            "vouchers",
+            "enshrine",
+            "--id",
+            "5",
+            "--enshrine",
+            "--commit",
+        ],
+    );
+
+    let outcome = tree::dispatch(&doc, doc.base(), &client, &matches).expect("dispatches");
+
+    assert!(matches!(outcome, Outcome::Sent(_)));
+    assert_eq!(only(&client).uri().path(), "/vouchers/5/enshrine");
+}
+
+/// One operation, two words. Every gate is answered or nothing is sent — a
+/// gate can only hold a request back, never let one through, so answering one
+/// of two is a dry run even from a caller who confirmed.
+///
+/// The fixture has no two-gated operation, and no command line can reach this
+/// state either: both flags are `required`, so clap refuses the invocation
+/// first. A hand-written verb that builds its own [`Answers`] can, which is
+/// what this document is here for.
+#[test]
+fn a_committed_write_with_one_of_two_gates_answered_sends_nothing() {
+    const TWO_GATES: &str = "openapi: 3.0.3\n\
+         info: { title: t, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+         \x20 /vouchers/{id}/enshrine:\n\
+         \x20   post:\n\
+         \x20     operationId: enshrineVoucher\n\
+         \x20     x-cli-gates: [enshrine, email]\n\
+         \x20     parameters:\n\
+         \x20       - { name: id, in: path, required: true, schema: { type: integer } }\n\
+         \x20     responses: { \"200\": { description: OK } }\n";
+
+    let doc = Document::load(TWO_GATES, &[]).expect("a document with a two-gated operation");
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+    let decided = |answers: &Answers| {
+        Plan::build(op, doc.base(), Values::new().param("id", 5), answers)
+            .expect("the values satisfy the operation")
+    };
+
+    assert!(matches!(decided(&Answers::new().commit()), Plan::DryRun(_)));
+    assert!(matches!(
+        decided(&Answers::new().commit().gate("enshrine")),
+        Plan::DryRun(_)
+    ));
+    assert!(
+        matches!(
+            decided(&Answers::new().gate("enshrine").gate("email")),
+            Plan::DryRun(_)
+        ),
+        "both gates and no confirmation is still a dry run: a gate is answered \
+         beside --commit, never instead of it"
+    );
+    assert!(matches!(
+        decided(&Answers::new().commit().gate("enshrine").gate("email")),
+        Plan::Send(_)
+    ));
 }

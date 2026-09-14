@@ -79,6 +79,12 @@ impl<'de> ::serde::Deserialize<'de> for Currency {
             })
     }
 }
+///`Delivery`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
+pub struct Delivery {
+    ///Mailbox the voucher is sent to
+    pub recipient: ::std::string::String,
+}
 ///`Voucher`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
 pub struct Voucher {

@@ -86,24 +86,59 @@ fn retyping_the_corrected_currency_fails_the_bless() {
     assert!(error.to_string().contains("does not apply"), "{error}");
 }
 
-/// Mutation 6: `enshrineVoucher` removed. The Overlay does not mention it, so
-/// the bless succeeds — this one is the compiler's to catch, through the
-/// `documented(..)` assertion in `cli/src/finalize.rs`.
+/// The CLI layer's own tripwire, and the reason it is aimed at the method: a
+/// gate names a hazard, and the hazard is the operation rather than the path.
+/// A vendor who moves the finalize to another method makes the action match
+/// nothing, and somebody has to decide whether `enshrine` still names what
+/// happens there.
+#[test]
+fn moving_a_gated_operation_to_another_method_fails_the_bless() {
+    let error = bless(&mutated(
+        "  /vouchers/{id}/enshrine:\n    post:\n",
+        "  /vouchers/{id}/enshrine:\n    put:\n",
+    ))
+    .expect_err("the Overlay names a gate on an operation that is no longer a POST");
+    assert!(error.to_string().contains("does not apply"), "{error}");
+}
+
+/// Mutation 6: `enshrineVoucher` withdrawn. The CLI layer names it — a gate is
+/// an action like any other — so the withdrawal of the one irreversible
+/// operation stops the bless, before the `documented(..)` assertion in
+/// `cli/src/finalize.rs` is ever compiled.
+#[test]
+fn removing_a_gated_operation_fails_the_bless() {
+    let error = bless(&without(
+        "  /vouchers/{id}/enshrine:",
+        "  /vouchers/{id}/render:",
+    ))
+    .expect_err("the Overlay names a gate on an operation that is gone");
+    assert!(error.to_string().contains("does not apply"), "{error}");
+}
+
+/// The other half: an operation no action names goes quietly. It stops having
+/// a subcommand and nothing else changes, which is why anything that depends on
+/// one asserts on it — that assertion is the only thing between a withdrawal
+/// and a CLI that is one verb short.
 #[test]
 fn removing_an_operation_the_overlay_does_not_mention_passes_the_bless() {
-    let without = TOY
-        .split("  /vouchers/{id}/enshrine:")
+    let doc = Document::load(&without("  /contacts:", "  /documents:"), OVERLAYS)
+        .expect("the document still loads");
+    assert!(doc.get("createContact").is_none());
+    assert!(doc.get("createVoucher").is_some());
+}
+
+/// The vendor's document with everything from one path key up to the next
+/// dropped.
+fn without(path: &str, next: &str) -> String {
+    let before = TOY
+        .split(path)
         .next()
-        .expect("the fixture declares the operation")
-        .to_owned()
-        + "  /vouchers/{id}/render:"
-        + TOY
-            .split("  /vouchers/{id}/render:")
-            .nth(1)
-            .expect("the fixture declares the render operation");
-    let doc = Document::load(&without, OVERLAYS).expect("the document still loads");
-    assert!(doc.get("enshrineVoucher").is_none());
-    assert!(doc.get("renderVoucher").is_some());
+        .unwrap_or_else(|| panic!("the fixture declares `{path}`"));
+    let after = TOY
+        .split(next)
+        .nth(1)
+        .unwrap_or_else(|| panic!("the fixture declares `{next}`"));
+    format!("{before}{next}{after}")
 }
 
 /// Mutations 1 and 2: a field added or removed elsewhere. Neither touches an

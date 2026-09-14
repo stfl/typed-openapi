@@ -68,6 +68,11 @@ than a guess from the HTTP method: a `GET` that stores a PDF is marked
 default-closed, and an operation the document does not describe has no
 subcommand at all.
 
+One word is not always enough. An operation that cannot be undone, or that
+reaches a third party, names its own gates — `x-cli-gates: [enshrine]` grows a
+required `--enshrine` that is demanded *beside* `--commit`, so the hazard is
+typed out before the request is even built.
+
 This matters most when the CLI's user is an agent, which has to learn caution
 from the tool rather than bring it.
 

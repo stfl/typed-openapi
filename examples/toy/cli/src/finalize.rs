@@ -10,8 +10,7 @@
 //! it — the CLI does not discover it at run time against a customer's ledger.
 
 use api::{Api, Call, Voucher, VoucherStatus};
-use typed_openapi::Plan;
-use typed_openapi::{SyncClient, render};
+use typed_openapi::{Answers, Plan, SyncClient, render};
 
 use crate::app::Error;
 use crate::output::Output;
@@ -79,7 +78,12 @@ enum Wrote {
 }
 
 /// Fetch, decide, then either print the writes or make them.
-pub fn run<C: SyncClient>(api: &Api, client: &C, id: i64, commit: bool) -> Result<Output, Error> {
+pub fn run<C: SyncClient>(
+    api: &Api,
+    client: &C,
+    id: i64,
+    answers: &Answers,
+) -> Result<Output, Error> {
     let fetch = api.get_voucher(id)?;
     let mut printed = vec![render(&fetch.request()?)];
     // The read runs in both modes: the plan is a function of what the server
@@ -97,8 +101,11 @@ pub fn run<C: SyncClient>(api: &Api, client: &C, id: i64, commit: bool) -> Resul
     for step in steps {
         let step = call(api, step)?;
         // The same gate the `raw` path uses, asked once per request, so the
-        // chain cannot disagree with a single operation about what a dry run is.
-        let decided = Plan::decide(step.effect(), commit, step.request()?);
+        // chain cannot disagree with a single operation about what a dry run
+        // is — including which words it wants: the enshrine stands behind
+        // `--enshrine` here for the same reason it does under `raw`, because
+        // both ask the operation.
+        let decided = Plan::decide(step.operation(), answers, step.request()?);
         printed.push(render(decided.request()));
         if let Plan::Send(_) = decided {
             wrote = Wrote::Everything(step.send(client)?);

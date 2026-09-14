@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
-use crate::model::{Document, DocumentError, DriftError, Effect, Operation};
+use crate::model::{Document, DocumentError, DriftError, Operation};
 use crate::request::{Invocation, ValueError};
 use crate::transport::{AsyncClient, HttpRequest, HttpResponse, SyncClient};
 use crate::values::Values;
@@ -158,11 +158,17 @@ impl<T> fmt::Debug for Call<'_, T> {
 }
 
 impl<T: DeserializeOwned> Call<'_, T> {
-    /// `Write` means a CLI must see `--commit` before this is sent. A Rust
-    /// caller is trusted and never asks.
+    /// What the document says about the operation this call was built from:
+    /// whether it writes, and which gates it stands behind.
+    ///
+    /// A Rust caller is trusted and is stopped by nothing here. A caller that
+    /// wants the same gate a CLI has hands this to [`Plan::decide`], which is
+    /// what the `finalize-voucher` verb in the example does.
+    ///
+    /// [`Plan::decide`]: crate::Plan::decide
     #[must_use]
-    pub fn effect(&self) -> Effect {
-        self.invocation.effect()
+    pub fn operation(&self) -> &Operation {
+        self.invocation.operation()
     }
 
     /// The exact bytes that go on the wire. A CLI prints this for a dry run; a

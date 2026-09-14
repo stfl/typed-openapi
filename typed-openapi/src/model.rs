@@ -21,14 +21,14 @@ use openapiv3::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::names::{CommandName, renamed};
+use crate::names::{CommandName, NameError, renamed, spelled};
 #[cfg(feature = "document")]
-use crate::names::{Grouping, NameError, Namespace, kebab};
+use crate::names::{Grouping, Namespace, kebab};
 use crate::scalar::Scalar;
 #[cfg(feature = "document")]
 use crate::schema::{RefError, is_json, is_multipart, resolve, resolve_schema, scalar_of};
 
-/// The three extensions this crate reads, all of them an adopter's say over
+/// The four extensions this crate reads, all of them an adopter's say over
 /// something the document alone cannot settle. An Overlay is where they are
 /// written.
 ///
@@ -43,6 +43,11 @@ const COMMAND: &str = "x-cli-command";
 /// the resource the operation belongs to.
 #[cfg(feature = "document")]
 const GROUP: &str = "x-cli-group";
+/// The hazards an operation stands behind by name, beside the write gate
+/// itself. One list rather than one marker per name, so a gate an adoption
+/// invents costs an Overlay line and not a release of this crate.
+#[cfg(feature = "document")]
+const GATES: &str = "x-cli-gates";
 
 /// Whole-body flag, for every operation that takes JSON.
 pub const JSON_BODY: &str = "json-body";
@@ -54,6 +59,15 @@ pub const FILE_PART: &str = "file";
 pub const FIELD_PART: &str = "field";
 /// The write gate.
 pub const COMMIT: &str = "commit";
+
+/// The flags every subcommand spends before the document has a say: the write
+/// gate and the four body flags.
+///
+/// A parameter or a body field that wants one of these moves aside, and a gate
+/// that names one is refused — a gate is a word of the adopter's own, and these
+/// five words are already spoken for.
+#[cfg(feature = "document")]
+const RESERVED: [&str; 5] = [COMMIT, JSON_BODY, RAW_BODY, FILE_PART, FIELD_PART];
 
 /// Every operation the document describes, in document order, plus the server
 /// it describes them against.
@@ -78,6 +92,7 @@ pub struct Operation {
     params: Vec<Param>,
     body: Body,
     effect: Effect,
+    gates: Vec<Gate>,
 }
 
 /// Whether the CLI must hold this operation behind `--commit`.
@@ -87,6 +102,59 @@ pub enum Effect {
     Read,
     /// A body-bearing or unsafe method, or a GET the document marks as writing.
     Write,
+}
+
+/// One named hazard an operation stands behind, spelled as a long flag.
+///
+/// `--commit` asks one question — did you mean to write? — and some operations
+/// are more than one question: an act that cannot be undone, and an act that
+/// reaches a third party, each want their own word rather than a second meaning
+/// for that one. A gate is answered *beside* the confirmation, never instead of
+/// it, so what a gate adds is always another thing to say and never permission
+/// to say less. What the word means is the adopter's business and no business
+/// of this crate's, which only carries it.
+///
+/// A gate travels in the reduced model, so a name comes back off a blob as well
+/// as out of a document. Both doors are the same door: `serde` reads it as a
+/// `String` and runs it through the spelling rule a command name passes, so a
+/// blob cannot smuggle in a flag a document could not have asked for.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Gate(String);
+
+impl Gate {
+    /// `sendEmail` becomes `send-email`; anything that will not reduce to
+    /// `[a-z0-9-]` is rejected rather than mangled, because what is being
+    /// spelled is a flag a user has to type.
+    pub fn new(origin: &'static str, raw: &str) -> Result<Self, NameError> {
+        spelled(origin, raw).map(Self)
+    }
+
+    /// The flag name, without the leading `--`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Gate {
+    type Error = NameError;
+
+    fn try_from(raw: String) -> Result<Self, NameError> {
+        Self::new("reduced model", &raw)
+    }
+}
+
+impl From<Gate> for String {
+    fn from(gate: Gate) -> Self {
+        gate.0
+    }
+}
+
+impl std::fmt::Display for Gate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// Where a parameter goes in the request.
@@ -196,6 +264,21 @@ pub enum LoadError {
         first: String,
         second: String,
     },
+    #[error("{op}: `{key}` is not a list of names")]
+    GateList { op: String, key: &'static str },
+    #[error("{op}: the gate `{gate}` is one of the flags every subcommand already spends")]
+    ReservedGate { op: String, gate: Gate },
+    #[error("{op}: the gate `{gate}` is named twice")]
+    DuplicateGate { op: String, gate: Gate },
+    /// A read that names a gate is a document saying two things at once: a read
+    /// is sent on sight, so there is nothing for the gate to hold back. Refused
+    /// rather than mounted, because one of the two statements is a mistake and
+    /// the document does not say which.
+    #[error(
+        "{op}: a read stands behind no gate, and this one names `{gate}`; \
+         mark the operation `x-cli-writes: true` or drop the gate"
+    )]
+    GatedRead { op: String, gate: Gate },
     #[error(transparent)]
     Reference(#[from] RefError),
     #[error("{op}: parameter `{name}` is {reason}")]
@@ -359,6 +442,34 @@ impl Document {
         &self.ops
     }
 
+    /// Every gate any operation in this document names, once each and in
+    /// document order.
+    ///
+    /// This is the list a `--help` page, a release note or a test suite reads
+    /// instead of keeping one by hand: a gate an Overlay adds appears here the
+    /// moment the document is reduced, and nothing has to be told twice.
+    #[must_use]
+    pub fn gates(&self) -> Vec<&Gate> {
+        let mut named: Vec<&Gate> = Vec::new();
+        for gate in self.ops.iter().flat_map(Operation::gates) {
+            if !named.contains(&gate) {
+                named.push(gate);
+            }
+        }
+        named
+    }
+
+    /// Every operation standing behind one gate, in document order.
+    ///
+    /// A suite that has something to say about everything irreversible asks
+    /// the document which operations those are, rather than carrying a list
+    /// that an Overlay can silently grow past.
+    pub fn gated_by(&self, gate: &str) -> impl Iterator<Item = &Operation> {
+        self.ops
+            .iter()
+            .filter(move |op| op.gates().iter().any(|named| named.as_str() == gate))
+    }
+
     /// Check this document against a generated `(operationId, method, path)`
     /// inventory, row by row and in order.
     ///
@@ -415,15 +526,20 @@ impl Operation {
             })?;
         let method = method_of(method);
         let (group, command) = placement(op, id, path, &method, whole.grouping)?;
+        let effect = effect_of(&method, op);
+        // The gates are read before the namespace exists, because their flags
+        // belong in it: a body field the vendor happens to spell `enshrine`
+        // moves aside rather than shadowing the word that stands in front of
+        // the hazard.
+        let gates = gates_of(op, id, effect)?;
 
-        // One namespace per subcommand: the gate's own flags are claimed first.
-        let mut flags =
-            Namespace::with_reserved([COMMIT, JSON_BODY, RAW_BODY, FILE_PART, FIELD_PART]);
+        // One namespace per subcommand: the CLI's own flags — this operation's
+        // gates, the confirmation and the body flags — are spent first.
+        let mut flags = Namespace::with_reserved(gates.iter().map(Gate::as_str).chain(RESERVED));
         let params = params
             .map(|p| Param::build(id, p, whole.components, &mut flags))
             .collect::<Result<Vec<_>, _>>()?;
         let body = Body::build(id, op, whole.components, &mut flags)?;
-        let effect = effect_of(&method, op);
 
         Ok(Self {
             id: id.to_owned(),
@@ -436,6 +552,7 @@ impl Operation {
             params,
             body,
             effect,
+            gates,
         })
     }
 
@@ -491,6 +608,14 @@ impl Operation {
     #[must_use]
     pub fn effect(&self) -> Effect {
         self.effect
+    }
+
+    /// The named hazards this operation stands behind, in the order the
+    /// document names them. Every one of them is answered beside the write
+    /// confirmation, and a read has none.
+    #[must_use]
+    pub fn gates(&self) -> &[Gate] {
+        &self.gates
     }
 
     /// The parameter the document spells `name`, if there is one.
@@ -555,6 +680,69 @@ fn named<'o>(
             op: id.to_owned(),
             key,
         }),
+    }
+}
+
+/// The gates one operation stands behind, in the order the document names them.
+///
+/// Every rule about a gate is run here, while the document is reduced: a name
+/// that is not a flag, a name the command line has already spent, a name given
+/// twice, and a gate on an operation that is sent on sight. All four are an
+/// adopter's mistake, and all four are refused at their expense rather than at
+/// a user's — a gate that reaches a shipped binary is a gate somebody is about
+/// to type.
+#[cfg(feature = "document")]
+fn gates_of(op: &openapiv3::Operation, id: &str, effect: Effect) -> Result<Vec<Gate>, LoadError> {
+    let mut gates: Vec<Gate> = Vec::new();
+    for raw in listed(op, id, GATES)? {
+        let gate = Gate::new(GATES, raw)?;
+        if RESERVED.contains(&gate.as_str()) {
+            return Err(LoadError::ReservedGate {
+                op: id.to_owned(),
+                gate,
+            });
+        }
+        if gates.contains(&gate) {
+            return Err(LoadError::DuplicateGate {
+                op: id.to_owned(),
+                gate,
+            });
+        }
+        gates.push(gate);
+    }
+    match (effect, gates.first()) {
+        (Effect::Read, Some(gate)) => Err(LoadError::GatedRead {
+            op: id.to_owned(),
+            gate: gate.clone(),
+        }),
+        _ => Ok(gates),
+    }
+}
+
+/// The names one list-valued `x-cli-` marker offers, if it offers any.
+///
+/// A marker that is present and is not a list of names is the document saying
+/// something this crate has no reading for, and is refused rather than passed
+/// over — the same reading [`named`] gives a marker that should have been one
+/// name, for the same reason: an adopter who writes one word where a list goes
+/// would otherwise get no gate at all.
+#[cfg(feature = "document")]
+fn listed<'o>(
+    op: &'o openapiv3::Operation,
+    id: &str,
+    key: &'static str,
+) -> Result<Vec<&'o str>, LoadError> {
+    let reject = || LoadError::GateList {
+        op: id.to_owned(),
+        key,
+    };
+    match op.extensions.get(key) {
+        None => Ok(Vec::new()),
+        Some(serde_json::Value::Array(names)) => names
+            .iter()
+            .map(|name| name.as_str().ok_or_else(reject))
+            .collect(),
+        Some(_) => Err(reject()),
     }
 }
 

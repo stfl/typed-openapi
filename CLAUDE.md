@@ -20,6 +20,15 @@ would send — the same value, so the two cannot drift. Whether an operation
 writes comes from the HTTP method plus the document's `x-cli-writes` marker,
 never from a name or a heuristic.
 
+An operation may name further gates in `x-cli-gates`, and they are demanded
+*in addition to* the confirmation: `Plan::Send` wants the commit and every gate
+answered, so adding a gate can only hold a request back. Each is a `required`
+flag, which is the point — the hazard is named before the request is built, dry
+run included. Their flags are reserved in the subcommand's `Namespace` before
+any parameter or field claims one, so a body field spelled like a gate moves
+aside rather than shadowing it. A gate on a read is refused while the document
+is reduced: a request sent on sight has nothing for a gate to hold.
+
 **Both command names are decided while the document is reduced.** `Grouping` in
 `src/names.rs` reads the rule off every path once; an `Operation` carries the
 group and the command it was placed under, and both travel in the postcard blob.

@@ -60,8 +60,8 @@ Overlay files are YAML or JSON, and so are the documents they extend.
 An action is a `target` — an RFC 9535 JSONPath — plus exactly one of three
 verbs.
 
-**`update`** merges a value into every node the target selects. All four actions
-the example adoption commits are updates; the one above adds a property to a
+**`update`** merges a value into every node the target selects. Every action the
+example adoption commits is an update; the one above adds a property to a
 schema.
 
 **`remove: true`** deletes the selected nodes from their container. This is how
@@ -120,8 +120,8 @@ itself asserts that the operation is still a `GET`:
 A vendor who moves that operation to `POST` makes this a zero match — which is
 the right outcome, because a `POST` is already gated and the correction has
 become redundant. [`typed-openapi/tests/drift.rs`](../typed-openapi/tests/drift.rs)
-holds every tripwire to a mutated fixture; the example adoption has three, two
-in the vendor layer and one in the CLI layer.
+holds every tripwire to a mutated fixture; the example adoption has five, two
+in the vendor layer and three in the CLI layer.
 
 The cost is deliberate: every tripwire is a place a vendor revision stops the
 build. That is the trade — you are buying a failure you can read in exchange for
@@ -153,7 +153,7 @@ else could use this?*
 |---|---|---|
 | `corrections.yaml` | what is true of the API and the vendor got wrong or left out | anyone — the vendor, a TypeScript generator, a mock server, a request validator |
 | `client.yaml` | what is true of *your* client but not of the API | you, in any language |
-| `cli.yaml` | `x-cli-writes`, `x-cli-group`, `x-cli-command` | the command-line half of this crate |
+| `cli.yaml` | `x-cli-writes`, `x-cli-gates`, `x-cli-group`, `x-cli-command` | the command-line half of this crate |
 
 Later layers may say things earlier ones must not, so the order is not a
 preference. The practical argument is also small and immediate: a tripwire that
@@ -317,7 +317,7 @@ uses one layer down. The difference is only who the statement is true of — see
 
 ### 3. Grouping and the command line
 
-**What only this crate reads** — the three `x-cli-` extensions, under the `x-`
+**What only this crate reads** — the four `x-cli-` extensions, under the `x-`
 prefix OpenAPI reserves for exactly this.
 [`examples/toy/spec/cli.yaml`](../examples/toy/spec/cli.yaml) is this layer,
 and it is last because nothing else has any use for what is in it.
@@ -325,6 +325,7 @@ and it is last because nothing else has any use for what is in it.
 | marker | on | says |
 |---|---|---|
 | `x-cli-writes: true` | an operation | hold it behind `--commit`, whatever its method is |
+| `x-cli-gates: [<name>, …]` | an operation | demand one flag per name as well, each required |
 | `x-cli-group: <name>` | an operation | mount it under this group rather than the one its path names |
 | `x-cli-command: <name>` | an operation | call it this rather than what its path and method name |
 
@@ -339,6 +340,26 @@ has the rule they overrule.
     update:
       x-cli-command: finalize
 ```
+
+**A gate is a word for a hazard**, and which acts are hazardous is a reading of
+the API rather than a fact about it — which is why it lives here and not one
+layer down. The vendor's document says an operation finalizes a voucher; that
+finalizing cannot be undone, and is therefore worth typing a word for, is yours
+to say:
+
+```yaml
+  - target: $.paths['/vouchers/{id}/enshrine'].post
+    description: Finalizing cannot be undone, so it is typed out by name.
+    update:
+      x-cli-gates: [enshrine]
+```
+
+The names are yours to invent. A list rather than one marker per name is what
+makes that cheap: a gate this crate never heard of costs one Overlay line and no
+release. What each becomes on the command line is in
+[docs/cli.md](cli.md#named-gates); a name that is not a usable flag, one the
+command line already spends, one given twice, and one on an operation that is
+sent on sight are each a `LoadError` while the document is reduced.
 
 ## Owning the type yourself
 
@@ -468,6 +489,8 @@ pub const CORRECTIONS: &[Correction] = &[
     Correction::Undeclared { schema: "Voucher", property: "internal_ref" },
     Correction::Undocumented("archiveVoucher"),
     Correction::Gated("renderVoucher"),
+    Correction::Guarded { op: "enshrineVoucher", gates: &["enshrine"] },
+    Correction::Guarded { op: "sendVoucherByEmail", gates: &["email"] },
 ];
 ```
 
@@ -477,14 +500,17 @@ checks every row against *both* documents — the vendor's, exactly as it ships,
 and the corrected one this crate embeds — in both directions:
 
 - **A row that no longer describes a difference fails.** A gate is a correction
-  only while the vendor's own method says otherwise; a retype only while the
-  vendor leaves the rule unsaid and the schema stating it is the Overlay's own;
-  an undocumented operation only while the vendor still omits it. When the
-  vendor catches up, the test says to drop the action and the row.
+  only while the vendor's own method says otherwise; a named gate only while the
+  vendor's document does not carry it and the operation really stands behind
+  that word; a retype only while the vendor leaves the rule unsaid and the
+  schema stating it is the Overlay's own; an undocumented operation only while
+  the vendor still omits it. When the vendor catches up, the test says to drop
+  the action and the row.
 - **A difference with no row fails.** The test walks every schema property of
-  both documents and every operation's effect. A property the corrected
-  document has and the vendor's does not, without an `Undeclared` row, is a
-  failure. So is editing an Overlay and not saying so here.
+  both documents, and every operation's effect and gates. A property the
+  corrected document has and the vendor's does not, without an `Undeclared` row,
+  is a failure. So is a word the CLI would demand that no `Guarded` row names.
+  So is editing an Overlay and not saying so here.
 
 The `Correction` enum is matched exhaustively with no wildcard arm, so adding a
 variant is a compile error in the test — where someone has to decide what

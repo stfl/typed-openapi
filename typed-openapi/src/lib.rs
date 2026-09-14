@@ -16,9 +16,10 @@
 //!   typed arguments.
 //! - [`Invocation`] — an operation and values that satisfy it. Making one is
 //!   the validation; [`Invocation::request`] is then a rendering.
-//! - [`Plan`] — the gate. A read runs on sight; a write runs only once
-//!   confirmed, and until then a dry run prints the exact bytes a confirmed
-//!   run would send.
+//! - [`Plan`] — the gate. A read runs on sight; a write runs once it is
+//!   confirmed and every gate the document names on it is answered, and until
+//!   then a dry run prints the exact bytes a confirmed run would send.
+//!   [`Answers`] is what the caller answered.
 //! - `tree::commands` and `tree::dispatch` — the clap tree, and the trip back.
 //! - [`SyncClient`] / [`AsyncClient`] — where the request meets the network.
 //!
@@ -80,11 +81,11 @@ pub use client::{Call, Client, NoContent};
 #[cfg(feature = "document")]
 pub use model::LoadError;
 pub use model::{
-    Body, COMMIT, Document, DocumentError, Effect, Field, JSON_BODY, Location, Operation, Param,
-    RAW_BODY,
+    Body, COMMIT, Document, DocumentError, Effect, Field, Gate, JSON_BODY, Location, Operation,
+    Param, RAW_BODY,
 };
 pub use names::{CommandName, kebab};
-pub use plan::{Plan, PlanError};
+pub use plan::{Answers, Plan, PlanError};
 /// `regress`, for generated code to name the regex engine through.
 ///
 /// A generated `types.rs` enforces a schema's `pattern` inside `FromStr`, and

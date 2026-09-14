@@ -15,7 +15,7 @@
 )]
 
 use typed_openapi::model::Body;
-use typed_openapi::{Document, Effect, Invocation, Values, render, tree};
+use typed_openapi::{Document, Effect, Invocation, Operation, Values, render, tree};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
 const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
@@ -53,6 +53,57 @@ fn the_gate_is_default_closed_and_the_marker_can_only_add_writes() {
     assert_eq!(effect("archiveVoucher"), Effect::Write);
     // The one fact HTTP cannot carry, and the only thing `x-cli-writes` is for.
     assert_eq!(effect("renderVoucher"), Effect::Write);
+}
+
+/// The second half of the gate: the words an operation is held behind beyond
+/// the confirmation. They are decided while the document is reduced and read
+/// back off both doors, because a shipped binary meets the blob and never the
+/// document.
+#[test]
+fn the_gates_an_operation_names_come_back_off_the_document_and_the_blob() {
+    let doc = document();
+    let gates = |doc: &Document, id: &str| -> Vec<String> {
+        doc.get(id)
+            .unwrap_or_else(|| panic!("{id}"))
+            .gates()
+            .iter()
+            .map(|gate| gate.as_str().to_owned())
+            .collect()
+    };
+
+    assert_eq!(gates(&doc, "enshrineVoucher"), ["enshrine"]);
+    assert_eq!(gates(&doc, "sendVoucherByEmail"), ["email"]);
+    assert!(
+        gates(&doc, "createVoucher").is_empty(),
+        "a write the document names no hazard on stands behind --commit alone"
+    );
+    assert!(
+        gates(&doc, "getVoucher").is_empty(),
+        "a read is asked nothing"
+    );
+
+    let blob = doc.to_blob().expect("the reduction encodes");
+    let shipped = Document::from_blob(&blob).expect("and decodes");
+    assert_eq!(gates(&shipped, "enshrineVoucher"), ["enshrine"]);
+    assert_eq!(gates(&shipped, "sendVoucherByEmail"), ["email"]);
+}
+
+/// Which operations stand behind a given word is the document's answer, so a
+/// suite with something to say about everything irreversible asks it rather
+/// than keeping a list beside it.
+#[test]
+fn the_document_names_its_gates_and_what_stands_behind_each() {
+    let doc = document();
+    let named: Vec<&str> = doc.gates().iter().map(|gate| gate.as_str()).collect();
+    assert_eq!(named, ["enshrine", "email"]);
+
+    let behind = |gate: &str| -> Vec<&str> { doc.gated_by(gate).map(Operation::id).collect() };
+    assert_eq!(behind("enshrine"), ["enshrineVoucher"]);
+    assert_eq!(behind("email"), ["sendVoucherByEmail"]);
+    assert!(
+        behind("commit").is_empty(),
+        "the write gate is not one of the named ones"
+    );
 }
 
 #[test]
@@ -400,6 +451,95 @@ fn a_marker_that_is_not_a_name_is_refused() {
         error.to_string(),
         "listVouchers: `x-cli-command` is not a string"
     );
+}
+
+/// Every way a gate can be wrong, refused while the document is reduced and
+/// naming the operation and the word.
+///
+/// A gate that reached a shipped binary would be a flag somebody is about to
+/// type, so all of this is the adopter's failure at bless time rather than a
+/// user's at the prompt.
+#[test]
+fn a_gate_the_command_line_cannot_offer_is_refused_by_name() {
+    let refused = |method: &str, marker: &str| {
+        let paths = format!(
+            "  /vouchers/{{id}}/enshrine:\n\
+             \x20   {method}:\n\
+             \x20     operationId: enshrineVoucher\n\
+             \x20     x-cli-gates: {marker}\n\
+             \x20     responses: {{ \"200\": {{ description: OK }} }}\n"
+        );
+        Document::load(&synthetic(&paths), &[])
+            .expect_err("the document names a gate it cannot offer")
+            .to_string()
+    };
+
+    // One word where a list goes would otherwise be no gate at all, which is
+    // the one outcome a default-closed gate must never reach by accident.
+    assert_eq!(
+        refused("post", "enshrine"),
+        "enshrineVoucher: `x-cli-gates` is not a list of names"
+    );
+    assert_eq!(
+        refused("post", "[3]"),
+        "enshrineVoucher: `x-cli-gates` is not a list of names"
+    );
+    assert_eq!(
+        refused("post", "[\"???\"]"),
+        "the x-cli-gates `???` does not kebab-case into [a-z0-9-]"
+    );
+    assert_eq!(
+        refused("post", "[commit]"),
+        "enshrineVoucher: the gate `commit` is one of the flags every subcommand \
+         already spends"
+    );
+    assert_eq!(
+        refused("post", "[enshrine, enshrine]"),
+        "enshrineVoucher: the gate `enshrine` is named twice"
+    );
+    // A read runs on sight, so there is nothing for a gate to hold back: the
+    // document is saying two things at once and does not say which it meant.
+    assert_eq!(
+        refused("get", "[enshrine]"),
+        "enshrineVoucher: a read stands behind no gate, and this one names \
+         `enshrine`; mark the operation `x-cli-writes: true` or drop the gate"
+    );
+}
+
+/// A gate's flag is claimed before the document's own names are, so a body
+/// field the vendor happens to spell like one moves aside instead of shadowing
+/// the word standing in front of the hazard.
+#[test]
+fn a_body_field_that_collides_with_a_gate_moves_aside() {
+    let doc = Document::load(
+        &synthetic(
+            "  /vouchers/{id}/enshrine:\n\
+             \x20   post:\n\
+             \x20     operationId: enshrineVoucher\n\
+             \x20     x-cli-gates: [enshrine]\n\
+             \x20     requestBody:\n\
+             \x20       content:\n\
+             \x20         application/json:\n\
+             \x20           schema:\n\
+             \x20             type: object\n\
+             \x20             properties:\n\
+             \x20               enshrine: { type: string }\n\
+             \x20     responses: { \"200\": { description: OK } }\n",
+        ),
+        &[],
+    )
+    .expect("a document whose body field is spelled like its gate");
+
+    let op = doc.get("enshrineVoucher").unwrap();
+    let Body::JsonFields(fields) = op.body() else {
+        panic!("enshrineVoucher takes a flat JSON body");
+    };
+    let field = fields.iter().find(|f| f.name() == "enshrine").unwrap();
+    assert_eq!(field.flag(), "body-enshrine");
+    assert!(field.renamed(), "and it says so in its help line");
+    // Both flags are on the subcommand, which they could not be if one had
+    // shadowed the other: clap panics on a duplicate name, and this is where.
+    tree::command(op).debug_assert();
 }
 
 /// An override that will not reduce to a command name is rejected rather than

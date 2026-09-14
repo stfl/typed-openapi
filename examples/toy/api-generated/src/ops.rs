@@ -35,6 +35,8 @@ pub enum OperationId {
     EnshrineVoucher,
     ///renderVoucher
     RenderVoucher,
+    ///sendVoucherByEmail
+    SendVoucherByEmail,
     ///createContact
     CreateContact,
     ///uploadDocument
@@ -54,6 +56,7 @@ impl OperationId {
         OperationId::UpdateVoucher,
         OperationId::EnshrineVoucher,
         OperationId::RenderVoucher,
+        OperationId::SendVoucherByEmail,
         OperationId::CreateContact,
         OperationId::UploadDocument,
         OperationId::UploadDocumentMultipart,
@@ -73,6 +76,7 @@ impl OperationId {
             ("vouchers", "update") => Some(Self::UpdateVoucher),
             ("vouchers", "enshrine") => Some(Self::EnshrineVoucher),
             ("vouchers", "render") => Some(Self::RenderVoucher),
+            ("vouchers", "send-by-email") => Some(Self::SendVoucherByEmail),
             ("contacts", "create") => Some(Self::CreateContact),
             ("documents", "create") => Some(Self::UploadDocument),
             ("documents-multipart", "create") => Some(Self::UploadDocumentMultipart),
@@ -94,6 +98,9 @@ impl OperationId {
             }
             Self::UpdateVoucher => {
                 typed_openapi::client::fits::<crate::types::Voucher>("updateVoucher", body)
+            }
+            Self::SendVoucherByEmail => {
+                typed_openapi::client::fits::<crate::types::Delivery>("sendVoucherByEmail", body)
             }
             Self::CreateContact => {
                 typed_openapi::client::fits::<crate::types::Contact>("createContact", body)
@@ -119,6 +126,7 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
     ("updateVoucher", "PUT", "/vouchers/{id}"),
     ("enshrineVoucher", "POST", "/vouchers/{id}/enshrine"),
     ("renderVoucher", "GET", "/vouchers/{id}/render"),
+    ("sendVoucherByEmail", "POST", "/vouchers/{id}/send-by-email"),
     ("createContact", "POST", "/contacts"),
     ("uploadDocument", "POST", "/documents"),
     ("uploadDocumentMultipart", "POST", "/documents-multipart"),
@@ -126,7 +134,7 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
 ];
 ///How many operations the document declares. An operation *added*
 ///upstream moves this number and nothing else would have noticed.
-pub const OPERATION_COUNT: usize = 10usize;
+pub const OPERATION_COUNT: usize = 11usize;
 const fn str_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
@@ -213,7 +221,7 @@ impl Api {
     ///
     ///POST /vouchers/{id}/enshrine
     ///
-    ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit` and `--enshrine`.
     pub fn enshrine_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::EnshrineVoucher, Values::new().param("id", id))
     }
@@ -224,6 +232,21 @@ impl Api {
     ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     pub fn render_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::RenderVoucher, Values::new().param("id", id))
+    }
+    ///Email the voucher to a recipient
+    ///
+    ///POST /vouchers/{id}/send-by-email
+    ///
+    ///This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit` and `--email`.
+    pub fn send_voucher_by_email(
+        &self,
+        id: i64,
+        body: &crate::types::Delivery,
+    ) -> Result<Call<'_, NoContent>, Error> {
+        self.call(
+            OperationId::SendVoucherByEmail,
+            Values::new().param("id", id).json(crate::to_json(body)?),
+        )
     }
     ///Create a contact
     ///
@@ -323,6 +346,15 @@ impl Api {
         id: i64,
     ) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.render_voucher(id)
+    }
+    ///The same call as [`Api::send_voucher_by_email`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn send_voucher_by_email_builder(
+        &self,
+        id: i64,
+        body: &crate::types::Delivery,
+    ) -> Result<Call<'_, NoContent>, Error> {
+        self.send_voucher_by_email(id, body)
     }
     ///The same call as [`Api::create_contact`], with its arguments named. A missing required argument is a compile error.
     #[builder]

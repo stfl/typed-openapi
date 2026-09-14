@@ -41,15 +41,7 @@ impl CommandName {
     /// `origin` is what the raw name was read off, and it is there for the
     /// error: a document whose own words cannot be spelled is told which word.
     pub fn new(origin: &'static str, raw: &str) -> Result<Self, NameError> {
-        let name = kebab(raw);
-        let allowed = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
-        if name.is_empty() || !name.bytes().all(allowed) {
-            return Err(NameError {
-                origin,
-                raw: raw.to_owned(),
-            });
-        }
-        Ok(Self(name))
+        spelled(origin, raw).map(Self)
     }
 
     #[must_use]
@@ -199,9 +191,14 @@ pub struct Namespace(Vec<String>);
 impl Namespace {
     /// Start with the CLI's own flags already spent, so a document that happens
     /// to name a field `commit` renames rather than colliding at startup.
+    ///
+    /// The set is an iterator rather than a fixed list because part of it is a
+    /// fact about one operation: the flags standing in front of that
+    /// operation's named gates are spent here too, before the document's own
+    /// names are claimed.
     #[must_use]
-    pub fn with_reserved<const N: usize>(reserved: [&str; N]) -> Self {
-        Self(reserved.iter().map(|s| (*s).to_owned()).collect())
+    pub fn with_reserved<'r>(reserved: impl IntoIterator<Item = &'r str>) -> Self {
+        Self(reserved.into_iter().map(ToOwned::to_owned).collect())
     }
 
     /// The flag to use: `preferred` when it is free, otherwise prefixed.
@@ -231,6 +228,26 @@ impl Namespace {
 /// lives here rather than once in each of them.
 pub(crate) fn renamed(flag: &str, wire_name: &str) -> bool {
     flag != kebab(wire_name)
+}
+
+/// The one spelling rule for a name the user has to type: kebab-cased, and
+/// `[a-z0-9-]` once it is.
+///
+/// A command name and a gate's flag are both such a name, so the rule is
+/// written here once and neither of them writes it again — a second copy is a
+/// second rule the moment one of them is loosened. `origin` is what the raw
+/// name was read off, and it is there for the error: a document whose own words
+/// cannot be spelled is told which word.
+pub(crate) fn spelled(origin: &'static str, raw: &str) -> Result<String, NameError> {
+    let name = kebab(raw);
+    let allowed = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
+    if name.is_empty() || !name.bytes().all(allowed) {
+        return Err(NameError {
+            origin,
+            raw: raw.to_owned(),
+        });
+    }
+    Ok(name)
 }
 
 /// `createVoucher` and `internal_ref` both become flag-shaped: lowercase words

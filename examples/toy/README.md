@@ -33,15 +33,16 @@ Operations on vouchers
 Usage: toy raw vouchers [OPTIONS] <COMMAND>
 
 Commands:
-  list      List vouchers
-  create    Create a voucher
-  get       Fetch one voucher
-  update    Replace a voucher
-  enshrine  Finalize a voucher (irreversible)
-  render    Render the voucher to PDF and store it on the server (this GET
-            writes)
-  archive   Archive a voucher (undocumented; vendor ships it)
-  help      Print this message or the help of the given subcommand(s)
+  list           List vouchers
+  create         Create a voucher
+  get            Fetch one voucher
+  update         Replace a voucher
+  enshrine       Finalize a voucher (irreversible)
+  render         Render the voucher to PDF and store it on the server (this GET
+                 writes)
+  send-by-email  Email the voucher to a recipient
+  archive        Archive a voucher (undocumented; vendor ships it)
+  help           Print this message or the help of the given subcommand(s)
 ```
 
 [`../../docs/cli.md`](../../docs/cli.md) has the rule, and the two `x-cli-`
@@ -58,6 +59,16 @@ dry run: nothing was sent. Add --commit to send it.
 
 The request is on stdout and the line explaining it is on stderr, so a script
 that pipes the first gets the request and nothing else.
+
+Two of the writes are more than one question. Finalizing cannot be undone and
+mail cannot be recalled, so `spec/cli.yaml` stands each behind a word of its
+own, and the word is required as well as `--commit`:
+
+```console
+$ cargo run -p cli -- raw vouchers enshrine --id 5 --commit
+error: the following required arguments were not provided:
+  --enshrine
+```
 
 That one is a `GET`. HTTP cannot say "this GET writes", so the Overlay does,
 with `x-cli-writes` — and the gate treats it like any `POST`.
@@ -152,6 +163,12 @@ enshrines it if it is open, then renders it. The decision about *which* calls is
 a pure function over the voucher — no client, no runtime, no fixture — and its
 match has no `_` arm, so a status the vendor adds is a compile error where
 someone has to decide whether it may be enshrined.
+
+The verb is held to the same words the generated subcommand is. Its chain calls
+the gated `enshrineVoucher`, so it builds its gate flags out of
+`Operation::gates` and reads them back with `tree::answers` — the word is the
+document's, not this crate's, and `toy finalize-voucher` demands `--enshrine`
+exactly as `toy raw vouchers enshrine` does.
 
 [`cli/examples/root.rs`](cli/examples/root.rs) is the other shape: the
 operations *are* the CLI, 53 lines, no `raw` layer and no dispatch of its own.

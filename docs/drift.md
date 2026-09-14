@@ -23,7 +23,8 @@ early they bite:
 | renames or retypes a field an Overlay action corrects | that layer, under `ErrorOnZeroMatch` | bless | the layer's file name, then target matched zero nodes, quoting the JSONPath |
 | moves a corrected operation to another method | the same | bless | the same, quoting the other JSONPath |
 | adds an operation that reduces to a command another one already has | `Document::load` | bless | both `operationId`s, and that one needs an `x-cli-command` |
-| withdraws an operation something depends on | `const _: () = assert!(documented(..))` | compile | E0080, quoting the whole assertion |
+| withdraws an operation an Overlay action names | the same | bless | the same, quoting the action's JSONPath |
+| withdraws an operation nothing in an Overlay names, that something depends on | `const _: () = assert!(documented(..))` | compile | E0080, quoting the whole assertion |
 | adds a field to a schema the adopter destructures | the exhaustive `let Voucher { … }` | compile | E0027, naming the added field |
 | renames or removes such a field | the same | compile | E0026, naming the missing field and suggesting the new one |
 | adds an enum variant | a `_`-less `match` | compile | E0004, naming the uncovered variant |
@@ -40,13 +41,12 @@ The verbatim messages are in the sections below.
 
 ## Bless time: the Overlay as an assertion
 
-`ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Three
-of the example adoption's seven actions — two in
-[`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml), one in
-[`spec/cli.yaml`](../examples/toy/spec/cli.yaml) — are written as JSONPath
-filters that state what the vendor currently says, so a revision that changes
-the thing being corrected fails the bless rather than being silently
-overwritten. The message opens with the layer, because with corrections split
+`ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Five
+of the example adoption's nine actions — two in
+[`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml), three in
+[`spec/cli.yaml`](../examples/toy/spec/cli.yaml) — are written as targets that
+state what the vendor currently says, so a revision that changes the thing being
+corrected fails the bless rather than being silently overwritten. The message opens with the layer, because with corrections split
 by purpose that is the first thing to know:
 
 ```
@@ -57,9 +57,9 @@ The form and its cost are in [docs/overlay.md](overlay.md#the-tripwire-form);
 [`typed-openapi/tests/drift.rs`](../typed-openapi/tests/drift.rs) is where both
 tripwires are held to a mutated fixture.
 
-The same file records what *passes* this stage, and deliberately so: removing
-`enshrineVoucher`, and adding or removing a field the Overlay never mentions,
-all bless cleanly. Those are the compiler's.
+The same file records what *passes* this stage, and deliberately so: withdrawing
+an operation no action names, and adding or removing a field the Overlay never
+mentions, both bless cleanly. Those are the compiler's.
 
 ## Compile time: the operation inventory
 
@@ -84,6 +84,11 @@ error[E0080]: evaluation panicked: assertion failed: api::documented("enshrineVo
 
 The assertion is a whole row, so an operation that keeps its `operationId` and
 moves to a different path or method fails it too.
+
+Both operations that chain calls are named by the CLI layer as well — one is
+marked `x-cli-writes`, the other stands behind a gate — so in this adoption a
+withdrawal stops the bless before this ever compiles. The assertion is what
+catches the case no Overlay happens to cover.
 
 This is opt-in per dependency. An operation nobody asserts on simply stops
 having a subcommand.

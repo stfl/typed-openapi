@@ -39,15 +39,16 @@ Operations on vouchers
 Usage: toy raw vouchers [OPTIONS] <COMMAND>
 
 Commands:
-  list      List vouchers
-  create    Create a voucher
-  get       Fetch one voucher
-  update    Replace a voucher
-  enshrine  Finalize a voucher (irreversible)
-  render    Render the voucher to PDF and store it on the server (this GET
-            writes)
-  archive   Archive a voucher (undocumented; vendor ships it)
-  help      Print this message or the help of the given subcommand(s)
+  list           List vouchers
+  create         Create a voucher
+  get            Fetch one voucher
+  update         Replace a voucher
+  enshrine       Finalize a voucher (irreversible)
+  render         Render the voucher to PDF and store it on the server (this GET
+                 writes)
+  send-by-email  Email the voucher to a recipient
+  archive        Archive a voucher (undocumented; vendor ships it)
+  help           Print this message or the help of the given subcommand(s)
 ```
 
 A group holding one operation stays a group, so every operation is reachable as
@@ -143,6 +144,7 @@ toy: createVoucher: the request body does not fit the schema the document declar
 | any other media type | `--raw-body FILE`, sent verbatim under that media type |
 | no request body | nothing |
 | an operation that writes | `--commit` |
+| `x-cli-gates: [enshrine, email]` on an operation | `--enshrine` and `--email`, both required |
 
 One nested property is enough to make the whole body `--json-body` only: no
 sibling gets a flag the request builder would then throw away. `contacts create`
@@ -196,8 +198,10 @@ $ toy raw vouchers update --help
 ```
 
 Each subcommand's namespace starts with `commit`, `json-body`, `raw-body`,
-`file` and `field` already spent, so a document that names a field `commit`
-renames instead of colliding at startup. A global flag the surrounding CLI adds
+`file` and `field` already spent — plus every gate the operation names — so a
+document that names a field `commit`, or a field spelled like the gate standing
+in front of it, renames instead of colliding at startup. A global flag the
+surrounding CLI adds
 — `toy`'s `--base-url`, for instance — is not in that set.
 [`src/names.rs`](../typed-openapi/src/names.rs) holds the rule: a name still
 taken after the first prefix gains a counter, `body-id`, `body-id-3`.
@@ -254,6 +258,64 @@ dry run: nothing was sent. Add --commit to send it.
 Each subcommand's long help says so too, so an agent reading `--help` sees the
 method, the path, the `operationId` and the gate without opening the document.
 An operation the document does not describe has no subcommand at all.
+
+### Named gates
+
+`--commit` asks one question: did you mean to write? Some operations are more
+than one question — an act that cannot be undone, an act that reaches someone
+else — and `x-cli-gates` is where the document names them:
+
+```yaml
+  - target: $.paths['/vouchers/{id}/enshrine'].post
+    update:
+      x-cli-gates: [enshrine]
+```
+
+Each name becomes a flag of its own on that subcommand, and each is
+**required**, so the hazard is on the command line before the request is built —
+a dry run of it is still a command somebody had to write the word on:
+
+```console
+$ toy raw vouchers enshrine --id 5 --commit
+error: the following required arguments were not provided:
+  --enshrine
+
+Usage: toy raw vouchers enshrine --id <INT> --enshrine --commit
+
+$ toy raw vouchers enshrine --id 5 --enshrine
+POST /vouchers/5/enshrine HTTP/1.1
+host: localhost:9999
+dry run: nothing was sent. Add --commit to send it.
+```
+
+The gates are demanded *in addition to* `--commit`, never instead of it, and
+every one of them is answered or nothing is sent — so adding a gate can only
+hold a request back, never let one through. A read carries none: a gate on a
+safe method is a `LoadError` at bless time, because a request that is sent on
+sight has nothing for a gate to hold.
+
+What a word means is yours. `typed-openapi` carries it, offers it and demands
+it, and never reads anything into it.
+
+```console
+$ toy raw vouchers enshrine --help
+Finalize a voucher (irreversible)
+
+POST /vouchers/{id}/enshrine  (operationId: enshrineVoucher)
+
+This operation writes. Without --commit it is a dry run.
+
+Named gates: --enshrine. Each one is required, and demanded in addition to
+--commit.
+```
+
+A verb you write yourself joins in through the same two calls the generated
+surface uses: build the flags out of
+[`Operation::gates`](../typed-openapi/src/model.rs), read them back with
+`tree::answers`, and hand the result to `Plan::decide`.
+[`examples/toy/cli/src/app.rs`](../examples/toy/cli/src/app.rs) does exactly
+that for `finalize-voucher`, whose chain calls the gated `enshrineVoucher` — so
+the same word is demanded whichever way the operation is reached.
 
 ## Shell completion
 

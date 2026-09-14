@@ -13,11 +13,12 @@ info:
     a document about the vendor's API rather than about this CLI.
 
     `x-cli-writes` marks an operation the gate must hold behind `--commit`.
-    `x-cli-group` and `x-cli-command` name an operation on the command line
-    where the path spells it badly, or where two operations reduce to the same
-    name; the toy document needs neither.
+    `x-cli-gates` names the hazards a caller has to type out beside it, one
+    word each. `x-cli-group` and `x-cli-command` name an operation on the
+    command line where the path spells it badly, or where two operations reduce
+    to the same name; the toy document needs neither.
 
-    Applied with `ErrorOnZeroMatch`, like every layer, and the action below
+    Applied with `ErrorOnZeroMatch`, like every layer, and every action below
     uses that deliberately as a tripwire.
 extends: toy.yaml
 actions:
@@ -30,3 +31,22 @@ actions:
     description: Mark the rendering GET as a write, so `--commit` gates it.
     update:
       x-cli-writes: true
+
+  # ---------------------------------------------------------- Named gates ---
+  # TRIPWIRE, the same one, for a different reason. `--commit` asks whether the
+  # caller meant to write; these two operations are a second question each, and
+  # the word that answers it is theirs alone. Targeting `.post` asserts the
+  # operation is still the one the word was chosen for — a vendor who moves it
+  # to another method fails the bless, and someone has to look at whether
+  # `enshrine` still names what happens there.
+  - target: $.paths['/vouchers/{id}/enshrine'].post
+    description: Finalizing cannot be undone, so it is typed out by name.
+    update:
+      x-cli-gates: [enshrine]
+
+  # Mail leaves the building and cannot be recalled, and the recipient is
+  # someone other than the person running the command.
+  - target: $.paths['/vouchers/{id}/send-by-email'].post
+    description: Sending mail to a third party is typed out by name.
+    update:
+      x-cli-gates: [email]

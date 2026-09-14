@@ -100,6 +100,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Voucher'
+      x-cli-gates:
+      - enshrine
   /vouchers/{id}/render:
     get:
       operationId: renderVoucher
@@ -119,6 +121,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/Voucher'
       x-cli-writes: true
+  /vouchers/{id}/send-by-email:
+    post:
+      operationId: sendVoucherByEmail
+      summary: Email the voucher to a recipient
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Delivery'
+      responses:
+        '202':
+          description: Accepted
+      x-cli-gates:
+      - email
   /contacts:
     post:
       operationId: createContact
@@ -221,6 +245,14 @@ components:
         internal_ref:
           type: string
           description: Vendor's internal bookkeeping reference (undocumented)
+    Delivery:
+      type: object
+      required:
+      - recipient
+      properties:
+        recipient:
+          type: string
+          description: Mailbox the voucher is sent to
     Address:
       type: object
       required:

@@ -276,12 +276,7 @@ fn wrapper(
     let name = format_ident!("{}", op.id().to_snake_case());
     let summary = op.summary().unwrap_or(op.id());
     let signature = format!("{} {}", op.method(), op.path());
-    let gate = match op.effect() {
-        crate::Effect::Write => {
-            "This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`."
-        }
-        crate::Effect::Read => "A read.",
-    };
+    let gate = gate_note(op);
 
     let Signature {
         args,
@@ -307,6 +302,33 @@ fn wrapper(
             self.call(OperationId::#variant, Values::new() #(#builder)*)
         }
     })
+}
+
+/// What a wrapper's doc says about the gate a command line holds the operation
+/// behind.
+///
+/// A Rust caller is trusted and is stopped by nothing here, so this is the one
+/// place the hazard is written down for them: the doc names every word the CLI
+/// demands, because a caller reading the wrapper is deciding whether to make
+/// the call at all.
+fn gate_note(op: &Operation) -> String {
+    let named: Vec<String> = op
+        .gates()
+        .iter()
+        .map(|gate| format!("`--{gate}`"))
+        .collect();
+    match (op.effect(), named.is_empty()) {
+        (crate::Effect::Read, _) => "A read.".to_owned(),
+        (crate::Effect::Write, true) => {
+            "This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`."
+                .to_owned()
+        }
+        (crate::Effect::Write, false) => format!(
+            "This operation writes. A Rust caller is trusted; the CLI holds it behind \
+             `--commit` and {}.",
+            named.join(" and ")
+        ),
+    }
 }
 
 /// The same operation with its arguments named at the call site.

@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use api::{CORRECTIONS, Correction, Money, OPERATIONS, Voucher};
-use typed_openapi::{Document, Effect};
+use typed_openapi::{Document, Effect, Gate};
 
 /// The vendor's document, unpatched. `api` never reads this — that is the
 /// point: it is the thing the corrections are corrections *to*.
@@ -88,6 +88,7 @@ struct Rows {
     undocumented: Vec<&'static str>,
     skipped: Vec<&'static str>,
     gated: Vec<&'static str>,
+    guarded: Vec<(&'static str, &'static [&'static str])>,
     retyped: Vec<Retype>,
     undeclared: Vec<(&'static str, &'static str)>,
 }
@@ -99,6 +100,7 @@ fn rows() -> Rows {
             Correction::Undocumented(id) => rows.undocumented.push(id),
             Correction::Skipped(id) => rows.skipped.push(id),
             Correction::Gated(id) => rows.gated.push(id),
+            Correction::Guarded { op, gates } => rows.guarded.push((op, gates)),
             Correction::Retyped {
                 schema,
                 property,
@@ -192,6 +194,31 @@ fn every_gate_still_corrects_something() {
     }
 }
 
+/// A named gate is the adopter's reading of what an operation costs to get
+/// wrong, so it is a correction only while the vendor's document does not carry
+/// it — and only while the operation really does stand behind those words.
+#[test]
+fn every_named_gate_is_the_overlays_own_and_is_carried() {
+    for (id, gates) in rows().guarded {
+        let vendor = vendor();
+        let before = vendor.get(id).unwrap_or_else(|| {
+            panic!("`{id}` is listed as standing behind a gate but the vendor does not ship it")
+        });
+        assert!(
+            before.gates().is_empty(),
+            "`{id}` names its own gates in the vendor's document: drop the action and the row"
+        );
+
+        let corrected = corrected();
+        let after = corrected.get(id).expect("the corrected document keeps it");
+        let carried: Vec<&str> = after.gates().iter().map(Gate::as_str).collect();
+        assert_eq!(
+            carried, *gates,
+            "`{id}` does not stand behind the words the row names"
+        );
+    }
+}
+
 /// A retype is a correction only while the vendor leaves the rule unsaid and
 /// the schema that says it is the Overlay's own — and only while the generated
 /// field really is that newtype.
@@ -263,16 +290,14 @@ fn every_undeclared_property_is_still_undeclared() {
 
 /// The other direction, and the one that keeps [`api::CORRECTIONS`] from being
 /// a second copy of the Overlay: a difference between the two documents that no
-/// row explains fails here. Editing an Overlay without editing the list
-/// does not compile away, it turns red.
+/// row explains fails here. Editing an Overlay without editing the list does not
+/// compile away, it turns red.
+///
+/// This half is what a command line makes of an operation — whether it writes,
+/// and which words it stands behind.
 #[test]
-fn every_difference_between_the_documents_has_a_row() {
-    let Rows {
-        gated,
-        retyped,
-        undeclared,
-        ..
-    } = rows();
+fn every_operation_the_command_line_treats_differently_has_a_row() {
+    let Rows { gated, guarded, .. } = rows();
 
     let (vendor, corrected) = (vendor(), corrected());
     for op in &corrected {
@@ -284,7 +309,33 @@ fn every_difference_between_the_documents_has_a_row() {
             "`{}` is gated differently from the vendor's own method and no row says so",
             op.id()
         );
+        assert!(
+            before.gates() == op.gates() || guarded.iter().any(|(id, _)| *id == op.id()),
+            "`{}` stands behind words the vendor's document does not name, and no row says so",
+            op.id()
+        );
     }
+    // And no gate exists that no row named: `Document::gates` is the whole
+    // list, so a word added to an Overlay has nowhere to hide.
+    for gate in corrected.gates() {
+        assert!(
+            guarded
+                .iter()
+                .any(|(_, gates)| gates.contains(&gate.as_str())),
+            "`{gate}` is a gate the Overlay names and no row says so"
+        );
+    }
+}
+
+/// The same direction over what the two documents *declare*: a property that
+/// arrived, changed, or left, and a schema the Overlay wrote down under a name.
+#[test]
+fn every_declaration_that_differs_between_the_documents_has_a_row() {
+    let Rows {
+        retyped,
+        undeclared,
+        ..
+    } = rows();
 
     let before = properties(&json(VENDOR));
     let after = properties(&json(api::DOCUMENT));

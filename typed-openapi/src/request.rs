@@ -13,7 +13,7 @@
 use http::{Request, Uri, header};
 use thiserror::Error;
 
-use crate::model::{Body, Effect, Location, Operation};
+use crate::model::{Body, Location, Operation};
 use crate::multipart;
 use crate::scalar::ScalarError;
 use crate::values::{Payload, Values};
@@ -81,12 +81,6 @@ impl<'a> Invocation<'a> {
     #[must_use]
     pub fn operation(&self) -> &'a Operation {
         self.op
-    }
-
-    /// `Write` means a CLI must see `--commit` before this is sent.
-    #[must_use]
-    pub fn effect(&self) -> Effect {
-        self.op.effect()
     }
 
     /// The request this invocation stands for, against `base`.
