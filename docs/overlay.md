@@ -349,10 +349,16 @@ The trade against the named-schema route above:
 | the type's name | the schema's | yours |
 | `Display`, arithmetic, conversions | what the generator emits | anything you write |
 | enforced on the command line | yes | no — a bare `format` states no rule |
-| the stripped binary | +810 KB for the engine ([validation.md](validation.md#what-it-costs)) | +0 |
+| the stripped binary | +0 — the engine is linked either way ([validation.md](validation.md#what-it-costs)) | +0 |
 
-Reach for it when you need behaviour on the type. Reach for the named schema
-when you need the rule: it is the only one of the two that a command line can
+Neither row buys or saves the regex engine: `typed-openapi` links `regress`
+unconditionally so that a command line can enforce whatever pattern the
+document states, and it is in the tree of every crate here — `api`'s included,
+which links no argument parser. The 810 KB is the price of enforcing rules at
+all, not of choosing one of these two routes.
+
+Reach for `replace` when you need behaviour on the type. Reach for the named
+schema when you need the rule: it is the only one of the two that a command line can
 enforce, because a `format` names a rule without stating it. The two compose —
 a `format` tag *and* a `pattern` gives you both, at both costs.
 
