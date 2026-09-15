@@ -352,6 +352,83 @@ fn no_generated_wrapper_binds_one_identifier_twice() {
     }
 }
 
+/// An argument that moved aside says which wire name it carries.
+///
+/// `self_2` and `ref_2` are nowhere in the document, and under the `builder`
+/// feature they are setters an adopter types — so a signature carrying one is a
+/// name they cannot look up. The command line meets the same collision and
+/// answers it, with `(sends `ref`)` on the flag that moved; a wrapper that said
+/// nothing would leave the two consumers disagreeing about whether a rename is
+/// worth mentioning, which is the asymmetry the renaming rule exists to end.
+///
+/// The count is the other half: an argument that kept the plain spelling
+/// accounts for itself, so a note beside one would be noise.
+#[test]
+fn a_wrapper_argument_that_moved_aside_says_what_it_sends() {
+    let ops = read(&blessed("hostile-moved").join("src/ops.rs"));
+    for said in [
+        "`self_2` sends the document's `Self`, under a name of its own",
+        "`ref_2` sends the document's `ref`, under a name of its own",
+    ] {
+        assert!(
+            ops.contains(said),
+            "the wrapper does not account for the argument:\n{ops}"
+        );
+    }
+    assert_eq!(
+        ops.matches("under a name of its own").count(),
+        2,
+        "two arguments move in this document, and nothing else is remarked on"
+    );
+}
+
+/// The request body claims its name last, so a document that spends `body` on a
+/// parameter keeps the parameter's name and moves the body — which then says
+/// what it is, because a `body_2` beside a `body` is exactly the signature an
+/// adopter would otherwise read as a generator's mistake.
+#[test]
+fn a_body_argument_the_parameters_crowded_out_says_what_it_is() {
+    const CROWDED: &str = r#"
+openapi: 3.0.3
+info: { title: Crowded, version: "1.0" }
+servers: [{ url: "http://localhost:9411" }]
+paths:
+  /firings:
+    post:
+      operationId: startFiring
+      parameters:
+        - name: body
+          in: query
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cone: { type: string }
+      responses:
+        "201": { description: Created }
+"#;
+
+    let dir = out("hostile-crowded");
+    Settings::new(wrote(&dir, "document.yaml", CROWDED))
+        .write_to(&dir)
+        .expect("a parameter named `body` is legal and blesses");
+    let ops = read(&dir.join("src/ops.rs"));
+
+    assert_eq!(
+        arguments(&ops, "start_firing"),
+        ["body", "body_2"],
+        "the document's own `body` keeps the name and the request body moves"
+    );
+    assert!(
+        ops.contains("`body_2` is the request body, under a name of its own"),
+        "the wrapper does not account for its body argument:\n{ops}"
+    );
+}
+
 /// One wire name in two places is two flags, and the one that moved says which
 /// wire name it carries — the only thing left to go by once the document is
 /// gone.

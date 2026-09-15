@@ -494,6 +494,10 @@ impl Signature {
     /// that a second `type` reads as `type_2` and not as `r#type_2`. Appending
     /// to a word that already spells an identifier spells one too, which is why
     /// nothing here can fail.
+    ///
+    /// This decides a name and says nothing about it. [`Signature::argument`] is
+    /// the door every argument comes through, and it is where a name that moved
+    /// is accounted for.
     fn bind(&mut self, plain: Ident, word: &str) -> Ident {
         let mut candidate = plain;
         let mut suffix = 2;
@@ -503,6 +507,36 @@ impl Signature {
         }
         self.names.push(candidate.clone());
         candidate
+    }
+
+    /// One argument's identifier, and the note that accounts for it where it is
+    /// not the plain spelling of the document's own word.
+    ///
+    /// An argument that moved is the one thing in a generated signature an
+    /// adopter cannot look up: `ref_2` is nowhere in their document, and with
+    /// the `builder` feature on it is a setter they have to type. The command
+    /// line meets the same collision and answers it — `tree`'s `wire` puts
+    /// "sends `ref`" on the flag that moved aside — so a wrapper that said
+    /// nothing would be the two consumers disagreeing about whether a rename is
+    /// worth mentioning, which is the asymmetry [`Signature::bind`] exists to
+    /// end rather than to move.
+    ///
+    /// `carries` says what the argument is in the document's own terms, because
+    /// that is the half the reader is missing: the identifier is in front of
+    /// them and the thing it stands for is not.
+    ///
+    /// Every argument comes through here rather than through [`Signature::bind`],
+    /// so an argument added later cannot be given a name without being
+    /// accounted for under it.
+    fn argument(&mut self, plain: &Ident, word: &str, carries: &str) -> Ident {
+        let bound = self.bind(plain.clone(), word);
+        if bound != *plain {
+            self.notes.push(format!(
+                "`{bound}` {carries}, under a name of its own: an argument \
+                 declared before it had already spent the plain spelling."
+            ));
+        }
+        bound
     }
 }
 
@@ -525,12 +559,12 @@ fn signature_of(
         Body::None => {}
         Body::JsonFields(_) | Body::JsonWhole { .. } => {
             let ty = body_type(op, operation, names)?;
-            let body = out.bind(format_ident!("body"), "body");
+            let body = out.argument(&format_ident!("body"), "body", "is the request body");
             out.args.push(quote! { #body: &#ty });
             out.builder.push(quote! { .json(crate::to_json(#body)?) });
         }
         Body::Opaque { media_type, .. } => {
-            let body = out.bind(format_ident!("body"), "body");
+            let body = out.argument(&format_ident!("body"), "body", "is the request body");
             out.notes.push(format!(
                 "`{body}` is sent verbatim under the document's own `{media_type}`, \
                  which this crate does not assemble."
@@ -539,7 +573,7 @@ fn signature_of(
             out.builder.push(quote! { .raw(#body) });
         }
         Body::Multipart { names, .. } => {
-            let parts = out.bind(format_ident!("parts"), "parts");
+            let parts = out.argument(&format_ident!("parts"), "parts", "carries the body's parts");
             out.notes.push(multipart_note(&parts, names));
             out.args.push(quote! { #parts: Vec<Part> });
             out.builder.push(quote! { .multipart(#parts) });
@@ -577,7 +611,11 @@ fn add_param(
             param.name()
         ))
     })?;
-    let ident = out.bind(plain, &word);
+    let ident = out.argument(
+        &plain,
+        &word,
+        &format!("sends the document's `{}`", param.name()),
+    );
     let schema = param_schema(item, operation, param.name())?;
     let wire = param.name();
     if join.is_some() {

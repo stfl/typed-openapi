@@ -348,6 +348,13 @@ Three things are worth knowing:
   documentation says which parameter it does not carry and why. An array must
   declare its `items` inline: a `$ref` to an array schema is a
   `GenerateError::Unsupported` naming the parameter.
+- **Two values that reduce to one Rust word get one argument each.** A document
+  may name a parameter `self` and another `Self`, or use one wire name in the
+  path and again in the query; a function signature binds each name once, so
+  the later of the two is `self_2` or `ref_2`. What it sends is unaffected —
+  the wire name travels beside the argument as a literal — and the wrapper's
+  own documentation says which name the moved argument carries, the way the
+  flag that moved aside says so on its help line.
 
 [typify]: https://docs.rs/typify
 [bon]: https://bon-rs.com
