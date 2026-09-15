@@ -285,8 +285,11 @@ fn operation_ident(word: &str) -> Result<Ident, GenerateError> {
 /// given, so an argument is free to be spelled however Rust requires.
 ///
 /// A word with no spelling at all — one that starts with a digit, or that
-/// case-conversion emptied — is an error rather than a panic, because
-/// `format_ident!` panics and a bless step is a library call.
+/// case-conversion emptied — is `None` rather than a panic, because
+/// `format_ident!` panics and a bless step is a library call. The parse is what
+/// answers that, and it is not the arm below it: `accept_as_ident` asks whether
+/// a word may stand unquoted, so it says yes to `3rd_firing` and to the empty
+/// string, and only `syn` refuses a word that is no identifier in any spelling.
 fn ident(word: &str) -> Option<Ident> {
     if typify::accept_as_ident(word) {
         return syn::parse_str(word).ok();
@@ -449,11 +452,58 @@ fn builder_wrapper(
 
 /// One wrapper's arguments, the `Values` builder chain they feed, and whatever
 /// about them the document can explain but the types cannot.
+///
+/// `names` is the identifiers the arguments bind, in order. It is what the
+/// delegate beside a wrapper forwards, and it is also the set [`Signature::bind`]
+/// asks before it hands out another one — a wrapper's argument list is the whole
+/// of what an identifier has to be unique against, so the list is the namespace.
 struct Signature {
     args: Vec<TokenStream>,
     names: Vec<Ident>,
     builder: Vec<TokenStream>,
     notes: Vec<String>,
+}
+
+impl Signature {
+    /// The identifier one argument binds: `plain` where this wrapper has not
+    /// spent it, and `word_2`, `word_3`, … where it has.
+    ///
+    /// A document may name two of an operation's values so that they reduce to
+    /// one Rust word. `self` and `Self` are one such pair, and so is a wire name
+    /// used once in the path and again in the query — both of which OpenAPI
+    /// allows and neither of which a function signature does. Two arguments
+    /// under one identifier is `E0415`: the generated crate does not compile,
+    /// and a bless step that emitted it reports success, because `syn` parses a
+    /// signature that binds a name twice without complaint. Were it to compile,
+    /// the second `.maybe` would send the first argument's value under the
+    /// second's wire name.
+    ///
+    /// So the later claimant moves aside, which is what
+    /// [`Namespace`](crate::names::Namespace) already does to the same document
+    /// on the command line — one operation cannot be two things to its two
+    /// consumers. It moves aside *here* rather than in the reduced model because
+    /// the name settled here reaches nothing else: a flag travels in the blob
+    /// and is spent at run time, while an argument is spelled once, in Rust's
+    /// alphabet, for an adopter's compiler.
+    ///
+    /// The suffix costs the request nothing. The wire name travels beside the
+    /// argument as the literal the request builder is given, so what a value is
+    /// sent under does not depend on what Rust had to call the binding.
+    ///
+    /// `word` is what the alternatives are built from rather than `plain`, so
+    /// that a second `type` reads as `type_2` and not as `r#type_2`. Appending
+    /// to a word that already spells an identifier spells one too, which is why
+    /// nothing here can fail.
+    fn bind(&mut self, plain: Ident, word: &str) -> Ident {
+        let mut candidate = plain;
+        let mut suffix = 2;
+        while self.names.contains(&candidate) {
+            candidate = format_ident!("{word}_{suffix}");
+            suffix += 1;
+        }
+        self.names.push(candidate.clone());
+        candidate
+    }
 }
 
 fn signature_of(
@@ -475,24 +525,24 @@ fn signature_of(
         Body::None => {}
         Body::JsonFields(_) | Body::JsonWhole { .. } => {
             let ty = body_type(op, operation, names)?;
-            out.args.push(quote! { body: &#ty });
-            out.names.push(format_ident!("body"));
-            out.builder.push(quote! { .json(crate::to_json(body)?) });
+            let body = out.bind(format_ident!("body"), "body");
+            out.args.push(quote! { #body: &#ty });
+            out.builder.push(quote! { .json(crate::to_json(#body)?) });
         }
         Body::Opaque { media_type, .. } => {
+            let body = out.bind(format_ident!("body"), "body");
             out.notes.push(format!(
-                "`body` is sent verbatim under the document's own `{media_type}`, \
+                "`{body}` is sent verbatim under the document's own `{media_type}`, \
                  which this crate does not assemble."
             ));
-            out.args.push(quote! { body: Vec<u8> });
-            out.names.push(format_ident!("body"));
-            out.builder.push(quote! { .raw(body) });
+            out.args.push(quote! { #body: Vec<u8> });
+            out.builder.push(quote! { .raw(#body) });
         }
         Body::Multipart { names, .. } => {
-            out.notes.push(multipart_note(names));
-            out.args.push(quote! { parts: Vec<Part> });
-            out.names.push(format_ident!("parts"));
-            out.builder.push(quote! { .multipart(parts) });
+            let parts = out.bind(format_ident!("parts"), "parts");
+            out.notes.push(multipart_note(&parts, names));
+            out.args.push(quote! { #parts: Vec<Part> });
+            out.builder.push(quote! { .multipart(#parts) });
         }
     }
     Ok(out)
@@ -520,15 +570,16 @@ fn add_param(
             return Ok(());
         }
     };
-    let ident = ident(&param.name().to_snake_case()).ok_or_else(|| {
+    let word = param.name().to_snake_case();
+    let plain = ident(&word).ok_or_else(|| {
         unsupported(format!(
             "parameter `{}` has no spelling as a Rust identifier",
             param.name()
         ))
     })?;
+    let ident = out.bind(plain, &word);
     let schema = param_schema(item, operation, param.name())?;
     let wire = param.name();
-    out.names.push(ident.clone());
     if join.is_some() {
         // A list parameter is the wire name given once per value, which is the
         // repetition a repeated flag reaches the request builder with.
@@ -547,10 +598,10 @@ fn add_param(
     Ok(())
 }
 
-fn multipart_note(names: &[String]) -> String {
-    let assembled = "`parts` are assembled into a `multipart/form-data` body.";
+fn multipart_note(parts: &Ident, names: &[String]) -> String {
+    let assembled = format!("`{parts}` are assembled into a `multipart/form-data` body.");
     if names.is_empty() {
-        assembled.to_owned()
+        assembled
     } else {
         format!("{assembled} The document declares: {}.", names.join(", "))
     }
@@ -689,5 +740,66 @@ fn ref_name(schema: &ReferenceOr<Schema>) -> Option<&str> {
     match schema {
         ReferenceOr::Reference { reference } => reference.strip_prefix("#/components/schemas/"),
         ReferenceOr::Item(_) => None,
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "a test that cannot build its fixture should fail loudly and name it"
+)]
+mod tests {
+    use super::*;
+
+    /// The two halves of [`ident`] answer different questions, and only one of
+    /// them refuses a word that is no identifier.
+    ///
+    /// `accept_as_ident` asks whether a word may stand unquoted, so it says yes
+    /// to a word beginning with a digit and yes to the empty string; the parse
+    /// beside it is what turns both into `None`. Pinning that here is what keeps
+    /// a reader of the keyword arm from taking it for the check — the two look
+    /// alike from the call site, and only one of them holds.
+    #[test]
+    fn a_word_that_is_no_identifier_is_refused_by_the_parse() {
+        for word in ["3RdFiring", "3rd_firing", ""] {
+            assert!(typify::accept_as_ident(word), "{word:?} stands unquoted");
+            assert_eq!(ident(word), None, "{word:?} is no identifier");
+        }
+        assert_eq!(
+            ident("type").map(|i| i.to_string()),
+            Some("r#type".to_owned())
+        );
+        assert_eq!(
+            ident("self").map(|i| i.to_string()),
+            Some("self_".to_owned())
+        );
+    }
+
+    /// Two values of one operation that reduce to one Rust word bind two
+    /// arguments, and the alternative is built from the document's word rather
+    /// than from the raw identifier that spells it.
+    #[test]
+    fn a_wrapper_binds_each_of_its_arguments_to_a_name_of_its_own() {
+        let mut signature = Signature {
+            args: Vec::new(),
+            names: Vec::new(),
+            builder: Vec::new(),
+            notes: Vec::new(),
+        };
+        let bound = |signature: &mut Signature, word: &str| {
+            signature
+                .bind(ident(word).expect("a word that spells one"), word)
+                .to_string()
+        };
+        assert_eq!(bound(&mut signature, "ref"), "r#ref");
+        assert_eq!(bound(&mut signature, "ref"), "ref_2");
+        assert_eq!(bound(&mut signature, "ref"), "ref_3");
+        assert_eq!(bound(&mut signature, "self"), "self_");
+        assert_eq!(bound(&mut signature, "self"), "self_2");
+        // The body claims its name after the parameters, so a document that
+        // spends `body` on one of them moves the body aside and not the
+        // parameter the document named.
+        assert_eq!(bound(&mut signature, "body"), "body");
+        assert_eq!(bound(&mut signature, "body"), "body_2");
     }
 }

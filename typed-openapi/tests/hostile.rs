@@ -19,12 +19,11 @@
 //!
 //! # Outcomes that are pinned rather than endorsed
 //!
-//! Three shapes here produce something this crate would not choose. They are
+//! Two shapes here produce something this crate would not choose. They are
 //! pinned exactly as they are, with the test saying so, because a
 //! characterisation is what makes a repair visible: the day one is fixed, the
 //! test naming it goes red and whoever fixed it reads what the old behaviour
 //! was. They are
-//! [`two_parameters_that_spell_one_identifier_collide_in_the_wrapper`],
 //! [`a_ref_chain_longer_than_the_hop_limit_is_refused_as_a_cycle_it_is_not`]
 //! and [`a_property_whose_name_has_no_letters_becomes_a_flag_with_no_name`].
 
@@ -132,6 +131,19 @@ fn blessed(name: &str) -> PathBuf {
     dir
 }
 
+/// Every typed wrapper the generated file declares, in its order.
+///
+/// A wrapper is the `pub fn` that takes `&self`, which is what tells one from
+/// the inventory's own `pub fn`s beside them.
+fn wrappers(ops: &str) -> Vec<String> {
+    ops.split("pub fn ")
+        .skip(1)
+        .filter_map(|after| after.split_once('('))
+        .filter(|(_, args)| args.trim_start().starts_with("&self"))
+        .map(|(name, _)| name.to_owned())
+        .collect()
+}
+
 /// The argument list of one generated wrapper, as the identifiers it binds.
 ///
 /// Read out of the emitted text rather than off a token stream, because what
@@ -228,7 +240,10 @@ components:
 ///
 /// `self`, `crate` and `Self` are the three that cannot be written raw. `Self`
 /// kebab-cases onto `self`, which the subcommand has already spent, so it moves
-/// aside — the same rule a body field follows.
+/// aside — the same rule a body field follows. It snake-cases onto `self` as
+/// well, and moves aside in the wrapper for the same reason in the other
+/// alphabet; what it *sends* is `Self` either way, which is what these rows
+/// read.
 #[test]
 fn parameters_named_after_rust_words_keep_the_documents_word_on_the_flag() {
     let doc = document();
@@ -254,7 +269,7 @@ fn parameters_named_after_rust_words_keep_the_documents_word_on_the_flag() {
         ("move", "r#move"),
         ("self", "self_"),
         ("crate", "crate_"),
-        ("Self", "self_"),
+        ("Self", "self_2"),
     ] {
         assert!(
             ops.contains(&format!(".maybe(\"{word}\", {spelled})")),
@@ -263,41 +278,79 @@ fn parameters_named_after_rust_words_keep_the_documents_word_on_the_flag() {
     }
 }
 
-/// **A defect, pinned as it stands.**
+/// Two parameters whose names snake-case onto one word bind two arguments.
 ///
-/// Two parameters whose names snake-case onto one word bind one identifier in
-/// the generated wrapper. `self` and `Self` both become `self_`, and the `ref`
-/// in a path and the `ref` in a query are both `r#ref` — so the emitted file
-/// carries `fn list_firings(…, self_: …, crate_: …, self_: …)`, which is
-/// `E0415`, and `fn append_log_entry(r#ref: &str, r#ref: Option<&str>, …)`,
-/// which is the same. A bless step reports success and the adopter's crate does
-/// not compile; were it to compile, the second `.maybe` would send the first
-/// argument's value under the second's wire name.
+/// `self` and `Self` both want `self_`, and the `ref` in a path and the `ref` in
+/// a query both want `r#ref`. Two arguments under one identifier is `E0415` —
+/// and `syn` parses such a signature without complaint, so a bless step would
+/// report success over a crate that does not compile. The later claimant moves
+/// aside, which is the answer the command line gives the same pair two tests up.
 ///
-/// The command line has an answer for exactly this — `Namespace::claim` moves
-/// the second claimant aside, which is why `--self` and `--param-self` are two
-/// flags above — and the wrapper has none, so the two consumers disagree about
-/// one operation.
-///
-/// What this test pins is the collision, so that a repair turns it red rather
-/// than passing silently.
+/// What each argument *sends* is the half that has to survive the move: the wire
+/// name travels beside the argument as a literal, so `ref_2` still reaches the
+/// request under `ref`. Sending the first argument's value under the second's
+/// wire name is the failure the collision threatened, and the builder chain is
+/// where it would show.
 #[test]
-fn two_parameters_that_spell_one_identifier_collide_in_the_wrapper() {
+fn two_parameters_that_spell_one_identifier_bind_two_arguments() {
     let ops = read(&blessed("hostile-collision").join("src/ops.rs"));
 
-    let listing = arguments(&ops, "list_firings");
     assert_eq!(
-        listing.iter().filter(|name| *name == "self_").count(),
-        2,
-        "`self` and `Self` are expected to collide today: {listing:?}"
+        arguments(&ops, "list_firings"),
+        [
+            "r#type",
+            "r#match",
+            "r#ref",
+            "r#move",
+            "self_",
+            "crate_",
+            "self_2",
+            "kiln_state",
+            "crazing",
+            "saggar_tally",
+        ],
+        "`Self` moves aside from the `self_` the document's `self` spent"
     );
 
-    let appending = arguments(&ops, "append_log_entry");
     assert_eq!(
-        appending.iter().filter(|name| *name == "r#ref").count(),
-        2,
-        "the path `ref` and the query `ref` are expected to collide today: {appending:?}"
+        arguments(&ops, "append_log_entry"),
+        ["r#ref", "ref_2", "body"],
+        "the query `ref` moves aside from the path `ref`"
     );
+    for pairing in [r#".param("ref", r#ref)"#, r#".maybe("ref", ref_2)"#] {
+        assert!(
+            ops.contains(pairing),
+            "`{pairing}` is not how the request is built:\n{ops}"
+        );
+    }
+}
+
+/// No wrapper in the generated file binds one identifier twice.
+///
+/// The assertion above names the two operations that would have; this one is the
+/// statement without the names, so a third collision the fixture grows is caught
+/// where it happens rather than wherever it first fails to compile.
+#[test]
+fn no_generated_wrapper_binds_one_identifier_twice() {
+    let ops = read(&blessed("hostile-bound").join("src/ops.rs"));
+    let named = wrappers(&ops);
+    assert_eq!(
+        named.len(),
+        14,
+        "two wrappers per operation — the plain one and the builder that \
+         delegates to it — over seven operations: {named:?}"
+    );
+    for wrapper in named {
+        let bound = arguments(&ops, &wrapper);
+        let mut once = bound.clone();
+        once.sort_unstable();
+        once.dedup();
+        assert_eq!(
+            once.len(),
+            bound.len(),
+            "`{wrapper}` binds an identifier twice: {bound:?}"
+        );
+    }
 }
 
 /// One wire name in two places is two flags, and the one that moved says which
