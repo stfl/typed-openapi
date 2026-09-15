@@ -189,10 +189,15 @@ impl VisitMut for ThroughThisCrate {
 }
 
 /// Every named schema the document declares, in document order.
+///
+/// A document that names none is a document with no `components` block, or one
+/// whose block holds only security schemes. Both are ordinary and both
+/// generate: the wrappers name no type and the types file carries typify's
+/// error module and nothing else.
 fn definitions(api: &openapiv3::OpenAPI) -> Result<Vec<Definition>, GenerateError> {
-    let components = api.components.as_ref().ok_or_else(|| {
-        GenerateError::Unsupported("the overlaid document has no components".to_owned())
-    })?;
+    let Some(components) = api.components.as_ref() else {
+        return Ok(Vec::new());
+    };
     components
         .schemas
         .iter()

@@ -756,3 +756,38 @@ fn a_schema_the_adopter_owns_is_named_by_the_adopters_own_path() {
         "typify defined a type the adopter owns:\n{types}"
     );
 }
+
+/// A document with paths and no `components` block at all. Nothing in OpenAPI
+/// requires one, and an API whose operations take and return nothing but
+/// scalars declares no schema to put in it.
+const NAMELESS: &str = r#"
+openapi: 3.0.3
+info: { title: Nameless, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /ping:
+    get:
+      operationId: ping
+      responses:
+        "200": { description: OK }
+"#;
+
+/// A document that names no schema generates like any other: the wrappers name
+/// no type, and the types file carries what typify writes for itself. Refusing
+/// it would be this crate inventing a requirement the format does not have.
+#[test]
+fn a_document_that_names_no_schema_still_generates() {
+    let dir = out("nameless");
+    Settings::new(wrote(&dir, "document.yaml", NAMELESS))
+        .write_to(&dir)
+        .expect("a document with no components is a document");
+
+    assert!(
+        read(&dir.join("src/ops.rs")).contains("pub fn ping(&self)"),
+        "the operation did not reach a wrapper"
+    );
+    assert!(
+        !read(&dir.join("src/types.rs")).contains("crate::types::"),
+        "a wrapper names a type in a document that declares none"
+    );
+}
