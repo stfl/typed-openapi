@@ -54,6 +54,8 @@ pub mod tree;
 #[cfg(feature = "document")]
 pub mod overlay;
 #[cfg(feature = "document")]
+pub mod required;
+#[cfg(feature = "document")]
 pub mod schema;
 
 #[cfg(feature = "generate")]

@@ -400,6 +400,15 @@ pub enum LoadError {
          mark the operation `x-cli-writes: true` or drop the gate"
     )]
     GatedRead { op: String, gate: Gate },
+    /// A `required` naming a key nothing declares, which is the document
+    /// saying two things at once: this key must be sent, and this key does not
+    /// exist. Refused rather than reduced — a generator makes a required field
+    /// of no stated type out of it, so nothing downstream ever checks a value
+    /// for the key, and the request goes out without the one its caller was
+    /// told to send. Which of the two statements the vendor meant is a
+    /// judgement, and a judgement belongs in an Overlay a reviewer can read.
+    #[error(transparent)]
+    Phantom(#[from] crate::required::PhantomKeys),
     #[error(transparent)]
     Reference(#[from] RefError),
     /// A parameter this CLI cannot supply that the document says a caller must.
@@ -492,6 +501,11 @@ impl Document {
         for overlay in overlays {
             doc = crate::overlay::apply(doc, overlay)?;
         }
+        // Against the corrected document, so that an adopter's own Overlay is
+        // what repairs a contradiction, and while it is still the text the
+        // vendor wrote: the object model below normalises away shapes — an
+        // inline body's schema among them — that this reading needs to see.
+        crate::required::check(&doc)?;
         let doc: OpenAPI = serde_json::from_value(doc).map_err(LoadError::Shape)?;
         Self::from_openapi(&doc)
     }
