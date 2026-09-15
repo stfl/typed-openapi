@@ -23,6 +23,15 @@
 //! and [`Recorder`] holds its script the same way; that is why a recorder is
 //! scripted, sent through and read back without ever being `mut`.
 //!
+//! `send` takes the request by value, so a client that interposes and *resends*
+//! — a retry policy, a client that re-signs after a `401` — clones it once per
+//! attempt. [`HttpRequest`] is `Clone` and copies every part of a request:
+//! method, uri, version, headers, body, and the extensions too, whose values
+//! are `Clone` by the bound `http` puts on putting one in. So an attempt costs
+//! `request.clone()` and carries everything the first one carried; there is
+//! nothing for a wrapper to take apart and rebuild, and so nothing for it to
+//! leave behind.
+//!
 //! No adapter may turn a status code into an error: the status belongs to the
 //! layer above, which needs the body that came with it. ureq does this by
 //! default and must be built with `http_status_as_error(false)`.
@@ -42,12 +51,12 @@
 //! ```
 //! use http::{Method, StatusCode};
 //! use serde_json::json;
-//! use typed_openapi::{Recorder, SyncClient};
+//! use typed_openapi::{Reach, Recorder, SyncClient};
 //!
 //! let client = Recorder::new()
 //!     .answering_route(Method::GET, "/vouchers", StatusCode::OK, &json!([{"id": 5}]))
 //!     .answering_route(Method::GET, "/vouchers", StatusCode::OK, &json!([]))
-//!     .failing_route(Method::POST, "/vouchers", "the request never left")
+//!     .failing_route(Method::POST, "/vouchers", Reach::NeverLeft, "connection refused")
 //!     .answering(StatusCode::OK, &json!({}));
 //!
 //! let get = |uri: &str| http::Request::get(uri).body(Vec::new()).unwrap();
@@ -69,6 +78,15 @@
 //! `send` was called, so everything a caller does with a transport failure — a
 //! retry policy, a ledger line for an attempt whose outcome never arrived — is
 //! reachable from a test. The request that got it is recorded like any other.
+//!
+//! A failure is queued with its [`Reach`], and the message is what a client
+//! would have said rather than what the test means by it. The two reaches are
+//! not interchangeable on a write — one wrote nothing and may be sent again,
+//! the other may have done everything and may never be — so a caller scripting
+//! a failure picks the one it means, and [`RecorderError::reach`] hands that
+//! state back for an adopter's own error taxonomy to map from. Spelling the
+//! distinction in the message instead would put it back where only a string
+//! comparison could read it, and a renamed message would compile.
 //!
 //! [`Recorder::take`] hands back what was sent, oldest first, and
 //! [`Recorder::unused`] how many answers were never reached: a run that left
@@ -197,26 +215,69 @@ impl<C: AsyncClient + ?Sized> AsyncClient for &C {
     }
 }
 
-/// The failure a script asked for, carrying the message it was queued with.
+/// How far a scripted failure let the request get.
 ///
-/// A message is the whole of it, deliberately. The two states a retry rule
-/// tells apart — the request never left, and the request left and nothing came
-/// back — are a reading of what a failure *means*, and this crate has no far
-/// side to read: it sends nothing. A test that needs the distinction queues
-/// two different messages and asserts on the one it got, and the reading stays
-/// where the rule is.
+/// This is the one thing a caller must decide about a failure that a message
+/// cannot carry, because a retry rule branches on it: a request that never
+/// left wrote nothing, and a request that left and was never answered may have
+/// done everything. A write held at the wrong one of those is either a lost
+/// call or a duplicated one.
+///
+/// A [`Recorder`] states this because the script *invented* the failure, which
+/// is the whole of why it can. It is no reading of what a failure means: a real
+/// client's failure is classified by whoever wrote the adapter, which is why
+/// nothing above the seam — not [`client::Error::Transport`], not
+/// `tree::DispatchError::Transport` — classifies one.
+///
+/// [`client::Error::Transport`]: crate::client::Error::Transport
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// The request never left, so nothing was written and it may be sent
+    /// again.
+    ///
+    /// This is a connection refused, a DNS failure, a request the client
+    /// rejected before opening a socket — every failure whose far side never
+    /// saw the bytes. A retry here is free.
+    NeverLeft,
+    /// The request left and nothing came back, so it may have done everything
+    /// and it may never be sent again.
+    ///
+    /// This is a read timeout, a connection dropped mid-response, a process
+    /// killed while waiting — every failure where the far side may have
+    /// committed the write and only the answer was lost. A retry here is a
+    /// second write.
+    NeverAnswered,
+}
+
+/// The failure a script asked for: how far it let the request get, and the
+/// message a client would have failed with.
+///
+/// The reach is a state and not part of the message, so an adopter whose own
+/// error taxonomy tells the two apart maps a variant to a variant rather than
+/// comparing a sentinel string it agreed with itself.
 #[derive(Debug, Error)]
 #[error("{message}")]
 pub struct RecorderError {
+    reach: Reach,
     message: String,
 }
 
 impl RecorderError {
+    /// How far this failure let the request get.
+    ///
+    /// The half of a failure a retry rule reads, and the reason a caller
+    /// scripting one has to say which it means.
+    #[must_use]
+    pub fn reach(&self) -> Reach {
+        self.reach
+    }
+
     /// The message this failure was queued with.
     ///
-    /// The same text [`Display`](std::fmt::Display) renders, handed back
+    /// The whole of what [`Display`](std::fmt::Display) renders, handed back
     /// unwrapped so that a test compares against the constant it scripted
-    /// rather than against a rendering.
+    /// rather than against a rendering. The reach stays out of both, so that
+    /// reading it means reading [`Self::reach`].
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
@@ -281,10 +342,13 @@ impl fmt::Display for Route {
 }
 
 /// One thing a recorder does when a request reaches it.
+///
+/// Both variants hold what the caller gets, not a description of it, so an
+/// answer is queued and handed over without being rebuilt in between.
 #[derive(Debug)]
 enum Answer {
     Response(HttpResponse),
-    Failure(String),
+    Failure(RecorderError),
 }
 
 impl Recorder {
@@ -321,13 +385,15 @@ impl Recorder {
         self.queue_for(Route::new(method, path), Answer::Response(response))
     }
 
-    /// Queue a failure for the next request on `method path`.
+    /// Queue a failure for the next request on `method path`, having got as far
+    /// as `reach`.
+    ///
+    /// `message` is what a client would have said; [`Reach`] is what a retry
+    /// rule reads, and there is no default for it because on a write the two
+    /// reaches are opposite instructions.
     #[must_use]
-    pub fn failing_route(self, method: Method, path: &str, message: &str) -> Self {
-        self.queue_for(
-            Route::new(method, path),
-            Answer::Failure(message.to_owned()),
-        )
+    pub fn failing_route(self, method: Method, path: &str, reach: Reach, message: &str) -> Self {
+        self.queue_for(Route::new(method, path), failure(reach, message))
     }
 
     /// Queue a JSON response for the next request whose own route has nothing
@@ -350,10 +416,11 @@ impl Recorder {
         self.queue_for_anything(Answer::Response(response))
     }
 
-    /// Queue a failure for the next request whose own route has nothing left.
+    /// Queue a failure for the next request whose own route has nothing left,
+    /// having got as far as `reach`.
     #[must_use]
-    pub fn failing(self, message: &str) -> Self {
-        self.queue_for_anything(Answer::Failure(message.to_owned()))
+    pub fn failing(self, reach: Reach, message: &str) -> Self {
+        self.queue_for_anything(failure(reach, message))
     }
 
     /// Refuse a request no queue has an answer for, instead of answering
@@ -371,8 +438,9 @@ impl Recorder {
 
     /// Every request sent so far, oldest first, and the recorder is left empty.
     ///
-    /// It drains because `http::Request` is not `Clone`, so there is nothing to
-    /// hand back a copy of; a test that wants to look twice binds the vector.
+    /// The script sits behind a `Mutex` and `&self` cannot lend out what the
+    /// guard holds, so this hands the vector over rather than a view into it.
+    /// A test that wants to look twice binds it.
     pub fn take(&self) -> Vec<HttpRequest> {
         std::mem::take(&mut self.held().sent)
     }
@@ -427,11 +495,20 @@ impl Recorder {
 
         match queued {
             Some(Answer::Response(response)) => Ok(response),
-            Some(Answer::Failure(message)) => Err(RecorderError { message }),
+            Some(Answer::Failure(error)) => Err(error),
             None if self.strict => unscripted(&route, &held),
             None => Ok(json_response(StatusCode::OK, &serde_json::json!({}))),
         }
     }
+}
+
+/// The failure both `failing` spellings queue, built in one place so that the
+/// route and the anything queue cannot disagree about what a failure is.
+fn failure(reach: Reach, message: &str) -> Answer {
+    Answer::Failure(RecorderError {
+        reach,
+        message: message.to_owned(),
+    })
 }
 
 /// What a strict recorder says about a request it was never given an answer
@@ -506,7 +583,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AsyncClient, HttpRequest, HttpResponse, Method, Recorder, RecorderError, Request,
+        AsyncClient, HttpRequest, HttpResponse, Method, Reach, Recorder, RecorderError, Request,
         StatusCode, SyncClient, header, json_response,
     };
 
@@ -610,34 +687,124 @@ mod tests {
         assert_eq!(client.unused(), 1);
     }
 
+    /// What a client that resends stands on: one attempt is a clone, and the
+    /// clone is the whole request.
+    ///
+    /// A retry policy sends the same bytes twice, so any part a copy dropped
+    /// would be a part the second attempt sent differently — an idempotency key
+    /// left off, a trace id gone, a body of the wrong length. The extension is
+    /// the part worth pinning: it is the one a request taken apart and rebuilt
+    /// field by field loses without saying so.
+    #[test]
+    fn a_request_copies_with_every_part_a_resend_would_need() {
+        #[derive(Debug, Clone, PartialEq)]
+        struct Attempt(u8);
+
+        let mut first = Request::builder()
+            .method(Method::POST)
+            .uri("https://example.test/vouchers?page=2")
+            .version(http::Version::HTTP_10)
+            .header("x-idempotency-key", "abc")
+            .header("x-trace", "t-1")
+            .body(br#"{"total":"12.50"}"#.to_vec())
+            .unwrap();
+        first.extensions_mut().insert(Attempt(1));
+
+        let again = first.clone();
+
+        assert_eq!(again.method(), first.method());
+        assert_eq!(again.uri(), first.uri());
+        assert_eq!(again.version(), first.version());
+        assert_eq!(again.headers(), first.headers());
+        assert_eq!(again.body(), first.body());
+        assert_eq!(again.extensions().get::<Attempt>(), Some(&Attempt(1)));
+    }
+
     #[test]
     fn a_scripted_failure_reaches_the_caller_and_the_request_is_recorded_anyway() {
-        let client =
-            Recorder::new().failing_route(Method::POST, "/vouchers", "the request never left");
+        let client = Recorder::new().failing_route(
+            Method::POST,
+            "/vouchers",
+            Reach::NeverLeft,
+            "connection refused",
+        );
 
         let failed =
             SyncClient::send(&client, request(Method::POST, "/vouchers")).expect_err("scripted");
 
-        assert_eq!(failed.message(), "the request never left");
-        assert_eq!(failed.to_string(), "the request never left");
+        assert_eq!(failed.message(), "connection refused");
+        assert_eq!(failed.to_string(), "connection refused");
         let sent = client.take();
         assert_eq!(sent.len(), 1, "a refused request went out like any other");
         assert_eq!(sent[0].uri().path(), "/vouchers");
     }
 
+    /// A write that never left wrote nothing, and a retry rule reading this is
+    /// free to send it again — so the state a script asked for is the state it
+    /// gets, and not the other one.
     #[test]
-    fn two_failures_are_told_apart_by_the_messages_they_were_queued_with() {
+    fn a_failure_scripted_as_never_left_comes_back_as_never_left() {
+        let client = Recorder::new().failing_route(
+            Method::POST,
+            "/vouchers",
+            Reach::NeverLeft,
+            "connection refused",
+        );
+
+        let failed =
+            SyncClient::send(&client, request(Method::POST, "/vouchers")).expect_err("scripted");
+
+        assert_eq!(failed.reach(), Reach::NeverLeft);
+        assert_ne!(
+            failed.reach(),
+            Reach::NeverAnswered,
+            "a request that never left is not one whose answer was lost"
+        );
+    }
+
+    /// The reverse, off the anything queue: a write whose answer was lost may
+    /// have done everything, and a retry rule reading this must not send it
+    /// again. Scripted through `failing` rather than `failing_route`, so the
+    /// queue a failure came from cannot be what decides its reach.
+    #[test]
+    fn a_failure_scripted_as_never_answered_comes_back_as_never_answered() {
+        let client = Recorder::new().failing(Reach::NeverAnswered, "read timed out");
+
+        let failed =
+            SyncClient::send(&client, request(Method::POST, "/vouchers")).expect_err("scripted");
+
+        assert_eq!(failed.reach(), Reach::NeverAnswered);
+        assert_ne!(
+            failed.reach(),
+            Reach::NeverLeft,
+            "a request whose answer was lost is not one that never went out"
+        );
+    }
+
+    #[test]
+    fn two_failures_in_one_script_each_keep_the_reach_and_message_they_were_queued_with() {
         let client = Recorder::new()
-            .failing_route(Method::POST, "/vouchers", "the request never left")
-            .failing("the request left and nothing came back");
+            .failing_route(
+                Method::POST,
+                "/vouchers",
+                Reach::NeverLeft,
+                "connection refused",
+            )
+            .failing(Reach::NeverAnswered, "read timed out");
 
         let never = SyncClient::send(&client, request(Method::POST, "/vouchers"))
             .expect_err("the route's own failure");
         let silent = SyncClient::send(&client, request(Method::GET, "/vouchers"))
             .expect_err("the failure queued for anything");
 
-        assert_eq!(never.message(), "the request never left");
-        assert_eq!(silent.message(), "the request left and nothing came back");
+        assert_eq!(
+            (never.reach(), never.message()),
+            (Reach::NeverLeft, "connection refused")
+        );
+        assert_eq!(
+            (silent.reach(), silent.message()),
+            (Reach::NeverAnswered, "read timed out")
+        );
     }
 
     #[test]
@@ -659,7 +826,12 @@ mod tests {
         let script = || {
             Recorder::new()
                 .answering_route(Method::GET, "/vouchers", StatusCode::OK, &json!("the list"))
-                .failing_route(Method::POST, "/vouchers", "the request never left")
+                .failing_route(
+                    Method::POST,
+                    "/vouchers",
+                    Reach::NeverLeft,
+                    "connection refused",
+                )
         };
         let synchronous = script();
         let asynchronous = script();
@@ -680,7 +852,10 @@ mod tests {
         .expect_err("scripted");
 
         assert_eq!(read, body(&read_async));
-        assert_eq!(wrote.message(), wrote_async.message());
+        assert_eq!(
+            (wrote.reach(), wrote.message()),
+            (wrote_async.reach(), wrote_async.message())
+        );
 
         let routes = |client: &Recorder| -> Vec<String> {
             client
@@ -759,7 +934,12 @@ mod tests {
         let client = Recorder::new()
             .strict()
             .answering_route(Method::GET, "/vouchers", StatusCode::OK, &json!("the list"))
-            .failing_route(Method::POST, "/vouchers", "the request never left");
+            .failing_route(
+                Method::POST,
+                "/vouchers",
+                Reach::NeverLeft,
+                "connection refused",
+            );
 
         assert_eq!(
             body(&sent(&client, Method::GET, "/vouchers")),
@@ -769,7 +949,7 @@ mod tests {
             SyncClient::send(&client, request(Method::POST, "/vouchers"))
                 .expect_err("scripted")
                 .message(),
-            "the request never left"
+            "connection refused"
         );
         assert_eq!(client.take().len(), 2, "both went out");
     }

@@ -133,6 +133,25 @@ toy: createVoucher: the request body does not fit the schema the document declar
 `typed-openapi` knows the body is JSON; only the adopter's crate knows which
 `struct` that JSON has to be.
 
+**With no client at all.** `Selection::plan` is the other exit from the seam: it
+builds the request, puts it to the gate and hands back the `Plan`, with nothing
+sent and no client asked for. That is what a dry run of a write costs — no
+socket, no credential — so a user who has configured neither can still ask what
+the command would send:
+
+```rust,ignore
+match tree::select(api.document(), &matches)?.plan(api.base())? {
+    Plan::DryRun(request) => print!("{}", render(&request)),
+    Plan::Send(request) => {
+        let response = client()?.send(request)?; // built only for a request that goes out
+    }
+}
+```
+
+The client's `send` is the client's own, so the error it returns is the client's
+own type rather than the box `DispatchError::Transport` carries.
+[`docs/client.md`](client.md) has both routes to a concrete transport error.
+
 ## Flags
 
 | what the document says | what the subcommand grows |
@@ -440,4 +459,7 @@ error and discards the body unless it is built with
 Both paths are reachable from a test without a socket. `Recorder::failing_route`
 queues a failure for one method and path and `Recorder::answering_route` a
 response with any status, so what `toy` prints for a refused send and what it
-prints for a 4xx are each one line of setup away.
+prints for a 4xx are each one line of setup away. A queued failure names its
+`Reach` — whether the request never left or left and was never answered — so a
+retry rule built on top of `toy` is driven from both sides without a socket
+either; [`docs/client.md`](client.md) has the pair.

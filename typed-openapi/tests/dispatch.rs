@@ -20,8 +20,8 @@ use http::{Method, StatusCode};
 use serde_json::json;
 use typed_openapi::tree::{self, DispatchError, Outcome};
 use typed_openapi::{
-    Answers, COMMIT, Document, HttpRequest, Plan, Recorder, RecorderError, SyncClient, Values,
-    render,
+    Answers, COMMIT, Document, HttpRequest, Plan, Reach, Recorder, RecorderError, SyncClient,
+    Values, render,
 };
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
@@ -99,14 +99,19 @@ fn a_client_that_fails_is_reported_as_the_transport_and_the_request_still_went_o
     // An answer is queued against the request as it goes out, so the route is
     // the path with the id already substituted, not the template the document
     // spells it with.
-    let client = Recorder::new().failing_route(Method::GET, "/vouchers/5", "nothing came back");
+    let client = Recorder::new().failing_route(
+        Method::GET,
+        "/vouchers/5",
+        Reach::NeverAnswered,
+        "read timed out",
+    );
     let matches = parse(&doc, &["toy", "vouchers", "get", "--id", "5"]);
 
     let error = tree::dispatch(&doc, doc.base(), &client, &matches)
         .expect_err("the script fails this route");
 
     assert!(matches!(error, DispatchError::Transport(_)), "{error:?}");
-    assert_eq!(error.to_string(), "transport: nothing came back");
+    assert_eq!(error.to_string(), "transport: read timed out");
     assert_eq!(only(&client).uri().path(), "/vouchers/5");
     assert_eq!(client.unused(), 0, "the script was used up");
 }
@@ -245,6 +250,85 @@ fn the_shortcut_and_the_seam_reach_the_same_request() {
     };
 
     assert_eq!(render(&long_way), render(&short_way));
+}
+
+/// The claim `Selection::plan` is here for: the gate's verdict is reached with
+/// no client in existence. A `Recorder` is cheap and a real client is not — it
+/// is where a credential is read — so a dry run that had to be handed one would
+/// be a dry run that needs what it never sends. Nothing in this test builds a
+/// client of any kind.
+#[test]
+fn a_selection_reaches_the_gates_verdict_with_no_client_built() {
+    let doc = document();
+    let matches = parse(&doc, CREATE);
+    let selected = tree::select(&doc, &matches).expect("the subcommand names an operation");
+
+    let plan = selected
+        .plan(doc.base())
+        .expect("the values satisfy the operation");
+
+    let Plan::DryRun(request) = plan else {
+        panic!("a create is a write, and nothing confirmed it");
+    };
+    assert_eq!(
+        render(&request),
+        "POST /vouchers HTTP/1.1\n\
+         host: localhost:9999\n\
+         content-type: application/json\n\
+         \n\
+         {\"total\":\"12.50\",\"currency\":\"EUR\",\"status\":\"open\"}\n"
+    );
+}
+
+/// The gate's two answers off one command line, and the same request in both:
+/// what `--commit` changes is whether the request goes out, never what it says.
+#[test]
+fn a_confirmed_selection_plans_to_send_the_request_the_dry_run_carried() {
+    let doc = document();
+    let planned = |args: &[&str]| {
+        let matches = parse(&doc, args);
+        tree::select(&doc, &matches)
+            .expect("the subcommand names an operation")
+            .plan(doc.base())
+            .expect("the values satisfy the operation")
+    };
+
+    let dry = planned(CREATE);
+    let confirmed: Vec<&str> = CREATE.iter().copied().chain(["--commit"]).collect();
+    let sending = planned(&confirmed);
+
+    assert!(matches!(dry, Plan::DryRun(_)), "nothing confirmed it");
+    assert!(matches!(sending, Plan::Send(_)), "--commit sends");
+    assert_eq!(render(sending.request()), render(dry.request()));
+}
+
+/// The two exits of the seam agree about one command line. `send` is `plan`
+/// followed by whatever the verdict says, so the request it reports for a write
+/// nobody confirmed is byte-for-byte the one `plan` handed back.
+#[test]
+fn plan_and_send_report_one_request_for_one_command_line() {
+    let doc = document();
+    let matches = parse(&doc, CREATE);
+
+    let planned = tree::select(&doc, &matches)
+        .expect("the subcommand names an operation")
+        .plan(doc.base())
+        .expect("the values satisfy the operation");
+
+    let client = Recorder::new();
+    let outcome = tree::select(&doc, &matches)
+        .expect("the subcommand names an operation")
+        .send(&client, doc.base())
+        .expect("a write dispatches");
+
+    let Outcome::DryRun(sent) = outcome else {
+        panic!("a write without --commit is a dry run");
+    };
+    assert_eq!(render(&sent), render(planned.request()));
+    assert!(
+        client.take().is_empty(),
+        "a dry run reaches the client with nothing"
+    );
 }
 
 #[test]
@@ -673,8 +757,12 @@ fn a_transport_failure_is_read_back_by_downcast_without_naming_the_client() {
     }
 
     let doc = document();
-    let client =
-        Recorder::new().failing_route(Method::GET, "/vouchers/5", "the request never left");
+    let client = Recorder::new().failing_route(
+        Method::GET,
+        "/vouchers/5",
+        Reach::NeverLeft,
+        "connection refused",
+    );
     let matches = parse(&doc, &["toy", "vouchers", "get", "--id", "5"]);
 
     let error = run(&doc, &client, &matches).expect_err("the script fails this route");
@@ -687,8 +775,15 @@ fn a_transport_failure_is_read_back_by_downcast_without_naming_the_client() {
         .expect("the box holds the error the client itself returned");
     assert_eq!(
         concrete.message(),
-        "the request never left",
+        "connection refused",
         "the message is the one the script queued, not a rendering of it"
+    );
+    // The half the box was hiding: a retry rule catching here reads the state
+    // rather than the sentence, which is the whole point of scripting one.
+    assert_eq!(
+        concrete.reach(),
+        Reach::NeverLeft,
+        "the reach the script queued survives the box"
     );
 }
 
@@ -702,8 +797,12 @@ fn a_transport_failure_is_read_back_by_downcast_without_naming_the_client() {
 fn a_request_sent_through_the_client_itself_fails_with_the_clients_own_error() {
     let doc = document();
     let op = doc.get("getVoucher").expect("the document describes it");
-    let client =
-        Recorder::new().failing_route(Method::GET, "/vouchers/5", "the request never left");
+    let client = Recorder::new().failing_route(
+        Method::GET,
+        "/vouchers/5",
+        Reach::NeverLeft,
+        "connection refused",
+    );
 
     let Plan::Send(request) = Plan::build(
         op,
@@ -719,6 +818,7 @@ fn a_request_sent_through_the_client_itself_fails_with_the_clients_own_error() {
         .expect_err("the script fails this route");
 
     // `RecorderError`, named here and nowhere else: no box, no downcast.
-    assert_eq!(failed.message(), "the request never left");
+    assert_eq!(failed.message(), "connection refused");
+    assert_eq!(failed.reach(), Reach::NeverLeft);
     assert_eq!(only(&client).uri().path(), "/vouchers/5");
 }

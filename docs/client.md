@@ -119,9 +119,9 @@ if let Err(DispatchError::Transport(boxed)) = run(&document, client, &matches)
 }
 ```
 
-**Send it yourself.** Build the request through `Plan` — or `Call::request` on
-the typed side — and hand it to the client's own `send`. Nothing is boxed and
-the error is the client's own type:
+**Send it yourself.** Build the request through `Plan` — `Selection::plan` from
+a command line, `Call::request` on the typed side — and hand it to the client's
+own `send`. Nothing is boxed and the error is the client's own type:
 
 ```rust,ignore
 let Plan::Send(request) = Plan::build(op, base, values, &answers)? else {
@@ -145,9 +145,9 @@ call paths run off one fixture.
 |---|---|
 | `answering_route(method, path, status, body)` | answer one route with a status and a JSON body |
 | `answering_route_with(method, path, response)` | answer one route with a response you built |
-| `failing_route(method, path, message)` | fail one route, as a transport would |
+| `failing_route(method, path, reach, message)` | fail one route, as a transport would |
 | `answering(status, body)` / `answering_with(response)` | answer anything |
-| `failing(message)` | fail anything |
+| `failing(reach, message)` | fail anything |
 | `strict()` | panic on a request no queue has an answer for, rather than answering `200 {}` |
 | `take()` | every request it was given |
 | `unused()` | how many queued answers were never asked for |
@@ -157,6 +157,27 @@ call, hand it the recorder, and assert on the request that came out.
 `unused()` is the other half — a script that queued three answers and was asked
 for one is usually a test that stopped early.
 
-The failure a script queues carries only the message it was queued with.
-`RecorderError::message` hands that text back unwrapped, so a test compares
-against the constant it scripted rather than against a rendering.
+A scripted failure carries two things, and `RecorderError` hands both back:
+`message()` is the sentence a client would have failed with, unwrapped, so a
+test compares against the constant it scripted rather than against a rendering;
+`reach()` is how far the request got.
+
+`Reach` is a closed pair, and `failing` takes it because there is no safe
+default:
+
+| | |
+|---|---|
+| `Reach::NeverLeft` | the request never left — nothing was written, and it may be sent again |
+| `Reach::NeverAnswered` | the request left and nothing came back — it may have done everything, and it may never be sent again |
+
+On a write those are opposite instructions to a retry rule, which is why the
+distinction is a state rather than a phrase inside the message: an adopter maps
+a variant to a variant, and a reworded message cannot silently reclassify a
+suite. A `Recorder` can state the reach because the script invented the failure.
+It is no reading of what a failure means: a real client's failure is classified
+by whoever wrote the adapter, and nothing above the seam classifies one.
+
+The state survives `Error::Transport` and `DispatchError::Transport`:
+`downcast_ref::<RecorderError>()` hands back the error the client returned,
+`reach()` and all, so a test can drive both branches of a retry rule through
+the boxed variant.

@@ -286,10 +286,15 @@ pub enum DispatchError {
     /// whether the request left, and on a write that is the difference between
     /// an operation that did nothing and one that may have done everything.
     /// Only an adapter can read that out of its own client's error, so the
-    /// reading belongs above the seam — the position
-    /// [`RecorderError`](crate::RecorderError) states for a scripted failure,
-    /// and the same one here. A failure nobody has classified is one that may
-    /// have arrived, which is the only safe default to hold it at.
+    /// reading belongs above the seam. A failure nobody has classified is one
+    /// that may have arrived, which is the only safe default to hold it at.
+    ///
+    /// A [`Recorder`](crate::Recorder) does not bend that rule — it is the
+    /// other side of it. A scripted failure carries a [`Reach`](crate::Reach)
+    /// because the script chose the failure rather than read one, and a
+    /// `downcast_ref` here hands that state back with it, so a test drives both
+    /// branches of an adopter's retry rule through this variant without the
+    /// crate ever classifying a real client's error.
     ///
     /// Reading it is not shut off, though. The box holds `C::Error` exactly as
     /// the client returned it, so `downcast_ref` recovers it — and the type a
