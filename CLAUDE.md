@@ -98,13 +98,20 @@ write in an Overlay where a reviewer can see it.
 
 **A shape this crate cannot spell stops at the operation, not at the document.**
 A parameter that is `in: cookie`, described by `content`, neither a value nor a
-list of values, or declaring a `style` this crate does not serialise, is
-carried as `Shape::Unreachable` — named on the subcommand's long help and in the
-wrapper's documentation, and given no flag, no argument and no place in the
-request — and only a *required* one is a `LoadError`, because an operation that
-could never build a correct request is worth refusing by name. It is the rule a
-body already follows, where one nested property sends the whole body through
-`--json-body` rather than refusing the document that holds it.
+list of values, declaring a `style` this crate does not serialise, or *named* in
+a way `names::spelled` refuses, is carried as `Shape::Unreachable` — named on
+the subcommand's long help and in the wrapper's documentation, and given no
+flag, no argument and no place in the request — and only a *required* one is a
+`LoadError`, because an operation that could never build a correct request is
+worth refusing by name. It is the rule a body already follows, where one nested
+property sends the whole body through `--json-body` rather than refusing the
+document that holds it.
+
+Every flag a user types passes `names::spelled`, which is why a body property
+spelled `*` sends its body whole rather than claiming a flag called `""`. The
+body's rule turns on whether a property has a flag and never on why it has none,
+so an unspellable property and a nested one reach the same answer — and the
+`Body::JsonWhole` template is then the one place the key is written down.
 
 **A body template is read from the model and reaches no request.** The body with
 no per-field flags is the body `--help` cannot describe, so `Body::JsonWhole`

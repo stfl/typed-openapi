@@ -27,7 +27,7 @@ use thiserror::Error;
 
 use crate::names::{CommandName, NameError, renamed, spelled};
 #[cfg(feature = "document")]
-use crate::names::{Grouping, Namespace, kebab};
+use crate::names::{Grouping, Namespace};
 use crate::scalar::Scalar;
 #[cfg(feature = "document")]
 use crate::schema::{
@@ -289,12 +289,16 @@ pub enum Join {
 
 /// Why a parameter carries no flag.
 ///
-/// Four shapes, one answer, because they cost a document the same thing: an
+/// Five shapes, one answer, because they cost a document the same thing: an
 /// operation nobody can express sits beside a hundred that are expressible, and
 /// refusing the document for it makes those hundred unreachable too. So an
 /// unsupported parameter is carried rather than refused, and only a *required*
 /// one — an operation that could never be invoked correctly — is named as a
 /// `LoadError` while the document is reduced.
+///
+/// Four of the five are the document describing a value this CLI cannot put on
+/// a flag. [`Unsupported::Unspellable`] is the other half of the same question:
+/// the value is ordinary and it is the *name* that no flag can carry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Unsupported {
     /// `in: cookie`. This CLI sends no cookies.
@@ -316,6 +320,18 @@ pub enum Unsupported {
     /// it. Writing it out as some other style would put the value on the wire
     /// in a shape the server does not read.
     Style(String),
+    /// A name with no kebab-case spelling, so there is no flag to offer. A
+    /// parameter named `*` or `()` or `_` is the vendor's business and reaches
+    /// a command line as nothing at all.
+    ///
+    /// A flag is the one name in this crate a *user types*, so it passes the
+    /// rule [`crate::names`] states once and a command name and a gate are
+    /// already held to. A parameter spelled outside it would otherwise get a
+    /// flag called `""`, which clap renders as the end-of-options marker and
+    /// which nothing on the help page distinguishes from one — a name the
+    /// command line cannot spell, spelled anyway, and discoverable only by
+    /// accident.
+    Unspellable,
 }
 
 impl std::fmt::Display for Unsupported {
@@ -333,6 +349,9 @@ impl std::fmt::Display for Unsupported {
                     out,
                     "declared with `style: {style}`, which this CLI does not serialise"
                 )
+            }
+            Self::Unspellable => {
+                out.write_str("named in a way that does not kebab-case into [a-z0-9-]")
             }
         }
     }
@@ -1180,8 +1199,14 @@ fn shape_of(
         Ok(join) => join,
         Err(style) => return Ok(Shape::Unreachable(Unsupported::Style(style.to_owned()))),
     };
+    // The name is asked last, so that a parameter this CLI could not have
+    // supplied anyway is reported for what the document said about its value
+    // rather than for how the vendor spelled it.
+    let Ok(spelling) = spelled("parameter", &data.name) else {
+        return Ok(Shape::Unreachable(Unsupported::Unspellable));
+    };
     Ok(Shape::Flag {
-        flag: flags.claim(&kebab(&data.name), "param"),
+        flag: flags.claim(&spelling, "param"),
         location,
         scalar,
         join: repeats.then_some(join),
@@ -1447,8 +1472,16 @@ fn json_body(
             return whole();
         };
         runnable(&scalar, id, name)?;
+        // A property whose name has no kebab-case spelling has no flag either,
+        // and the body's rule is about whether a property has one rather than
+        // about why it has none — so it goes the way a nested property goes.
+        // What that buys is the disclosure: the template `--json-body-template`
+        // prints carries the key, where a flag called `""` names it nowhere.
+        let Ok(spelling) = spelled("property", name) else {
+            return whole();
+        };
         fields.push(Field {
-            flag: flags.claim(&kebab(name), "body"),
+            flag: flags.claim(&spelling, "body"),
             name: name.clone(),
             required: required && object.required.iter().any(|r| r == name),
             scalar,

@@ -343,10 +343,11 @@ Three things are worth knowing:
   A scalar is one argument; an array of scalars is a `Vec` argument the wrapper
   fills by repeating the wire name, which is what a repeated flag does. A
   parameter neither can supply — `in: cookie`, one declared with `content`
-  rather than `schema`, one whose schema is an object — is an argument on
-  neither, and the wrapper's own documentation says which parameter it does not
-  carry and why. An array must declare its `items` inline: a `$ref` to an array
-  schema is a `GenerateError::Unsupported` naming the parameter.
+  rather than `schema`, one whose schema is an object, one whose name has no
+  kebab-case spelling — is an argument on neither, and the wrapper's own
+  documentation says which parameter it does not carry and why. An array must
+  declare its `items` inline: a `$ref` to an array schema is a
+  `GenerateError::Unsupported` naming the parameter.
 
 [typify]: https://docs.rs/typify
 [bon]: https://bon-rs.com

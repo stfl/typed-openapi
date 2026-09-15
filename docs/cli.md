@@ -175,7 +175,11 @@ own type rather than the box `DispatchError::Transport` carries.
 One nested property is enough to make the whole body `--json-body` only: no
 sibling gets a flag the request builder would then throw away. `contacts create`
 is the case — its `address` is an object, so there is no `--name`, and asking
-for one is a clap error rather than a value silently dropped.
+for one is a clap error rather than a value silently dropped. A property whose
+*name* has no kebab-case spelling does the same thing for the same reason: what
+the rule turns on is whether a property has a flag, never why it has none, and
+`--json-body-template` is then where the key that could not be spelled is
+written down.
 
 `-` as the path to `--json-body` or `--raw-body` reads stdin.
 
@@ -274,12 +278,17 @@ nothing lands on them.
 
 ### Parameters with no flag
 
-Four shapes have no command-line spelling: `in: cookie`, a parameter described
+Five shapes have no command-line spelling: `in: cookie`, a parameter described
 by `content` instead of `schema`, one whose schema is neither a value nor a list
-of values, and one declaring a `style` this CLI does not write —
-`spaceDelimited`, `pipeDelimited` or `deepObject` in a query, `matrix` or
-`label` in a path. The style is read whatever the schema is, because it is not
-only about delimiters: `matrix` puts a `;name=` in front of a single value too.
+of values, one declaring a `style` this CLI does not write — `spaceDelimited`,
+`pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — and
+one whose *name* has no kebab-case spelling. The style is read whatever the
+schema is, because it is not only about delimiters: `matrix` puts a `;name=` in
+front of a single value too.
+
+The last of the five is the only one that is about the name rather than the
+value. A flag is `[a-z0-9-]` once kebab-cased, the rule a command name and a
+gate also pass, and a parameter named `*` or `()` reduces to nothing under it.
 
 None of them refuses the document. The parameter stays in the reduction, the
 subcommand grows nothing for it, and its long help carries a line of its own

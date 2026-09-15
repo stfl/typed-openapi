@@ -19,11 +19,12 @@
 //!
 //! # Outcomes that are pinned rather than endorsed
 //!
-//! One shape here produces something this crate would not choose. It is pinned
-//! exactly as it is, with the test saying so, because a characterisation is
-//! what makes a repair visible: the day it is fixed, the test naming it goes
-//! red and whoever fixed it reads what the old behaviour was. It is
-//! [`a_property_whose_name_has_no_letters_becomes_a_flag_with_no_name`].
+//! A shape that produces something this crate would not choose is pinned
+//! exactly as it stands, with the test saying so, because a characterisation is
+//! what makes a repair visible: the day one is fixed, the test naming it goes
+//! red and whoever fixed it reads what the old behaviour was. Nothing here is
+//! pinned that way at present — every assertion below says what this crate
+//! means, not what it happens to do.
 
 #![expect(
     clippy::expect_used,
@@ -35,7 +36,7 @@ use std::path::{Path, PathBuf};
 use typed_openapi::generate::Settings;
 use typed_openapi::model::Body;
 use typed_openapi::{
-    Carrier, CommandName, Document, Field, LoadError, Operation, Scalar, Shape, Unsupported,
+    Carrier, CommandName, Document, LoadError, Operation, Scalar, Shape, Unsupported,
 };
 
 /// The control document, read the way an adopter reads it.
@@ -530,64 +531,99 @@ fn an_object_with_no_properties_is_a_flat_body_with_no_flags() {
     assert!(help.contains("--json-body <FILE>"), "{help}");
 }
 
-/// **A defect, pinned as it stands.**
+/// A property named `*` kebab-cases to nothing, so there is no flag to give it
+/// — and the body it is in goes out whole.
 ///
-/// A property named `*` kebab-cases to nothing, and nothing is what the flag is
-/// called. `--help` prints it as `-- <STRING>`, which is the end-of-options
-/// marker and not a flag anybody would try; the one spelling that reaches it is
-/// `--=VALUE`, and the help line does not say which key it carries, because a
-/// flag is only told to name its wire name when it *moved*.
+/// A flag is the one name in this crate a *user types*, and `names::spelled` is
+/// the rule it passes, the same one a command name and a gate pass. A property
+/// outside that rule has no flag, and the body's question is whether a property
+/// has one and never why it has none: a name nothing can spell reaches the same
+/// answer a nested schema reaches, which is `--json-body` for the lot.
 ///
-/// The value does arrive under the right key, so nothing is sent wrongly. What
-/// is wrong is that a name the command line cannot spell is spelled anyway:
-/// `names::spelled` exists and refuses exactly this for a command name and for
-/// a gate, and the flag a parameter or a body field claims never goes through
-/// it. Carrying such a value as unreachable — the answer a parameter this crate
-/// cannot spell already gets — would say so at bless time instead.
-///
-/// A *parameter* named this way lands in the same place with less room around
-/// it: a body keeps `--json-body` as a second door, where a parameter has only
-/// the `--=VALUE` spelling — which a required one then makes compulsory.
+/// `grog` loses a flag it could have carried, which is the price the nested rule
+/// already pays. What it buys is that the key is written down: the skeleton
+/// `--json-body-template` prints names `*`, where a flag called `""` names it
+/// nowhere — clap renders one as `-- <STRING>`, the end-of-options marker, and
+/// the only spelling that ever reached it was `--=VALUE`.
 #[test]
-fn a_property_whose_name_has_no_letters_becomes_a_flag_with_no_name() {
-    use clap::ArgMatches;
-
+fn a_property_whose_name_has_no_letters_sends_the_body_whole() {
     let doc = document();
     let op = operation(&doc, "packWadding");
-    let Body::JsonFields(fields) = op.body() else {
-        panic!("both properties are values, so the body is flat");
+    let Body::JsonWhole { required, template } = op.body() else {
+        panic!("`*` is a property with no flag, so the body goes out whole");
     };
-    let starred = fields
-        .iter()
-        .find(|field| field.name() == "*")
-        .expect("the document declares a property named `*`");
-    assert_eq!(starred.flag(), "", "expected today: the flag has no name");
-    assert!(starred.required());
-    assert!(
-        !starred.renamed(),
-        "expected today: nothing tells the user which key this flag carries"
+    assert!(*required);
+    assert_eq!(
+        template.as_deref(),
+        Some("{\n  \"*\": \"\",\n  \"grog\": \"\"\n}"),
+        "the template is the one place the key nothing can spell is named"
     );
 
     let help = long_help(&op);
+    assert!(help.contains("--json-body <FILE>"), "{help}");
     assert!(
-        help.contains("-- <STRING>"),
-        "expected today: the help prints the end-of-options marker as a flag:\n{help}"
+        !help.contains("-- <STRING>"),
+        "no flag stands where the end-of-options marker is written:\n{help}"
     );
+    assert!(
+        !help.contains("--grog"),
+        "and no sibling keeps a flag beside a body that goes whole:\n{help}"
+    );
+}
 
-    let parsed = |args: &[&str]| -> Result<ArgMatches, clap::Error> {
-        typed_openapi::tree::command(&op).try_get_matches_from(args)
-    };
-    assert!(
-        parsed(&["create", "--grog", "silica", "--", "kaolin"]).is_err(),
-        "expected today: `--` is not a way to reach it"
-    );
-    let matches = parsed(&["create", "--grog", "silica", "--=kaolin"])
-        .expect("expected today: `--=VALUE` is the one spelling that reaches it");
-    let values = typed_openapi::tree::values(&op, &matches).expect("the values are read");
+/// A parameter named the same way is carried the way every other parameter this
+/// crate cannot spell is: named on the subcommand's long help, given nothing,
+/// and counted.
+///
+/// It is the shape with the least room around it. A body keeps `--json-body` as
+/// a second door, where a parameter has none at all — so a *required* one is an
+/// operation that could never build a correct request, which is the line the
+/// four shapes beside it are already held to.
+#[test]
+fn a_parameter_whose_name_has_no_letters_is_carried_without_a_flag() {
+    fn starred(required: bool) -> String {
+        format!(
+            r#"
+openapi: 3.0.3
+info: {{ title: Starred, version: "1.0" }}
+servers: [{{ url: "http://localhost:9411" }}]
+paths:
+  /firings:
+    get:
+      operationId: listFirings
+      parameters:
+        - name: "*"
+          in: query
+          required: {required}
+          schema: {{ type: string }}
+      responses:
+        "200": {{ description: OK }}
+"#
+        )
+    }
+
+    let doc = Document::load(&starred(false), &[]).expect("an optional one costs one value");
+    let op = operation(&doc, "listFirings");
     assert_eq!(
-        format!("{values:?}"),
-        r#"Values { params: [], body: Some(Json(Object {"*": String("kaolin"), "grog": String("silica")})) }"#,
-        "whatever the flag is called, the key on the wire is the document's"
+        op.param("*").expect("declared").shape(),
+        &Shape::Unreachable(Unsupported::Unspellable)
+    );
+    assert!(
+        unwrapped(&op).contains(
+            "`*` has no flag: it is named in a way that does not kebab-case into [a-z0-9-]."
+        ),
+        "the long help does not say why it has none:\n{}",
+        unwrapped(&op)
+    );
+    assert_eq!(doc.summary().unreachable().len(), 1);
+
+    let refused =
+        Document::load(&starred(true), &[]).expect_err("a required one could never be supplied");
+    assert_eq!(
+        refused.to_string(),
+        "listFirings: parameter `*` is named in a way that does not kebab-case into \
+         [a-z0-9-], and the document requires it; correct the parameter in an Overlay, \
+         or drop its `required`"
     );
 }
 
@@ -1066,16 +1102,16 @@ fn the_reduction_of_the_control_document_counts_what_is_in_it() {
     assert_eq!(summary.reads(), 1);
     assert_eq!(summary.writes(), 6);
     assert_eq!(summary.bodiless(), 2);
-    // Three rather than the two bodies that are `JsonWhole`: a flat body of no
+    // Four rather than the three bodies that are `JsonWhole`: a flat body of no
     // properties offers a command line `--json-body` and nothing else, which is
     // what the count is about.
-    assert_eq!(summary.whole_bodies(), 3);
+    assert_eq!(summary.whole_bodies(), 4);
     assert_eq!(summary.unreachable().len(), 5);
 }
 
 /// Every awkward name survives the blob, because a shipped binary meets the
-/// blob and never the document. A flag that moved aside, a flag with no name at
-/// all and a command name taken off a path are all decided while the document
+/// blob and never the document. A flag that moved aside, a key no flag could
+/// carry and a command name taken off a path are all decided while the document
 /// is reduced, so all three have to come back off the bytes unchanged.
 #[test]
 fn every_awkward_name_comes_back_off_the_blob_as_it_went_in() {
@@ -1102,13 +1138,13 @@ fn every_awkward_name_comes_back_off_the_blob_as_it_went_in() {
     );
 
     let packing = operation(&shipped, "packWadding");
-    let Body::JsonFields(fields) = packing.body() else {
-        panic!("a flat body stays flat across the blob");
+    let Body::JsonWhole { template, .. } = packing.body() else {
+        panic!("a body goes whole across the blob as readily as it goes flat");
     };
     assert_eq!(
-        fields.iter().map(Field::flag).collect::<Vec<_>>(),
-        ["", "grog"],
-        "every field comes back, the one with no name included"
+        template.as_deref(),
+        Some("{\n  \"*\": \"\",\n  \"grog\": \"\"\n}"),
+        "the key no flag could carry comes back off the bytes"
     );
 
     assert_eq!(

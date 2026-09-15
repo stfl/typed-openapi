@@ -116,9 +116,9 @@ above the seam needs no socket and no fixture server. Both are
   only for flat ones. The typed wrapper takes the generated type either way.
 - **No object parameters.** A list of scalars is a repeatable flag, laid out by
   its own `style` and `explode`. An object, an `in: cookie`, a
-  `content`-described parameter and an unserialisable `style` carry no flag:
-  each is named on its subcommand's help, and refuses the document only where
-  the document requires it.
+  `content`-described parameter, an unserialisable `style` and a name that will
+  not kebab-case carry no flag: each is named on its subcommand's help, and
+  refuses the document only where the document requires it.
 - **No async CLI.** The command tree is sync; `AsyncClient` is for the typed
   caller.
 - **No check on a whole-body file.** `--json-body FILE` is held to being JSON
