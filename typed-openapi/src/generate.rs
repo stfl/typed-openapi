@@ -8,7 +8,7 @@
 //!
 //! # What it writes
 //!
-//! Five artefacts under one directory, all derived from a single Overlay
+//! Four artefacts under one directory, all derived from a single Overlay
 //! application so that none of them can describe a different API:
 //!
 //! - `spec/<name>.overlaid.yaml` — the corrected document, and the reviewable
@@ -21,11 +21,14 @@
 //! - `src/model.postcard` — that same document already reduced to the facts a
 //!   command line needs, so a shipped binary parses no YAML and enables no
 //!   feature that could.
-//! - `src/summary.md` — what that reduction did, as a page: the operations, the
-//!   groups, the reads and writes, what stands behind each named gate, and the
-//!   parameters carried without a flag. An adopter's prose quotes it and an
-//!   adopter's test asserts against [`Summary`](crate::Summary), so a count in a
-//!   README is measured rather than remembered.
+//!
+//! An adoption that quotes a count in its own prose asks for a fifth.
+//! [`Settings::summary_page`] names where it goes, and the bless step renders
+//! [`Summary`](crate::Summary) there: the operations, the groups, the reads and
+//! writes, what stands behind each named gate, and the parameters carried
+//! without a flag. The prose quotes the page and a test asserts against
+//! `Summary`, so the count is measured rather than remembered. An adoption that
+//! quotes no count names no path, and its tree gains no file.
 //!
 //! # Using it
 //!
@@ -35,6 +38,7 @@
 //!     .overlay("spec/corrections.yaml")
 //!     .overlay("spec/cli.yaml")
 //!     .replace("money", "money::Money")
+//!     .summary_page("src/summary.md")
 //!     .write_to("api-generated")?;
 //! # Ok(())
 //! # }
@@ -99,19 +103,20 @@ const ALLOW: &str = "\
 )]
 ";
 
-/// What a bless step generates, and the two things only the adopter can say.
+/// What a bless step generates, and the things only the adopter can say.
 ///
 /// The vendor's document and the adopter's Overlays are the input and a
-/// directory is the output; everything between them is derived. The two
-/// settings are the two facts the documents do not carry: which Rust types the
-/// adopter already owns for which vendor formats, and what command regenerates
-/// the result.
+/// directory is the output; everything between them is derived. What is left
+/// over are the facts no document carries: which Rust types the adopter already
+/// owns for which vendor formats, what command regenerates the result, and
+/// whether a summary page is wanted and where it goes.
 #[derive(Debug, Clone)]
 pub struct Settings {
     document: PathBuf,
     overlays: Vec<PathBuf>,
     replacements: Vec<(String, String)>,
     command: String,
+    summary: Option<PathBuf>,
 }
 
 impl Settings {
@@ -129,6 +134,7 @@ impl Settings {
             overlays: Vec::new(),
             replacements: Vec::new(),
             command: DEFAULT_COMMAND.to_owned(),
+            summary: None,
         }
     }
 
@@ -186,13 +192,49 @@ impl Settings {
         self
     }
 
-    /// Write the five artefacts under `crate_dir`, and answer with their paths.
+    /// Render the summary page too, at `path`.
     ///
-    /// The sink is a directory rather than five values the caller places,
+    /// The page is [`Summary`](crate::Summary) as Markdown — the tallies, the
+    /// groups by name, a row per named gate, a row per parameter carried
+    /// without a flag — under a header naming the command that counts it again
+    /// and every document it was counted from. An adoption that states a count
+    /// in a doc comment, a README or a reference page quotes the page and holds
+    /// the prose to [`Document::summary`] in a test, so the number is a
+    /// measurement rather than a memory.
+    ///
+    /// Asking is the whole of it: an adoption that quotes no count names no
+    /// path, and the bless step writes no file. The count is available either
+    /// way — `Document::summary` is derived from the reduction, so a shipped
+    /// binary that loaded a blob answers it with no page, no document and no
+    /// feature.
+    ///
+    /// **The path is the adopter's, because nothing the generator writes reads
+    /// this page.** The four artefacts embed each other by relative path, which
+    /// is why [`Settings::write_to`] owns where *they* go; a summary page is
+    /// reached only by whatever the adoption points at it — an `include_str!`
+    /// in a hand-written `lib.rs`, a `docs/` page, a link out of a README — and
+    /// only the adopter knows which. So `src/summary.md` beside the blob and
+    /// `../docs/api-summary.md` two directories up are equally sensible, and
+    /// naming one would have been this crate choosing the shape of a tree it
+    /// does not own. A relative path lands under `crate_dir`; an absolute one
+    /// lands where it says.
+    #[must_use]
+    pub fn summary_page(mut self, path: impl Into<PathBuf>) -> Self {
+        self.summary = Some(path.into());
+        self
+    }
+
+    /// Write the artefacts under `crate_dir`, and answer with their paths.
+    ///
+    /// The four the generated crate is built from, always; the summary page
+    /// after them where [`Settings::summary_page`] asked for one. The answer is
+    /// what was written, so a caller who asked for no page is handed no page.
+    ///
+    /// The sink is a directory rather than four values the caller places,
     /// because the layout is not the caller's to choose: the generated crate
     /// embeds the corrected document and the reduced model by relative path,
     /// and the header of each Rust file states where the others are. One
-    /// argument buys all five files in the arrangement they have to be in.
+    /// argument buys all four in the arrangement they have to be in.
     ///
     /// Every Rust file is handed to `rustfmt` after it is written, so what
     /// lands in the tree is what `cargo fmt --check` expects and the bless step
@@ -205,11 +247,12 @@ impl Settings {
         let types = dir.join("src/types.rs");
         let ops = dir.join("src/ops.rs");
         let model = dir.join("src/model.postcard");
-        let summary = dir.join("src/summary.md");
+        // A relative path lands under the directory the rest do; an absolute
+        // one lands where it says, which is `Path::join`'s own rule.
+        let page = self.summary.as_ref().map(|path| dir.join(path));
 
         let header = self.rust_header(&spec);
         let document = format!("{}{}", self.document_header(), corrected.yaml);
-        let counted = format!("{}{}", self.summary_header(), corrected.model.summary());
 
         // The types are emitted first because the wrappers name them, and
         // `names` is how they are named: `ops` looks a schema up in what
@@ -228,9 +271,14 @@ impl Settings {
             &ops::emit(&corrected.api, &corrected.model, &header, &names)?,
         )?;
         write_model(&model, &corrected.model)?;
-        write_bytes(&summary, counted.as_bytes())?;
 
-        Ok(vec![spec, types, ops, model, summary])
+        let mut written = vec![spec, types, ops, model];
+        if let Some(page) = page {
+            let counted = format!("{}{}", self.summary_header(), corrected.model.summary());
+            write_bytes(&page, counted.as_bytes())?;
+            written.push(page);
+        }
+        Ok(written)
     }
 
     /// Every layer, laid over the document in order, in the three views the
@@ -346,8 +394,7 @@ fn listed(items: &[String]) -> String {
     }
 }
 
-/// One Overlay application, in the three views the five artefacts are emitted
-/// from.
+/// One Overlay application, in the three views every artefact is emitted from.
 ///
 /// Producing all three from one application is the whole point: the YAML that
 /// is committed, the reduction a binary reads and counts itself off, and the

@@ -159,16 +159,26 @@ which is the whole defect this exists to retire, and deriving also keeps the
 postcard blob the size it is. The type is feature-free, because a shipped binary
 that loaded a blob has to answer the question a bless step answered.
 
-`Summary`'s `Display` is the page a bless step commits as the fifth artefact,
-and the counts a test asserts against are the accessors on the same value — so
-the sentence a reader is shown and the number a test pins cannot drift apart.
-The page carries its provenance from `Settings::summary_header`, beside the
-headers the other generated files get: the command that counts it again and the
-documents it was counted from, because a count a reader cannot re-take is a
-claim rather than a measurement, and the two look identical on the page.
+`Summary`'s `Display` is the page a bless step renders, and the counts a test
+asserts against are the accessors on the same value — so the sentence a reader
+is shown and the number a test pins cannot drift apart. The page carries its
+provenance from `Settings::summary_header`, beside the headers the other
+generated files get: the command that counts it again and the documents it was
+counted from, because a count a reader cannot re-take is a claim rather than a
+measurement, and the two look identical on the page.
 `examples/toy/api/tests/summary.rs` is the demonstration that the shape is
 right — it builds the toy README's own sentences out of the summary — and any
 count this crate adds owes a row there.
+
+**The value is derived for everyone; the file is asked for.** `Settings::write_to`
+writes four artefacts and answers with what it wrote;
+`Settings::summary_page(path)` adds the page, and the answer grows by exactly
+that path. The page is Markdown an adopter commits, reviews and lists in their
+own bless check, in prose they cannot word — a whole obligation, so only an
+adopter takes it on, and one that quotes no count is handed no file. Its path is
+theirs for the reason the other four's is not: those name each other by relative
+path, and nothing the generator writes reads the page. `examples/toy` opts in
+because it quotes counts, which is also what keeps the claim from rotting.
 
 **Generated files are never edited.** `examples/toy/api-generated/src/{types,ops}.rs`,
 `src/model.postcard`, `src/summary.md` and `spec/toy.overlaid.yaml` are written

@@ -15,8 +15,9 @@
 //! - [`Summary`] — what the reduction did, counted off the model rather than
 //!   remembered beside it: the operations, the groups, the reads and writes,
 //!   what stands behind each named gate, and the parameters carried without a
-//!   flag. [`Document::summary`] takes one, and a bless step renders one to a
-//!   page an adopter quotes instead of a number.
+//!   flag. [`Document::summary`] takes one off any reduction, blob included;
+//!   an adoption that quotes counts in its prose also asks a bless step to
+//!   render one to a page, and holds the prose to it.
 //! - [`Values`] — arguments for one operation, under the document's own names.
 //!   A CLI builds one from `ArgMatches`; a generated wrapper builds one from
 //!   typed arguments.

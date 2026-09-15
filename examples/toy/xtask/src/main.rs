@@ -6,8 +6,8 @@
 //! ```
 //!
 //! This is the whole of an adopter's generator. Everything it calls ships in
-//! `typed-openapi` under the `generate` feature, so the five artefacts under
-//! `api-generated/` are reproducible from a published crate rather than from
+//! `typed-openapi` under the `generate` feature, so every artefact under
+//! `api-generated/` is reproducible from a published crate rather than from
 //! this workspace.
 
 use std::path::Path;
@@ -33,6 +33,12 @@ fn main() -> ExitCode {
         // stands for it. `Voucher.currency` beside it takes the other route: a
         // named schema, and the newtype the generator writes.
         .replace("money", "money::Money")
+        // This adoption states counts in its prose, so it asks for the page
+        // those counts are measured off; an adoption that states none asks for
+        // nothing and gets no file. Beside the blob because that is where
+        // `api-generated/src/client.rs` reaches it with `include_str!` — the
+        // path is the adopter's for exactly that reason.
+        .summary_page("src/summary.md")
         .write_to(adoption.join("api-generated"));
 
     match blessed {

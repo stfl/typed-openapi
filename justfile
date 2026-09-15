@@ -122,21 +122,25 @@ test:
 # Everything CI runs, in the order CI runs it.
 gate: check features test blessed package
 
-# The five artefacts under `api-generated` are committed, so the generator has
-# to be able to reproduce them. A diff here is either the vendor's document
-# moving or the generator's output changing — both worth looking at, and
-# neither should reach main unnoticed. Without this recipe nothing in the gate
-# runs the generator at all.
+# Every artefact under `api-generated` is committed, so the generator has to be
+# able to reproduce them. A diff here is either the vendor's document moving or
+# the generator's output changing — both worth looking at, and neither should
+# reach main unnoticed. Without this recipe nothing in the gate runs the
+# generator at all.
 #
-# `src/summary.md` is in the list for the same reason as the rest and for one
-# more: it is the artefact adopters quote counts out of, so an unchecked copy of
-# it would be exactly the stale number it exists to retire.
+# `src/summary.md` is in the list for the same reason as the rest and for two
+# more. It is the artefact adopters quote counts out of, so an unchecked copy of
+# it would be exactly the stale number it exists to retire — and it is the one
+# the bless step writes only because `xtask` asks for it, which is a line that
+# can be deleted. So the recipe checks two things a diff alone cannot tell
+# apart: that the generator still writes each artefact, and that what it wrote
+# is what is committed. A file nobody generates any more keeps its bytes and
+# passes the diff.
 
 # Regenerate, and fail if anything committed changed.
 blessed:
     #!/usr/bin/env bash
     set -euo pipefail
-    just bless
     # Only what the generator writes. `api-generated/src/{lib,client}.rs` are
     # hand-written and live in the same crate, and a recipe that failed on an
     # edit to those would be answering a different question.
@@ -147,12 +151,21 @@ blessed:
         examples/toy/api-generated/src/model.postcard
         examples/toy/api-generated/src/summary.md
     )
+    # The bless step names every path it wrote, one per line.
+    reported=$(just bless)
+    echo "$reported"
+    for path in "${written[@]}"; do
+        grep -qF -- "$path" <<<"$reported" || {
+            echo "bless no longer writes $path" >&2
+            exit 1
+        }
+    done
     if ! git diff --quiet HEAD -- "${written[@]}"; then
         echo "bless changed committed output:" >&2
         git --no-pager diff --stat HEAD -- "${written[@]}" >&2
         exit 1
     fi
-    echo "bless reproduces every committed artefact"
+    echo "bless writes and reproduces every committed artefact"
 
 # What crates.io will receive. `--list` is the cheap half — it fails on missing
 # metadata and prints the file set — and the build proves the crate stands up

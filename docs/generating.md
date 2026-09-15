@@ -10,7 +10,7 @@ the only thing you write is a binary that calls it.
 
 ## Contents
 
-- [The five artefacts](#the-five-artefacts)
+- [The artefacts](#the-artefacts)
 - [`Settings`](#settings)
 - [Layers](#layers)
 - [Wiring your own `xtask`](#wiring-your-own-xtask)
@@ -18,11 +18,11 @@ the only thing you write is a binary that calls it.
 - [The `builder` feature](#the-builder-feature)
 - [Requirements and limits](#requirements-and-limits)
 
-## The five artefacts
+## The artefacts
 
-All five come out of one run of the Overlay chain, which is why none of them can
-describe a different API from the others. `<name>` is the vendor document's own
-file stem.
+Four files, plus one you ask for. All of them come out of one run of the Overlay
+chain, which is why none of them can describe a different API from the others.
+`<name>` is the vendor document's own file stem.
 
 | Path | What it is | Who reads it |
 |---|---|---|
@@ -30,7 +30,11 @@ file stem.
 | `src/types.rs` | `components.schemas` as Rust types, from [typify]. A named schema stating a `pattern` becomes a newtype that enforces it, with `Display` beside the `FromStr` | your code, and the wrappers |
 | `src/ops.rs` | one typed wrapper per operation, the closed `OperationId` set, and the `(operationId, method, path)` inventory | your code, and a CLI's dispatch |
 | `src/model.postcard` | the corrected document already reduced to the facts a command line needs | the shipped binary, through `Document::from_blob` |
-| `src/summary.md` | what that reduction did, counted off it: operations, groups, reads and writes, the operations behind each named gate, bodiless operations, bodies with no per-field flags, parameters carried without a flag | you, and the docs you write |
+
+Those four land where the table says, because they name each other by relative
+path. The fifth is the [summary page](#the-summary-page): it appears only where
+[`Settings::summary_page`](#settingssummary_pagepath---settings) names a path,
+and that path is yours, because nothing generated reads it.
 
 The reduction is the reason a binary parses no YAML on startup and enables
 neither the `document` nor the `generate` feature: the expensive read happened
@@ -45,20 +49,28 @@ with a wrapping module.
 
 ### The summary page
 
-Every adoption ends up counting something about its own API — how many
-operations there are, how many of them write, which stand behind which gate —
-and putting the number in a doc comment, a README or a reference page. Nothing
-re-counts it when an Overlay adds an operation, so the page goes quietly stale
-and reads exactly like a page that is right.
+Adoptions that count something about their own API — how many operations there
+are, how many of them write, which stand behind which gate — put the number in a
+doc comment, a README or a reference page. Nothing re-counts it when an Overlay
+adds an operation, so the page goes quietly stale and reads exactly like a page
+that is right.
 
-`src/summary.md` is that count taken off the reduction instead. It opens with an
-HTML comment naming the command that counts it again and every document it was
-counted from, then carries a table of the tallies, the groups by name, one row
-per gate, and one row per parameter carried without a flag — the operation, the
-parameter, and why. Nothing on it is stored in the model: `Document::summary`
-derives every number from the operations the model already holds, so the page
-and the blob cannot come apart, and neither can carry a number the other does
-not.
+The summary page is that count taken off the reduction instead. Name a path and
+the bless step writes it there:
+
+```rust
+Settings::new("spec/vendor.yaml")
+    .summary_page("src/summary.md")
+    .write_to("api-generated")?;
+```
+
+It opens with an HTML comment naming the command that counts it again and every
+document it was counted from, then carries a table of the tallies, the groups by
+name, one row per gate, and one row per parameter carried without a flag — the
+operation, the parameter, and why. Nothing on it is stored in the model:
+`Document::summary` derives every number from the operations the model already
+holds, so the page and the blob cannot come apart, and neither can carry a
+number the other does not.
 
 Two consumers, one measurement. Quote the page in your prose, and assert against
 [`Summary`] in a test:
@@ -68,16 +80,19 @@ let summary = api.document().summary();
 assert!(README.contains(&format!("**{} operations**", summary.operations())));
 ```
 
-`Summary` needs no feature: it is derived from a reduced `Document`, so a binary
-that loaded a blob answers the question a bless step answered.
+`Summary` needs no page and no feature: it is derived from a reduced `Document`,
+so a binary that loaded a blob answers the question a bless step answered. That
+is the split — the count is always available, the *file* is what you opt into.
 `examples/toy/api/tests/summary.rs` is that test in the worked example, holding
 the toy adoption's own README paragraph to the reduction behind it — which is
 the half that matters, because a page quoting a count fails nothing when the
 count moves unless something holds the page to it.
 
-Put the page in the list your bless check compares against the committed tree.
-An artefact nothing checks is an artefact that can rot, and this is the one
-adopters quote numbers out of.
+If you ask for the page, put it in the list your bless check compares against
+the committed tree. An artefact nothing checks is an artefact that can rot, and
+this is the one adopters quote numbers out of. If your prose quotes no count,
+ask for nothing: a Markdown file in a Rust source directory is one more thing to
+commit, to review and to remember.
 
 [`Summary`]: https://docs.rs/typed-openapi/latest/typed_openapi/summary/struct.Summary.html
 
@@ -91,6 +106,7 @@ Settings::new("spec/vendor.yaml")
     .overlay("spec/cli.yaml")
     .replace("money", "money::Money")
     .regenerated_by("just bless")
+    .summary_page("src/summary.md")
     .write_to("api-generated")?;
 ```
 
@@ -184,17 +200,34 @@ The command a generated file tells its reader to run. Defaults to
 `cargo run -p xtask -- bless`. Set it if your bless step is spelled differently;
 the line is a promise to whoever opens the file next.
 
+### `Settings::summary_page(path) -> Settings`
+
+Render the [summary page](#the-summary-page) too, at `path`. Call it once; the
+last call wins. Leave it out and no page is written and none is reported.
+
+`path` is relative to the `crate_dir` you hand `write_to`, so `src/summary.md`
+sits beside the blob where an `include_str!` in your own `lib.rs` can reach it.
+An absolute path lands where it says, and a relative one may climb out —
+`../docs/how-big.md` puts the page next to the prose that quotes it.
+
+The path is yours because nothing generated reads this page. The other four
+artefacts embed each other by relative path, which is why `write_to` decides
+where *they* go; a summary is reached only by whatever you point at it.
+
 ### `Settings::write_to(crate_dir) -> Result<Vec<PathBuf>, GenerateError>`
 
-Write the five artefacts under `crate_dir` and answer with their paths, in the
-order of the table above. Directories are created as needed. Each Rust file is
-handed to `rustfmt` after it is written, so what lands in the tree is what
-`cargo fmt --check` expects.
+Write the artefacts under `crate_dir` and answer with their paths: the four of
+the table above, in that order, then the summary page if you asked for one.
+Directories are created as needed. Each Rust file is handed to `rustfmt` after
+it is written, so what lands in the tree is what `cargo fmt --check` expects.
 
-The sink is a directory rather than five values you place yourself: the
+The answer is what was written, so a run that asked for no page reports four
+paths and a script that copies or checks the answer copies or checks four files.
+
+The sink is a directory rather than four values you place yourself: the
 generated crate embeds the corrected document and the reduced model by relative
-path, and each Rust header states where the others are, so the layout is not the
-caller's to choose.
+path, and each Rust header states where the others are, so that layout is not
+the caller's to choose.
 
 ### `GenerateError`
 
@@ -261,7 +294,9 @@ fn main() -> ExitCode {
 ```
 
 Then `cargo run -p xtask -- bless`, review the diff, and commit everything it
-wrote. `examples/toy/xtask` is this file in the worked example.
+wrote. `examples/toy/xtask` is this file in the worked example, with a
+`.summary_page("src/summary.md")` line because that adoption quotes counts in
+its README.
 
 Keep `xtask` out of `default-members`. Cargo resolves features once per
 invocation over the packages it builds, so leaving the bless step out of the

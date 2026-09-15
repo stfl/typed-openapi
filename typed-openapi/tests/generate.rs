@@ -111,14 +111,17 @@ fn a_generated_newtype_over_a_string_prints_and_needs_no_engine_of_its_own() {
     );
 }
 
-/// The five artefacts are one Overlay application seen five ways, so the
+/// The artefacts are one Overlay application seen several ways, so the
 /// reduction a binary loads has to be the reduction of the document that was
 /// committed beside it. Reducing the written YAML again is the only check that
 /// they left the generator together.
 #[test]
 fn the_written_model_is_the_written_documents_reduction() {
     let dir = out("agree");
-    let written = layered().write_to(&dir).expect("the fixtures generate");
+    let written = layered()
+        .summary_page("src/summary.md")
+        .write_to(&dir)
+        .expect("the fixtures generate");
 
     assert_eq!(
         written,
@@ -154,6 +157,7 @@ fn the_summary_page_is_the_written_models_count_and_says_where_it_came_from() {
     let dir = out("summary");
     let written = layered()
         .regenerated_by("just bless")
+        .summary_page("src/summary.md")
         .write_to(&dir)
         .expect("the fixtures generate");
     let page = read(&written[4]);
@@ -176,6 +180,84 @@ fn the_summary_page_is_the_written_models_count_and_says_where_it_came_from() {
             "the page does not name {input}, which it was counted from:\n{page}"
         );
     }
+}
+
+/// An adoption that quotes no count gets no page, and is not told it got one.
+///
+/// The page is Markdown in a Rust source directory, committed, and listed in
+/// whatever check holds a bless step's output to the tree — a whole obligation,
+/// which is why only an adopter can take it on. Both halves are asserted: a
+/// file that appears anyway is one nobody asked for, and a path in the answer
+/// that names no file would send a caller iterating the answer to copy, list or
+/// check a file that is not there.
+#[test]
+fn a_bless_step_that_asks_for_no_summary_page_writes_none() {
+    let dir = out("unasked");
+    let written = layered().write_to(&dir).expect("the fixtures generate");
+
+    assert_eq!(
+        written,
+        vec![
+            dir.join("spec/toy.overlaid.yaml"),
+            dir.join("src/types.rs"),
+            dir.join("src/ops.rs"),
+            dir.join("src/model.postcard"),
+        ],
+        "the answer names an artefact the caller did not ask for"
+    );
+    for path in &written {
+        assert!(
+            path.exists(),
+            "{} was reported and not written",
+            path.display()
+        );
+    }
+    assert!(
+        !dir.join("src/summary.md").exists(),
+        "a page nobody asked for landed in the adopter's source directory"
+    );
+}
+
+/// Where the page goes is the adopter's to say, because nothing the generator
+/// writes reads it.
+///
+/// The other four embed each other by relative path, so `write_to` owns their
+/// layout; a summary is reached only by what the adoption points at it, and an
+/// adoption whose prose lives in `docs/` has no reason to keep the page under
+/// `src/`. A relative path lands under the directory the rest do, and an
+/// absolute one lands where it says.
+#[test]
+fn the_summary_page_lands_where_the_adoption_asks_for_it() {
+    let dir = out("elsewhere");
+    let counted = out("counted").join("deep/api-summary.md");
+
+    let relative = layered()
+        .summary_page("docs/how-big.md")
+        .write_to(&dir)
+        .expect("the fixtures generate");
+    assert_eq!(
+        relative.last(),
+        Some(&dir.join("docs/how-big.md")),
+        "a relative path did not land under the directory the rest did"
+    );
+    assert!(
+        !dir.join("src/summary.md").exists(),
+        "the page also landed at a path this crate chose"
+    );
+
+    let absolute = layered()
+        .summary_page(&counted)
+        .write_to(&dir)
+        .expect("the fixtures generate");
+    assert_eq!(
+        absolute.last(),
+        Some(&counted),
+        "an absolute path did not land where it says"
+    );
+    assert!(
+        read(&counted).contains("# What the reduction found"),
+        "the page written outside the crate directory is not the summary"
+    );
 }
 
 /// A bless step is run again on every vendor revision and its output is
@@ -344,6 +426,7 @@ fn every_generated_file_names_the_command_that_rewrites_it() {
     let dir = out("header");
     layered()
         .regenerated_by("just bless")
+        .summary_page("src/summary.md")
         .write_to(&dir)
         .expect("the fixtures generate");
 
