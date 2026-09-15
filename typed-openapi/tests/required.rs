@@ -3,8 +3,13 @@
 //!
 //! The refusal is the point of this file, but the tests that matter most are
 //! the ones holding it *back*: a check with no override has to be wrong about
-//! nothing. The two `required` keywords OpenAPI spells with one word are the
-//! nearest miss, and there is one test for each of them.
+//! nothing. Two near misses have a test each. The first is that `required` is
+//! the name of two things in OpenAPI, and a document that spells the other one
+//! is every document. The second is that a `required` list is only a schema's
+//! where a schema stands — the same three words inside a specification
+//! extension, or among the arguments a link passes on, are the vendor's data.
+//! Against those stands one test that every place a schema *does* stand is
+//! still read, so that the walk cannot be made right by being switched off.
 
 #![expect(
     clippy::expect_used,
@@ -495,5 +500,226 @@ fn the_committed_fixture_reduces_and_the_same_fixture_with_a_phantom_does_not() 
             .to_string()
             .contains("$.components.schemas.Address requires `city`"),
         "{refused}"
+    );
+}
+
+/// A specification extension carries the vendor's own arbitrary JSON, and JSON
+/// that holds a `required` list beside no `properties` is a form the vendor
+/// described rather than a schema contradicting itself. Refusing over one
+/// leaves an adopter deleting the vendor's extension in an Overlay to repair a
+/// defect that was never there, which is why this test exists at all.
+#[test]
+fn a_specification_extension_is_the_vendors_own_json_and_never_a_schema() {
+    /// A callback object carries one too. It is checked rather than loaded
+    /// because `openapiv3` reads a callback as a bare map of path items and so
+    /// refuses this document a step later — by the shape it could not read,
+    /// which is a refusal that says what it is about. This check is not
+    /// allowed to get there first.
+    const IN_A_CALLBACK: &str = r"paths:
+  /ledger:
+    post:
+      operationId: postEntry
+      responses: { '201': { description: Created } }
+      callbacks:
+        settled:
+          x-template:
+            post:
+              requestBody:
+                content:
+                  application/json:
+                    schema: { required: [template] }
+";
+
+    const EXTENSIONS: &str = r"x-forms:
+  signup: { required: [name, email] }
+tags:
+  - name: ledger
+    description: The ledger.
+    x-fields: { required: [account] }
+paths:
+  x-mock-defaults:
+    get:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { required: [stub] }
+  /ledger:
+    get:
+      operationId: listEntries
+      x-form:
+        required: [name, email]
+        fields: [name, email]
+      responses:
+        '200': { description: OK }
+        x-fallback:
+          content:
+            application/json:
+              schema: { required: [fallback] }
+components:
+  x-templates:
+    entry: { required: [account] }
+  schemas:
+    Entry:
+      type: object
+      properties:
+        amount: { type: string }
+      x-ui: { required: [amount, side] }
+";
+
+    assert_eq!(scanned(EXTENSIONS), Ok(()), "no diagnostic at all");
+    assert!(loaded(EXTENSIONS).is_ok());
+    assert_eq!(scanned(IN_A_CALLBACK), Ok(()), "no diagnostic at all");
+}
+
+/// A link object says which of an operation's parameters the next call is given
+/// and what body to send it. Its `parameters` are values passed on, so a
+/// `required` among them names a parameter rather than a key — the same
+/// mistake as reading an extension, arrived at through a key the specification
+/// does name.
+#[test]
+fn a_link_passes_arguments_on_and_states_no_schema() {
+    const LINKS: &str = r"paths:
+  /ledger:
+    get:
+      operationId: listEntries
+      responses:
+        '200':
+          description: OK
+          links:
+            entry:
+              operationId: getEntry
+              parameters:
+                required: [account, amount]
+              requestBody: { required: [account] }
+";
+
+    assert_eq!(scanned(LINKS), Ok(()), "no diagnostic at all");
+}
+
+/// One phantom in every position the specification puts a schema in.
+const EVERYWHERE: &str = r"paths:
+  /ledger:
+    parameters:
+      - name: tenant
+        in: query
+        schema: { type: object, required: [shared] }
+    post:
+      operationId: postEntry
+      parameters:
+        - name: filter
+          in: query
+          content:
+            application/json:
+              schema: { type: object, required: [onParameterContent] }
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string }
+            encoding:
+              file:
+                headers:
+                  X-Checksum:
+                    schema: { type: object, required: [onEncodingHeader] }
+      responses:
+        '200':
+          description: OK
+          headers:
+            X-Page:
+              schema: { type: object, required: [onResponseHeader] }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rows:
+                    type: array
+                    items: { type: object, required: [onItems] }
+                  spare:
+                    type: object
+                    additionalProperties: { type: object, required: [onAdditional] }
+      callbacks:
+        settled:
+          '{$request.body#/url}':
+            post:
+              operationId: onSettled
+              requestBody:
+                content:
+                  application/json:
+                    schema: { type: object, required: [onCallbackBody] }
+              responses: { '204': { description: No Content } }
+components:
+  parameters:
+    Period:
+      name: period
+      in: query
+      schema: { type: object, required: [onComponentParameter] }
+  headers:
+    X-Total:
+      schema: { type: object, required: [onComponentHeader] }
+  requestBodies:
+    Entry:
+      content:
+        application/json:
+          schema: { type: object, required: [onComponentRequestBody] }
+  responses:
+    Problem:
+      description: Problem
+      content:
+        application/json:
+          schema: { type: object, required: [onComponentResponse] }
+  schemas:
+    Named:
+      type: object
+      required: [onNamedSchema]
+      properties:
+        nested: { type: object, required: [onNestedProperty] }
+        x-audit: { type: object, required: [onPropertyNamedLikeAnExtension] }
+    x-Legacy:
+      type: object
+      required: [onSchemaNamedLikeAnExtension]
+";
+
+/// The other half of reading by position: every place the specification does
+/// put a schema is still read, so that the walk was narrowed rather than
+/// switched off. One phantom per route, and the refusal names all of them.
+///
+/// The last two are where the extension rule stops. A map of schemas is keyed
+/// by names an author chose — `x-audit` is an ordinary thing for a JSON body
+/// to carry a field called, and a schema may be named that way too — so `x-`
+/// there is a name and not a vendor's aside.
+#[test]
+fn every_position_a_schema_stands_in_is_still_read() {
+    assert_eq!(
+        named(EVERYWHERE),
+        [
+            "$.paths['/ledger'].parameters[0].schema requires `shared`",
+            "$.paths['/ledger'].post.parameters[0].content['application/json'].schema \
+             requires `onParameterContent`",
+            "$.paths['/ledger'].post.requestBody.content['multipart/form-data'].encoding.file\
+             .headers['X-Checksum'].schema requires `onEncodingHeader`",
+            "$.paths['/ledger'].post.responses['200'].headers['X-Page'].schema \
+             requires `onResponseHeader`",
+            "$.paths['/ledger'].post.responses['200'].content['application/json'].schema\
+             .properties.rows.items requires `onItems`",
+            "$.paths['/ledger'].post.responses['200'].content['application/json'].schema\
+             .properties.spare.additionalProperties requires `onAdditional`",
+            "$.paths['/ledger'].post.callbacks.settled['{$request.body#/url}'].post.requestBody\
+             .content['application/json'].schema requires `onCallbackBody`",
+            "$.components.parameters.Period.schema requires `onComponentParameter`",
+            "$.components.headers['X-Total'].schema requires `onComponentHeader`",
+            "$.components.requestBodies.Entry.content['application/json'].schema \
+             requires `onComponentRequestBody`",
+            "$.components.responses.Problem.content['application/json'].schema \
+             requires `onComponentResponse`",
+            "$.components.schemas.Named requires `onNamedSchema`",
+            "$.components.schemas.Named.properties.nested requires `onNestedProperty`",
+            "$.components.schemas.Named.properties['x-audit'] \
+             requires `onPropertyNamedLikeAnExtension`",
+            "$.components.schemas['x-Legacy'] requires `onSchemaNamedLikeAnExtension`",
+        ]
     );
 }

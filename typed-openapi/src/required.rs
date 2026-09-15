@@ -18,6 +18,30 @@
 //! see: the walk reaches an inline request body and an inline response as
 //! readily as `components.schemas`, which is where these turn up.
 //!
+//! # Where a schema stands
+//!
+//! A node is read as a schema only where the specification puts one: under
+//! `components.schemas`, under the `schema` of a parameter, a header or a
+//! media type, and under the keywords a schema states further schemas with.
+//! Every step down to one is a step the document's own shape names — `paths`
+//! to path items, a method to an operation, `content` to media types — and a
+//! key naming no such step is not followed at all.
+//!
+//! Position is what tells a schema from JSON that merely looks like one, and a
+//! specification extension is why that has to be told. `x-…` carries the
+//! vendor's own arbitrary JSON wherever it stands, so an extension holding
+//! `required: [name, email]` beside no `properties` is a form the vendor
+//! described — not a schema contradicting itself. Judging every object by its
+//! shape alone refuses that document, and leaves the adopter writing an
+//! Overlay that deletes the vendor's extension to repair a defect that was
+//! never there. A link object's `parameters` is the same thing under a fixed
+//! key: its entries are the arguments the link passes on, and a `required`
+//! among them names a parameter.
+//!
+//! What the rule costs is a schema standing somewhere this reading does not
+//! name, which goes unread — a phantom missed rather than a document wrongly
+//! refused, which is the trade the whole module is built on.
+//!
 //! # What the walk reads
 //!
 //! A node is classified by where its names *are*, never by its `type` keyword —
@@ -54,12 +78,9 @@
 //! every document.
 //!
 //! `example`, `examples`, `default`, `enum` and `const` hold instance data
-//! rather than schemas, so the walk does not descend into them. A vendor whose
-//! example spells out a form as `required: [name, email]` is writing a value,
-//! not requiring a key, and reading it as a schema would refuse a document that
-//! is correct. The cost is that a schema reached only through a key spelled one
-//! of those five words goes unread, which is a phantom missed rather than a
-//! document wrongly refused.
+//! rather than schemas, and no step leads through one. A vendor whose example
+//! spells out a form as `required: [name, email]` is writing a value, not
+//! requiring a key.
 //!
 //! # What makes a node open-ended
 //!
@@ -68,8 +89,9 @@
 //! `false` says any name satisfies the node, so a name declared nowhere is
 //! still satisfiable and the document is not contradicting itself. The same
 //! reading is given to `patternProperties`, to `$dynamicRef`, to `not` and to
-//! `if`/`then`/`else` — none of which this walk follows — and to a `$ref` that
-//! leads nowhere this document holds.
+//! `if`/`then`/`else` — none of which this walk reads a name out of, whether or
+//! not it descends into them — and to a `$ref` that leads nowhere this document
+//! holds.
 //!
 //! That lopsidedness is the point. A refusal an adopter cannot override must
 //! have no false positives on a valid document, so every shape the walk has no
@@ -111,10 +133,6 @@ const CONDITIONAL: [&str; 4] = ["not", "if", "then", "else"];
 /// Everything else that puts a name beyond this walk's reach, and so makes the
 /// node carrying it open-ended.
 const OPEN: [&str; 2] = ["patternProperties", "$dynamicRef"];
-/// Keys whose values are instance data rather than schemas. The walk does not
-/// descend into them, so a `required` a vendor wrote inside an example stays a
-/// value.
-const DATA: [&str; 5] = ["example", "examples", "default", "enum", "const"];
 
 /// One node whose `required` names keys nothing it declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,7 +179,7 @@ pub fn check(document: &Value) -> Result<(), PhantomKeys> {
         enclosing: Vec::new(),
         found: Vec::new(),
     };
-    walk.read(document);
+    walk.read(Kind::Root, document);
     if walk.found.is_empty() {
         Ok(())
     } else {
@@ -199,6 +217,126 @@ enum Step<'d> {
     Index(usize),
 }
 
+/// Where a node stands in the document.
+///
+/// The document's own shape is what says whether a node is a schema, so the
+/// walk carries that answer down rather than asking each node what it looks
+/// like. Every kind but [`Kind::Schema`] is a place on the way to one.
+#[derive(Debug, Clone, Copy)]
+enum Kind {
+    /// The document itself.
+    Root,
+    /// `components`, holding the halves of everything else under a name.
+    Components,
+    /// The operations on one path, and the parameters they share.
+    PathItem,
+    /// One operation.
+    Operation,
+    /// The callbacks one operation may make, keyed by the runtime expressions
+    /// that address them.
+    Callback,
+    /// One parameter.
+    Parameter,
+    /// One header. It is a parameter that does not have to name itself, and it
+    /// leads to a schema by the same two keys.
+    Header,
+    /// A request body.
+    RequestBody,
+    /// One response.
+    Response,
+    /// One entry of a `content` map.
+    MediaType,
+    /// How one property of a body is carried.
+    Encoding,
+    /// A schema, and the only kind this walk judges.
+    Schema,
+}
+
+/// What stands under a key that leads somewhere.
+#[derive(Debug, Clone, Copy)]
+enum Route {
+    /// One node of this kind — or, where the key holds a list of them, each
+    /// member of it.
+    Node(Kind),
+    /// A map whose values are each one node of this kind.
+    Map(Kind),
+}
+
+impl Kind {
+    /// What one of this node's keys leads to, and `None` for a key with no
+    /// schema anywhere under it.
+    ///
+    /// This is the whole of what the walk is allowed to enter. A position left
+    /// out is a schema unread, and a position wrongly put in is a document
+    /// wrongly refused — so it names what the specification names, and a shape
+    /// the specification leaves to the vendor is not in it.
+    fn route(self, key: &str) -> Option<Route> {
+        use Kind::{
+            Callback, Components, Encoding, Header, MediaType, Operation, Parameter, PathItem,
+            RequestBody, Response, Root, Schema,
+        };
+        use Route::{Map, Node};
+        // Grouped by where a key leads rather than by the node it sits on, so
+        // that no two arms say the same thing.
+        Some(match (self, key) {
+            (Root, "components") => Node(Components),
+            (Root, "paths" | "webhooks") | (Components, "pathItems") => Map(PathItem),
+            // Nothing names a callback's keys but the expressions themselves,
+            // so each of them addresses a path item — bar an extension, which
+            // is the vendor's JSON standing beside them rather than one more.
+            (Callback, key) if !is_extension(key) => Node(PathItem),
+            (Components | Operation, "callbacks") => Map(Callback),
+            (
+                PathItem,
+                "get" | "put" | "post" | "delete" | "options" | "head" | "patch" | "trace",
+            ) => Node(Operation),
+            (PathItem | Operation, "parameters") => Node(Parameter),
+            (Components, "parameters") => Map(Parameter),
+            (Operation, "requestBody") => Node(RequestBody),
+            (Components, "requestBodies") => Map(RequestBody),
+            (Components | Operation, "responses") => Map(Response),
+            (Components | Response | Encoding, "headers") => Map(Header),
+            (Parameter | Header | RequestBody | Response, "content") => Map(MediaType),
+            (MediaType, "encoding") => Map(Encoding),
+            (Parameter | Header | MediaType, "schema") => Node(Schema),
+            (Components, "schemas") => Map(Schema),
+            (Schema, key) => return keyword(key),
+            _ => return None,
+        })
+    }
+}
+
+/// What one of a schema's keywords leads to.
+///
+/// Every keyword whose value is a schema, or a list or a map of them. A
+/// keyword left out states something other than a schema — a `type`, a bound,
+/// a `pattern` — or states one this walk has no reading for, and a node
+/// carrying one of those is open-ended rather than read.
+fn keyword(key: &str) -> Option<Route> {
+    Some(match key {
+        PROPERTIES | "patternProperties" | "$defs" | "definitions" | "dependentSchemas" => {
+            Route::Map(Kind::Schema)
+        }
+        ITEMS
+        | "prefixItems"
+        | "additionalProperties"
+        | "unevaluatedProperties"
+        | "unevaluatedItems"
+        | "propertyNames"
+        | "contains"
+        | "contentSchema" => Route::Node(Kind::Schema),
+        key if COMPOSED.contains(&key) || CONDITIONAL.contains(&key) => Route::Node(Kind::Schema),
+        _ => return None,
+    })
+}
+
+/// A specification extension: a key the specification says carries the vendor's
+/// own arbitrary JSON, so what stands under it is never read as part of the
+/// document.
+fn is_extension(key: &str) -> bool {
+    key.starts_with("x-")
+}
+
 /// The descent.
 ///
 /// `doc` is the whole document, because a `$ref` resolves against the root
@@ -213,19 +351,23 @@ struct Walk<'d> {
 }
 
 impl<'d> Walk<'d> {
-    /// This node, then everything under it.
-    fn read(&mut self, node: &'d Value) {
+    /// This node, then everything under it the document leads to a schema
+    /// through. A list under a key stands for each of its members, which is
+    /// how one reading serves `allOf` and `parameters` alike.
+    fn read(&mut self, kind: Kind, node: &'d Value) {
         match node {
             Value::Object(fields) => {
-                self.judge(node);
+                if matches!(kind, Kind::Schema) {
+                    self.judge(node);
+                }
                 for (key, value) in fields {
-                    self.field(node, key, value);
+                    self.field(kind, node, key, value);
                 }
             }
             Value::Array(members) => {
                 for (index, value) in members.iter().enumerate() {
                     self.at.push(Step::Index(index));
-                    self.read(value);
+                    self.read(kind, value);
                     self.at.pop();
                 }
             }
@@ -233,34 +375,60 @@ impl<'d> Walk<'d> {
         }
     }
 
-    /// One field of `node`, read with the right notion of which value it is
-    /// about.
+    /// One field of `node`, read with the right notion of what stands under it
+    /// and of which value it is about.
     ///
-    /// A composition keyword keeps talking about the value `node` talks about,
-    /// so `node` joins what its members are held to. Every other key — a
+    /// A key the document does not lead to a schema through is not read at
+    /// all. A composition keyword keeps talking about the value `node` talks
+    /// about, so `node` joins what its members are held to. Every other key — a
     /// property, an item, a response, a path — is a different value, and the
-    /// schemas out here have nothing to say about it. A key holding instance
-    /// data is not read at all.
-    fn field(&mut self, node: &'d Value, key: &'d str, value: &'d Value) {
-        if DATA.contains(&key) {
+    /// schemas out here have nothing to say about it.
+    fn field(&mut self, kind: Kind, node: &'d Value, key: &'d str, value: &'d Value) {
+        let Some(route) = kind.route(key) else {
             return;
-        }
+        };
         self.at.push(Step::Key(key));
-        self.descend(node, key, value);
+        self.descend(node, key, route, value);
         self.at.pop();
     }
 
-    /// The step itself, with whatever the key means for the schemas the value
-    /// under it is held to.
-    fn descend(&mut self, node: &'d Value, key: &'d str, value: &'d Value) {
+    /// The step itself: one node, or every entry of a map of them, with
+    /// whatever the key means for the schemas the value under it is held to.
+    fn descend(&mut self, node: &'d Value, key: &'d str, route: Route, value: &'d Value) {
         if COMPOSED.contains(&key) || CONDITIONAL.contains(&key) {
             self.enclosing.push(node);
-            self.read(value);
+            self.follow(route, value);
             self.enclosing.pop();
         } else {
             let outer = std::mem::take(&mut self.enclosing);
-            self.read(value);
+            self.follow(route, value);
             self.enclosing = outer;
+        }
+    }
+
+    /// What the route says stands there.
+    fn follow(&mut self, route: Route, value: &'d Value) {
+        match route {
+            Route::Node(kind) => self.read(kind, value),
+            Route::Map(kind) => self.entries(kind, value),
+        }
+    }
+
+    /// Every entry of a map of nodes of one kind.
+    ///
+    /// A map of schemas is keyed by names an author chose, and `x-total` is an
+    /// ordinary thing to call a property or a schema. Every other map here
+    /// holds objects the specification describes, beside which it lets a
+    /// vendor hang JSON of its own — and that is not one more entry.
+    fn entries(&mut self, kind: Kind, map: &'d Value) {
+        let by_name = matches!(kind, Kind::Schema);
+        for (key, entry) in map.as_object().into_iter().flatten() {
+            if !by_name && is_extension(key) {
+                continue;
+            }
+            self.at.push(Step::Key(key));
+            self.read(kind, entry);
+            self.at.pop();
         }
     }
 
