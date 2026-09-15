@@ -20,7 +20,7 @@ use quote::{format_ident, quote};
 use syn::visit_mut::VisitMut as _;
 
 use super::GenerateError;
-use super::types::Names;
+use super::names::Names;
 use crate::model::{Body, Shape};
 use crate::{Document, Operation};
 
@@ -615,8 +615,7 @@ fn list_type(
 /// so an enumerated parameter is the generated enum rather than a string.
 fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStream, GenerateError> {
     if let Some(name) = ref_name(schema) {
-        let ident = names.get(name)?;
-        return Ok(quote!(crate::types::#ident));
+        return names.get(name).cloned();
     }
     let ReferenceOr::Item(schema) = schema else {
         return Err(unsupported(
@@ -680,8 +679,7 @@ fn response_type(
         return Ok(quote!(NoContent));
     };
     if let Some(name) = ref_name(schema) {
-        let ident = names.get(name)?;
-        return Ok(quote!(crate::types::#ident));
+        return names.get(name).cloned();
     }
     let ReferenceOr::Item(schema) = schema else {
         return Ok(quote!(serde_json::Value));
@@ -702,8 +700,7 @@ fn named_or_value(
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
     if let Some(name) = ref_name(schema) {
-        let ident = names.get(name)?;
-        return Ok(quote!(crate::types::#ident));
+        return names.get(name).cloned();
     }
     Ok(quote!(serde_json::Value))
 }

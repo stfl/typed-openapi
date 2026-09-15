@@ -53,6 +53,7 @@
 //! correction that stops applying is the loudest thing a vendor revision can
 //! do, and this is where it is heard. The failure names the layer it is in.
 
+mod names;
 mod ops;
 mod types;
 
@@ -572,14 +573,15 @@ pub enum GenerateError {
     },
     #[error("typify cannot build Rust types from the document's schemas: {0}")]
     Typify(#[source] typify::Error),
-    /// A wrapper would have to name a type the generated schemas do not
-    /// define. Emitting it anyway is how an adopter ends up bisecting a
-    /// generated file, so the schema is named here instead.
+    /// A wrapper would have to name the type of a schema the document's
+    /// `components.schemas` never declared. Emitting an identifier for it
+    /// anyway is how an adopter ends up bisecting a generated file, so the
+    /// reference is named here instead.
     #[error(
-        "the document's schema `{schema}` has no generated type: a wrapper \
-         would name `{rust}`, which the generated types do not define"
+        "`#/components/schemas/{schema}` is referenced but not declared, so no \
+         wrapper can name the type it would be"
     )]
-    NoType { schema: String, rust: String },
+    NoType { schema: String },
     #[error("{0}")]
     Unsupported(String),
     /// A failure while emitting one operation's wrapper, named by the

@@ -706,3 +706,53 @@ fn prose_that_was_never_code_is_still_prose() {
         "a line mentioning a doc comment did not survive:\n{types}"
     );
 }
+
+/// A named schema the adopter owns the type for, reached from a wrapper.
+const OWNED: &str = r##"
+openapi: 3.0.3
+info: { title: Owned, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /prices:
+    get:
+      operationId: listPrices
+      parameters:
+        - name: over
+          in: query
+          schema: { $ref: "#/components/schemas/Cents" }
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Cents:
+      type: string
+      format: money
+"##;
+
+/// A schema `Settings::replace` substituted has no type in the generated
+/// module, because typify defined none — the adopter's own path is the answer,
+/// and it is good anywhere the generated crate compiles. A wrapper reaching for
+/// `crate::types::Cents` would name a module the type was never in, and a rule
+/// that derived the name instead of asking would have no way to know that.
+///
+/// This is route 2 whole: `replace` is how an adopter owns a type no document
+/// can describe, and a parameter is an ordinary place to spend it.
+#[test]
+fn a_schema_the_adopter_owns_is_named_by_the_adopters_own_path() {
+    let dir = out("owned");
+    Settings::new(wrote(&dir, "document.yaml", OWNED))
+        .replace("money", "cents::Cents")
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+    let ops = read(&dir.join("src/ops.rs"));
+
+    assert!(
+        ops.contains("over: Option<cents::Cents>"),
+        "the wrapper does not take the type the adopter owns:\n{ops}"
+    );
+    assert!(
+        !types.contains("struct Cents"),
+        "typify defined a type the adopter owns:\n{types}"
+    );
+}

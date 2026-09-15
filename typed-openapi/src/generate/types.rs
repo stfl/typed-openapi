@@ -21,24 +21,22 @@
 //! # It also answers what each schema is called
 //!
 //! typify chooses the Rust name of every generated type, and it chooses it
-//! here. [`ops`](super::ops) writes wrappers that name those types, so it needs
-//! the same answer — and a rule spelled in both places is a rule that can be
-//! spelled two ways, which an adopter meets as a generated crate that does not
-//! compile. So [`Names`] travels out of this module beside the source, built
-//! from the file typify actually emitted, and `ops` looks a schema up rather
-//! than deriving a spelling of its own.
+//! here — so this is where [`Names`](super::names::Names) is read off the
+//! `TypeSpace`, and it travels out beside the source for `ops` to look a
+//! schema up in.
 //!
 //! [`with_conversion`]: typify::TypeSpaceSettings::with_conversion
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use proc_macro2::{Ident, Span};
+use proc_macro2::Span;
 use quote::quote;
 use serde_json::Value;
 use syn::visit_mut::VisitMut;
 use typify::{TypeSpace, TypeSpaceImpl, TypeSpaceSettings};
 
 use super::GenerateError;
+use super::names::Names;
 
 /// One schema of the document, under its own name, in typify's dialect.
 type Definition = (String, Value);
@@ -82,6 +80,7 @@ pub(super) fn emit(
     space
         .add_ref_types(schemas(definitions)?)
         .map_err(GenerateError::Typify)?;
+    let names = Names::read(&mut space, declared.iter().map(String::as_str))?;
 
     let mut file: syn::File =
         syn::parse2(space.to_stream()).map_err(|source| GenerateError::NotRust {
@@ -90,7 +89,6 @@ pub(super) fn emit(
         })?;
     ThroughThisCrate.visit_file_mut(&mut file);
     super::Prose.visit_file_mut(&mut file);
-    let names = Names::of(declared.iter().map(String::as_str), &file);
     let mut displays = display_impls(&file)?;
     file.items.append(&mut displays);
     Ok((format!("{header}{}", prettyplease::unparse(&file)), names))
@@ -278,146 +276,5 @@ fn as_json_schema(value: Value) -> Value {
         ),
         Value::Array(items) => Value::Array(items.into_iter().map(as_json_schema).collect()),
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value,
-    }
-}
-
-/// Every schema the document names, paired with the type it became.
-///
-/// Only schemas that reached the emitted file are in here, and each is paired
-/// with the identifier as that file spells it rather than as a rule predicted
-/// it — so a lookup answers with something the generated types are known to
-/// define.
-#[derive(Debug, Default)]
-pub(super) struct Names(BTreeMap<String, Ident>);
-
-impl Names {
-    /// Pair each of `schemas` with the type `file` defines for it.
-    pub(super) fn of<'a>(schemas: impl IntoIterator<Item = &'a str>, file: &syn::File) -> Self {
-        let defined: BTreeMap<String, Ident> = file
-            .items
-            .iter()
-            .filter_map(defines)
-            .map(|ident| (ident.to_string(), ident.clone()))
-            .collect();
-        Self(
-            schemas
-                .into_iter()
-                .filter_map(|schema| {
-                    let ident = defined.get(&rust_type(schema))?;
-                    Some((schema.to_owned(), ident.clone()))
-                })
-                .collect(),
-        )
-    }
-
-    /// The type `schema` became, or the reason a wrapper cannot name it.
-    pub(super) fn get(&self, schema: &str) -> Result<&Ident, GenerateError> {
-        self.0.get(schema).ok_or_else(|| GenerateError::NoType {
-            schema: schema.to_owned(),
-            rust: rust_type(schema),
-        })
-    }
-}
-
-/// The type name typify gives the schema the document calls `schema`.
-///
-/// typify pascal-cases a definition's name and then makes the result a Rust
-/// identifier: an apostrophe is dropped so that `don't` is one word, everything
-/// else an identifier cannot carry becomes a separator, a name that would start
-/// with a digit is prefixed, and one that collides with a keyword gains a
-/// trailing underscore. The two signs are the two cases where pascal-casing
-/// alone would produce nothing usable.
-///
-/// This is a claim about what typify does, and [`Names`] is where the claim is
-/// checked: a name derived here that the emitted file does not define is not in
-/// the map, so it is reported rather than written into a wrapper.
-fn rust_type(schema: &str) -> String {
-    use heck::ToPascalCase as _;
-
-    let pascal = match schema {
-        "+1" => "Plus1".to_owned(),
-        "-1" => "Minus1".to_owned(),
-        other => other
-            .replace('\'', "")
-            .replace(|c: char| !c.is_alphanumeric() && c != '_', "-")
-            .to_pascal_case(),
-    };
-    let started = match pascal.chars().next() {
-        None => "X".to_owned(),
-        Some(first) if first.is_alphabetic() || first == '_' => pascal,
-        Some(_) => format!("X{pascal}"),
-    };
-    if typify::accept_as_ident(&started) {
-        started
-    } else {
-        format!("{started}_")
-    }
-}
-
-/// The name this item defines, if it defines one a wrapper could name.
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "the three arms are every shape a schema becomes; an `impl`, a \
-              `mod` or a `use` defines no type a wrapper could name, and \
-              neither would a kind syn adds later"
-)]
-fn defines(item: &syn::Item) -> Option<&Ident> {
-    match item {
-        syn::Item::Struct(item) => Some(&item.ident),
-        syn::Item::Enum(item) => Some(&item.ident),
-        syn::Item::Type(item) => Some(&item.ident),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "a test that cannot build its fixture should fail loudly and name it"
-)]
-mod tests {
-    use super::*;
-
-    /// Pinned because it is a claim about another crate's behaviour, and the
-    /// claim is load-bearing: a spelling that stops matching typify's is a
-    /// generated crate that does not compile. `Names` catches such a schema
-    /// rather than emitting it, and these are the cases it should never have
-    /// to catch.
-    #[test]
-    fn a_schema_name_is_spelled_the_way_typify_spells_it() {
-        for (schema, rust) in [
-            ("Voucher", "Voucher"),
-            ("saveVoucher", "SaveVoucher"),
-            ("Model_voucher", "ModelVoucher"),
-            ("voucher-summary", "VoucherSummary"),
-            ("voucher.summary", "VoucherSummary"),
-            ("2fa_stamp", "X2faStamp"),
-            ("don't", "Dont"),
-            ("+1", "Plus1"),
-            ("-1", "Minus1"),
-            ("", "X"),
-        ] {
-            assert_eq!(rust_type(schema), rust, "the spelling of `{schema}`");
-        }
-    }
-
-    /// The guard that makes a disagreement a report rather than a broken
-    /// crate: a schema the emitted file has no type for is named, with the
-    /// spelling that was looked for, so that whoever reads the failure can see
-    /// which half moved.
-    #[test]
-    fn a_schema_with_no_generated_type_is_named_rather_than_emitted() {
-        let empty = Names::default();
-        let failure = empty
-            .get("Model_voucher")
-            .expect_err("nothing was generated, so nothing can be named");
-        assert!(
-            matches!(
-                &failure,
-                GenerateError::NoType { schema, rust }
-                    if schema == "Model_voucher" && rust == "ModelVoucher"
-            ),
-            "the failure names neither the schema nor the spelling: {failure}"
-        );
     }
 }
