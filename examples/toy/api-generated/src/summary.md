@@ -12,17 +12,17 @@ quoting one is quoting a measurement rather than a memory.
 
 | what | how many |
 |---|---|
-| operations | 11 |
-| groups they are mounted under | 4 |
+| operations | 12 |
+| groups they are mounted under | 5 |
 | reads, sent on sight | 2 |
-| writes, held behind `--commit` | 9 |
+| writes, held behind `--commit` | 10 |
 | operations the document asks no body of | 5 |
 | bodies that go out whole, with no flag per property | 3 |
 | parameters carried without a flag | 0 |
 
 ## Groups
 
-`vouchers`, `contacts`, `documents`, `documents-multipart`
+`vouchers`, `contacts`, `documents`, `documents-multipart`, `ledger`
 
 ## Gates
 

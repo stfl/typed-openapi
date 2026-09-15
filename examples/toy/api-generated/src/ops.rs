@@ -43,6 +43,8 @@ pub enum OperationId {
     UploadDocument,
     ///uploadDocumentMultipart
     UploadDocumentMultipart,
+    ///createLedgerEntry
+    CreateLedgerEntry,
     ///archiveVoucher
     ArchiveVoucher,
 }
@@ -60,6 +62,7 @@ impl OperationId {
         OperationId::CreateContact,
         OperationId::UploadDocument,
         OperationId::UploadDocumentMultipart,
+        OperationId::CreateLedgerEntry,
         OperationId::ArchiveVoucher,
     ];
     ///The `<group> <command>` pair the CLI mounts this
@@ -80,6 +83,7 @@ impl OperationId {
             ("contacts", "create") => Some(Self::CreateContact),
             ("documents", "create") => Some(Self::UploadDocument),
             ("documents-multipart", "create") => Some(Self::UploadDocumentMultipart),
+            ("ledger", "entries") => Some(Self::CreateLedgerEntry),
             ("vouchers", "archive") => Some(Self::ArchiveVoucher),
             _ => None,
         }
@@ -108,6 +112,9 @@ impl OperationId {
             Self::CreateContact => {
                 typed_openapi::client::fits::<crate::types::Contact>("createContact", body)
             }
+            Self::CreateLedgerEntry => typed_openapi::client::fits::<
+                crate::types::CreateLedgerEntryBody,
+            >("createLedgerEntry", body),
             Self::ListVouchers
             | Self::GetVoucher
             | Self::EnshrineVoucher
@@ -133,11 +140,12 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
     ("createContact", "POST", "/contacts"),
     ("uploadDocument", "POST", "/documents"),
     ("uploadDocumentMultipart", "POST", "/documents-multipart"),
+    ("createLedgerEntry", "POST", "/ledger/entries"),
     ("archiveVoucher", "POST", "/vouchers/{id}/archive"),
 ];
 ///How many operations the document declares. An operation *added*
 ///upstream moves this number and nothing else would have noticed.
-pub const OPERATION_COUNT: usize = 11usize;
+pub const OPERATION_COUNT: usize = 12usize;
 const fn str_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
@@ -316,6 +324,22 @@ impl Api {
         )
     }
     /**
+    Post an amount to a ledger account
+
+    POST /ledger/entries
+
+    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    */
+    pub fn create_ledger_entry(
+        &self,
+        body: &crate::types::CreateLedgerEntryBody,
+    ) -> Result<Call<'_, crate::types::CreateLedgerEntryResponse>, Error> {
+        self.call(
+            OperationId::CreateLedgerEntry,
+            Values::new().json(crate::to_json(body)?),
+        )
+    }
+    /**
     Archive a voucher (undocumented; vendor ships it)
 
     POST /vouchers/{id}/archive
@@ -406,6 +430,14 @@ impl Api {
         parts: Vec<Part>,
     ) -> Result<Call<'_, NoContent>, Error> {
         self.upload_document_multipart(parts)
+    }
+    ///The same call as [`Api::create_ledger_entry`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn create_ledger_entry_builder(
+        &self,
+        body: &crate::types::CreateLedgerEntryBody,
+    ) -> Result<Call<'_, crate::types::CreateLedgerEntryResponse>, Error> {
+        self.create_ledger_entry(body)
     }
     ///The same call as [`Api::archive_voucher`], with its arguments named. A missing required argument is a compile error.
     #[builder]

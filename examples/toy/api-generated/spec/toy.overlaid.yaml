@@ -196,6 +196,41 @@ paths:
       responses:
         '201':
           description: Created
+  /ledger/entries:
+    post:
+      operationId: createLedgerEntry
+      summary: Post an amount to a ledger account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - account
+              - amount
+              properties:
+                account:
+                  $ref: '#/components/schemas/LedgerAccount'
+                amount:
+                  type: string
+                  format: money
+                  description: Decimal amount as a string
+                memo:
+                  $ref: '#/components/schemas/Memo'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account:
+                    $ref: '#/components/schemas/LedgerAccount'
+                  balance:
+                    type: string
+                    format: money
   /vouchers/{id}/archive:
     post:
       operationId: archiveVoucher
@@ -279,6 +314,10 @@ components:
         city:
           type: string
           example: Vienna
+    LedgerAccount:
+      type: string
+      description: The four-digit account an entry is posted to.
+      pattern: ^[0-9]{4}$
     Contact:
       type: object
       required:

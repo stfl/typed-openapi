@@ -34,6 +34,23 @@ pub struct Contact {
     pub id: ::std::option::Option<i64>,
     pub name: ::std::string::String,
 }
+///`CreateLedgerEntryBody`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
+pub struct CreateLedgerEntryBody {
+    pub account: LedgerAccount,
+    ///Decimal amount as a string
+    pub amount: money::Money,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub memo: ::std::option::Option<Memo>,
+}
+///`CreateLedgerEntryResponse`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default, PartialEq)]
+pub struct CreateLedgerEntryResponse {
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub account: ::std::option::Option<LedgerAccount>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub balance: ::std::option::Option<money::Money>,
+}
 ///An ISO 4217 currency code.
 #[derive(::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
@@ -95,6 +112,60 @@ pub struct Delivery {
     pub note: ::std::option::Option<Memo>,
     ///Mailbox the voucher is sent to
     pub recipient: ::std::string::String,
+}
+///The four-digit account an entry is posted to.
+#[derive(::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[serde(transparent)]
+pub struct LedgerAccount(::std::string::String);
+impl ::std::ops::Deref for LedgerAccount {
+    type Target = ::std::string::String;
+    fn deref(&self) -> &::std::string::String {
+        &self.0
+    }
+}
+impl ::std::convert::From<LedgerAccount> for ::std::string::String {
+    fn from(value: LedgerAccount) -> Self {
+        value.0
+    }
+}
+impl ::std::str::FromStr for LedgerAccount {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::typed_openapi::regress::Regex> =
+            ::std::sync::LazyLock::new(|| {
+                ::typed_openapi::regress::Regex::new("^[0-9]{4}$").unwrap()
+            });
+        if PATTERN.find(value).is_none() {
+            return Err("doesn't match pattern \"^[0-9]{4}$\"".into());
+        }
+        Ok(Self(value.to_string()))
+    }
+}
+impl ::std::convert::TryFrom<&str> for LedgerAccount {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for LedgerAccount {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for LedgerAccount {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        ::std::string::String::deserialize(deserializer)?
+            .parse()
+            .map_err(|e: self::error::ConversionError| {
+                <D::Error as ::serde::de::Error>::custom(e.to_string())
+            })
+    }
 }
 /**
 A note the sender keeps against the voucher.
@@ -277,6 +348,11 @@ pub mod error {
     }
 }
 impl ::std::fmt::Display for Currency {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::std::fmt::Display::fmt(&self.0, f)
+    }
+}
+impl ::std::fmt::Display for LedgerAccount {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         ::std::fmt::Display::fmt(&self.0, f)
     }
