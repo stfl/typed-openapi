@@ -791,3 +791,150 @@ fn a_document_that_names_no_schema_still_generates() {
         "a wrapper names a type in a document that declares none"
     );
 }
+
+/// A named schema whose whole shape the adopter owns the type for. The schema
+/// is called one thing and the type another, which is the ordinary case and
+/// the one typify answers by wrapping.
+const PROMISED: &str = r#"
+openapi: 3.0.3
+info: { title: Promised, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /prices:
+    get:
+      operationId: listPrices
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Amount:
+      type: string
+      format: cash
+"#;
+
+/// The `const _` block the generated file carries, from `const` to its closing
+/// brace at column zero.
+fn promise_in(types: &str) -> String {
+    let block: Vec<&str> = types
+        .lines()
+        .skip_while(|line| !line.starts_with("const _: () = {"))
+        .take_while(|line| *line != "};")
+        .collect();
+    format!("{}\n}};\n", block.join("\n"))
+}
+
+/// `Settings::replace` promises typify that the adopter's type parses from a
+/// string and prints to one, and typify writes the newtype's `FromStr`,
+/// `Display` and both `TryFrom`s in terms of that promise. The promise is
+/// checked where it is made, because breaking it is one of the worst failures
+/// this crate can hand an adopter.
+#[test]
+fn a_type_the_adopter_owns_is_held_to_what_replace_promised() {
+    let dir = out("promised");
+    Settings::new(wrote(&dir, "document.yaml", PROMISED))
+        .replace("cash", "crate::Owned")
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert!(
+        types.contains("parses_from_a_string::<crate::Owned>()")
+            && types.contains("prints_to_a_string::<crate::Owned>()"),
+        "the promise the generated newtype rests on is not checked:\n{types}"
+    );
+}
+
+/// A type the adopter owns, with `FromStr` and without `Display`.
+const HALF_KEPT: &str = "
+pub struct Owned;
+impl ::std::str::FromStr for Owned {
+    type Err = ::std::convert::Infallible;
+    fn from_str(_: &str) -> ::std::result::Result<Self, Self::Err> {
+        Ok(Self)
+    }
+}
+";
+
+/// The whole value of the check is the message, so the message is what is
+/// pinned: one error, naming the adopter's type and the trait it is missing,
+/// against a line that says what asked for it. The alternative an adopter gets
+/// without this is `E0599: no method named `fmt`` from inside a generated
+/// newtype, or — for a missing `FromStr` — four `E0271`s and two `E0276`s
+/// about an associated type that cannot be resolved.
+#[test]
+fn a_broken_promise_names_the_type_and_the_trait_it_lacks() {
+    let dir = out("promise-broken");
+    Settings::new(wrote(&dir, "document.yaml", PROMISED))
+        .replace("cash", "crate::Owned")
+        .write_to(&dir)
+        .expect("the document generates");
+
+    let promise = promise_in(&read(&dir.join("src/types.rs")));
+    let path = wrote(&dir, "half_kept.rs", &format!("{HALF_KEPT}{promise}"));
+    let ran = std::process::Command::new("rustc")
+        .args([
+            "--edition",
+            "2024",
+            "--crate-type",
+            "lib",
+            "--emit",
+            "metadata",
+        ])
+        .arg("-o")
+        .arg(dir.join("half_kept.rmeta"))
+        .arg(&path)
+        .output()
+        .expect("rustc is on PATH beside the rustfmt a bless step already needs");
+    let complained = String::from_utf8_lossy(&ran.stderr);
+
+    assert!(
+        complained.contains("the trait `std::fmt::Display` is not implemented for `Owned`"),
+        "the failure does not name the adopter's type and the trait it lacks:\n{complained}"
+    );
+    assert!(
+        complained.contains("prints_to_a_string"),
+        "the failure does not point at the line that says what asked for it:\n{complained}"
+    );
+}
+
+/// The same format, declared inline rather than under a name.
+const INLINE: &str = r#"
+openapi: 3.0.3
+info: { title: Inline, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /prices:
+    get:
+      operationId: listPrices
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Price:
+      type: object
+      properties:
+        figure: { type: string, format: cash }
+"#;
+
+/// typify emits a replaced type directly wherever it does not wrap it, and
+/// writes nothing in terms of it — so there is no promise to keep and none is
+/// demanded. Asking anyway would refuse a type for missing a trait the
+/// generated code never uses.
+#[test]
+fn a_type_nothing_was_written_in_terms_of_is_asked_for_nothing() {
+    let dir = out("inline");
+    Settings::new(wrote(&dir, "document.yaml", INLINE))
+        .replace("cash", "crate::Owned")
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert!(
+        types.contains("crate::Owned"),
+        "the adopter's type did not reach the generated field:\n{types}"
+    );
+    assert!(
+        !types.contains("a_type_named_by_settings_replace"),
+        "a promise is demanded where nothing rests on it:\n{types}"
+    );
+}

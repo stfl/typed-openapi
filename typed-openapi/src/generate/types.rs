@@ -91,7 +91,92 @@ pub(super) fn emit(
     super::Prose.visit_file_mut(&mut file);
     let mut displays = display_impls(&file)?;
     file.items.append(&mut displays);
+    for promise in promises(&file, replacements)?.into_iter().rev() {
+        file.items.insert(0, promise);
+    }
     Ok((format!("{header}{}", prettyplease::unparse(&file)), names))
+}
+
+/// What [`Settings::replace`] promised typify, checked by the generated crate.
+///
+/// `with_conversion` tells typify that the adopter's type parses from a string
+/// and prints to one, and typify writes the newtype's `Display`, `FromStr` and
+/// both `TryFrom`s in terms of that promise. An adopter who breaks it does not
+/// read that they broke it: a missing `FromStr` is four `E0271`s and two
+/// `E0276`s about an associated type that cannot be resolved, and a missing
+/// `Display` is `E0599: no method named `fmt``, all of them tens of thousands
+/// of lines inside a file they did not write.
+///
+/// The promise is only owed where typify *wrapped* the type. Where it emitted
+/// the type directly — an inline shape, or a named schema whose own name is
+/// what the replacement path ends in — nothing is written in terms of it and
+/// the adopter's type needs neither trait. So the emitted file is what decides
+/// who is asked, and a type nobody wrapped is asked for nothing.
+///
+/// The traits the newtype *derives* are deliberately not here. `Clone`,
+/// `Debug`, `PartialEq`, serde's pair and whatever else typify adds for the
+/// shape already fail one at a time, naming the type and the trait, which is
+/// as good as this could make them — and which of them are derived varies with
+/// the shape, so a fixed list would eventually fail for a reason that is not
+/// the reason.
+///
+/// [`Settings::replace`]: super::Settings::replace
+fn promises(
+    file: &syn::File,
+    replacements: &[(String, String)],
+) -> Result<Vec<syn::Item>, GenerateError> {
+    let wrapped: BTreeSet<String> = file.items.iter().filter_map(wraps).collect();
+    let mut asked = BTreeSet::new();
+    let mut promises = Vec::new();
+    for (format, rust) in replacements {
+        let ty: syn::Type = syn::parse_str(rust).map_err(|source| {
+            GenerateError::Unsupported(format!(
+                "`{rust}`, named for `format: {format}`, is not a Rust type: {source}"
+            ))
+        })?;
+        let spelling = quote!(#ty).to_string();
+        if !wrapped.contains(&spelling) || !asked.insert(spelling) {
+            continue;
+        }
+        let said = format!(
+            "`Settings::replace(\"{format}\", \"{rust}\")` promises that this type parses \
+             from a string and prints to one, and the newtype above is written in terms \
+             of both."
+        );
+        promises.push(
+            syn::parse2(quote! {
+                #[doc = #said]
+                const _: () = {
+                    fn parses_from_a_string<T: ::std::str::FromStr>() {}
+                    fn prints_to_a_string<T: ::std::fmt::Display>() {}
+                    fn a_type_named_by_settings_replace() {
+                        parses_from_a_string::<#ty>();
+                        prints_to_a_string::<#ty>();
+                    }
+                };
+            })
+            .map_err(|source| GenerateError::NotRust {
+                file: "types.rs",
+                source,
+            })?,
+        );
+    }
+    Ok(promises)
+}
+
+/// The type this item is a newtype over, if that is what it is.
+fn wraps(item: &syn::Item) -> Option<String> {
+    let syn::Item::Struct(item) = item else {
+        return None;
+    };
+    let syn::Fields::Unnamed(fields) = &item.fields else {
+        return None;
+    };
+    if !item.generics.params.is_empty() || fields.unnamed.len() != 1 {
+        return None;
+    }
+    let wrapped = &fields.unnamed.first()?.ty;
+    Some(quote!(#wrapped).to_string())
 }
 
 /// `Display` for every generated newtype that wraps a string and has none.

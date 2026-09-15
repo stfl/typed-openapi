@@ -90,20 +90,30 @@ second.
 the generated crate can name — which means the crate that owns the type is a
 dependency of the generated crate.
 
-**What your type has to implement.** A named schema tagged with the format
-becomes a newtype over your type, and that newtype's impls are written in terms
-of yours: `Display` forwards to it, `FromStr` parses into it and names
-`<YourType as FromStr>::Err` as its own error, and the two `TryFrom`s go through
-that. So the type needs `FromStr` and `Display`, plus the `Serialize`,
-`Deserialize`, `Clone`, `Debug` and `PartialEq` every generated type derives. A
-type missing `FromStr` is a pile of errors inside `types.rs` about an
-associated type that does not exist, which is a confusing place to read that
-this is the contract.
+**What your type has to implement.** Your type needs the `Serialize`,
+`Deserialize`, `Clone`, `Debug` and `PartialEq` that every generated type
+derives, wherever it appears. Each missing one is a single error naming your
+type and the trait.
 
-That contract is also why the rule and the type do not check each other. A
-schema whose format is replaced hands the whole reading to your `FromStr`: the
+Sometimes it needs `FromStr` and `Display` as well. A named schema tagged with
+the format becomes a *newtype over* your type whenever the schema's name is not
+what your type's path ends in — schema `Cents` and `money::Cents` are the same
+word, so the type stands alone; schema `Amount` and `money::Cents` are not, so
+`Amount` wraps it. A wrapper's impls are written in terms of yours: `Display`
+forwards to it, `FromStr` parses into it and names `<YourType as FromStr>::Err`
+as its own error, and both `TryFrom`s go through that.
+
+You are not left to remember which case you are in. Where a wrapper is written,
+`types.rs` carries a `const _` block asserting both traits against your type, so
+a missing one is a single error naming your type, the trait, and the line that
+asked for it — rather than the `E0271`s and `E0276`s about an unresolvable
+associated type that the wrapper's own impls would otherwise produce, tens of
+thousands of lines into a file you did not write.
+
+`FromStr` is also why the rule and the type do not check each other. A schema
+whose format is replaced hands the whole reading to your `FromStr`: the
 document's `pattern` reaches the command line, and nothing re-runs it inside the
-newtype. The two can therefore disagree, and only a test holds them together —
+wrapper. The two can therefore disagree, and only a test holds them together —
 see [owning the type yourself](overlay.md#owning-the-type-yourself).
 
 It is the route for a type that needs *behaviour*, or one the document cannot
