@@ -6,7 +6,8 @@
 //! rule. typify gives that newtype `Deref<Target = String>`, `FromStr` and two
 //! `TryFrom`s — and no `Display`, so a value that came back from the API can be
 //! dereferenced into a `format!` but not written to one. [`display_impls`] is
-//! the missing half. typify also writes `::regress::Regex` into every such
+//! the missing half, for the newtypes that are missing it. typify also writes
+//! `::regress::Regex` into every such
 //! check; [`ThroughThisCrate`] points those at this crate's re-export, so the
 //! crate holding the generated code adds no dependency of its own.
 //!
@@ -29,7 +30,7 @@
 //!
 //! [`with_conversion`]: typify::TypeSpaceSettings::with_conversion
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::{Ident, Span};
 use quote::quote;
@@ -94,17 +95,26 @@ pub(super) fn emit(
     Ok((format!("{header}{}", prettyplease::unparse(&file)), names))
 }
 
-/// `Display` for every generated newtype that wraps a string.
+/// `Display` for every generated newtype that wraps a string and has none.
 ///
-/// It reads the emitted file rather than the schemas because the file is what
-/// settles the question: typify decides which schemas become newtypes, and a
-/// name it chose is the name the `impl` has to carry. Writing to `self.0` is
-/// what makes the two travel together — the `impl` lands in the module holding
-/// the struct, so the private field is in reach and no `Deref` is assumed.
+/// typify writes one itself for a newtype it left *unconstrained* — a named
+/// schema that is a bare `type: string`, with no `pattern`, no `enum` and no
+/// `format` — and omits it only for the ones whose `FromStr` enforces a rule.
+/// Which of the two a schema became is not a thing to predict, so it is read
+/// off the file: a struct that already carries a `Display` is skipped, and a
+/// second `impl` for one is a generated crate that does not compile.
+///
+/// Reading the emitted file rather than the schemas settles the names too.
+/// typify decides which schemas become newtypes, and a name it chose is the
+/// name the `impl` has to carry. Writing to `self.0` is what makes the two
+/// travel together — the `impl` lands in the module holding the struct, so the
+/// private field is in reach and no `Deref` is assumed.
 fn display_impls(file: &syn::File) -> Result<Vec<syn::Item>, GenerateError> {
+    let printed: BTreeSet<String> = file.items.iter().filter_map(prints).collect();
     file.items
         .iter()
         .filter_map(string_newtype)
+        .filter(|name| !printed.contains(&name.to_string()))
         .map(|name| {
             syn::parse2(quote! {
                 impl ::std::fmt::Display for #name {
@@ -120,6 +130,21 @@ fn display_impls(file: &syn::File) -> Result<Vec<syn::Item>, GenerateError> {
             })
         })
         .collect()
+}
+
+/// The type this item writes a `Display` for, if that is what this item is.
+fn prints(item: &syn::Item) -> Option<String> {
+    let syn::Item::Impl(item) = item else {
+        return None;
+    };
+    let (path, _) = item.trait_.as_ref()?;
+    if path.segments.last()?.ident != "Display" {
+        return None;
+    }
+    let syn::Type::Path(printed) = item.self_ty.as_ref() else {
+        return None;
+    };
+    Some(printed.path.segments.last()?.ident.to_string())
 }
 
 /// The name of a newtype over a string, if that is what this item is.

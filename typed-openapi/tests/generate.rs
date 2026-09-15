@@ -498,3 +498,61 @@ fn a_parameter_that_cannot_be_spelled_names_itself_and_its_operation() {
         "listVouchers: parameter `2` has no spelling as a Rust identifier",
     );
 }
+
+/// A named schema that is a bare string: no `pattern`, no `enum`, no `format`.
+///
+/// Naming a schema purely to give a field a description and one place to change
+/// it is an ordinary thing to do, and it is the one shape typify gives a
+/// `Display` of its own.
+const UNCONSTRAINED: &str = r##"
+openapi: 3.0.3
+info: { title: Unconstrained, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /vouchers:
+    get:
+      operationId: listVouchers
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Voucher" }
+components:
+  schemas:
+    Filename:
+      type: string
+      description: The name the server gave an uploaded file.
+    Sku:
+      type: string
+      pattern: "^[A-Z]{3}-[0-9]{4}$"
+    Voucher:
+      type: object
+      properties:
+        attachment: { $ref: "#/components/schemas/Filename" }
+        sku: { $ref: "#/components/schemas/Sku" }
+"##;
+
+/// Which newtypes typify prints for itself is not a thing to predict: it writes
+/// a `Display` for an unconstrained string newtype and omits it for a
+/// pattern-constrained one. Both shapes have to end up with exactly one, and
+/// the document here carries one of each so that neither half can pass alone.
+#[test]
+fn every_string_newtype_prints_and_none_of_them_twice() {
+    let dir = out("unconstrained");
+    Settings::new(wrote(&dir, "document.yaml", UNCONSTRAINED))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    for name in ["Filename", "Sku"] {
+        let written = types
+            .matches(&format!("impl ::std::fmt::Display for {name} "))
+            .count();
+        assert_eq!(
+            written, 1,
+            "`{name}` has {written} `Display` impls, and a generated crate \
+             compiles with exactly one:\n{types}"
+        );
+    }
+}
