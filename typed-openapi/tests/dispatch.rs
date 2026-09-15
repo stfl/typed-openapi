@@ -18,7 +18,7 @@
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use http::{Method, StatusCode};
 use serde_json::json;
-use typed_openapi::tree::{self, DispatchError, Outcome};
+use typed_openapi::tree::{self, Asked, DispatchError, Outcome, Selection};
 use typed_openapi::{
     Answers, COMMIT, Document, HttpRequest, Plan, Reach, Recorder, RecorderError, SyncClient,
     Values, render,
@@ -56,6 +56,18 @@ fn root(doc: &Document) -> Command {
 
 fn parse(doc: &Document, args: &[&str]) -> ArgMatches {
     root(doc).get_matches_from(args)
+}
+
+/// The selection a subcommand that was asked to run hands back.
+///
+/// `select` answers two questions and only one of them is an operation to run,
+/// so a command line that asked what a body looks like never reaches the trip
+/// these tests are about — and says so here rather than further down.
+fn running<'d>(doc: &'d Document, matches: &ArgMatches) -> Selection<'d> {
+    match tree::select(doc, matches).expect("the subcommand names an operation") {
+        Asked::Run(selection) => selection,
+        Asked::Template(_) => panic!("this command line runs the operation"),
+    }
 }
 
 /// The one request the recorder was given. "One" is half the assertion: a
@@ -195,6 +207,7 @@ fn commit_sends_exactly_what_the_dry_run_printed() {
         match tree::dispatch(&doc, doc.base(), &client, &matches).expect("dispatches") {
             Outcome::DryRun(request) => render(&request),
             Outcome::Sent(_) => panic!("no --commit was given"),
+            Outcome::Template(_) => panic!("this command line runs the operation"),
         }
     };
 
@@ -230,7 +243,7 @@ fn the_shortcut_and_the_seam_reach_the_same_request() {
     let long_way = {
         let client = Recorder::new();
         let matches = parse(&doc, &["toy", "vouchers", "get", "--id", "5"]);
-        let selected = tree::select(&doc, &matches).expect("the subcommand names an operation");
+        let selected = running(&doc, &matches);
         // What the seam exists for: an adopter reads the operation and the
         // values here, and holds the body to a type this crate cannot see.
         assert_eq!(selected.operation().id(), "getVoucher");
@@ -261,7 +274,7 @@ fn the_shortcut_and_the_seam_reach_the_same_request() {
 fn a_selection_reaches_the_gates_verdict_with_no_client_built() {
     let doc = document();
     let matches = parse(&doc, CREATE);
-    let selected = tree::select(&doc, &matches).expect("the subcommand names an operation");
+    let selected = running(&doc, &matches);
 
     let plan = selected
         .plan(doc.base())
@@ -287,8 +300,7 @@ fn a_confirmed_selection_plans_to_send_the_request_the_dry_run_carried() {
     let doc = document();
     let planned = |args: &[&str]| {
         let matches = parse(&doc, args);
-        tree::select(&doc, &matches)
-            .expect("the subcommand names an operation")
+        running(&doc, &matches)
             .plan(doc.base())
             .expect("the values satisfy the operation")
     };
@@ -310,14 +322,12 @@ fn plan_and_send_report_one_request_for_one_command_line() {
     let doc = document();
     let matches = parse(&doc, CREATE);
 
-    let planned = tree::select(&doc, &matches)
-        .expect("the subcommand names an operation")
+    let planned = running(&doc, &matches)
         .plan(doc.base())
         .expect("the values satisfy the operation");
 
     let client = Recorder::new();
-    let outcome = tree::select(&doc, &matches)
-        .expect("the subcommand names an operation")
+    let outcome = running(&doc, &matches)
         .send(&client, doc.base())
         .expect("a write dispatches");
 
@@ -329,6 +339,188 @@ fn plan_and_send_report_one_request_for_one_command_line() {
         client.take().is_empty(),
         "a dry run reaches the client with nothing"
     );
+}
+
+/// Asking what a body looks like is not running the operation, and the proof
+/// is that `createContact` answers at all.
+///
+/// Its body is `required: true`, so a request built for this command line would
+/// have been refused by `Invocation::new` for having no body — the route that
+/// answers here is the route that never built one. Nothing reaches the gate,
+/// because there is nothing to put to it, and the recorder is handed nothing
+/// because no client was ever asked for.
+#[test]
+fn asking_what_a_body_looks_like_builds_nothing_and_sends_nothing() {
+    let doc = document();
+    let client = Recorder::new();
+    let matches = parse(&doc, &["toy", "contacts", "create", "--json-body-template"]);
+
+    let asked = tree::select(&doc, &matches).expect("the subcommand names an operation");
+    assert!(
+        matches!(asked, Asked::Template(_)),
+        "a template is not a selection to send"
+    );
+
+    let outcome = tree::dispatch(&doc, doc.base(), &client, &matches)
+        .expect("nothing is built, so there is nothing to refuse");
+    let Outcome::Template(template) = outcome else {
+        panic!("this command line asked what the body looks like");
+    };
+    assert!(template.starts_with("{\n  \"name\""), "{template}");
+    assert!(
+        client.take().is_empty(),
+        "no request was built, so none went out"
+    );
+}
+
+/// A write's template wants no confirmation, because a template is not a write.
+///
+/// `createContact` is a `POST` with a required body, so running it demands
+/// `--json-body` and prints a dry run until `--commit`. Asking for the shape
+/// demands neither — requiring the confirmation to read the shape of a body
+/// would be asking a user to promise to send something they cannot yet spell.
+///
+/// The other half is that `--commit` beside it is *refused* rather than
+/// ignored: a command line that confirms a write and asks what the write would
+/// look like is two commands, and only the user can say which they meant.
+#[test]
+fn a_templates_write_wants_neither_the_confirmation_nor_the_body_it_describes() {
+    let doc = document();
+    let template_only = root(&doc)
+        .try_get_matches_from(["toy", "contacts", "create", "--json-body-template"])
+        .expect("a template asks for nothing else and is asked for nothing else");
+    assert!(matches!(
+        tree::select(&doc, &template_only).expect("the subcommand names an operation"),
+        Asked::Template(_)
+    ));
+
+    // The same subcommand run for real wants the body it would send.
+    let refused = root(&doc)
+        .try_get_matches_from(["toy", "contacts", "create"])
+        .expect_err("the body is required")
+        .to_string();
+    assert!(refused.contains("--json-body"), "{refused}");
+
+    // And the confirmation is not something to give a command that sends
+    // nothing.
+    let conflict = root(&doc)
+        .try_get_matches_from([
+            "toy",
+            "contacts",
+            "create",
+            "--json-body-template",
+            "--commit",
+        ])
+        .expect_err("two commands on one line")
+        .to_string();
+    assert!(
+        conflict.contains("--json-body-template") && conflict.contains("cannot be used with"),
+        "{conflict}"
+    );
+}
+
+/// The same holds for a named gate, which is the one flag this crate makes
+/// `required` on purpose. A gate stands in front of a hazard, and reading the
+/// shape of a body is not the hazard — so the word is not demanded for it, and
+/// the operation still demands it for every command line that runs.
+#[test]
+fn a_template_is_not_the_hazard_a_gate_stands_in_front_of() {
+    const GATED: &str = "openapi: 3.0.3\n\
+         info: { title: t, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+        \x20 /postings:\n\
+        \x20   post:\n\
+        \x20     operationId: createPosting\n\
+        \x20     x-cli-gates: [enshrine]\n\
+        \x20     requestBody:\n\
+        \x20       required: true\n\
+        \x20       content:\n\
+        \x20         application/json:\n\
+        \x20           schema:\n\
+        \x20             type: object\n\
+        \x20             required: [period]\n\
+        \x20             properties:\n\
+        \x20               period:\n\
+        \x20                 type: object\n\
+        \x20                 required: [opens]\n\
+        \x20                 properties:\n\
+        \x20                   opens: { type: string }\n\
+        \x20     responses: { \"201\": { description: Created } }\n";
+    let doc = Document::load(GATED, &[]).expect("a document");
+
+    let asked = root(&doc)
+        .try_get_matches_from(["toy", "postings", "create", "--json-body-template"])
+        .expect("a gate holds back a request, and this builds none");
+    let Asked::Template(template) =
+        tree::select(&doc, &asked).expect("the subcommand names an operation")
+    else {
+        panic!("this command line asked what the body looks like");
+    };
+    assert_eq!(template, "{\n  \"period\": {\n    \"opens\": \"\"\n  }\n}");
+
+    // And the gate is still a gate for everything that runs.
+    let refused = root(&doc)
+        .try_get_matches_from(["toy", "postings", "create", "--json-body", "body.json"])
+        .expect_err("the gate is required")
+        .to_string();
+    assert!(refused.contains("--enshrine"), "{refused}");
+}
+
+/// A flag with nothing behind it is the flag this design replaces, so a
+/// `--json-body-template` that would print nothing does not exist to be typed.
+///
+/// Two ways to have nothing to print. A flat body's per-field flags already say
+/// what goes in it, so it is never asked again. And a body that goes whole but
+/// whose schema this crate has no reading for — a `oneOf`, where the document
+/// says a value is one of several things and nothing here picks which — has a
+/// `--json-body` and no skeleton to go with it.
+#[test]
+fn a_body_with_no_template_grows_no_flag_to_ask_for_one() {
+    /// A body the document says is one of two objects: a real composition, and
+    /// one with no single shape to write down.
+    const COMPOSED: &str = "openapi: 3.0.3\n\
+         info: { title: t, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+        \x20 /postings:\n\
+        \x20   post:\n\
+        \x20     operationId: createPosting\n\
+        \x20     requestBody:\n\
+        \x20       required: true\n\
+        \x20       content:\n\
+        \x20         application/json:\n\
+        \x20           schema:\n\
+        \x20             oneOf:\n\
+        \x20               - { type: object, required: [ledger], properties: { ledger: { type: string } } }\n\
+        \x20               - { type: object, required: [period], properties: { period: { type: string } } }\n\
+        \x20     responses: { \"201\": { description: Created } }\n";
+
+    let unexpected = |refused: clap::Error| {
+        let refused = refused.to_string();
+        assert!(
+            refused.contains("unexpected argument '--json-body-template'"),
+            "{refused}"
+        );
+    };
+
+    let doc = document();
+    unexpected(
+        root(&doc)
+            .try_get_matches_from(["toy", "vouchers", "create", "--json-body-template"])
+            .expect_err("a flat body has per-field flags instead"),
+    );
+
+    let composed = Document::load(COMPOSED, &[]).expect("a document");
+    unexpected(
+        root(&composed)
+            .try_get_matches_from(["toy", "postings", "create", "--json-body-template"])
+            .expect_err("a composition has no single shape to print"),
+    );
+    // And the body it cannot describe still goes through a file.
+    root(&composed)
+        .try_get_matches_from(["toy", "postings", "create", "--json-body", "body.json"])
+        .expect("--json-body is what a body with no flags has");
 }
 
 #[test]

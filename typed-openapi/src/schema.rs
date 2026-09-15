@@ -13,12 +13,18 @@
 //! Two other things a schema says travel with those rules and are not rules
 //! themselves: the sentence that describes it, and the `format` that names what
 //! kind of value it is. [`description_of`] and [`format_of`] read them.
+//!
+//! [`template`] is the other half of the same reading. A body that does not fit
+//! on flags goes through a file, and the shape of that file is the one thing
+//! `--help` cannot state — so the walk that decided the body was not flat also
+//! writes down what it saw, as the JSON skeleton a user fills in.
 
 use openapiv3::{
-    Components, IntegerType, NumberType, ReferenceOr, Schema, SchemaKind, StringType, Type,
-    VariantOrUnknownOrEmpty,
+    ArrayType, Components, IntegerType, NumberType, ObjectType, ReferenceOr, Schema, SchemaKind,
+    StringType, Type, VariantOrUnknownOrEmpty,
 };
 use serde::Serialize;
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::scalar::{Bounds, Limit, Scalar, Text};
@@ -32,6 +38,18 @@ pub struct RefError {
 
 /// How deep a chain of `$ref`s may go before it is called a cycle.
 const MAX_HOPS: usize = 8;
+
+/// How deep a body template spells the document out.
+///
+/// A property that points back at the schema holding it — a voucher whose
+/// parent is a voucher — describes a value of no finite depth, so the walk
+/// wants a floor rather than a way to recognise that one case: a cycle and an
+/// honestly deep document stop in the same place, and neither hands a user a
+/// template that scrolls past what they came to read. Eight levels is past
+/// anything read in one sitting, and what stands at the floor is the empty
+/// object or the empty list — the template says a value belongs here and stops
+/// spelling it out, which is the most it can truthfully say.
+const MAX_DEPTH: usize = 8;
 
 /// Follow `#/components/<section>/<name>` hops until an item appears.
 pub fn resolve<'c, T>(
@@ -183,6 +201,162 @@ fn as_written<T: Serialize>(format: &VariantOrUnknownOrEmpty<T>) -> Option<Strin
     match serde_json::to_value(format) {
         Ok(serde_json::Value::String(spelling)) => Some(spelling),
         Ok(_) | Err(_) => None,
+    }
+}
+
+/// The example a schema states about itself, and the one it inherits by
+/// pointing somewhere else.
+///
+/// Read the way [`description_of`] reads a description, and for the same
+/// reason: a value stated about *this* field is about this field, where a named
+/// schema's is about every field that shares the rule.
+fn example_of<'c>(
+    schema: &'c ReferenceOr<Schema>,
+    components: &'c Components,
+) -> Result<Option<&'c Value>, RefError> {
+    let own = &resolve_schema(schema, components)?.schema_data.example;
+    if own.is_some() {
+        return Ok(own.as_ref());
+    }
+    Ok(stated(schema, components)?.schema_data.example.as_ref())
+}
+
+/// A skeleton of one JSON body, as the text a user redirects into a file.
+///
+/// The body that goes through a file is the body with no per-field flags, and
+/// the flags are where this crate says what a field is called and what it
+/// accepts — so that body is the one a `--help` page cannot describe. This is
+/// what the walk that decided it was not flat saw on the way.
+///
+/// `None` where there is no shape to write down: a body the document gives no
+/// schema, or one whose schema is a composition this crate has no reading for.
+/// The absence travels, and a subcommand with nothing to print grows no flag to
+/// ask for it.
+///
+/// Rendered once, while the document is reduced, and carried as the text it
+/// renders to. A shipped binary prints it and reads nothing — the rule both
+/// command names already follow.
+pub fn template(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+) -> Result<Option<String>, RefError> {
+    let skeleton = skeleton(schema, components, 0)?;
+    if skeleton.is_null() {
+        return Ok(None);
+    }
+    Ok(serde_json::to_string_pretty(&skeleton).ok())
+}
+
+/// One schema as the emptiest value that fits it.
+///
+/// `Value::Null` is what this says about a schema it has no reading for — a
+/// composition, or a node that states nothing at all. Under a required property
+/// that is the honest placeholder for a key the caller must supply and this
+/// crate cannot describe; at the top it is what [`template`] reads as having no
+/// template to offer.
+fn skeleton(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+    depth: usize,
+) -> Result<Value, RefError> {
+    // An `example` is instance data, so it is taken whole and never read as a
+    // schema. A vendor whose example spells out a form as `{"required": [...]}`
+    // is writing a value that happens to use those words, and descending into
+    // it would build a template out of somebody's sample. It comes first
+    // because it is the better source: a value the document states round-trips,
+    // where one derived from types alone is only a shape.
+    if let Some(example) = example_of(schema, components)? {
+        return Ok(example.clone());
+    }
+    if let Some(scalar) = scalar_of(schema, components)? {
+        return Ok(empty(&scalar));
+    }
+    let node = stated(schema, components)?;
+    if let SchemaKind::Type(Type::Object(object)) = &node.schema_kind {
+        return object_skeleton(object, components, depth);
+    }
+    if let SchemaKind::Type(Type::Array(array)) = &node.schema_kind {
+        return array_skeleton(array, components, depth);
+    }
+    Ok(Value::Null)
+}
+
+/// The required properties, in the order the document declares them, and
+/// nothing else.
+///
+/// An optional key carrying an empty value is a key the caller never asked to
+/// send: on a `PUT` it is an empty string written over a field somebody meant
+/// to leave alone, and JSON has no comment to mark it as a suggestion with. So
+/// a template carries the minimum the document demands and the document stays
+/// where the rest is stated — the default-closed instinct the write gate has,
+/// applied to a body. A schema that requires nothing renders as `{}`, which is
+/// exactly what it asks of a caller.
+fn object_skeleton(
+    object: &ObjectType,
+    components: &Components,
+    depth: usize,
+) -> Result<Value, RefError> {
+    let mut out = serde_json::Map::new();
+    if depth >= MAX_DEPTH {
+        return Ok(Value::Object(out));
+    }
+    for (name, property) in &object.properties {
+        if !object.required.iter().any(|required| required == name) {
+            continue;
+        }
+        out.insert(
+            name.clone(),
+            skeleton(&property.clone().unbox(), components, depth + 1)?,
+        );
+    }
+    Ok(Value::Object(out))
+}
+
+/// One element rather than none.
+///
+/// An empty list is a body the server accepts and the user learns nothing
+/// from, and what goes *in* the list is exactly what they came here to find
+/// out. One element, itself a skeleton, says that much and is no more sendable
+/// than the rest of the template. A list whose `items` the document omits is
+/// the one case with nothing to put in it.
+fn array_skeleton(
+    array: &ArrayType,
+    components: &Components,
+    depth: usize,
+) -> Result<Value, RefError> {
+    if depth >= MAX_DEPTH {
+        return Ok(Value::Array(Vec::new()));
+    }
+    let Some(items) = &array.items else {
+        return Ok(Value::Array(Vec::new()));
+    };
+    Ok(Value::Array(vec![skeleton(
+        &items.clone().unbox(),
+        components,
+        depth + 1,
+    )?]))
+}
+
+/// The emptiest value of one kind.
+///
+/// Empty and zero rather than plausible, on purpose: a template a user can send
+/// unmodified by accident is a worse artefact than none. `""` against a
+/// `pattern` and `0` against a `minimum` are values the document itself rules
+/// out, so a template nobody filled in is a body the server refuses rather than
+/// one it acts on.
+///
+/// An enumeration is the one kind with no empty member, so it shows the first
+/// value the document lists. A value the enumeration does not list would be a
+/// lie about the API, and there is nothing else to show.
+fn empty(scalar: &Scalar) -> Value {
+    match scalar {
+        Scalar::Text(_) => Value::String(String::new()),
+        Scalar::Integer(_) => Value::from(0),
+        Scalar::Number(_) => Value::from(0.0),
+        Scalar::Boolean => Value::Bool(false),
+        Scalar::Choice(values) => values
+            .first()
+            .map_or(Value::Null, |first| Value::String(first.clone())),
     }
 }
 

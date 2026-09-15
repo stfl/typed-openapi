@@ -61,6 +61,11 @@ fn run() -> Result<String, Box<dyn std::error::Error>> {
                 "{}\ndry run: nothing was sent. Add --commit to send it.\n",
                 render(&request)
             ),
+            // `--json-body-template`. Nothing was built and nothing was sent,
+            // so the skeleton is the whole of the output and goes out clean —
+            // `root vouchers ... --json-body-template > body.json` leaves a
+            // file with JSON in it and nothing else.
+            Outcome::Template(template) => format!("{template}\n"),
         },
     )
 }

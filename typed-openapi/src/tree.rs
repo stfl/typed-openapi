@@ -14,6 +14,13 @@
 //! body to a generated type, say — between what the user typed and what goes
 //! out. [`dispatch`] is the two of them in order.
 //!
+//! Not every subcommand is asked to run. `--json-body-template` asks what the
+//! body of a nested one looks like, and [`select`] answers it from the reduced
+//! model as an [`Asked::Template`] — no values read, no request built, no
+//! client wanted. It is an arm of an enum rather than a flag left lying about
+//! because an arm has to be rendered: a template nobody prints is the thing
+//! this exists to replace.
+//!
 //! The seam also answers the gate on its own: [`Selection::plan`] builds the
 //! request and returns what the gate decided, with nothing sent and no client
 //! asked for. An adopter whose client costs something to build — a credential a
@@ -32,8 +39,8 @@ use http::Uri;
 use thiserror::Error;
 
 use crate::model::{
-    Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, Gate, JSON_BODY, Location,
-    Operation, Param, RAW_BODY, Shape,
+    Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, Gate, JSON_BODY,
+    JSON_BODY_TEMPLATE, Location, Operation, Param, RAW_BODY, Shape,
 };
 use crate::names::{CommandName, renamed};
 use crate::plan::{Answers, Plan, PlanError};
@@ -254,11 +261,17 @@ pub fn values(op: &Operation, matches: &ArgMatches) -> Result<Values, ArgError> 
     Ok(values.body(payload(op, matches)?))
 }
 
-/// What running one operation produced.
+/// What one subcommand produced, carried far enough to render.
 ///
-/// The two arms are the gate's two answers, carried far enough to render: a
-/// response that came back, or the request that was not sent. Printing is the
-/// adopter's — this crate decides and executes, and hands the result over.
+/// Two of the arms are the gate's two answers — a response that came back, or
+/// the request that was not sent. The third is the subcommand that was asked
+/// what its body looks like and answered without running. Printing is the
+/// adopter's: this crate decides and executes, and hands the result over.
+///
+/// Every arm has to be rendered somewhere, which is the point of putting the
+/// template here rather than leaving it to a flag an adopter may or may not
+/// read. A `--json-body-template` nothing prints is the flag this design exists
+/// to avoid, and the compiler is what rules it out.
 #[derive(Debug)]
 pub enum Outcome {
     /// The request went out; this is what came back, status and all. A 4xx is
@@ -268,6 +281,10 @@ pub enum Outcome {
     /// A write without confirmation. Nothing was sent, and this is the exact
     /// request that a confirmed run would have sent.
     DryRun(HttpRequest),
+    /// `--json-body-template`: the skeleton of the JSON body, as JSON text with
+    /// no trailing newline. Nothing was built and nothing was sent — this
+    /// never reached the gate, because there was no request to put to it.
+    Template(String),
 }
 
 /// Why an operation the user named did not run.
@@ -392,6 +409,28 @@ impl<'d> Selection<'d> {
     }
 }
 
+/// What one subcommand was asked for.
+///
+/// Two questions reach a subcommand and only one of them is an operation to
+/// run, so only one of them produces a [`Selection`] — the value that exists in
+/// order to be sent. Asking what a body looks like produces the text and
+/// nothing else: no values are read, no file is opened, no request is built and
+/// there is no exit here that takes a client.
+///
+/// That is what keeps [`Plan::decide`] the only place deciding whether a
+/// request goes out. This route does not reach a second decision; it reaches no
+/// request at all.
+///
+/// [`Plan::decide`]: crate::Plan::decide
+#[derive(Debug)]
+pub enum Asked<'d> {
+    /// Run the operation: the arguments are read and the gate is answered.
+    Run(Selection<'d>),
+    /// `--json-body-template`: the skeleton of the JSON body, borrowed from the
+    /// reduced model that carries it.
+    Template(&'d str),
+}
+
 /// Read the two subcommands the user typed, whichever command the groups were
 /// mounted on.
 ///
@@ -399,7 +438,7 @@ impl<'d> Selection<'d> {
 /// the whole CLI, or the `raw` subcommand when they sit under one. This
 /// function reads the group below it and the operation below that, and never
 /// looks above it, which is what lets the same tree mount anywhere.
-pub fn select<'d>(doc: &'d Document, matches: &ArgMatches) -> Result<Selection<'d>, DispatchError> {
+pub fn select<'d>(doc: &'d Document, matches: &ArgMatches) -> Result<Asked<'d>, DispatchError> {
     let (group, under) = matches.subcommand().ok_or(DispatchError::NoCommand)?;
     let (command, args) = under.subcommand().ok_or(DispatchError::NoCommand)?;
     let operation = doc
@@ -408,11 +447,38 @@ pub fn select<'d>(doc: &'d Document, matches: &ArgMatches) -> Result<Selection<'
             group: group.to_owned(),
             command: command.to_owned(),
         })?;
-    Ok(Selection {
+    // Before the arguments are read, because reading them opens whatever file
+    // `--json-body` names: a user asking what a body looks like has no such
+    // file yet, which is the whole reason they are asking.
+    if let Some(template) = wanted_template(operation, args) {
+        return Ok(Asked::Template(template));
+    }
+    Ok(Asked::Run(Selection {
         values: values(operation, args)?,
         answers: answers(operation, args),
         operation,
-    })
+    }))
+}
+
+/// The skeleton of this operation's body, when the user asked for it.
+///
+/// The answer comes off the reduced model, where a bless step wrote it. Nothing
+/// is walked and no schema is read — a shipped binary has no reader compiled
+/// into it, which is the rule both command names already follow.
+///
+/// A body that carries no template grows no flag, so the two cannot disagree:
+/// this reads the flag only for the body that has something to print, and
+/// [`flag`] reads one the command never declared as absent rather than
+/// panicking.
+fn wanted_template<'d>(op: &'d Operation, matches: &ArgMatches) -> Option<&'d str> {
+    let Body::JsonWhole {
+        template: Some(template),
+        ..
+    } = op.body()
+    else {
+        return None;
+    };
+    flag(matches, JSON_BODY_TEMPLATE).then_some(template.as_str())
 }
 
 /// [`select`], then [`Selection::send`]: the whole generated surface in one
@@ -423,7 +489,10 @@ pub fn dispatch<C: SyncClient>(
     client: &C,
     matches: &ArgMatches,
 ) -> Result<Outcome, DispatchError> {
-    select(doc, matches)?.send(client, base)
+    match select(doc, matches)? {
+        Asked::Run(selection) => selection.send(client, base),
+        Asked::Template(template) => Ok(Outcome::Template(template.to_owned())),
+    }
 }
 
 fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgError> {
@@ -560,10 +629,16 @@ fn body_args(cmd: Command, body: &Body) -> Command {
     match body {
         Body::None => cmd,
         Body::JsonFields(fields) => json_field_args(cmd, fields),
-        Body::JsonWhole { required } => cmd.arg(file_arg(JSON_BODY, *required).help(
-            "JSON body read from a file; `-` is stdin. This body is nested, so it has \
-             no per-field flags",
-        )),
+        Body::JsonWhole { required, template } => {
+            let cmd = cmd.arg(file_arg(JSON_BODY, *required).help(
+                "JSON body read from a file; `-` is stdin. This body is nested, so it has \
+                 no per-field flags",
+            ));
+            match template {
+                None => cmd,
+                Some(_) => cmd.arg(template_arg()),
+            }
+        }
         Body::Multipart { names, required } => multipart_args(cmd, names, *required),
         Body::Opaque {
             media_type,
@@ -667,6 +742,43 @@ fn file_arg(flag: &'static str, required: bool) -> Arg {
         .required(required)
         .value_parser(clap::value_parser!(PathBuf))
         .value_hint(ValueHint::FilePath)
+}
+
+/// `--json-body-template`: the shape of the file `--json-body` wants.
+///
+/// A flag on an operation that does not run the operation is an odd thing, and
+/// it earns the place by being the only one a user can redirect: the skeleton
+/// goes to stdout as it stands, where a `--help` page would rewrap it and a
+/// `long_about` would put a usage block around it. It sits on the subcommand
+/// because that is where the question is asked — the user is already typing the
+/// operation whose body they cannot spell.
+///
+/// `exclusive`, which is clap answering two of the three things this flag has to
+/// be true of, before any code of this crate's runs. Asking what a body looks
+/// like is not running the operation, so the operation's own required flags — a
+/// path parameter, a required body, every gate it names — are not demanded for
+/// it; and `--commit` beside it is refused rather than quietly ignored, because
+/// a command line that confirms a write *and* asks what the write would look
+/// like is two commands, and only the user can say which one they meant.
+///
+/// The third thing — that nothing is sent — is not clap's to promise. It holds
+/// because [`select`] answers this from the reduced model and hands back an
+/// [`Asked::Template`], which carries no values, builds no request and has no
+/// exit that takes a client. [`Plan::decide`] stays the only place that decides
+/// whether a request goes out, because this way round there is no request for
+/// it to decide about.
+///
+/// [`Plan::decide`]: crate::Plan::decide
+fn template_arg() -> Arg {
+    Arg::new(JSON_BODY_TEMPLATE)
+        .long(JSON_BODY_TEMPLATE)
+        .action(ArgAction::SetTrue)
+        .exclusive(true)
+        .help(
+            "Print a skeleton of the JSON body and stop, for --json-body to be filled \
+             in from. Required properties only, with empty values. Nothing is built \
+             and nothing is sent, so this takes no other flag",
+        )
 }
 
 /// The description, then whatever the document constrains, then whatever else

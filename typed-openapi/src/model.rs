@@ -32,7 +32,7 @@ use crate::scalar::Scalar;
 #[cfg(feature = "document")]
 use crate::schema::{
     RefError, description_of, format_of, is_json, is_media_type, is_multipart, resolve,
-    resolve_schema, scalar_of,
+    resolve_schema, scalar_of, template,
 };
 
 /// The four extensions this crate reads, all of them an adopter's say over
@@ -58,6 +58,8 @@ const GATES: &str = "x-cli-gates";
 
 /// Whole-body flag, for every operation that takes JSON.
 pub const JSON_BODY: &str = "json-body";
+/// The shape of that body, printed instead of sent.
+pub const JSON_BODY_TEMPLATE: &str = "json-body-template";
 /// Whole-body flag, for a media type this CLI does not assemble.
 pub const RAW_BODY: &str = "raw-body";
 /// One file part of a multipart body.
@@ -68,13 +70,25 @@ pub const FIELD_PART: &str = "field";
 pub const COMMIT: &str = "commit";
 
 /// The flags every subcommand spends before the document has a say: the write
-/// gate and the four body flags.
+/// gate and the five body flags.
 ///
 /// A parameter or a body field that wants one of these moves aside, and a gate
 /// that names one is refused — a gate is a word of the adopter's own, and these
-/// five words are already spoken for.
+/// six words are already spoken for.
+///
+/// Spending a word here changes the reduced model of any document that declares
+/// a field spelled the same way, which is the point: the field moves aside at
+/// bless time, where a reviewer sees it, rather than shadowing a flag the CLI
+/// needs.
 #[cfg(feature = "document")]
-const RESERVED: [&str; 5] = [COMMIT, JSON_BODY, RAW_BODY, FILE_PART, FIELD_PART];
+const RESERVED: [&str; 6] = [
+    COMMIT,
+    JSON_BODY,
+    JSON_BODY_TEMPLATE,
+    RAW_BODY,
+    FILE_PART,
+    FIELD_PART,
+];
 
 /// Every operation the document describes, in document order, plus the server
 /// it describes them against.
@@ -357,11 +371,25 @@ pub enum Body {
     None,
     /// A JSON object whose every property is a scalar: one flag per property,
     /// plus `--json-body` as a base document to merge them over.
+    ///
+    /// No template: the per-field flags already say what goes in the body, one
+    /// per property, each with the rules its schema states. A second rendering
+    /// of the same facts in a second notation would be the one place the two
+    /// could come to disagree.
     JsonFields(Vec<Field>),
     /// JSON this CLI will not take apart — a nested object, an array, anything
     /// but an object of scalars. `--json-body` only, and no dead per-field
     /// flags beside it.
-    JsonWhole { required: bool },
+    ///
+    /// This is the body with nothing on the command line saying what goes in
+    /// it, so this is the body that carries a `template`: the JSON skeleton the
+    /// same walk saw while it was deciding the body was not flat, rendered
+    /// while the document was reduced. `None` where the document describes no
+    /// shape to render, and then the subcommand grows no flag to ask for one.
+    JsonWhole {
+        required: bool,
+        template: Option<String>,
+    },
     /// `multipart/form-data`: assembled from `--file name=@path` and
     /// `--field name=value`. `names` is what the document declares, for the
     /// help line; the CLI accepts any part name, because a document that
@@ -1306,35 +1334,66 @@ impl Body {
                 required,
             });
         }
-        let Some(schema) = &media.schema else {
-            return Ok(Self::JsonWhole { required });
-        };
-        let schema = resolve_schema(schema, components)?;
-        let SchemaKind::Type(openapiv3::Type::Object(object)) = &schema.schema_kind else {
-            return Ok(Self::JsonWhole { required });
-        };
-
-        let mut fields = Vec::with_capacity(object.properties.len());
-        for (name, property) in &object.properties {
-            let property = property.clone().unbox();
-            let Some(scalar) = scalar_of(&property, components)? else {
-                // One nested property is enough: the whole body goes through
-                // `--json-body`, and no sibling gets a flag the request builder
-                // would then throw away.
-                return Ok(Self::JsonWhole { required });
-            };
-            runnable(&scalar, id, name)?;
-            fields.push(Field {
-                flag: flags.claim(&kebab(name), "body"),
-                name: name.clone(),
-                required: required && object.required.iter().any(|r| r == name),
-                scalar,
-                format: format_of(&property, components)?,
-                description: description_of(&property, components)?,
-            });
-        }
-        Ok(Self::JsonFields(fields))
+        json_body(id, media.schema.as_ref(), required, components, flags)
     }
+}
+
+/// What a JSON body is worth on a command line: one flag per property, or one
+/// flag for the whole thing.
+///
+/// The same question [`shape_of`] asks of a parameter, and answered the same
+/// way — everything a flag set needs lives on the variant that has it, so a
+/// body cannot leave behind a flag the request builder would ignore.
+///
+/// A body that goes whole carries its skeleton, because going whole is exactly
+/// what leaves the command line with nothing saying what the body wants. The
+/// walk that decided it has already seen the shape.
+#[cfg(feature = "document")]
+fn json_body(
+    id: &str,
+    schema: Option<&ReferenceOr<Schema>>,
+    required: bool,
+    components: &Components,
+    flags: &mut Namespace,
+) -> Result<Body, LoadError> {
+    let Some(schema) = schema else {
+        return Ok(Body::JsonWhole {
+            required,
+            template: None,
+        });
+    };
+    let whole = || {
+        Ok(Body::JsonWhole {
+            required,
+            template: template(schema, components)?,
+        })
+    };
+    let SchemaKind::Type(openapiv3::Type::Object(object)) =
+        &resolve_schema(schema, components)?.schema_kind
+    else {
+        return whole();
+    };
+
+    let mut fields = Vec::with_capacity(object.properties.len());
+    for (name, property) in &object.properties {
+        let property = property.clone().unbox();
+        let Some(scalar) = scalar_of(&property, components)? else {
+            // One nested property is enough: the whole body goes through
+            // `--json-body`, and no sibling gets a flag the request builder
+            // would then throw away.
+            return whole();
+        };
+        runnable(&scalar, id, name)?;
+        fields.push(Field {
+            flag: flags.claim(&kebab(name), "body"),
+            name: name.clone(),
+            required: required && object.required.iter().any(|r| r == name),
+            scalar,
+            format: format_of(&property, components)?,
+            description: description_of(&property, components)?,
+        });
+    }
+    Ok(Body::JsonFields(fields))
 }
 
 /// Refuse a rule that cannot be run, naming the operation and the value it was

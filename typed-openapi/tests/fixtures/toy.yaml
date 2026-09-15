@@ -272,6 +272,7 @@ components:
           type: string
         city:
           type: string
+          example: Vienna
     LedgerAccount:
       type: string
       description: The four-digit account an entry is posted to.

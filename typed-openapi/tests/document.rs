@@ -15,6 +15,7 @@
 )]
 
 use typed_openapi::model::Body;
+use typed_openapi::tree::Asked;
 use typed_openapi::{
     Carrier, Document, Effect, Invocation, Operation, Param, Scalar, Shape, Unsupported, Values,
     render, tree,
@@ -119,7 +120,7 @@ fn every_body_is_exactly_one_flag_set() {
     // rather than dead ones beside a required `--json-body`.
     assert!(matches!(
         body("createContact"),
-        Body::JsonWhole { required: true }
+        Body::JsonWhole { required: true, .. }
     ));
     // A media type nothing here assembles: the bytes go through `--raw-body`
     // under the document's own `Content-Type`.
@@ -144,6 +145,306 @@ fn a_body_field_moves_aside_for_a_path_parameter_of_the_same_name() {
     let id = fields.iter().find(|f| f.name() == "id").unwrap();
     assert_eq!(id.flag(), "body-id");
     assert!(id.renamed(), "and it says so in its help line");
+}
+
+/// A flag word this CLI spends is spent before the document has a say, so a
+/// vendor who declares a field spelled the same way gets a flag of their own
+/// rather than the one that stands in front of the CLI's own question.
+///
+/// The word costs something to reserve — this is that cost, paid at bless time
+/// where a reviewer sees the rename, rather than at run time where a user would
+/// find `--json-body-template` sending a field.
+#[test]
+fn a_body_field_spelled_like_the_template_flag_moves_aside() {
+    let document = pointing(
+        "\x20               json-body-template:\n\
+         \x20                 type: string\n",
+    );
+    let doc = Document::load(&document, &[]).expect("a document");
+    let Body::JsonFields(fields) = doc.get("createNote").expect("createNote").body() else {
+        panic!("a body of scalars is flat");
+    };
+    let field = fields
+        .iter()
+        .find(|f| f.name() == "json-body-template")
+        .expect("the document declares it");
+    assert_eq!(field.flag(), "body-json-body-template");
+    assert!(field.renamed(), "and it says so in its help line");
+}
+
+/// The body with no per-field flags is the body nothing on the command line
+/// describes, so the reduction writes down what it saw on the way to deciding
+/// that: the keys a caller must supply, nested as deep as the document nests
+/// them.
+///
+/// Every rule the template follows is in this one rendering. `name` and
+/// `address` are required and are here; `Contact.id` is optional and is not.
+/// `address` nests, because the document nests it. `street` is the empty string
+/// its type skeletons to, and `city` is the word the document states an
+/// `example` for — a value that round-trips, where one built from the type
+/// alone is only a shape.
+#[test]
+fn a_nested_body_carries_the_shape_no_flag_can_state() {
+    let doc = document();
+    let Body::JsonWhole {
+        template: Some(template),
+        ..
+    } = doc.get("createContact").expect("createContact").body()
+    else {
+        panic!("a nested body goes whole and carries a template");
+    };
+    assert_eq!(
+        template,
+        "{\n  \"name\": \"\",\n  \"address\": {\n    \"street\": \"\",\n    \"city\": \"Vienna\"\n  }\n}"
+    );
+}
+
+/// The template one document's `createNote` body renders to.
+///
+/// `body` is the request body's schema, indented to sit under `schema:`, and
+/// `schemas` is whatever `components.schemas` it points into.
+fn templated(body: &str, schemas: &str) -> Option<String> {
+    let components = if schemas.is_empty() {
+        String::new()
+    } else {
+        format!("components:\n\x20 schemas:\n{schemas}")
+    };
+    let document = format!(
+        "openapi: 3.0.3\n\
+         info: {{ title: t, version: \"1\" }}\n\
+         servers: [{{ url: 'http://localhost:9999' }}]\n\
+         paths:\n\
+         \x20 /notes:\n\
+         \x20   post:\n\
+         \x20     operationId: createNote\n\
+         \x20     requestBody:\n\
+         \x20       required: true\n\
+         \x20       content:\n\
+         \x20         application/json:\n\
+         {body}\
+         \x20     responses: {{ \"201\": {{ description: Created }} }}\n\
+         {components}"
+    );
+    let doc = Document::load(&document, &[]).expect("a document");
+    let Body::JsonWhole { template, .. } = doc.get("createNote").expect("createNote").body() else {
+        panic!("a body with per-field flags is not the case a template is for");
+    };
+    template.clone()
+}
+
+/// A body of one nested object, whose properties are handed in.
+fn nested(properties: &str) -> String {
+    format!(
+        "\x20           schema:\n\
+         \x20             type: object\n\
+         \x20             required: [inner]\n\
+         \x20             properties:\n\
+         \x20               inner:\n\
+         \x20                 type: object\n\
+         {properties}"
+    )
+}
+
+/// A template is a skeleton, so it carries values a server refuses: `""` where
+/// the document states a `pattern`, `0` where it states a `minimum`, `false`
+/// where it asks for a decision. A template a user could send unmodified by
+/// accident would be a worse artefact than none — and there is no empty member
+/// of an enumeration, so that one kind shows the first value the document
+/// lists rather than a value the document does not have.
+#[test]
+fn a_template_is_empty_where_a_value_can_be_and_names_an_enums_own_value() {
+    let template = templated(
+        &nested(
+            "\x20                 required: [ref, count, rate, paid, status]\n\
+             \x20                 properties:\n\
+             \x20                   ref: { type: string, pattern: '^[A-Z]{3}$' }\n\
+             \x20                   count: { type: integer, minimum: 10 }\n\
+             \x20                   rate: { type: number }\n\
+             \x20                   paid: { type: boolean }\n\
+             \x20                   status: { type: string, enum: [draft, open, paid] }\n",
+        ),
+        "",
+    )
+    .expect("a nested body renders a template");
+
+    assert_eq!(
+        template,
+        "{\n  \"inner\": {\n    \"ref\": \"\",\n    \"count\": 0,\n    \"rate\": 0.0,\n    \
+         \"paid\": false,\n    \"status\": \"draft\"\n  }\n}"
+    );
+}
+
+/// The keys a caller must supply, and no others. An optional key carrying an
+/// empty value would be a key nobody asked to send — on a `PUT`, an empty
+/// string written over a field somebody meant to leave alone — and JSON has no
+/// comment to mark it as a suggestion with.
+#[test]
+fn only_the_properties_the_document_requires_reach_a_template() {
+    let template = templated(
+        &nested(
+            "\x20                 required: [kept]\n\
+             \x20                 properties:\n\
+             \x20                   kept: { type: string }\n\
+             \x20                   dropped: { type: string }\n",
+        ),
+        "",
+    )
+    .expect("a nested body renders a template");
+
+    assert!(template.contains("\"kept\""), "{template}");
+    assert!(
+        !template.contains("\"dropped\""),
+        "an optional key is not a key the caller asked for: {template}"
+    );
+}
+
+/// The document's own `example` is the better source, so it wins over the
+/// skeleton a type alone would give — a value the document states round-trips.
+///
+/// And it is read as *data*: a vendor whose example spells out a form using the
+/// words `required` and `properties` is writing a value that happens to use
+/// them, so the walk takes it whole and never descends into it looking for a
+/// schema.
+#[test]
+fn an_example_the_document_states_wins_and_is_read_as_a_value() {
+    let template = templated(
+        &nested(
+            "\x20                 required: [amount]\n\
+             \x20                 properties:\n\
+             \x20                   amount: { type: string }\n\
+             \x20                 example:\n\
+             \x20                   required: [not a key]\n\
+             \x20                   properties: not a schema\n",
+        ),
+        "",
+    )
+    .expect("a nested body renders a template");
+
+    assert_eq!(
+        template,
+        "{\n  \"inner\": {\n    \"required\": [\n      \"not a key\"\n    ],\n    \
+         \"properties\": \"not a schema\"\n  }\n}"
+    );
+}
+
+/// One element rather than none. An empty list is a body a server accepts and
+/// a user learns nothing from, and what goes *in* the list is what they came
+/// here to find out.
+#[test]
+fn an_array_shows_one_element_rather_than_none() {
+    let template = templated(
+        &nested(
+            "\x20                 required: [lines]\n\
+             \x20                 properties:\n\
+             \x20                   lines:\n\
+             \x20                     type: array\n\
+             \x20                     items:\n\
+             \x20                       type: object\n\
+             \x20                       required: [account]\n\
+             \x20                       properties:\n\
+             \x20                         account: { type: string }\n",
+        ),
+        "",
+    )
+    .expect("a nested body renders a template");
+
+    assert_eq!(
+        template,
+        "{\n  \"inner\": {\n    \"lines\": [\n      {\n        \"account\": \"\"\n      }\n    \
+         ]\n  }\n}"
+    );
+}
+
+/// A property that points back at the schema holding it describes a value of no
+/// finite depth, so the walk stops at a floor and writes the empty object
+/// there. What a user gets is the shape down to that depth rather than a
+/// template that never ends — and, more to the point, rather than a bless step
+/// that never returns.
+#[test]
+fn a_schema_that_points_back_at_itself_still_renders_a_finite_template() {
+    let template = templated(
+        "\x20           schema: { $ref: '#/components/schemas/Node' }\n",
+        "\x20   Node:\n\
+         \x20     type: object\n\
+         \x20     required: [label, child]\n\
+         \x20     properties:\n\
+         \x20       label: { type: string }\n\
+         \x20       child: { $ref: '#/components/schemas/Node' }\n",
+    )
+    .expect("a cycle still renders");
+
+    assert_eq!(
+        template.matches("\"child\"").count(),
+        8,
+        "the walk stops at its own floor: {template}"
+    );
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&template).is_ok(),
+        "and what it stops with is JSON: {template}"
+    );
+}
+
+/// A flat body carries no template, because its per-field flags already say
+/// what goes in it — one per property, each with the rules its schema states. A
+/// second rendering of the same facts in a second notation would be the one
+/// place the two could come to disagree.
+#[test]
+fn a_flat_body_has_its_flags_to_say_what_it_wants_and_carries_no_template() {
+    let doc = document();
+    assert!(matches!(
+        doc.get("createVoucher").expect("createVoucher").body(),
+        Body::JsonFields(_)
+    ));
+}
+
+/// A body this crate has no reading for describes no shape, so there is nothing
+/// to write down and the absence travels — which is what keeps a subcommand from
+/// growing a flag that prints nothing, the flag progenitor ships.
+///
+/// Two ways to say nothing: a body with no schema at all, and a composition,
+/// where the document says a value is one of several things and nothing here
+/// picks which. A skeleton for either would be a shape this crate invented.
+#[test]
+fn a_body_the_document_describes_no_shape_for_carries_no_template() {
+    assert_eq!(templated("\x20           {}\n", ""), None);
+    assert_eq!(templated(&composed(), ""), None);
+}
+
+/// A body whose schema is a `oneOf` of two objects: a real composition, and one
+/// with no single shape to write down.
+fn composed() -> String {
+    "\x20           schema:\n\
+     \x20             oneOf:\n\
+     \x20               - { type: object, required: [ledger], properties: { ledger: { type: string } } }\n\
+     \x20               - { type: object, required: [period], properties: { period: { type: string } } }\n"
+        .to_owned()
+}
+
+/// A template is decided while the document is reduced and travels in the blob,
+/// like both command names: a shipped binary prints it and has no schema walk
+/// compiled into it to have derived it with.
+///
+/// The bytes are the reason it is text rather than a `serde_json::Value`.
+/// postcard is not self-describing and a `Value` deserialises through
+/// `deserialize_any`, which postcard answers with `WontImplement` — a `Value`
+/// in the blob would not come back at all.
+#[test]
+fn a_template_comes_back_off_the_blob_the_bless_step_writes() {
+    let doc = document();
+    let blob = doc.to_blob().expect("the reduction encodes");
+    let read = Document::from_blob(&blob).expect("and decodes");
+
+    let template = |doc: &Document| {
+        let Body::JsonWhole { template, .. } =
+            doc.get("createContact").expect("createContact").body()
+        else {
+            panic!("a nested body goes whole");
+        };
+        template.clone()
+    };
+    let carried = template(&read);
+    assert!(carried.is_some(), "the blob carries the template");
+    assert_eq!(carried, template(&doc));
 }
 
 /// The closest thing a runtime-built tree has to a compile-time check, and the
@@ -507,7 +808,7 @@ fn an_all_of_that_is_more_than_a_wrapper_is_not_a_scalar() {
         let doc = Document::load(&pointing(properties), &[]).expect("a document");
         matches!(
             doc.get("createNote").expect("createNote").body(),
-            Body::JsonWhole { required: true }
+            Body::JsonWhole { required: true, .. }
         )
     };
     assert!(whole(
@@ -1152,7 +1453,11 @@ fn a_repeatable_flag_says_what_it_does_and_reaches_the_request_builder_repeated(
     let matches = clap::Command::new("toy")
         .subcommands(tree::commands(&doc))
         .get_matches_from(["toy", "vouchers", "list", "--tag", "a", "--tag", "b"]);
-    let selected = tree::select(&doc, &matches).expect("the subcommand names an operation");
+    let Asked::Run(selected) =
+        tree::select(&doc, &matches).expect("the subcommand names an operation")
+    else {
+        panic!("this command line runs the operation");
+    };
     let request = Invocation::new(selected.operation(), selected.values().clone())
         .expect("the flags satisfy the operation")
         .request(doc.base())

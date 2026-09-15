@@ -239,6 +239,7 @@ components:
           type: string
         city:
           type: string
+          example: Vienna
     Contact:
       type: object
       required: [name, address]

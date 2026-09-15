@@ -360,6 +360,69 @@ fn a_nested_body_goes_through_a_file_and_no_dead_flags_are_offered() {
     assert!(refused.is_err(), "a flag the request builder would ignore");
 }
 
+/// The other half of a body that goes through a file: what goes *in* the file.
+///
+/// A body with no per-field flags has nothing on `--help` saying what it wants,
+/// and this is the flag that says it. The skeleton goes to stdout on its own,
+/// so the redirect a user reaches for leaves a file holding JSON and nothing
+/// else — and that file, filled in, is what `--json-body` takes. The round trip
+/// is the test: a template the generated type would refuse is a template that
+/// sent a user somewhere they cannot get back from.
+///
+/// `createContact` is a `POST` whose body the document requires, so a request
+/// built for this command line would have been refused for having no body.
+/// That it answers at all is the evidence nothing was built.
+#[test]
+fn the_template_is_the_file_json_body_wants() {
+    let asked = Recorder::new();
+    let out = run(
+        &asked,
+        &["toy", "raw", "contacts", "create", "--json-body-template"],
+    );
+
+    assert!(
+        asked.take().is_empty(),
+        "nothing is sent to find out what a body looks like"
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "{\n  \"name\": \"\",\n  \"address\": {\n    \"street\": \"\",\n    \"city\": \"Vienna\"\n  }\n}\n",
+        "the required keys, nested, with the document's own example where it states one"
+    );
+
+    // Filled in and handed back. `toy raw` holds a JSON body to the generated
+    // `Contact` before anything goes out, so a request that leaves here is a
+    // template that fits the document it was built from.
+    let dir = tempdir();
+    let path = dir.join("contact.json");
+    let filled = out
+        .stdout
+        .replace("\"name\": \"\"", "\"name\": \"Ada\"")
+        .replace("\"street\": \"\"", "\"street\": \"1 Main\"");
+    std::fs::write(&path, &filled).expect("writing the fixture");
+
+    let client = Recorder::new().answering(
+        StatusCode::CREATED,
+        &serde_json::json!({"id": 1, "name": "Ada",
+                            "address": {"street": "1 Main", "city": "Vienna"}}),
+    );
+    let sent = run(
+        &client,
+        &[
+            "toy",
+            "raw",
+            "contacts",
+            "create",
+            "--json-body",
+            path.to_str().expect("a UTF-8 path"),
+            "--commit",
+        ],
+    );
+    assert!(sent.success, "{}", sent.stderr);
+    assert_eq!(client.take().len(), 1);
+}
+
 #[test]
 fn the_multipart_upload_is_assembled_from_parts() {
     let dir = tempdir();

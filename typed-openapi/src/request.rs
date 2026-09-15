@@ -268,7 +268,9 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
         (
             Body::None
             | Body::JsonFields(_)
-            | Body::JsonWhole { required: false }
+            | Body::JsonWhole {
+                required: false, ..
+            }
             | Body::Multipart {
                 required: false, ..
             }
@@ -282,7 +284,7 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
         | (Body::Opaque { .. }, Some(Payload::Raw(_))) => Ok(()),
         (Body::None, Some(_)) => Err(ValueError::UnexpectedBody { op: name() }),
         (
-            Body::JsonWhole { required: true }
+            Body::JsonWhole { required: true, .. }
             | Body::Multipart { required: true, .. }
             | Body::Opaque { required: true, .. },
             None,

@@ -106,6 +106,22 @@ could never build a correct request is worth refusing by name. It is the rule a
 body already follows, where one nested property sends the whole body through
 `--json-body` rather than refusing the document that holds it.
 
+**A body template is read from the model and reaches no request.** The body with
+no per-field flags is the body `--help` cannot describe, so `Body::JsonWhole`
+carries the skeleton `schema::template` rendered while the document was reduced
+— text, because postcard is not self-describing and a `serde_json::Value`
+deserialises through `deserialize_any`, which postcard answers with
+`WontImplement`. `tree::select` answers `--json-body-template` from that field
+and returns `Asked::Template` before any value is read, so the template route
+builds no request: `Plan::decide` stays the only place deciding whether one is
+sent, because this way round there is nothing for it to decide about. The flag
+is `exclusive`, which is what suppresses the confirmation, the gates and every
+other required flag — asking for a shape is not the hazard any of them stand in
+front of. `JSON_BODY_TEMPLATE` is in `RESERVED` for the same reason every other
+body flag is. `Asked` and `Outcome::Template` are arms rather than a flag left
+lying about: an adopter cannot declare the flag and fail to print it, which is
+the defect progenitor's `cli.rs` ships.
+
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.

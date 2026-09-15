@@ -12,7 +12,7 @@
 
 use api::{Api, OperationId};
 use clap::ArgMatches;
-use typed_openapi::tree::{self, Outcome, Selection};
+use typed_openapi::tree::{self, Asked, Outcome, Selection};
 use typed_openapi::{Payload, SyncClient, render};
 
 use crate::app::Error;
@@ -20,9 +20,25 @@ use crate::output::Output;
 
 /// One operation, straight from the document.
 pub fn run<C: SyncClient>(api: &Api, client: &C, matches: &ArgMatches) -> Result<Output, Error> {
-    let selected = tree::select(api.document(), matches)?;
+    let selected = match tree::select(api.document(), matches)? {
+        Asked::Run(selection) => selection,
+        Asked::Template(template) => return Ok(shape(template)),
+    };
     vet_body(&selected)?;
     Ok(report(selected.send(client, api.base())?))
+}
+
+/// The skeleton of a body, on stdout with the sentence about it on stderr.
+///
+/// Which stream each half goes to is the whole point of answering this as text
+/// rather than as help: `toy raw contacts create --json-body-template >
+/// body.json` leaves a file holding JSON and nothing else, ready to fill in and
+/// hand back to `--json-body`.
+fn shape(template: &str) -> Output {
+    Output::note(
+        format!("{template}\n"),
+        "the shape of the body: nothing was sent. Fill it in and pass it to --json-body.\n",
+    )
 }
 
 /// Hold a JSON body to the generated type the operation takes, before anything
@@ -52,5 +68,10 @@ fn report(outcome: Outcome) -> Output {
             render(&request),
             "dry run: nothing was sent. Add --commit to send it.\n",
         ),
+        // `select` answers this before a `Selection` exists, so nothing `send`
+        // hands back carries one. The arm is here because `Outcome` is also
+        // what `tree::dispatch` returns, where the same answer arrives without
+        // a seam to catch it in — `examples/root.rs` is that CLI.
+        Outcome::Template(template) => shape(&template),
     }
 }

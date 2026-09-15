@@ -87,6 +87,7 @@ let matches = Command::new("toy")
 match tree::dispatch(api.document(), api.base(), &client, &matches)? {
     Outcome::Sent(response) => ...,
     Outcome::DryRun(request) => ...,
+    Outcome::Template(skeleton) => ...,
 }
 ```
 
@@ -101,11 +102,12 @@ lets the tree sit anywhere:
 ```
 
 **With a check of your own in the middle.** `dispatch` is `select` followed by
-`Selection::send`. Splitting them gives you a `Selection` — the operation, the
-arguments under the document's own names, and the gate's answer — with nothing
-sent yet. [`examples/toy/cli/src/raw.rs`](../examples/toy/cli/src/raw.rs) uses
-that seam to hold a JSON body to the generated Rust type before the request is
-built.
+`Selection::send`. Splitting them gives you an `Asked`: either a `Selection` —
+the operation, the arguments under the document's own names, and the gate's
+answer, with nothing sent yet — or the body skeleton a `--json-body-template`
+asked for, which is text to print and not an operation to run.
+[`examples/toy/cli/src/raw.rs`](../examples/toy/cli/src/raw.rs) uses that seam
+to hold a JSON body to the generated Rust type before the request is built.
 
 The seam earns its keep because the library's own body check is a check of
 *kind*, not of content: `check_body` in
@@ -140,7 +142,10 @@ socket, no credential — so a user who has configured neither can still ask wha
 the command would send:
 
 ```rust,ignore
-match tree::select(api.document(), &matches)?.plan(api.base())? {
+let Asked::Run(selection) = tree::select(api.document(), &matches)? else {
+    ... // `--json-body-template`: print the skeleton, build nothing
+};
+match selection.plan(api.base())? {
     Plan::DryRun(request) => print!("{}", render(&request)),
     Plan::Send(request) => {
         let response = client()?.send(request)?; // built only for a request that goes out
@@ -160,7 +165,7 @@ own type rather than the box `DispatchError::Transport` carries.
 | the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode` |
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
 | a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE` |
-| any other JSON body — nested, an array, no schema | `--json-body FILE` alone |
+| any other JSON body — nested, an array, no schema | `--json-body FILE`, plus `--json-body-template` where the document describes a shape |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
 | any other media type | `--raw-body FILE`, sent verbatim under that media type |
 | no request body | nothing |
@@ -173,6 +178,74 @@ is the case — its `address` is an object, so there is no `--name`, and asking
 for one is a clap error rather than a value silently dropped.
 
 `-` as the path to `--json-body` or `--raw-body` reads stdin.
+
+### The shape of a body that has no flags
+
+The flags are where this crate says what a field is called and what it accepts,
+so a body with none leaves `--help` with nothing to say about it.
+`--json-body-template` is where it says it: the JSON skeleton of the body, on
+stdout and nothing else, for the file `--json-body` wants.
+
+```console
+$ toy raw contacts create --json-body-template > contact.json
+the shape of the body: nothing was sent. Fill it in and pass it to --json-body.
+
+$ cat contact.json
+{
+  "name": "",
+  "address": {
+    "street": "",
+    "city": "Vienna"
+  }
+}
+```
+
+What is in it:
+
+| the document says | the template shows |
+|---|---|
+| a required property | the key, with a skeleton of its own schema |
+| an optional property | nothing |
+| `example` on a schema or a property | that value, taken whole |
+| `enum: [draft, open, paid]` | `"draft"` — the first value it lists |
+| `type: string` / `integer` / `number` / `boolean` | `""` / `0` / `0.0` / `false` |
+| a nested object | a nested object, to the depth the document nests it |
+| an array | a one-element list, the element a skeleton of `items` |
+| a property this crate has no reading for — a `oneOf`, an `allOf` of two | `null` |
+
+**The values are empty, not plausible.** `""` against a `pattern` and `0`
+against a `minimum` are values the document itself rules out, so a template
+nobody filled in is a body the server refuses rather than one it acts on. A
+template you can send unmodified by accident would be a worse artefact than
+none. An enumeration is the one exception, because it has no empty member: a
+value it does not list would be a lie about the API.
+
+**Optional properties are absent**, and JSON has no comment to have marked them
+with. An optional key carrying an empty value is a key the caller never asked to
+send — on a `PUT`, an empty string written over a field somebody meant to leave
+alone. So the template is the minimum the document demands, and the document
+stays where the rest is stated. A body that requires nothing renders as `{}`,
+which is exactly what it asks of a caller.
+
+**A cycle stops.** A property that points back at the schema holding it
+describes a value of no finite depth, so the walk stops eight levels down and
+writes the empty object there.
+
+**Nothing is sent, and nothing is built.** The flag takes no other flag — not
+`--commit`, not a required path parameter, not a named gate, not the
+`--json-body` it describes — and giving it one is a clap error rather than a
+silent ignore. It is not a dry run either: a dry run builds the request it would
+have sent, and this builds none. `createContact` is the proof, since its body is
+required and a request built for it with no body would have been refused.
+
+The template is read off the reduced model, where the bless step wrote it. A
+shipped binary prints it and has no schema walk compiled into it to have derived
+it with — the same rule both command names follow.
+
+`--json-body-template` exists only where the document describes a shape to
+print, so a body given no schema grows no flag, and neither does a flat body:
+there the per-field flags already say what goes in it, each with the rules its
+own schema states.
 
 ### Lists
 
@@ -274,8 +347,9 @@ $ toy raw vouchers update --help
           Server-assigned id (sends `id`)
 ```
 
-Each subcommand's namespace starts with `commit`, `json-body`, `raw-body`,
-`file` and `field` already spent — plus every gate the operation names — so a
+Each subcommand's namespace starts with `commit`, `json-body`,
+`json-body-template`, `raw-body`, `file` and `field` already spent — plus every
+gate the operation names — so a
 document that names a field `commit`, or a field spelled like the gate standing
 in front of it, renames instead of colliding at startup. A global flag the
 surrounding CLI adds

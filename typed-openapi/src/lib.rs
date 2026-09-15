@@ -84,8 +84,8 @@ pub use client::{Call, Client, NoContent};
 #[cfg(feature = "document")]
 pub use model::LoadError;
 pub use model::{
-    Body, COMMIT, Carrier, Document, DocumentError, Effect, Field, Gate, JSON_BODY, Join, Location,
-    Operation, Param, RAW_BODY, Shape, Unsupported,
+    Body, COMMIT, Carrier, Document, DocumentError, Effect, Field, Gate, JSON_BODY,
+    JSON_BODY_TEMPLATE, Join, Location, Operation, Param, RAW_BODY, Shape, Unsupported,
 };
 pub use names::{CommandName, kebab};
 pub use plan::{Answers, Plan, PlanError};
