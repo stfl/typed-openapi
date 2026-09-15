@@ -133,16 +133,34 @@ command line cares, `examples/toy/spec/cli.yaml`. `just bless` must
 leave `git diff` empty when nothing upstream has changed — a non-empty diff
 means either the vendor moved or the generator did.
 
+**A named schema carrying a replaced format is a newtype over the adopter's
+type, whatever it is called.** typify decides it the other way — it declines to
+wrap where the definition's name is what the replacement path ends in — so
+`generate/types.rs` does not ask it that question: every schema declaring the
+format is rewritten into a reference to a placeholder definition, and the
+placeholder is the adopter's type through `with_replacement`. A definition that
+is a bare reference is a newtype to typify, so the rule holds for `Cents`
+against `money::Cents` exactly as for `Amount`, and typify still names the
+wrapper — which is what keeps `names.rs` the one place a name is decided.
+Rewriting the emitted file instead would mean knowing which generated field came
+from which property, and that is typify's naming rule copied. A schema that
+reduces to the placeholder's own Rust name is a `GenerateError::Reserved`
+naming it.
+
 **A type the adopter owns is held to the document by a test, because nothing
-else holds it.** A named schema's newtype compiles the document's `pattern`
-into its own `FromStr`, so it cannot drift. `examples/toy/money` is reached
-through `Settings::replace` instead and borrows nothing —
-`examples/toy/api/tests/money.rs` reads the rule off the embedded document and
-holds `Money::from_str` to it in both directions, which is also why `Money`
-counts cents in a `num-bigint` integer: the pattern admits an unbounded run of
-digits, and a narrower count would refuse values the document allows. Any
-future `replace` owes the same test; `Voucher.total` and `Voucher.currency` are
-the two routes kept side by side so that neither loses its demonstration.
+else holds it.** A newtype the generator writes the whole of compiles the
+document's `pattern` into its own `FromStr`, so it cannot drift. A wrapper
+around `examples/toy/money` reads with *that crate's* `FromStr` and borrows
+nothing — `examples/toy/api/tests/money.rs` reads the rule off the embedded
+document and holds the amount to it in both directions, which is also why
+`Money` counts cents in a `num-bigint` integer: the pattern admits an unbounded
+run of digits, and a narrower count would refuse values the document allows.
+Any future `replace` owes the same test. `Voucher.total` and `Voucher.currency`
+are the two routes kept side by side so that neither loses its demonstration:
+both are named schemas and both are newtypes, and what differs is where the
+reading lives — inside the generated `FromStr` for `Currency`, inside the
+adopter's crate for `Money`. `api` re-exports `money` as a module rather than
+by item so that `api::Money` and `api::money::Money` keep their own names.
 
 **What an owned type is made of never reaches the library.** `num-bigint` is
 declared in `examples/toy/money` and in no other manifest, and `just

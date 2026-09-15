@@ -23,10 +23,18 @@
 //! them being renamed by a generator nobody asked.
 //!
 //! It is also how the answer stays right for a type the adopter owns.
-//! [`Settings::replace`](super::Settings::replace) substitutes their type, and
-//! where typify writes no definition for the schema at all there is no
-//! `crate::types::` name to find — only the path they named, which is what
-//! typify hands back.
+//! [`Settings::replace`](super::Settings::replace) substitutes their type
+//! wherever a schema states the format without naming it, and there is no
+//! `crate::types::` name to find for such a schema — only the path they named,
+//! which is what typify hands back.
+//!
+//! A schema the document *does* name has a type of its own, always: typify
+//! writes a struct, an enum or a newtype for every definition it is given, and
+//! the one thing that stops it is a definition whose name this crate reserved
+//! for a replaced type. So a named schema with no type of its own is that
+//! collision and nothing else, and it is refused by name — the alternative is
+//! the vendor's schema quietly becoming the adopter's type everywhere it is
+//! used.
 //!
 //! # A schema an operation states inline is a schema like any other
 //!
@@ -187,6 +195,13 @@ impl Names {
         };
         for (origin, id) in resolved {
             let ty = space.get_type(&id).map_err(GenerateError::Typify)?;
+            if let Origin::Named(schema) = &origin
+                && !defined_by_typify(&ty)
+            {
+                return Err(GenerateError::Reserved {
+                    schema: schema.clone(),
+                });
+            }
             let path = path_of(&ty, &defined)?;
             let asked = origin.described();
             if defined_by_typify(&ty)

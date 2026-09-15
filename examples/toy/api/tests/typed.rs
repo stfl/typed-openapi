@@ -13,7 +13,7 @@ use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
-use api::{Api, Contact, Currency, Money, Posting, Voucher, VoucherStatus};
+use api::{Api, Contact, Currency, Money, Posting, Voucher, VoucherStatus, money};
 use http::StatusCode;
 use typed_openapi::{Part, Recorder, render};
 
@@ -288,10 +288,15 @@ fn a_generated_newtype_prints_what_it_was_parsed_from() {
     assert!("EURO".parse::<Currency>().is_err());
 }
 
-/// The other route, on the field next door. `Money` is a type this adoption
-/// owns, substituted in by `Settings::replace`, so it is free to print for a
-/// person — and the two directions stop being inverses. `tests/money.rs` is
-/// where its reading half is held to the document; this is what a caller sees.
+/// The other route, on the field next door. `Money` is the newtype the bless
+/// step writes over a type this adoption owns, substituted in by
+/// `Settings::replace`, so it is free to print for a person — and the two
+/// directions stop being inverses. `tests/money.rs` is where its reading half
+/// is held to the document; this is what a caller sees.
+///
+/// What a caller sees of the newtype is a `.0` when they want the arithmetic:
+/// printing, reading and the wire form come through it, and adding is the
+/// owned type's, because `Add` is behaviour the document never asked for.
 #[test]
 fn a_replaced_type_prints_for_a_person_and_sends_what_the_document_accepts() {
     let voucher = voucher(VoucherStatus::Open);
@@ -300,7 +305,7 @@ fn a_replaced_type_prints_for_a_person_and_sends_what_the_document_accepts() {
         "12,50 EUR"
     );
     assert_eq!(voucher.total.wire(), "12.50");
-    assert_eq!(voucher.total, Money::from_minor_units(1250));
+    assert_eq!(voucher.total, Money(money::Money::from_minor_units(1250)));
     assert!(
         voucher.total.to_string().parse::<Money>().is_err(),
         "printing an amount and reading one are different jobs"
@@ -309,7 +314,7 @@ fn a_replaced_type_prints_for_a_person_and_sends_what_the_document_accepts() {
     // And it adds, which is the whole reason the adoption owns it. No
     // `unwrap`, because an arbitrary-precision count of cents has no sum it
     // has to refuse.
-    let twice = voucher.total.clone() + voucher.total;
+    let twice = voucher.total.0.clone() + voucher.total.0;
     assert_eq!(twice.wire(), "25.00");
     assert_eq!(twice.to_string(), "25,00");
 }

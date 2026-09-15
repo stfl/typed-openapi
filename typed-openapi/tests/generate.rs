@@ -811,7 +811,10 @@ fn prose_that_was_never_code_is_still_prose() {
     );
 }
 
-/// A named schema the adopter owns the type for, reached from a wrapper.
+/// A type the adopter owns, reached from a wrapper by both routes: a parameter
+/// points at a named schema carrying the format, and the response states the
+/// format itself. The schema's name is what the adopter's path ends in, which
+/// is the coincidence the rule does not turn on.
 const OWNED: &str = r##"
 openapi: 3.0.3
 info: { title: Owned, version: "1.0" }
@@ -825,7 +828,11 @@ paths:
           in: query
           schema: { $ref: "#/components/schemas/Cents" }
       responses:
-        "200": { description: OK }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: string, format: money }
 components:
   schemas:
     Cents:
@@ -833,11 +840,15 @@ components:
       format: money
 "##;
 
-/// A schema `Settings::replace` substituted has no type in the generated
+/// A schema stating the format without naming it has no type in the generated
 /// module, because typify defined none — the adopter's own path is the answer,
 /// and it is good anywhere the generated crate compiles. A wrapper reaching for
-/// `crate::types::Cents` would name a module the type was never in, and a rule
-/// that derived the name instead of asking would have no way to know that.
+/// `crate::types::Cents` there would name a module the type was never in, and a
+/// rule that derived the name instead of asking would have no way to know that.
+///
+/// The named schema beside it is the other half of the same reading: it has a
+/// type, so the wrapper names that. `Names` tells the two apart by asking
+/// typify what each became, never by looking at the format.
 ///
 /// This is route 2 whole: `replace` is how an adopter owns a type no document
 /// can describe, and a parameter is an ordinary place to spend it.
@@ -849,15 +860,19 @@ fn a_schema_the_adopter_owns_is_named_by_the_adopters_own_path() {
         .write_to(&dir)
         .expect("the document generates");
     let types = read(&dir.join("src/types.rs"));
-    let ops = read(&dir.join("src/ops.rs"));
+    let ops = dense(&read(&dir.join("src/ops.rs")));
 
     assert!(
-        ops.contains("over: Option<cents::Cents>"),
-        "the wrapper does not take the type the adopter owns:\n{ops}"
+        ops.contains("Call<'_,cents::Cents>"),
+        "the wrapper does not answer with the type the adopter owns:\n{ops}"
     );
     assert!(
-        !types.contains("struct Cents"),
-        "typify defined a type the adopter owns:\n{types}"
+        ops.contains("over:Option<crate::types::Cents>"),
+        "the wrapper does not take the type the named schema became:\n{ops}"
+    );
+    assert!(
+        types.contains("pub struct Cents(pub cents::Cents);"),
+        "the named schema is not a newtype over the type the adopter owns:\n{types}"
     );
 }
 
@@ -1040,6 +1055,174 @@ fn a_type_nothing_was_written_in_terms_of_is_asked_for_nothing() {
     assert!(
         !types.contains("a_type_named_by_settings_replace"),
         "a promise is demanded where nothing rests on it:\n{types}"
+    );
+}
+
+/// Two named schemas the adopter owns the same Rust type for, under two
+/// formats: one schema is called what the type's path ends in and the other is
+/// not.
+const EITHER_NAME: &str = r#"
+openapi: 3.0.3
+info: { title: Either name, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /prices:
+    get:
+      operationId: listPrices
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Cents:
+      type: string
+      format: cents
+      description: An amount in whole cents.
+    Amount:
+      type: string
+      format: amount
+    Price:
+      type: object
+      required: [figure]
+      properties:
+        figure:
+          type: string
+          format: cents
+          description: What it costs.
+"#;
+
+/// Whether a named schema wraps the type the adopter owns is not a coincidence
+/// between two names. `Cents` is what `money::Cents` ends in and `Amount` is
+/// not, and both are the same `#[serde(transparent)]` newtype over it.
+///
+/// The coincidence is what typify goes by, and it is the adopter's to pay for
+/// in the wrong currency: a schema name is what stands in the corrected
+/// document the vendor and every other consumer read, so "rename the schema to
+/// get the bare type" asks them to spend a name they do not own. One behaviour,
+/// whichever name is there, is the thing that can be reasoned about.
+#[test]
+fn a_named_schema_wraps_the_adopters_type_whatever_it_is_called() {
+    let dir = out("either-name");
+    Settings::new(wrote(&dir, "document.yaml", EITHER_NAME))
+        .replace("cents", "money::Cents")
+        .replace("amount", "money::Cents")
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert!(
+        types.contains("pub struct Cents(pub money::Cents);"),
+        "a schema called what the adopter's path ends in stands alone:\n{types}"
+    );
+    assert!(
+        types.contains("pub struct Amount(pub money::Cents);"),
+        "a schema called something else does not wrap:\n{types}"
+    );
+    // One rule means one obligation: both wrappers are written in terms of the
+    // adopter's type, so the promise is demanded for a coinciding name exactly
+    // as for any other.
+    assert!(
+        types.contains("parses_from_a_string::<money::Cents>()"),
+        "a wrapper was written and nothing holds the type it rests on:\n{types}"
+    );
+}
+
+/// A wrapper costs a name and a `.0`, and it must cost nothing on the wire: an
+/// adoption that reads a field as the adopter's type and one that reads it as
+/// the newtype are reading the same bytes. `#[serde(transparent)]` is what says
+/// so, and it is asserted against the `struct` line so that a wrapper emitted
+/// without it cannot pass.
+///
+/// What the attribute *does* is held where there is a serializer to run it:
+/// `examples/toy/api/tests/money.rs` sends a value both ways.
+#[test]
+fn the_wrapper_a_named_schema_becomes_is_transparent_on_the_wire() {
+    let dir = out("transparent");
+    Settings::new(wrote(&dir, "document.yaml", EITHER_NAME))
+        .replace("cents", "money::Cents")
+        .replace("amount", "money::Cents")
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    for wrapper in ["Cents", "Amount"] {
+        assert!(
+            types.contains(&format!(
+                "#[serde(transparent)]\npub struct {wrapper}(pub money::Cents);"
+            )),
+            "`{wrapper}` is a wrapper the wire can see:\n{types}"
+        );
+    }
+}
+
+/// The adopter's type is reached through a definition of this crate's own, and
+/// what the document said about the value has to arrive there with it. Only the
+/// *shape* is replaced — a shape the adopter owns the Rust for, so nothing is
+/// lost — and the vendor's prose is not shape. It reads the same at a named
+/// schema, where it becomes the wrapper's doc comment, and at a property, where
+/// it becomes the field's.
+#[test]
+fn the_prose_a_schema_carries_survives_the_substitution() {
+    let dir = out("owned-prose");
+    Settings::new(wrote(&dir, "document.yaml", EITHER_NAME))
+        .replace("cents", "money::Cents")
+        .replace("amount", "money::Cents")
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert!(
+        types.contains("///An amount in whole cents.\n#[derive"),
+        "the named schema's sentence did not reach the wrapper it became:\n{types}"
+    );
+    assert!(
+        types.contains("///What it costs.\n    pub figure: money::Cents,"),
+        "the property's sentence did not reach the field:\n{types}"
+    );
+}
+
+/// A schema named like the definition this crate declares a replaced type
+/// under. The vendor spells it with dashes; Rust does not, and that is the
+/// whole of the collision.
+const RESERVED: &str = r#"
+openapi: 3.0.3
+info: { title: Reserved, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /prices:
+    get:
+      operationId: listPrices
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    typed-openapi-replaced0:
+      type: object
+      properties:
+        figure: { type: string }
+    Cents:
+      type: string
+      format: money
+"#;
+
+/// The type the adopter owns is reached through a definition of this crate's
+/// own, so a schema whose Rust name is that definition's is a schema that would
+/// quietly become their type — everywhere it is used, with nothing left to
+/// carry what it declares. Every other named schema generates a type of its
+/// own, so having none is the collision and nothing else, and it is refused by
+/// name rather than approximated.
+#[test]
+fn a_schema_named_like_a_replaced_type_is_refused_by_name() {
+    let dir = out("reserved");
+    let failure = Settings::new(wrote(&dir, "document.yaml", RESERVED))
+        .replace("money", "money::Cents")
+        .write_to(&dir)
+        .expect_err("a schema cannot be the definition a replaced type is reached through");
+    assert_eq!(
+        failure.to_string(),
+        "the schema `typed-openapi-replaced0` reduces to a Rust name this crate \
+         declares a type `Settings::replace` substitutes under, so it generates \
+         no type of its own; rename it in an Overlay",
+        "the refusal has to name the schema to rename"
     );
 }
 
@@ -1334,6 +1517,11 @@ components:
 /// format itself or points at a schema that does. This is the case the first
 /// adoption lost: a monetary amount on a body nobody generated a type for is a
 /// rule enforced nowhere.
+///
+/// The two properties are also the whole rule side by side: the one that points
+/// at a named schema gets the newtype that schema became, and the one that
+/// states the format gets the adopter's type itself. Being named is what
+/// decides it, and nothing else does.
 #[test]
 fn a_type_the_adopter_owns_reaches_a_body_stated_inline() {
     let dir = out("owned-inline");
@@ -1351,8 +1539,8 @@ fn a_type_the_adopter_owns_reaches_a_body_stated_inline() {
         "the wrapper does not take the type the adopter's own reaches through"
     );
     assert!(
-        body.contains("pub amount: cents::Cents,"),
-        "a `$ref` to a schema the adopter owns is not their type:\n{types}"
+        body.contains("pub amount: Cents,"),
+        "a `$ref` to a schema the adopter owns is not the type it became:\n{types}"
     );
     assert!(
         body.contains("pub stated: ::std::option::Option<cash::Cash>,"),
@@ -1360,8 +1548,12 @@ fn a_type_the_adopter_owns_reaches_a_body_stated_inline() {
          else, is not their type:\n{types}"
     );
     assert!(
-        !types.contains("struct Cents") && !types.contains("struct Cash"),
-        "typify defined a type the adopter owns:\n{types}"
+        types.contains("pub struct Cents(pub cents::Cents);"),
+        "the named schema is not a newtype over the type the adopter owns:\n{types}"
+    );
+    assert!(
+        !types.contains("struct Cash"),
+        "a format stated without a name was given a type of its own:\n{types}"
     );
 }
 

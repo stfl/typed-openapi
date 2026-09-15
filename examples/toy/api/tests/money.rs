@@ -16,6 +16,15 @@
 //! to give `Voucher.total` this type, and the reduced model carries it so the
 //! command line can name the same field as an amount.
 //!
+//! # Which of the two amounts is held
+//!
+//! The document names a schema for the amount, so `Voucher.total` is [`Money`],
+//! the transparent newtype the bless step writes over [`money::Money`]. The
+//! table below is stated through that newtype, because it is the type a caller
+//! parses into and the one a `--total` has to agree with; the newtype adds a
+//! name and no reading, which
+//! [`the_wrapper_reads_and_travels_as_the_amount_it_holds`] is what says.
+//!
 //! [`Money`]: api::Money
 
 #![expect(
@@ -23,7 +32,7 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
-use api::{DOCUMENT, Money, MoneyError};
+use api::{DOCUMENT, Money, money};
 use typed_openapi::{Body, Carrier, Document, Scalar};
 
 /// Every edge the `Money` schema's `pattern` has, and whether it admits it.
@@ -111,9 +120,50 @@ fn money_reads_exactly_what_the_documents_pattern_admits() {
     // what an adopter handling one writes against.
     assert_eq!(
         "12,50".parse::<Money>(),
-        Err(MoneyError {
+        Err(money::MoneyError {
             raw: "12,50".to_owned()
         })
+    );
+}
+
+/// What the newtype over a replaced type costs, which is a name and nothing
+/// else.
+///
+/// It reads what the type it holds reads — so the table above, stated through
+/// the newtype, is a statement about [`money::Money`] as much as about
+/// `Voucher.total` — and it travels as the bytes that type travels as, so an
+/// adoption reading a voucher off the wire sees the amount the vendor sent and
+/// not a shape wrapped around it.
+///
+/// Both halves are needed. Reading alone would pass on a wrapper that
+/// serialised as an object; the wire form alone would pass on a wrapper that
+/// re-read the string its own way.
+#[test]
+fn the_wrapper_reads_and_travels_as_the_amount_it_holds() {
+    for (raw, _) in VALUES {
+        assert_eq!(
+            raw.parse::<Money>().map(|amount| amount.0),
+            raw.parse::<money::Money>(),
+            "`{raw}`: the newtype reads it differently from the amount it holds"
+        );
+    }
+
+    let amount: money::Money = "12.50".parse().expect("a valid amount");
+    let wrapped = Money(amount.clone());
+    assert_eq!(
+        serde_json::to_string(&wrapped).expect("an amount serialises"),
+        "\"12.50\"",
+        "the newtype is visible on the wire"
+    );
+    assert_eq!(
+        serde_json::to_string(&wrapped).expect("an amount serialises"),
+        serde_json::to_string(&amount).expect("an amount serialises"),
+        "the newtype and the amount it holds do not send the same bytes"
+    );
+    assert_eq!(
+        serde_json::from_str::<Money>("\"12.50\"").expect("an amount deserialises"),
+        wrapped,
+        "the bytes an amount travels as do not read back as the newtype"
     );
 }
 

@@ -12,8 +12,8 @@ builder = ["api-generated/builder"]
 
 [dependencies]
 api-generated = { path = "../api-generated" }
-# Named here as well as under `api-generated`, because this crate re-exports
-# `Money` beside the generated types: an adopter's own code names `api` and
+# Named here as well as under `api-generated`, because this crate re-exports the
+# crate whole beside the generated types: an adopter's own code names `api` and
 # nothing below it.
 money = { path = "../money" }
 typed-openapi = { path = "../../../typed-openapi", default-features = false }

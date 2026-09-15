@@ -571,8 +571,17 @@ generated crate — which usually means a small crate *below* it, since the
 generated code names it.
 [`examples/toy/money`](../examples/toy/money/src/lib.rs) is that crate: one
 type, `serde`, `thiserror` and `num-bigint`, and no dependency on
-`typed-openapi` at all. `Voucher.total` is a `money::Money`, and typify defines
-nothing for it.
+`typed-openapi` at all.
+
+The document names the shape, so what the generator writes for it is a
+`#[serde(transparent)]` newtype over `money::Money` — `Voucher.total` is that
+newtype, whatever the schema is called. It is transparent on the wire and
+`Deref`s to the type inside, so it costs a name and a `.0` where you want the
+arithmetic; the example spends that `.0` in
+[`Posting::of`](../examples/toy/api/src/posting.rs), which is where a voucher
+becomes the adopter's own vocabulary. A `format` declared without a name — on a
+property, on a list's items — is `money::Money` itself, with nothing wrapped
+around it.
 
 What the owned type is made of stays the adopter's business. `num-bigint` is
 declared in that crate's manifest and in no other, and `just bigint-free`
@@ -607,8 +616,8 @@ The trade against the named-schema route above:
 
 | | named schema | `replace` and a type of your own |
 |---|---|---|
-| the type's name | the schema's | yours |
-| `Display`, arithmetic, conversions | what the generator emits | anything you write |
+| the type's name | the schema's | the schema's, wrapped around yours |
+| `Display`, arithmetic, conversions | what the generator emits | anything you write, reached through the wrapper |
 | enforced on the command line | yes | only if the document states the rule too |
 | held to the document | by construction — typify compiles the same `pattern` | by a test you write |
 | your dependency tree | nothing — the generator writes the type | whatever your type is built from |
@@ -630,20 +639,22 @@ has no business knowing what a replaced type is made of. Choosing a narrower
 count, or a different crate, or no crate at all, is the adopter's call to make
 and the library never learns it was made.
 
-**The price of `replace` is the *held to the document* row.** A generated
-newtype cannot drift from the document; a hand-written one can, and nothing
-notices unless you make it. [`examples/toy/api/tests/money.rs`](../examples/toy/api/tests/money.rs)
-is that: it reads the `pattern` out of the embedded document and holds
-`Money::from_str` to it over every edge the pattern has, in both directions, so
-a vendor who widens the rule fails there instead of quietly admitting values the
+**The price of `replace` is the *held to the document* row.** A newtype the
+generator writes the whole of cannot drift from the document; a wrapper around a
+type you wrote reads with *your* `FromStr`, and nothing notices when that and
+the `pattern` part company. [`examples/toy/api/tests/money.rs`](../examples/toy/api/tests/money.rs)
+is what notices: it reads the `pattern` out of the embedded document and holds
+the amount to it over every edge the pattern has, in both directions, so a
+vendor who widens the rule fails there instead of quietly admitting values the
 type refuses.
 
 Reach for `replace` when you need behaviour on the type, or when no JSON Schema
 can say what the value *is*. Reach for the named schema alone when you need the
 rule and nothing more. The example adoption does both on adjacent fields of one
-schema: `Voucher.currency` is a generated `Currency`, `Voucher.total` a
-hand-owned `Money`, and a `format` tag *and* a `pattern` is what buys the
-second without giving up the first.
+schema: `Voucher.currency` is a `Currency` the generator wrote outright,
+`Voucher.total` a `Money` wrapped around a type the adoption owns, and a
+`format` tag *and* a `pattern` is what buys the second without giving up the
+first.
 
 ## CORRECTIONS, and the test that holds it
 

@@ -193,10 +193,11 @@ not the vendor's, and no row says so `` — so an Overlay edit nobody wrote down
 fails too. [docs/overlay.md](overlay.md) has the detail.
 
 [`api/tests/money.rs`](../examples/toy/api/tests/money.rs) is the fourth, and it
-exists because one type in this adoption is hand-written. A generated newtype
-compiles the document's `pattern` into its own `FromStr`, so it cannot drift;
-`money::Money` is the adopter's, reached through
-[`Settings::replace`](overlay.md#owning-the-type-yourself), and it borrows
+exists because the reading behind one type in this adoption is hand-written. A
+newtype the generator writes the whole of compiles the document's `pattern` into
+its own `FromStr`, so it cannot drift; `Voucher.total` is a newtype whose
+`FromStr` hands the whole reading to `money::Money`, the adopter's own, reached
+through [`Settings::replace`](overlay.md#owning-the-type-yourself) and borrowing
 nothing. The test reads the rule off the embedded document — the very `Scalar`
 that refuses a `--total` — and holds the type to it over every edge the pattern
 has, in both directions:

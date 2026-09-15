@@ -92,7 +92,7 @@ third layer this adoption has no need of.
 
 | the vendor | the correction | what it buys |
 |---|---|---|
-| declares `format: money` and never says what an amount is | an Overlay `update` naming a `Money` schema with the rule *and* the vendor's format in it, pointing `total` at it, and `xtask`'s `.replace("money", "money::Money")` | `--total` rejects `1,50`, and `Voucher.total` is a fixed-point type that adds |
+| declares `format: money` and never says what an amount is | an Overlay `update` naming a `Money` schema with the rule *and* the vendor's format in it, pointing `total` at it, and `xtask`'s `.replace("money", "money::Money")` | `--total` rejects `1,50`, and `Voucher.total` is a transparent newtype over a fixed-point type that adds |
 | calls a bare string an ISO 4217 code, in prose nothing can run | an `update` naming a `Currency` schema with `^[A-Z]{3}$` in it, and pointing `currency` at it | `Voucher.currency` is a `Currency`, and `--currency` rejects `eur` |
 | returns an `internal_ref` it never documented | an `update` adding the property | a struct field and a `--internal-ref` flag |
 | ships `archiveVoucher` and documents it nowhere | an `update` adding the path | a wrapper and a subcommand, for no Rust at all |
@@ -116,7 +116,7 @@ a real difference with no row fails.
 
 | crate | lines | written by | holds |
 |---|---|---|---|
-| [`money`](money) | 428 | the adopter | one type: a fixed-point amount, which the generated code names |
+| [`money`](money) | 428 | the adopter | one type: a fixed-point amount, which the generated code wraps |
 | [`api-generated`](api-generated) | 732 | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
 | [`api`](api) | 1151 | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
 | [`cli`](cli) | 1311 | the adopter | the `toy` binary, and `examples/root.rs` beside it |
@@ -135,19 +135,22 @@ owns a `Money` over whole cents — an arbitrary-precision count of them, so
 `xtask` tells the bless step that `format: money` means that type. The document
 keeps the `pattern`, so a command line still refuses `1,50`; what `replace` adds
 is the arithmetic, and a `Display` that prints `12,50` for a person while the
-wire keeps `12.50`. `Voucher.currency` next door goes the other way — the
-Overlay names a `Currency` schema and the generator writes the newtype, rule
-included — and the two fields are side by side because neither route replaces
-the other.
+wire keeps `12.50`. The Overlay names the shape, so `Voucher.total` is a
+transparent newtype around that type: free on the wire, and a `.0` away from the
+arithmetic, which [`api/src/posting.rs`](api/src/posting.rs) is where this
+adoption spends. `Voucher.currency` next door goes the other way — the Overlay
+names a `Currency` schema and the generator writes the reading as well as the
+type — and the two fields are side by side because neither route replaces the
+other.
 
 `num-bigint` is declared in `money`'s manifest and nowhere else: what an owned
 type is made of is the adopter's business, never the library's, and
 `just bigint-free` is the check rather than the promise.
 
-[`api/tests/money.rs`](api/tests/money.rs) is the price of the first: a
-generated type cannot drift from the document, and a hand-written one can, so a
-test reads the pattern out of the embedded document and holds `Money::from_str`
-to it value for value.
+[`api/tests/money.rs`](api/tests/money.rs) is the price of the first: a reading
+the generator wrote cannot drift from the document, and a hand-written one can,
+so a test reads the pattern out of the embedded document and holds the amount to
+it value for value.
 
 Where an adopter owns a type *above* the generated ones —
 [`api/src/posting.rs`](api/src/posting.rs) — two clippy lints scoped to that

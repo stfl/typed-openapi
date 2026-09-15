@@ -13,8 +13,9 @@
 //!   states a `pattern` becomes a newtype enforcing it, so
 //!   [`types::Currency`] cannot be built out of something that is not a
 //!   currency code. A schema tagged with a `format` the bless step was given a
-//!   Rust path for becomes that type instead, which is why `Voucher.total` is
-//!   a [`money::Money`] and this crate declares the crate holding it.
+//!   Rust path for becomes a transparent newtype over that path, which is why
+//!   [`types::Money`] holds a [`money::Money`] and this crate declares the
+//!   crate holding it.
 //! - `src/ops.rs` — [`ops::OperationId`], one typed method per operation, and
 //!   the `(operationId, method, path)` inventory [`ops::documented`] reads.
 //!

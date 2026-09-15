@@ -154,17 +154,18 @@ impl Settings {
     /// type stands for are the same bytes. `rust_type` is written into the
     /// generated source verbatim, so it is a path the generated crate can name.
     ///
-    /// A named schema carrying the format becomes a newtype *over* `rust_type`
-    /// whenever the schema's name is not what `rust_type` ends in, and that
+    /// A named schema carrying the format becomes a `#[serde(transparent)]`
+    /// newtype *over* `rust_type`, whatever the schema is called, and that
     /// wrapper's impls are written in terms of it: `Display` forwards to it,
     /// `FromStr` parses into it and names `<rust_type as FromStr>::Err` as its
-    /// own error. Where one is written, the generated types assert both traits
-    /// against `rust_type`, so a missing one is a single named error rather
-    /// than the wrapper's own impls failing. Everywhere else the type stands
-    /// alone and needs only the `Serialize`, `Deserialize`, `Clone`, `Debug`
-    /// and `PartialEq` every generated type has. `docs/generating.md` says
-    /// which case is which, and why the document's `pattern` and the type's
-    /// own reading are two rules that a test has to hold together.
+    /// own error. The generated types assert both traits against `rust_type`,
+    /// so a missing one is a single named error rather than the wrapper's own
+    /// impls failing. Where the format is declared without a name — on a
+    /// property, on a list's items — the type stands alone and needs only the
+    /// `Serialize`, `Deserialize`, `Clone`, `Debug` and `PartialEq` every
+    /// generated type has. `docs/generating.md` says why the document's
+    /// `pattern` and the type's own reading are two rules that a test has to
+    /// hold together.
     #[must_use]
     pub fn replace(mut self, format: impl Into<String>, rust_type: impl Into<String>) -> Self {
         self.replacements.push((format.into(), rust_type.into()));
@@ -770,6 +771,17 @@ pub enum GenerateError {
         second: String,
         rust: String,
     },
+    /// A schema whose Rust name is one this crate declares a replaced type
+    /// under. Every other named schema becomes a type of its own, so this one
+    /// would silently become whatever [`Settings::replace`] substitutes —
+    /// wherever the document uses it, and with no type of its own left to
+    /// carry what it declares.
+    #[error(
+        "the schema `{schema}` reduces to a Rust name this crate declares a \
+         type `Settings::replace` substitutes under, so it generates no type \
+         of its own; rename it in an Overlay"
+    )]
+    Reserved { schema: String },
     #[error("{0}")]
     Unsupported(String),
     /// A failure while emitting one operation's wrapper, named by the

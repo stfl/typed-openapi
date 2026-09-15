@@ -11,14 +11,40 @@
 //! check; [`ThroughThisCrate`] points those at this crate's re-export, so the
 //! crate holding the generated code adds no dependency of its own.
 //!
-//! The one setting that matters is [`with_conversion`]: the adopter owns a Rust
-//! type for a vendor *format*, and typify emits that type wherever the document
-//! declares the format —
-//! [`Settings::replace`](super::Settings::replace) is the call that says so.
-//! Keying on the format rather than on a name is what keeps that honest: the
-//! shape typify is told to replace is read out of the document.
+//! # A type the adopter owns is reached through a placeholder
 //!
-//! # It also answers what each schema is called
+//! [`Settings::replace`](super::Settings::replace) says that a vendor *format*
+//! stands for a Rust type the adopter already has. Every schema declaring that
+//! format is rewritten into a reference to a [placeholder](PLACEHOLDER)
+//! definition, and that definition is the adopter's type: typify substitutes a
+//! definition named in
+//! [`with_replacement`](typify::TypeSpaceSettings::with_replacement) and writes
+//! nothing for it. Keying the rewrite on the format rather than on a name is
+//! what keeps the substitution honest — the shape being replaced is read out of
+//! the document.
+//!
+//! Going through a reference is what makes one rule out of what would otherwise
+//! be two. A named schema is then a definition that is a *bare reference*,
+//! which typify reads as a newtype over what the reference resolves to — so a
+//! named schema carrying the format is a `#[serde(transparent)]` wrapper over
+//! the adopter's type whatever the schema is called, and a schema that merely
+//! *mentions* the format on a property is the adopter's type itself. The
+//! alternative is [`with_conversion`], which substitutes on the shape and then
+//! declines to wrap a definition whose name happens to be what the adopter's
+//! path ends in: schema `Cents` against `money::Cents` would stand alone where
+//! schema `Amount` against the same type wraps. Which of the two an adopter got
+//! would turn on a coincidence between a name the vendor chose and a name they
+//! chose, and a schema name is not theirs to move — it is what goes back to the
+//! vendor and out to every other consumer of the document.
+//!
+//! Rewriting typify's output afterwards is the other way to one rule, and it is
+//! the worse one: the emitted file spells the adopter's path the same way
+//! wherever it stands, so repointing the uses that came from a reference —
+//! and only those — would mean knowing which generated field came from which
+//! property. That is typify's naming rule, copied, which is the thing
+//! [`names`](super::names) exists to keep this crate from owning.
+//!
+//! # typify answers what each schema is called
 //!
 //! typify chooses the Rust name of every generated type, and it chooses it
 //! here — so this is where [`Names`](super::names::Names) is read off the
@@ -31,9 +57,9 @@
 //! states where it uses it rather than under a name, and each one is handed to
 //! typify beside the named ones. That is the whole of what makes an inline
 //! request body a type: typify converts any schema it is given, and the named
-//! schemas were the only ones being offered. A conversion the adopter asked
-//! for reaches them too, so a `format` declared inside an inline body becomes
-//! their type exactly as it does inside a named schema.
+//! schemas were the only ones being offered. The rewrite reaches them too, so a
+//! `format` declared inside an inline body becomes the adopter's type exactly
+//! as it does inside a named schema.
 //!
 //! [`with_conversion`]: typify::TypeSpaceSettings::with_conversion
 
@@ -58,6 +84,22 @@ type Stated = (Site, Value);
 /// The crate typify writes into a generated `pattern` check.
 const ENGINE: &str = "regress";
 
+/// What the definition standing for an adopter's type is declared under, before
+/// the index that tells one replacement from the next.
+///
+/// It reaches nothing a reader sees: typify replaces a definition of this name
+/// with the adopter's own path and writes no type for it, so the name is a key
+/// in the schema set handed to typify and in nothing else. It is spelled as
+/// PascalCase words because that is what typify's own sanitiser hands back for
+/// it — the registration is keyed by the sanitised name, so a name that
+/// sanitises to itself is what makes the registration and the definition agree
+/// without this crate owning a second copy of the sanitising rule.
+///
+/// A document is free to declare a schema that reduces to the same Rust name,
+/// and [`Names::read`](super::names::Names::read) refuses that by name rather
+/// than letting the schema be quietly substituted.
+const PLACEHOLDER: &str = "TypedOpenapiReplaced";
+
 /// The generated source, and the name every schema in it ended up with.
 ///
 /// The names come back with the source because this is the only place that
@@ -69,33 +111,31 @@ pub(super) fn emit(
     header: &str,
     replacements: &[(String, String)],
 ) -> Result<(String, Names), GenerateError> {
-    let definitions = definitions(api)?;
-    let stated = stated(api, model)?;
+    let mut definitions = definitions(api)?;
+    let mut stated = stated(api, model)?;
+
+    let owned = owned(replacements);
+    for (_, schema) in &mut definitions {
+        behind_a_reference(schema, &owned)?;
+    }
+    for (_, schema) in &mut stated {
+        behind_a_reference(schema, &owned)?;
+    }
+
+    // Read before the placeholders join them: `Names` answers for the schemas
+    // the document declares, and a placeholder is this crate's own.
+    let declared: Vec<String> = definitions.iter().map(|(name, _)| name.clone()).collect();
 
     let mut settings = TypeSpaceSettings::default();
     settings.with_derive("PartialEq".to_owned());
-    let shapes: Vec<&Value> = definitions
-        .iter()
-        .map(|(_, schema)| schema)
-        .chain(stated.iter().map(|(_, schema)| schema))
-        .collect();
-    for (format, rust) in replacements {
-        for shape in shapes_declaring(&shapes, format) {
-            let shape: schemars::schema::SchemaObject =
-                serde_json::from_value(shape).map_err(|source| {
-                    GenerateError::Unsupported(format!(
-                        "a `format: {format}` shape typify does not accept: {source}"
-                    ))
-                })?;
-            settings.with_conversion(
-                shape,
-                rust,
-                [TypeSpaceImpl::Display, TypeSpaceImpl::FromStr].into_iter(),
-            );
-        }
+    for owned in &owned {
+        settings.with_replacement(
+            &owned.placeholder,
+            &owned.rust,
+            [TypeSpaceImpl::Display, TypeSpaceImpl::FromStr].into_iter(),
+        );
+        definitions.push((owned.placeholder.clone(), Value::Bool(true)));
     }
-
-    let declared: Vec<String> = definitions.iter().map(|(name, _)| name.clone()).collect();
 
     let mut space = TypeSpace::new(&settings);
     space
@@ -132,11 +172,12 @@ pub(super) fn emit(
 /// `Display` is `E0599: no method named `fmt``, all of them tens of thousands
 /// of lines inside a file they did not write.
 ///
-/// The promise is only owed where typify *wrapped* the type. Where it emitted
-/// the type directly — an inline shape, or a named schema whose own name is
-/// what the replacement path ends in — nothing is written in terms of it and
-/// the adopter's type needs neither trait. So the emitted file is what decides
-/// who is asked, and a type nobody wrapped is asked for nothing.
+/// The promise is only owed where typify *wrapped* the type, which is at a
+/// named schema. Where it emitted the type directly — a property, a list's
+/// items, anything the document describes without naming — nothing is written
+/// in terms of it and the adopter's type needs neither trait. So the emitted
+/// file is what decides who is asked, and a type nobody wrapped is asked for
+/// nothing.
 ///
 /// The traits the newtype *derives* are deliberately not here. `Clone`,
 /// `Debug`, `PartialEq`, serde's pair and whatever else typify adds for the
@@ -375,35 +416,97 @@ fn inline(stated: Vec<Stated>) -> Result<Vec<(Site, schemars::schema::Schema)>, 
         .collect()
 }
 
-/// Every distinct schema in the document that declares `format`, in document
-/// order.
-///
-/// typify matches a conversion on the whole shape, so a document that spells
-/// one format two ways gets one conversion per spelling rather than a silent
-/// miss on the second.
-fn shapes_declaring(schemas: &[&Value], format: &str) -> Vec<Value> {
-    let mut found = Vec::new();
-    for schema in schemas {
-        collect(schema, format, &mut found);
-    }
-    found
+/// One vendor format an adopter owns the Rust type for, and the definition
+/// every schema declaring it is reached through.
+struct Owned {
+    /// The `format` keyword, in the document's own spelling.
+    format: String,
+    /// The definition typify substitutes the adopter's type for.
+    placeholder: String,
+    /// The adopter's own path, as [`Settings::replace`] spelled it.
+    ///
+    /// [`Settings::replace`]: super::Settings::replace
+    rust: String,
 }
 
-fn collect(value: &Value, format: &str, found: &mut Vec<Value>) {
-    let Value::Object(fields) = value else {
-        if let Value::Array(items) = value {
-            for item in items {
-                collect(item, format, found);
+/// One [`Owned`] per format the adopter named, in the order they were named.
+///
+/// A format named twice keeps the first, so that a later call cannot change
+/// what an earlier one already decided for a document this run also reads.
+fn owned(replacements: &[(String, String)]) -> Vec<Owned> {
+    let mut owned: Vec<Owned> = Vec::new();
+    for (format, rust) in replacements {
+        if owned.iter().any(|it| it.format == *format) {
+            continue;
+        }
+        owned.push(Owned {
+            format: format.clone(),
+            placeholder: format!("{PLACEHOLDER}{}", owned.len()),
+            rust: rust.clone(),
+        });
+    }
+    owned
+}
+
+/// Every schema under `value` that declares a format the adopter owns the type
+/// for, rewritten into a reference to the placeholder standing for it.
+///
+/// The whole document is walked rather than its named schemas alone, because a
+/// format is declared wherever a value is described — on a property of a named
+/// schema, on a property of a body an operation states inline, on the items of
+/// a list. Each of them is one substitution, and all of them are the same one.
+fn behind_a_reference(value: &mut Value, owned: &[Owned]) -> Result<(), GenerateError> {
+    match value {
+        Value::Array(items) => items
+            .iter_mut()
+            .try_for_each(|item| behind_a_reference(item, owned)),
+        Value::Object(fields) => {
+            let declared = fields
+                .get("format")
+                .and_then(Value::as_str)
+                .and_then(|format| owned.iter().find(|it| it.format == format));
+            match declared {
+                Some(owned) => {
+                    *value = reference_to(owned, std::mem::take(value))?;
+                    Ok(())
+                }
+                None => fields
+                    .values_mut()
+                    .try_for_each(|nested| behind_a_reference(nested, owned)),
             }
         }
-        return;
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => Ok(()),
+    }
+}
+
+/// A reference to `owned`'s placeholder, carrying what `schema` said about
+/// itself and nothing it said about its shape.
+///
+/// typify reads a definition that is a *bare* reference as a newtype over what
+/// the reference resolves to, and a bare one only: a `type` or a `pattern` left
+/// beside the `$ref` is merged into the referenced shape instead, which is a
+/// different type and not the one the adopter owns. So the shape goes and the
+/// metadata stays — the title and description a generated doc comment is
+/// written from describe the field or the schema rather than the shape, and
+/// losing them would cost the generated type the vendor's own prose.
+///
+/// Which keys those are is schemars' answer rather than a list here, because
+/// schemars is what typify reads the schema with.
+fn reference_to(owned: &Owned, schema: Value) -> Result<Value, GenerateError> {
+    let unreadable = |source: serde_json::Error| {
+        GenerateError::Unsupported(format!(
+            "a `format: {}` shape typify does not accept: {source}",
+            owned.format
+        ))
     };
-    if fields.get("format") == Some(&Value::String(format.to_owned())) && !found.contains(value) {
-        found.push(value.clone());
-    }
-    for nested in fields.values() {
-        collect(nested, format, found);
-    }
+    let stated: schemars::schema::SchemaObject =
+        serde_json::from_value(schema).map_err(unreadable)?;
+    serde_json::to_value(schemars::schema::SchemaObject {
+        metadata: stated.metadata,
+        reference: Some(format!("#/definitions/{}", owned.placeholder)),
+        ..schemars::schema::SchemaObject::default()
+    })
+    .map_err(unreadable)
 }
 
 /// An OpenAPI schema object as the JSON Schema typify understands: only the

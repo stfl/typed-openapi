@@ -95,20 +95,37 @@ dependency of the generated crate.
 derives, wherever it appears. Each missing one is a single error naming your
 type and the trait.
 
-Sometimes it needs `FromStr` and `Display` as well. A named schema tagged with
-the format becomes a *newtype over* your type whenever the schema's name is not
-what your type's path ends in — schema `Cents` and `money::Cents` are the same
-word, so the type stands alone; schema `Amount` and `money::Cents` are not, so
-`Amount` wraps it. A wrapper's impls are written in terms of yours: `Display`
-forwards to it, `FromStr` parses into it and names `<YourType as FromStr>::Err`
-as its own error, and both `TryFrom`s go through that.
+It needs `FromStr` and `Display` as well whenever the document *names* a schema
+carrying the format. A named schema becomes a `#[serde(transparent)]` newtype
+**over** your type — `Cents` against `money::Cents` and `Amount` against
+`money::Cents` alike, because what the schema is called has nothing to do with
+it — and that wrapper's impls are written in terms of yours: `Display` forwards
+to it, `FromStr` parses into it and names `<YourType as FromStr>::Err` as its
+own error, and both `TryFrom`s go through that. `Deref` is there too, so a
+method on your type is a method on the wrapper.
 
-You are not left to remember which case you are in. Where a wrapper is written,
-`types.rs` carries a `const _` block asserting both traits against your type, so
-a missing one is a single error naming your type, the trait, and the line that
-asked for it — rather than the `E0271`s and `E0276`s about an unresolvable
-associated type that the wrapper's own impls would otherwise produce, tens of
-thousands of lines into a file you did not write.
+The wrapper is `#[serde(transparent)]`, so the wire form is your type's: it
+costs a name and a `.0`, never a byte. Reach through it where you want the type
+itself — an operator or an associated function is your type's, not the
+wrapper's.
+
+Where the format is declared **without** a name — on a property, on a list's
+items, on a body the document states where it uses it — your type stands alone.
+Nothing is written in terms of it there, so neither trait is asked for.
+
+`types.rs` carries a `const _` block asserting both traits against your type
+wherever a wrapper is written, so a missing one is a single error naming your
+type, the trait, and the line that asked for it — rather than the `E0271`s and
+`E0276`s about an unresolvable associated type that the wrapper's own impls
+would otherwise produce, tens of thousands of lines into a file you did not
+write.
+
+Your type is reached through a definition the bless step adds to the schemas it
+hands the generator, under a name of its own. A vendor schema whose Rust name
+is that one is refused by name — *"the schema `…` reduces to a Rust name this
+crate declares a type `Settings::replace` substitutes under"* — because the
+alternative is that schema quietly becoming your type everywhere it is used.
+Rename it in an Overlay.
 
 `FromStr` is also why the rule and the type do not check each other. A schema
 whose format is replaced hands the whole reading to your `FromStr`: the

@@ -11,6 +11,15 @@
     reason = "generated source is not graded on style; the allow covers this \
               module and nothing else"
 )]
+///`Settings::replace("money", "money::Money")` promises that this type parses from a string and prints to one, and the newtype above is written in terms of both.
+const _: () = {
+    fn parses_from_a_string<T: ::std::str::FromStr>() {}
+    fn prints_to_a_string<T: ::std::fmt::Display>() {}
+    fn a_type_named_by_settings_replace() {
+        parses_from_a_string::<money::Money>();
+        prints_to_a_string::<money::Money>();
+    }
+};
 ///`Address`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
 pub struct Address {
@@ -130,6 +139,49 @@ impl ::std::str::FromStr for Memo {
         Ok(Self(value.to_string()))
     }
 }
+///A decimal amount carried in a string.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(transparent)]
+pub struct Money(pub money::Money);
+impl ::std::ops::Deref for Money {
+    type Target = money::Money;
+    fn deref(&self) -> &money::Money {
+        &self.0
+    }
+}
+impl ::std::convert::From<Money> for money::Money {
+    fn from(value: Money) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<money::Money> for Money {
+    fn from(value: money::Money) -> Self {
+        Self(value)
+    }
+}
+impl ::std::fmt::Display for Money {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl ::std::str::FromStr for Money {
+    type Err = <money::Money as ::std::str::FromStr>::Err;
+    fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
+        Ok(Self(value.parse()?))
+    }
+}
+impl ::std::convert::TryFrom<&str> for Money {
+    type Error = <money::Money as ::std::str::FromStr>::Err;
+    fn try_from(value: &str) -> ::std::result::Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<String> for Money {
+    type Error = <money::Money as ::std::str::FromStr>::Err;
+    fn try_from(value: String) -> ::std::result::Result<Self, Self::Error> {
+        value.parse()
+    }
+}
 ///`Voucher`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
 pub struct Voucher {
@@ -141,7 +193,7 @@ pub struct Voucher {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub internal_ref: ::std::option::Option<::std::string::String>,
     pub status: VoucherStatus,
-    pub total: money::Money,
+    pub total: Money,
 }
 ///`VoucherStatus`
 #[derive(
