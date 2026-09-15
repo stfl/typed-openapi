@@ -8,7 +8,10 @@ when a correction later stops fitting is [docs/drift.md](drift.md).
 
 - [Why an Overlay](#why-an-overlay)
 - [Action kinds](#action-kinds)
+- [A correction adds; it cannot subtract](#a-correction-adds-it-cannot-subtract)
+- [Pointing a field at a named schema](#pointing-a-field-at-a-named-schema)
 - [The tripwire form](#the-tripwire-form)
+- [Writing a target](#writing-a-target)
 - [Layers](#layers)
   - [1. Plain corrections](#1-plain-corrections)
   - [2. Type validations and newtypes](#2-type-validations-and-newtypes)
@@ -80,6 +83,75 @@ would accompany one in the summary list is `Correction::Skipped`:
 **`copy`** merges a node the target document already has — named by a second
 JSONPath — into every selected node. Nothing in this repository uses it.
 
+## A correction adds; it cannot subtract
+
+`remove: true` deletes a node that is an object or an array. It cannot delete a
+node that is a scalar, and a keyword's value is usually a scalar. Targeting one
+fails while the Overlay is applied:
+
+```
+action `target` must resolve to objects or arrays, not primitives or null
+```
+
+So a correction can add a keyword, and it can change one, but it can never take
+one away. A vendor field declared `type: string` and `format: date-time` keeps
+both for as long as the vendor declares them, whatever the layer says about the
+field afterwards.
+
+Changing is not removing, and two merge rules decide how a correction is
+written:
+
+- `update` **replaces** a shared scalar. `type: number` → `type: integer` is an
+  ordinary update; no `remove` is involved.
+- `update` **concatenates** shared arrays, so appending to a `parameters` array
+  is one action rather than a rewrite of the whole list.
+
+Writing `type: null` is not the way round it. The engine writes an explicit null
+rather than deleting the key, and `type: null` is not valid OpenAPI 3.0 — which
+makes the corrected document a worse artefact than the stale `type: string` it
+was meant to clean up, and the corrected document is the thing other consumers
+read.
+
+The workaround that does exist is to replace the whole parent object rather than
+the one keyword, which costs every sibling key the vendor wrote. That is usually
+worse than living with the stale keyword.
+
+## Pointing a field at a named schema
+
+This is the crate's recommended correction — say the rule once under a name, and
+point every field that carries it at that name — so it is worth being exact
+about which spelling to use. There are three, and two of them look right until
+they are blessed.
+
+| Spelling | Outcome |
+|---|---|
+| `update: { $ref: … }` merged over the vendor's keys | **Use this.** A `$ref` wins over everything written beside it, the field keeps its place in `properties`, and the rule the crate reads is the named schema's. |
+| `update: { allOf: [ { $ref: … } ] }` merged over them | Silently neither. Beside a vendor's `type` or `format` the node parses as neither a scalar nor a wrapper, the field stops being a flag, and the whole body falls back to `--json-body`, taking every sibling's flag with it. |
+| `remove` the property, then `update` the parent to re-add it clean | Works, and costs the property its place in `properties`, so `--help` order moves. |
+
+The price of the first is the vendor's own per-field description: a `$ref`'s
+siblings are ignored, so what a reader sees is the named schema's sentence. Say
+what the field means in the named schema, once, rather than in each field that
+points at it.
+
+The stale keywords stay beside the reference, because nothing can remove them:
+
+```yaml
+voucherDate:
+  type: string                            # the vendor's, and now ignored
+  format: date-time                       # the vendor's, and now ignored
+  description: The vendor's own words.    # ignored beside the `$ref`
+  $ref: '#/components/schemas/BookingDay'
+```
+
+That document is correct OpenAPI and every consumer reads it the same way. It is
+not tidy, and it cannot be made tidy from a layer.
+
+A single-element `allOf` *is* read as the schema it wraps — that is how a
+reference keeps a sentence of its own — but only where there is no vendor
+keyword beside it, which on a field the vendor declared is never. Use it in a
+named schema you are writing, not in a correction over a vendor's field.
+
 ## The tripwire form
 
 This is the idea worth taking away. An Overlay is applied with
@@ -126,6 +198,40 @@ in the vendor layer and three in the CLI layer.
 The cost is deliberate: every tripwire is a place a vendor revision stops the
 build. That is the trade — you are buying a failure you can read in exchange for
 a silent one you cannot.
+
+## Writing a target
+
+Two rules about JSONPath decide what a target can say, and both are easier to
+learn here than by writing an action and reading a zero-match failure.
+
+**A filter iterates the children of the node it follows.** RFC 9535 applies
+`[?(…)]` to each member of the node before it, so `@` inside the filter is a
+*child*, never the node the path just named. That is why the tripwire above
+hangs off `Voucher` rather than off `total`: it tests each of `Voucher`'s
+members for `.total.format`, finds it on `properties`, and the step after it
+names `total`. The form that reads more naturally —
+
+```yaml
+  - target: "$..properties.voucherDate[?(@.format == 'date-time')]"
+```
+
+— tests `voucherDate`'s own members for a `format` key of their own and matches
+nothing. `ErrorOnZeroMatch` makes that a failed bless rather than a silent
+no-op, so it is caught; it is still an hour nobody needs to spend.
+
+Four forms that do what they look like:
+
+| Form | Reaches |
+|---|---|
+| `$..properties['a','b','c']` | a union of field names, at any encoding |
+| `$..[?(@.properties.X.format == 'date-time')].properties.X` | one name at one encoding — the filter sits on the parent |
+| `$..parameters[?((@.name=='from' \|\| @.name=='to') && @.schema.type=='integer')].schema` | a name and an encoding together, for parameters |
+| `$..properties[?(@.description == "the vendor's exact sentence")]` | every field the vendor describes the same way |
+
+**Recursive descent corrects a family of fields in one action.**
+`$..properties.voucherDate` reaches every occurrence in the document, so a rule
+shared by a hundred fields is one reviewable action rather than a hundred — and
+one tripwire rather than a hundred.
 
 ## Layers
 
