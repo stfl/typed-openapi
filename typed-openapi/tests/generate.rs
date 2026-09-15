@@ -976,3 +976,52 @@ fn a_type_nothing_was_written_in_terms_of_is_asked_for_nothing() {
         "a promise is demanded where nothing rests on it:\n{types}"
     );
 }
+
+/// Two schemas the vendor spells differently and Rust does not: a dash and an
+/// underscore reduce to the same PascalCase word.
+const COLLIDING: &str = r##"
+openapi: 3.0.3
+info: { title: Colliding, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /vouchers:
+    post:
+      operationId: addVoucher
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/voucher-summary" }
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    voucher-summary:
+      type: object
+      properties:
+        count: { type: integer }
+    Voucher_Summary:
+      type: object
+      properties:
+        total: { type: string }
+"##;
+
+/// typify writes a definition per schema and uniquifies nothing, so two names
+/// that reduce to one are two `struct`s under the same name in the same file.
+/// Renaming one here would be a generator choosing a public name nobody asked
+/// for — the same reason two operations reducing to one `<group> <command>`
+/// are refused rather than renamed.
+#[test]
+fn two_schemas_that_reduce_to_one_type_are_refused_by_name() {
+    let dir = out("colliding");
+    let failure = Settings::new(wrote(&dir, "document.yaml", COLLIDING))
+        .write_to(&dir)
+        .expect_err("one name cannot be two types");
+    let said = failure.to_string();
+
+    assert!(
+        said.contains("`voucher-summary`")
+            && said.contains("`Voucher_Summary`")
+            && said.contains("`VoucherSummary`"),
+        "the refusal does not name both schemas and the type they share: {said}"
+    );
+}

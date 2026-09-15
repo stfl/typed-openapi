@@ -630,6 +630,19 @@ pub enum GenerateError {
          wrapper can name the type it would be"
     )]
     NoType { schema: String },
+    /// Two of the document's schemas reduce to one Rust type. typify writes a
+    /// definition per schema and uniquifies nothing, so emitting them is a file
+    /// that defines the same type twice; renaming one here would be a generator
+    /// choosing a public name nobody asked for.
+    #[error(
+        "the document's schemas `{first}` and `{second}` are both `{rust}` in Rust; \
+         rename one of them in an Overlay"
+    )]
+    OneType {
+        first: String,
+        second: String,
+        rust: String,
+    },
     #[error("{0}")]
     Unsupported(String),
     /// A failure while emitting one operation's wrapper, named by the

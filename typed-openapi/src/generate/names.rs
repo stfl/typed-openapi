@@ -15,6 +15,13 @@
 //! same authors against the same rule, prefixes it with `_`. Two copies of one
 //! rule already disagree in the wild.
 //!
+//! Two schemas that come back under one name are refused. typify emits a
+//! definition per schema and does not uniquify a name two of them reduce to,
+//! so the alternative is a generated file carrying the same `struct` twice —
+//! and this is the rule the command line already follows, where two operations
+//! reducing to one `<group> <command>` are refused by name rather than one of
+//! them being renamed by a generator nobody asked.
+//!
 //! It is also how the answer stays right for a type the adopter owns.
 //! [`Settings::replace`](super::Settings::replace) substitutes their type, and
 //! where typify writes no definition for the schema at all there is no
@@ -53,14 +60,23 @@ impl Names {
                 Ok((schema.to_owned(), id))
             })
             .collect::<Result<_, GenerateError>>()?;
-        resolved
-            .into_iter()
-            .map(|(schema, id)| {
-                let ty = space.get_type(&id).map_err(GenerateError::Typify)?;
-                Ok((schema, path_of(&ty)))
-            })
-            .collect::<Result<BTreeMap<_, _>, GenerateError>>()
-            .map(Self)
+        let mut claimed: BTreeMap<String, String> = BTreeMap::new();
+        let mut names = BTreeMap::new();
+        for (schema, id) in resolved {
+            let ty = space.get_type(&id).map_err(GenerateError::Typify)?;
+            let path = path_of(&ty);
+            if let Some(first) = claimed.insert(path.to_string(), schema.clone()) {
+                return Err(GenerateError::OneType {
+                    first,
+                    second: schema,
+                    // typify's own spelling of the name, rather than the token
+                    // stream's, because this is a sentence an adopter reads.
+                    rust: ty.name(),
+                });
+            }
+            names.insert(schema, path);
+        }
+        Ok(Self(names))
     }
 
     /// The type `schema` became, as a wrapper spells it.
