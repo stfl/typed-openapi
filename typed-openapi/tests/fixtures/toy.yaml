@@ -213,6 +213,19 @@ components:
         recipient:
           type: string
           description: Mailbox the voucher is sent to
+        note:
+          $ref: '#/components/schemas/Memo'
+    Memo:
+      type: string
+      description: |
+        A note the sender keeps against the voucher.
+
+        The server stores it verbatim and never reads it. Senders paste a
+        reference in, under a heading of their own:
+
+            PO-1234, approved by finance
+
+        and it comes back exactly as it was sent.
     Address:
       type: object
       required: [street, city]
