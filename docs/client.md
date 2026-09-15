@@ -10,6 +10,7 @@ any feature combination, and it never will. The primer is
 - [The seam](#the-seam)
 - [A reference to a client is a client](#a-reference-to-a-client-is-a-client)
 - [Writing an adapter](#writing-an-adapter)
+- [Classifying a transport failure](#classifying-a-transport-failure)
 - [`Recorder`, the one client this crate ships](#recorder-the-one-client-this-crate-ships)
 
 ## The seam
@@ -78,6 +79,59 @@ with a 4xx is what a caller needs, and a `Call` answers with `Outcome::Sent`
 carrying the response, status and all. ureq turns a 4xx into an error and
 discards the body unless it is built with `http_status_as_error(false)`, which
 is why the example's adapter sets it.
+
+## Classifying a transport failure
+
+`DispatchError::Transport` and `client::Error::Transport` carry the client's
+error in a `Box<dyn Error + Send + Sync>`. The box is what keeps a type
+parameter for the client off every signature that mentions either error, and
+what lets an adopter's own error type absorb one whole.
+
+Whether a failed request *left* — on a write, the difference between an
+operation that did nothing and one that may have done everything — is a reading
+of what a particular client's error means. This crate has no far side to read:
+it sends nothing. So the reading belongs in the crate that wrote the adapter,
+and a failure nobody has classified counts as one that may have arrived. That
+is the conservative answer, and the only safe one to reach for by default: a
+retry rule that treats every failure as harmless will re-send a write that
+already landed.
+
+Two routes reach the concrete error.
+
+**Downcast it.** The box holds `C::Error` exactly as the client returned it. A
+run that picks its client at run time holds the seam as a trait object, which
+fixes the associated type — so the catch site names the error type and never a
+client:
+
+```rust,ignore
+fn run(
+    document: &Document,
+    client: &dyn SyncClient<Error = MyError>,
+    matches: &ArgMatches,
+) -> Result<Outcome, DispatchError> {
+    tree::dispatch(document, document.base(), &client, matches)
+}
+
+if let Err(DispatchError::Transport(boxed)) = run(&document, client, &matches)
+    && let Some(mine) = boxed.downcast_ref::<MyError>()
+{
+    // `mine` is whatever the adapter put there, and `run` named no client.
+}
+```
+
+**Send it yourself.** Build the request through `Plan` — or `Call::request` on
+the typed side — and hand it to the client's own `send`. Nothing is boxed and
+the error is the client's own type:
+
+```rust,ignore
+let Plan::Send(request) = Plan::build(op, base, values, &answers)? else {
+    // A write nobody confirmed. Print it; send nothing.
+};
+let response = client.send(request)?; // the client's own error, untouched
+```
+
+This route also keeps the gate away from the network: it decides with no socket
+and no credential, so a dry run needs neither.
 
 ## `Recorder`, the one client this crate ships
 

@@ -48,6 +48,16 @@ pub enum Error {
     Request(#[from] http::Error),
     #[error("cannot serialise the request body: {0}")]
     Encode(#[source] serde_json::Error),
+    /// The client refused the request or never got an answer, carrying the
+    /// error the client itself returned.
+    ///
+    /// Boxed, so this type does not grow a parameter for the client. Whether
+    /// the request left is a reading only an adapter can make, so it belongs
+    /// above the seam, and a failure nobody has classified is one that may have
+    /// arrived. The concrete error is here to be read: `downcast_ref` recovers
+    /// `C::Error`, and [`Call::request`] hands back the bytes for a caller who
+    /// would rather send them through the client's own `send` and box nothing.
+    /// `docs/client.md` shows both.
     #[error("transport: {0}")]
     Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("{status}: {body}")]

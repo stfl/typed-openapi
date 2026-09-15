@@ -653,3 +653,72 @@ fn a_reference_and_a_trait_object_both_reach_the_crates_own_send() {
     assert_eq!(paths, ["/vouchers/5", "/vouchers/6"]);
     assert_eq!(client.unused(), 0, "both answers were reached");
 }
+
+/// Classifying a transport failure without naming the client it was made
+/// through.
+///
+/// `run` is the shape an adopter reaches for when the client is chosen a layer
+/// up: the seam is a trait object, so the associated type is fixed and its
+/// signature mentions no client at all. The catch site then spells the
+/// adopter's own error to get the concrete failure back out of the box — which
+/// is the knowledge the seam was meant to leave behind, kept behind.
+#[test]
+fn a_transport_failure_is_read_back_by_downcast_without_naming_the_client() {
+    fn run(
+        doc: &Document,
+        client: &dyn SyncClient<Error = RecorderError>,
+        matches: &ArgMatches,
+    ) -> Result<Outcome, DispatchError> {
+        tree::dispatch(doc, doc.base(), &client, matches)
+    }
+
+    let doc = document();
+    let client =
+        Recorder::new().failing_route(Method::GET, "/vouchers/5", "the request never left");
+    let matches = parse(&doc, &["toy", "vouchers", "get", "--id", "5"]);
+
+    let error = run(&doc, &client, &matches).expect_err("the script fails this route");
+
+    let DispatchError::Transport(boxed) = &error else {
+        panic!("a client that fails is a transport failure: {error:?}");
+    };
+    let concrete = boxed
+        .downcast_ref::<RecorderError>()
+        .expect("the box holds the error the client itself returned");
+    assert_eq!(
+        concrete.message(),
+        "the request never left",
+        "the message is the one the script queued, not a rendering of it"
+    );
+}
+
+/// The other route to the concrete error, which boxes nothing at all.
+///
+/// A caller that wants the gate without handing the crate a client builds the
+/// request through `Plan` and sends it through the client's own `send`. The
+/// error that comes back is the client's own type, so there is nothing to
+/// downcast and nothing to get wrong.
+#[test]
+fn a_request_sent_through_the_client_itself_fails_with_the_clients_own_error() {
+    let doc = document();
+    let op = doc.get("getVoucher").expect("the document describes it");
+    let client =
+        Recorder::new().failing_route(Method::GET, "/vouchers/5", "the request never left");
+
+    let Plan::Send(request) = Plan::build(
+        op,
+        doc.base(),
+        Values::new().param("id", 5),
+        &Answers::new(),
+    )
+    .expect("the values satisfy the operation") else {
+        panic!("a read is sent on sight");
+    };
+    let failed = client
+        .send(request)
+        .expect_err("the script fails this route");
+
+    // `RecorderError`, named here and nowhere else: no box, no downcast.
+    assert_eq!(failed.message(), "the request never left");
+    assert_eq!(only(&client).uri().path(), "/vouchers/5");
+}

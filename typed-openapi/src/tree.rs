@@ -279,6 +279,25 @@ pub enum DispatchError {
     Arg(#[from] ArgError),
     #[error(transparent)]
     Plan(#[from] PlanError),
+    /// The client refused the request or never got an answer, carrying the
+    /// error the client itself returned.
+    ///
+    /// What the box costs is worth saying out loud: this crate cannot tell
+    /// whether the request left, and on a write that is the difference between
+    /// an operation that did nothing and one that may have done everything.
+    /// Only an adapter can read that out of its own client's error, so the
+    /// reading belongs above the seam — the position
+    /// [`RecorderError`](crate::RecorderError) states for a scripted failure,
+    /// and the same one here. A failure nobody has classified is one that may
+    /// have arrived, which is the only safe default to hold it at.
+    ///
+    /// Reading it is not shut off, though. The box holds `C::Error` exactly as
+    /// the client returned it, so `downcast_ref` recovers it — and the type a
+    /// catch site names is the error type the adopter's own seam fixes, not
+    /// whichever client the call went through, because `&dyn SyncClient<Error
+    /// = E>` fixes `E` for every client behind it. A caller who wants no box at
+    /// all builds the request with [`Plan`] and sends it through the client's
+    /// own `send`. `docs/client.md` shows both.
     #[error("transport: {0}")]
     Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
