@@ -1,2 +1,10 @@
 /target
 .scratch/
+
+# Agent scratch, not project configuration. `.claude/` itself is not ignored:
+# a committed `settings.json`, `agents/` or `commands/` belongs to the repo and
+# should stay reviewable. These two do not — `worktrees/` holds throwaway git
+# worktrees an agent checks out and deletes, and `settings.local.json` is one
+# machine's overrides by the `.local` convention.
+.claude/worktrees/
+.claude/settings.local.json
