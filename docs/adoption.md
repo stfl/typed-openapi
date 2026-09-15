@@ -3,12 +3,12 @@
 The library refuses what it can refuse. A `pattern` no engine runs, a `content`
 key that is not a media type, two operations reducing to one command name: each
 is a `LoadError` naming the operation and the thing that could not be read, at
-the moment the document is reduced. This page is the residue — four judgement
+the moment the document is reduced. This page is the residue — five judgement
 calls no check reaches, because each is a claim about an API nobody has called
 yet. Read it if you are pointing this crate at a vendor's document rather than
 at the toy.
 
-The primer is [the README](../README.md); the mechanism every decision below is
+The primer is [the README](../README.md); the mechanism the decisions below are
 written in is [docs/overlay.md](overlay.md), and what fails when one of them
 stops fitting is [docs/drift.md](drift.md).
 
@@ -17,6 +17,7 @@ stops fitting is [docs/drift.md](drift.md).
 - [Route an action by its audience, never by keyword](#route-an-action-by-its-audience-never-by-keyword)
 - [A narrowing refuses reads as well as writes](#a-narrowing-refuses-reads-as-well-as-writes)
 - [A vendor may state one rule twice and disagree with itself](#a-vendor-may-state-one-rule-twice-and-disagree-with-itself)
+- [A documentation site may be a view of the document you hold](#a-documentation-site-may-be-a-view-of-the-document-you-hold)
 - [Evidence belongs in the action, with its date](#evidence-belongs-in-the-action-with-its-date)
 - [Prior art, and one hazard in it](#prior-art-and-one-hazard-in-it)
 - [Before you commit a correction](#before-you-commit-a-correction)
@@ -175,13 +176,60 @@ what you want, and it is what makes a guess expensive.
 **Measuring it means a call, and a read is worth more than a write.** A server
 that accepts a value may normalise it, so a 2xx says less than a record you did
 not write coming back with the spelling on it. Send one of each against a
-sandbox tenant, then fetch something ordinary and read what it carries.
+sandbox tenant, then fetch something ordinary and read what it carries. Prose
+the vendor publishes outside the document is a third statement worth having, and
+whether any exists is
+[a question with a cheap answer](#a-documentation-site-may-be-a-view-of-the-document-you-hold).
 
 Where you cannot measure, state the wider set or state nothing. The asymmetry is
 the whole argument: a rule that is too wide costs you a check you wanted, and a
 rule that is too narrow costs you the records. An `enum` naming both spellings
 refuses nothing that works. The vendor's document unchanged already admits
 whatever it admits, and the correction is the thing that has to be justified.
+
+## A documentation site may be a view of the document you hold
+
+**Whether the vendor's published documentation adds anything to the file you
+already have is a question with a cheap answer, and the cheap answer is a
+hash.** A documentation site that renders in the browser fetches the document it
+draws, and that request is in the page's network log. Fetch it, hash it, and
+hash the copy you vendored:
+
+```sh
+# the document the site loads, twice, past any cache — and the copy you hold
+for _ in 1 2; do
+    curl -fsS -H 'Cache-Control: no-cache' "$SPEC_URL?cb=$(date +%s%N)" | sha256sum
+done
+sha256sum spec/vendor.yaml
+```
+
+Three matching hashes say two things at once: the site is a renderer over the
+document you already have, and the origin served those bytes rather than a cache
+between you and it. Running it on the first adoption of this crate returned
+three matches, so *read the vendor's documentation* and *read the OpenAPI
+document* were one instruction — every hazard the site might have explained sat
+in a file that can be searched rather than browsed.
+
+**The method is the part that transfers, not the finding.** The weaker check is
+to skim the site for an afternoon and conclude that it adds little. That
+conclusion cannot be wrong, because no observation would have refuted it, and an
+unfalsifiable check is worse than none: it retires the question while leaving it
+open. A hash either matches or it does not.
+
+Which is why the finding does not generalise into *vendor prose is worthless*.
+[A vendor may state one rule twice](#a-vendor-may-state-one-rule-twice-and-disagree-with-itself)
+turns on a case where the prose is the only statement the live API honours, and
+a matching hash is what puts that prose in your hands rather than on a site: the
+sentence that settles it sits in a `description` you can grep. A hash that
+*differs* is the other finding and just as useful — the site carries statements
+the document does not, and each is a candidate answer to the question that
+section leaves open. Which of the two you are looking at is the thing to
+establish before deciding how much reading the site is worth.
+
+A hash holds for the day it was taken. A site can gain a page the document never
+gains, so the answer wants a date on it like any other measurement. And it says
+nothing about the vendor's other channels: a support desk, a changelog and a PDF
+somebody emails are each a source, and none of them is hashed by this.
 
 ## Evidence belongs in the action, with its date
 
@@ -270,7 +318,7 @@ one that may have arrived: [client.md](client.md#classifying-a-transport-failure
 
 ## Before you commit a correction
 
-Six questions. None of them has a checker.
+Seven questions. None of them has a checker.
 
 - **Who else could use this?** Anyone, and it is a correction; only your client,
   and it is a narrowing. The answer decides the file.
@@ -279,6 +327,9 @@ Six questions. None of them has a checker.
 - **Does the document state this rule anywhere else?** A description, an
   example, a second keyword. If the statements disagree, which one did you
   measure?
+- **Is the vendor's published documentation a second source, or a view of the
+  file you hold?** A hash answers that in minutes. An impression never answers
+  it, and retires the question all the same.
 - **What did you measure, when, and against what?** If the answer is nothing,
   does the `description` say so?
 - **Would this correction still be right if the vendor's prose were absent?** If
@@ -288,7 +339,7 @@ Six questions. None of them has a checker.
   value is refused at a flag in front of you. A wrong rule on an inbound one is
   a decode failure on data you did not create, in front of somebody else.
 
-Four mistakes and six questions out of one adoption, which is not a taxonomy.
+Five mistakes and seven questions out of one adoption, which is not a taxonomy.
 What they have in common is the only general thing here: the document is
 evidence about the API and is not the API, and every correction is a bet on the
 difference.
