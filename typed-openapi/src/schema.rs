@@ -33,11 +33,11 @@ use crate::scalar::{Bounds, Limit, Scalar, Text};
 
 /// A `$ref` this crate cannot follow to what it names.
 ///
-/// The two are different things to say and are worth saying apart: a reference
-/// nothing answers is a name to go and look for, where a cycle is a document
-/// describing a value of no finite depth. Reporting the second for the first —
-/// or for neither — tells an adopter to look for something their document does
-/// not contain.
+/// A reference nothing answers and a reference that leads back to itself are two
+/// things to say, and worth saying apart: the first is a name to go and look
+/// for, the second a document describing a value of no finite depth. Saying
+/// `cycle` where there is none sends an adopter looking for something their
+/// document does not contain.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum RefError {
     /// A reference naming nothing this document holds.
@@ -79,10 +79,10 @@ pub fn resolve<'c, T>(
 /// a cycle it does not contain. The set terminates on the cycle itself, and
 /// truncates nothing — so the word `cycle` is true wherever it appears.
 ///
-/// [`stated`] hands in a set of its own because a composition it unwraps is the
-/// same chain seen through `allOf`: a schema whose single member leads back to
-/// it returns to a reference this walk has taken, and one set spanning both is
-/// what sees that.
+/// [`stated`] hands in one set across every hop it makes, because a composition
+/// it unwraps is the same chain seen through `allOf`: a schema whose single
+/// member leads back to it returns to a reference this walk has already taken,
+/// and only a set spanning both sees that.
 fn follow<'c, T>(
     value: &'c ReferenceOr<T>,
     section: &impl Fn(&str) -> Option<&'c ReferenceOr<T>>,
