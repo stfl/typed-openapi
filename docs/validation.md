@@ -43,14 +43,18 @@ A rule that reaches `--help` and not the parser would be a promise the server
 has to keep instead, so `Scalar::note` and the refusal are one rendering and
 cannot come apart.
 
-**No `format` is read.** A format names a rule; it is not one. `format: money`
+**No `format` is enforced.** A format names a rule; it is not one. `format: money`
 tells a consumer that somebody somewhere knows what an amount is, and a
 document that wants the rule enforced states it as `pattern`, which every
 consumer of the document can run — see
-[overlay.md](overlay.md#1-plain-corrections). What a `format` *is* good for is
-naming a shape a Rust type of your own stands for, which is
-[`Settings::replace`](overlay.md#owning-the-type-yourself) and happens at bless
-time, nowhere near this page's parser.
+[overlay.md](overlay.md#1-plain-corrections). No value is admitted or refused
+for a format, and no format appears in a help line beside the rules above.
+
+The tag itself travels: the reduction carries the `format` a value's schema
+declares, beside the rules rather than among them, so that an adoption can ask
+which of an operation's values are of a kind the document names. That is
+[naming a kind](#naming-a-kind) at the foot of this page, and it changes
+nothing here.
 
 ## `pattern`
 
@@ -141,6 +145,69 @@ that enforces its own rule is a type nothing holds to the document unless you
 write the test that does. Keep the `pattern` beside the `format` and you get
 both: the command line runs the document's rule, and Rust gets the type the
 document could not describe.
+
+## Naming a kind
+
+Some rules no JSON Schema states. *A booking day must not fall in a closed
+accounting period* is one: a `pattern` can say what a day looks like and cannot
+say which days are closed, because the answer is not in the document and
+changes every month.
+
+What the document *can* do is say which values are days. Tag the schema with a
+`format` beside the `pattern`, and the reduction carries the tag:
+
+```yaml
+components:
+  schemas:
+    LedgerDay:
+      type: string
+      format: ledger-day
+      pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+```
+
+```rust,ignore
+use typed_openapi::Carrier;
+
+for carrier in operation.carrying("ledger-day") {
+    let (name, sent_as) = match carrier {
+        Carrier::Param(param) => (param.name(), "a path, query or header value"),
+        Carrier::Field(field) => (field.name(), "a property of the JSON body"),
+    };
+    println!("`{name}` is a day, sent as {sent_as}");
+}
+```
+
+`Operation::carrying` reads the reduced model, so a shipped binary answers with
+no document, no reader and no second pass; `Param::format` and `Field::format`
+are the same fact one value at a time. A guard written over the answer is
+general — it covers the field the vendor adds next revision, because the
+document is what names it — where a compiled-in list of field names protects
+whatever it was written against and nothing else.
+
+The kind is read off the schema that *states* it, so a dozen properties
+pointing a `$ref` at `LedgerDay` are a dozen days, and a wrapper around that
+reference is one too. That is the same node
+[`Settings::replace`](overlay.md#owning-the-type-yourself) keys on, so the Rust
+type a kind stands for and the values a command line calls that kind come out
+of one vocabulary rather than two.
+
+**The limits are worth knowing before you write the guard.**
+
+- Nothing is enforced. This crate carries the name and never acts on it; what a
+  kind *means* is yours, and a rule this crate could run would have been a
+  `pattern`.
+- A parameter with no command-line spelling names no kind. It carries no value
+  at all — no flag, no argument, no place in the request — so there is nothing
+  for a kind to be about, and the
+  [subcommand's long help says why](cli.md#parameters-with-no-flag) it has no
+  flag.
+- **A body that goes out whole has no fields, so its kinds are unreachable.**
+  One nested property sends the body through `--json-body`
+  ([above](#where-each-rule-runs)), and then there is no field anywhere to carry
+  what its properties declare. A guard over such a body is one you write over
+  the JSON yourself.
+- A list parameter's kind is its *items'*, which is where a list of days says
+  what it holds.
 
 [ecma]: https://tc39.es/ecma262/multipage/text-processing.html#sec-regexp-regular-expression-objects
 [regress]: https://docs.rs/regress

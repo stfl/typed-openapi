@@ -74,6 +74,21 @@ bless time. Taking it would tie the command line to the generated types, which
 this crate keeps apart on purpose, and it would still not supply the `pattern`
 and the bounds `Scalar::parse` enforces.
 
+**A declared `format` travels beside the rules and is inert.** `Shape::Flag` and
+`Field` carry the `format` the value's schema declares, in the document's own
+spelling; `Operation::carrying` is the one way to ask which values of an
+operation are of a kind, and `Carrier` says which half of the request each is
+in. It is deliberately *not* on `Scalar`: everything a `Scalar` carries is a
+rule `Scalar::parse` enforces and `Scalar::note` renders, so a format placed
+there would be a rule by the back door — the defect the invariant above exists
+to prevent. Where there is no value there is no kind, which is why an
+`Unreachable` parameter and a `JsonWhole` body report none, and why the format
+is read off the same schema the `Scalar` was read off — the items' for a list.
+`schema::format_of` reads it off `stated()`, which is what `Settings::replace`
+keys on too, so the generated types and the reduced model name one vocabulary.
+Unlike `description_of`, the named schema wins over the field: a sentence is
+about the field, a kind is about the value.
+
 **A shape the reduction cannot read is refused by name, never approximated.** A
 `pattern` no engine runs and a `content` key that is not a media type are both
 the document saying something this crate has no reading for, so both are a

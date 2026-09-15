@@ -510,6 +510,11 @@ fn param_arg(param: &Param) -> Option<Arg> {
         location,
         scalar,
         join,
+        // The kind the document calls this value is not a rule about it, and
+        // the help line carries rules: every note beside a flag is something
+        // `Scalar::parse` refuses a value for, and a format is something
+        // nothing here can refuse a value for.
+        format: _,
     } = param.shape()
     else {
         return None;

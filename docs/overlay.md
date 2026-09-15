@@ -586,6 +586,12 @@ document's own rule; `replace` supplies exact arithmetic over cents, which the
 document had no way to ask for. Neither is a substitute for the other: a
 `format` alone states no rule, and a `pattern` alone hands you a string.
 
+The tag reaches the other side of the adoption too. The reduced model carries
+the `format` a value's schema declares, so `Voucher.total` is an amount to the
+command line as well as to Rust, and asking an operation which of its values
+are amounts is [naming a kind](validation.md#naming-a-kind). One tag, read once
+off the document, and both halves of the adoption spell it the same way.
+
 The type is free to pick a representation the document never mentions, and the
 choice pays for itself: an arbitrary-precision count of cents cannot overflow,
 so `+`, `-`, `-x` and `sum()` are plain total operations with no `Option` in

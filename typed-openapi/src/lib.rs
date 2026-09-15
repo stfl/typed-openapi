@@ -10,7 +10,8 @@
 //!
 //! - [`Document`] — the document, corrected and resolved.
 //!   [`Document::from_blob`] takes the reduction back off the bytes
-//!   [`Document::to_blob`] wrote.
+//!   [`Document::to_blob`] wrote, and [`Operation::carrying`] asks one of its
+//!   operations which of the values it sends are of a kind the document names.
 //! - [`Values`] — arguments for one operation, under the document's own names.
 //!   A CLI builds one from `ArgMatches`; a generated wrapper builds one from
 //!   typed arguments.
@@ -83,7 +84,7 @@ pub use client::{Call, Client, NoContent};
 #[cfg(feature = "document")]
 pub use model::LoadError;
 pub use model::{
-    Body, COMMIT, Document, DocumentError, Effect, Field, Gate, JSON_BODY, Join, Location,
+    Body, COMMIT, Carrier, Document, DocumentError, Effect, Field, Gate, JSON_BODY, Join, Location,
     Operation, Param, RAW_BODY, Shape, Unsupported,
 };
 pub use names::{CommandName, kebab};

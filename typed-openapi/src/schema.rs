@@ -9,10 +9,16 @@
 //!
 //! A `$ref` is followed before the schema is read, so a property pointed at a
 //! named schema carries that schema's rules onto the flag.
+//!
+//! Two other things a schema says travel with those rules and are not rules
+//! themselves: the sentence that describes it, and the `format` that names what
+//! kind of value it is. [`description_of`] and [`format_of`] read them.
 
 use openapiv3::{
     Components, IntegerType, NumberType, ReferenceOr, Schema, SchemaKind, StringType, Type,
+    VariantOrUnknownOrEmpty,
 };
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::scalar::{Bounds, Limit, Scalar, Text};
@@ -128,12 +134,65 @@ pub fn description_of(
     Ok(stated(schema, components)?.schema_data.description.clone())
 }
 
+/// The `format` the stated schema declares, in the document's own spelling.
+///
+/// The preference is the opposite of [`description_of`]'s, and deliberately so.
+/// A description is about *this field*, so the field's own sentence wins; a
+/// format is about the kind of value, which is the named schema's business —
+/// one `Money` says what an amount is for every field that points at it, and a
+/// field that redescribed its kind would be describing a different value from
+/// the one it references. Reading it off the stated schema is also what leaves
+/// an adoption one vocabulary instead of two: that is the schema a generator
+/// hands typify, so the Rust type a format stands for and the format the
+/// reduced model reports come off the same node.
+///
+/// Nothing in this crate acts on the answer, which is what keeps a format from
+/// becoming a rule by the back door: [`Scalar`] carries none of this, so
+/// `Scalar::parse` cannot read it and `Scalar::note` cannot advertise it. What
+/// it is for is an adopter asking which of an operation's values are of a kind
+/// the document names — a question only the document can settle and only the
+/// adopter can answer.
+pub fn format_of(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+) -> Result<Option<String>, RefError> {
+    Ok(match &stated(schema, components)?.schema_kind {
+        SchemaKind::Type(Type::String(s)) => as_written(&s.format),
+        SchemaKind::Type(Type::Number(n)) => as_written(&n.format),
+        SchemaKind::Type(Type::Integer(i)) => as_written(&i.format),
+        // A format names the kind of a *value*, and none of these is one: an
+        // object and an array hold values rather than being one, a boolean has
+        // only two, and a composition is several schemas rather than a shape.
+        SchemaKind::Type(Type::Object(_) | Type::Array(_) | Type::Boolean(_))
+        | SchemaKind::OneOf { .. }
+        | SchemaKind::AllOf { .. }
+        | SchemaKind::AnyOf { .. }
+        | SchemaKind::Not { .. }
+        | SchemaKind::Any(_) => None,
+    })
+}
+
+/// One `format` keyword as the document spells it.
+///
+/// `openapiv3` reads the handful of formats OpenAPI itself names into variants
+/// and leaves every other one the string it was, so the spelling comes back
+/// through `serde` rather than from a table here. A table would be a second
+/// copy of those names, free to disagree with the first over `date-time`; the
+/// serialisation is the one the document was parsed against.
+fn as_written<T: Serialize>(format: &VariantOrUnknownOrEmpty<T>) -> Option<String> {
+    match serde_json::to_value(format) {
+        Ok(serde_json::Value::String(spelling)) => Some(spelling),
+        Ok(_) | Err(_) => None,
+    }
+}
+
 /// An enumeration completes; everything else is text carrying the rules the
 /// document states about it.
 ///
-/// `format` is not read at all. A format is a name for a rule, and a name is
-/// not a rule: the document that says what an amount looks like says so with
-/// `pattern`, which every consumer of the document can run.
+/// No `format` reaches a [`Scalar`]. A format is a name for a rule, and a name
+/// is not a rule: the document that says what an amount looks like says so with
+/// `pattern`, which every consumer of the document can run. The name travels
+/// beside the rules rather than among them — [`format_of`] is where it is read.
 fn string_scalar(s: &StringType) -> Scalar {
     let choices: Vec<String> = s.enumeration.iter().flatten().cloned().collect();
     if choices.is_empty() {

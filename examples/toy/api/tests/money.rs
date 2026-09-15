@@ -11,6 +11,11 @@
 //! over every edge the pattern has. A vendor revision that widens the rule
 //! fails here instead of quietly admitting values `Money` refuses.
 //!
+//! The `format: money` tag beside that rule is the other half of the pair, and
+//! it is what the two sides of the adoption agree on: the bless step reads it
+//! to give `Voucher.total` this type, and the reduced model carries it so the
+//! command line can name the same field as an amount.
+//!
 //! [`Money`]: api::Money
 
 #![expect(
@@ -19,7 +24,7 @@
 )]
 
 use api::{DOCUMENT, Money, MoneyError};
-use typed_openapi::{Body, Document, Scalar};
+use typed_openapi::{Body, Carrier, Document, Scalar};
 
 /// Every edge the `Money` schema's `pattern` has, and whether it admits it.
 ///
@@ -109,6 +114,51 @@ fn money_reads_exactly_what_the_documents_pattern_admits() {
         Err(MoneyError {
             raw: "12,50".to_owned()
         })
+    );
+}
+
+/// The tag reaches the command line's side of the adoption too.
+///
+/// `format: money` is the half of the pair the document *can* state, and a
+/// bless step reads it to give `Voucher.total` the type this adoption owns —
+/// which `tests/typed.rs` compiles against and is therefore held to. The
+/// reduced model carries the same tag, so the other side can be asked which of
+/// an operation's values are amounts and answers `total`: the very field the
+/// generated struct gave the type to, named without a list kept by hand and
+/// without reading the document again.
+///
+/// What the tag means is still this adoption's business. The document says
+/// which values are amounts; nothing here says what may be done with one.
+#[test]
+fn the_reduced_model_names_the_amounts_the_generated_type_stands_for() {
+    let document = Document::load(DOCUMENT, &[]).expect("the embedded document");
+    let amounts = |id: &str| -> Vec<String> {
+        document
+            .get(id)
+            .unwrap_or_else(|| panic!("{id}"))
+            .carrying("money")
+            .map(|carrier| carrier.name().to_owned())
+            .collect()
+    };
+
+    assert_eq!(amounts("updateVoucher"), ["total"]);
+    assert_eq!(amounts("createVoucher"), ["total"]);
+    // `currency` is the field next door and the other route entirely: a named
+    // schema and the newtype the generator writes, with no tag for anything to
+    // key on. A route that names no kind is named by nothing.
+    assert!(!amounts("updateVoucher").contains(&"currency".to_owned()));
+    // An operation that sends no amount says so, rather than answering with
+    // everything it does send.
+    assert!(
+        amounts("getVoucher").is_empty(),
+        "fetching a voucher sends no amount"
+    );
+
+    let op = document.get("updateVoucher").expect("updateVoucher");
+    assert!(
+        op.carrying("money")
+            .all(|carrier| matches!(carrier, Carrier::Field(_))),
+        "an amount reaches this operation as a property of its body"
     );
 }
 

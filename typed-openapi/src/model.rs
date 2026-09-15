@@ -13,6 +13,9 @@
 //! construction — there is one `load` — and a test holds the shipped blob to
 //! the shipped document to prove the pair was written by the same run.
 
+#[cfg(feature = "document")]
+use std::borrow::Cow;
+
 use http::{Method, Uri};
 #[cfg(feature = "document")]
 use openapiv3::{
@@ -28,8 +31,8 @@ use crate::names::{Grouping, Namespace, kebab};
 use crate::scalar::Scalar;
 #[cfg(feature = "document")]
 use crate::schema::{
-    RefError, description_of, is_json, is_media_type, is_multipart, resolve, resolve_schema,
-    scalar_of,
+    RefError, description_of, format_of, is_json, is_media_type, is_multipart, resolve,
+    resolve_schema, scalar_of,
 };
 
 /// The four extensions this crate reads, all of them an adopter's say over
@@ -161,6 +164,39 @@ impl std::fmt::Display for Gate {
     }
 }
 
+/// One place in an operation that carries a value of a kind the document names:
+/// a parameter, or one property of a flat JSON body.
+///
+/// The two halves of an operation take different roads into the request — a
+/// parameter is rendered into a path, a query string or a header, a field is a
+/// property of the JSON body — so what an adopter does with one is not what
+/// they do with the other. Saying which half it is costs the caller one match
+/// and is the difference between a guard that reads the value and a guard that
+/// hopes the names do not collide.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Carrier<'op> {
+    /// A path, query or header parameter.
+    Param(&'op Param),
+    /// One scalar property of a flat JSON body.
+    Field(&'op Field),
+}
+
+impl<'op> Carrier<'op> {
+    /// The wire name, as the document spells it: what a parameter is sent
+    /// under, and the property a field is written to in the body.
+    ///
+    /// The name outlives the carrier, which is a value two words wide and not
+    /// worth keeping — so `carrying(..).map(Carrier::name)` is a list of names
+    /// rather than a borrow checker's argument.
+    #[must_use]
+    pub fn name(self) -> &'op str {
+        match self {
+            Self::Param(param) => param.name(),
+            Self::Field(field) => field.name(),
+        }
+    }
+}
+
 /// Where a parameter goes in the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Location {
@@ -172,8 +208,9 @@ pub enum Location {
 /// One parameter the document declares.
 ///
 /// Everything that only a parameter with a flag has — the flag, where its value
-/// goes, what the flag accepts — hangs off [`Shape`], because a parameter this
-/// CLI cannot spell has none of it.
+/// goes, what the flag accepts, what kind of value the document calls it —
+/// hangs off [`Shape`], because a parameter this CLI cannot spell has none of
+/// it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Param {
     name: String,
@@ -200,6 +237,11 @@ pub enum Shape {
         location: Location,
         scalar: Scalar,
         join: Option<Join>,
+        /// The `format` the document declares about this value, in its own
+        /// spelling, and `None` where it declares none. It sits beside the
+        /// rules rather than among them: nothing in this crate reads it, and
+        /// [`Param::format`] is how an adopter does.
+        format: Option<String>,
     },
     /// Nothing a flag carries. The subcommand names the parameter in its long
     /// help and grows nothing for it, and the request goes out without it.
@@ -302,6 +344,7 @@ pub struct Field {
     flag: String,
     required: bool,
     scalar: Scalar,
+    format: Option<String>,
     description: Option<String>,
 }
 
@@ -776,6 +819,38 @@ impl Operation {
     pub fn param(&self, name: &str) -> Option<&Param> {
         self.params.iter().find(|p| p.name == name)
     }
+
+    /// Every value of this operation the document declares `format` about, in
+    /// document order: the parameters first, then the fields of a flat body.
+    ///
+    /// This is the question a guard asks — which of the values I am about to
+    /// send are of a kind I have something to say about — and it is asked of
+    /// the reduced model, so a shipped binary answers it with no document, no
+    /// reader and no second pass over anything. The document names the kind
+    /// and this crate carries the name; what the name *means* is the adopter's,
+    /// and a rule this crate could run would have been a `pattern`.
+    ///
+    /// Two shapes are silent here, both because they carry no value for a kind
+    /// to be about. A parameter this CLI cannot spell is a
+    /// [`Shape::Unreachable`]: it has no scalar, no flag and no place in the
+    /// request. A [`Body::JsonWhole`] has no fields at all — a body with one
+    /// nested property goes through `--json-body` whole — so the kinds its
+    /// properties declare are not reachable from here, and a guard over such a
+    /// body is a guard over JSON the adopter reads themselves.
+    pub fn carrying(&self, format: &str) -> impl Iterator<Item = Carrier<'_>> {
+        let params = self
+            .params
+            .iter()
+            .filter(move |param| param.format() == Some(format))
+            .map(Carrier::Param);
+        let fields = self
+            .body
+            .fields()
+            .iter()
+            .filter(move |field| field.format() == Some(format))
+            .map(Carrier::Field);
+        params.chain(fields)
+    }
 }
 
 /// What the whole document supplies while one of its operations is read: the
@@ -987,6 +1062,20 @@ impl Param {
         &self.shape
     }
 
+    /// The kind of value this parameter carries, as the document's `format`
+    /// names it, and `None` where the document names none.
+    ///
+    /// A parameter this CLI cannot spell answers `None` whatever the document
+    /// says: a [`Shape::Unreachable`] gets no flag, no argument and no place in
+    /// the request, so there is no value here for a kind to be about.
+    #[must_use]
+    pub fn format(&self) -> Option<&str> {
+        match &self.shape {
+            Shape::Flag { format, .. } => format.as_deref(),
+            Shape::Unreachable(_) => None,
+        }
+    }
+
     #[must_use]
     pub fn required(&self) -> bool {
         self.required
@@ -1018,13 +1107,15 @@ fn shape_of(
     let ParameterSchemaOrContent::Schema(schema) = &data.format else {
         return Ok(Shape::Unreachable(Unsupported::Encoded));
     };
-    // One value, or a list of them: the schema is asked first, and an array is
-    // asked again about its items.
-    let (scalar, repeats) = if let Some(scalar) = scalar_of(schema, components)? {
-        (scalar, false)
-    } else if let Some(scalar) = items_of(schema, components)? {
-        (scalar, true)
-    } else {
+    // One value, or a list of them: an array is asked about its items, and
+    // whichever schema describes the value is the one everything about that
+    // value is read off — so a list's rules and its declared kind are its
+    // items', which is where a list of days says that a day is what it holds.
+    let (value, repeats) = match items_of(schema, components)? {
+        Some(items) => (Cow::Owned(items), true),
+        None => (Cow::Borrowed(schema), false),
+    };
+    let Some(scalar) = scalar_of(&value, components)? else {
         return Ok(Shape::Unreachable(Unsupported::Structured));
     };
     runnable(&scalar, op, &data.name)?;
@@ -1041,6 +1132,7 @@ fn shape_of(
         location,
         scalar,
         join: repeats.then_some(join),
+        format: format_of(&value, components)?,
     })
 }
 
@@ -1091,20 +1183,22 @@ fn query_join(style: &QueryStyle, explode: Option<bool>) -> Result<Join, &'stati
     }
 }
 
-/// The scalar a `type: array` parameter's items are, when its items are one.
+/// The schema a `type: array` parameter's values are described by, when the
+/// document says what its items are.
+///
+/// Everything a list parameter's values are — the rules they are held to and
+/// the kind the document calls them — is stated here rather than on the array,
+/// which only says how many of them there are.
 #[cfg(feature = "document")]
 fn items_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
-) -> Result<Option<Scalar>, RefError> {
+) -> Result<Option<ReferenceOr<Schema>>, RefError> {
     let schema = resolve_schema(schema, components)?;
     let SchemaKind::Type(openapiv3::Type::Array(array)) = &schema.schema_kind else {
         return Ok(None);
     };
-    let Some(items) = &array.items else {
-        return Ok(None);
-    };
-    scalar_of(&items.clone().unbox(), components)
+    Ok(array.items.clone().map(ReferenceOr::unbox))
 }
 
 impl Field {
@@ -1135,6 +1229,17 @@ impl Field {
         &self.scalar
     }
 
+    /// The kind of value this field carries, as the document's `format` names
+    /// it, and `None` where the document names none.
+    ///
+    /// Only a flat body has fields to ask. One nested property sends the whole
+    /// body through `--json-body`, and then there is no [`Field`] anywhere to
+    /// carry what its properties declare.
+    #[must_use]
+    pub fn format(&self) -> Option<&str> {
+        self.format.as_deref()
+    }
+
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
@@ -1142,6 +1247,18 @@ impl Field {
 }
 
 impl Body {
+    /// The per-field flags this body offers, and none for a body that offers
+    /// none — which is every body but a flat JSON one, whether because it has
+    /// no properties to offer or because it goes out whole.
+    fn fields(&self) -> &[Field] {
+        match self {
+            Self::JsonFields(fields) => fields,
+            Self::None | Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => {
+                &[]
+            }
+        }
+    }
+
     #[cfg(feature = "document")]
     fn build(
         id: &str,
@@ -1212,6 +1329,7 @@ impl Body {
                 name: name.clone(),
                 required: required && object.required.iter().any(|r| r == name),
                 scalar,
+                format: format_of(&property, components)?,
                 description: description_of(&property, components)?,
             });
         }

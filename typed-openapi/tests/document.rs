@@ -16,7 +16,8 @@
 
 use typed_openapi::model::Body;
 use typed_openapi::{
-    Document, Effect, Invocation, Operation, Param, Shape, Unsupported, Values, render, tree,
+    Carrier, Document, Effect, Invocation, Operation, Param, Scalar, Shape, Unsupported, Values,
+    render, tree,
 };
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
@@ -521,6 +522,270 @@ fn an_all_of_that_is_more_than_a_wrapper_is_not_a_scalar() {
          \x20                 allOf: [{ $ref: '#/components/schemas/Day' }]\n"
     ));
 }
+
+/// One operation over a named schema that states both halves of a rule: the
+/// `pattern` every consumer of the document can run, and the `format` naming
+/// the part no document can state — what a day *is* to a ledger that closes
+/// periods. Five values are of that kind, each arriving at it by a different
+/// road, and three are not.
+const POSTINGS: &str = r"openapi: 3.0.3
+info: { title: t, version: '1' }
+servers: [{ url: 'http://localhost:9999' }]
+paths:
+  /postings:
+    post:
+      operationId: createPosting
+      parameters:
+        - name: period
+          in: query
+          schema: { $ref: '#/components/schemas/LedgerDay' }
+        - name: opened
+          in: query
+          schema: { type: array, items: { $ref: '#/components/schemas/LedgerDay' } }
+        - name: session
+          in: cookie
+          schema: { $ref: '#/components/schemas/LedgerDay' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                booked_on: { $ref: '#/components/schemas/LedgerDay' }
+                paid_on:
+                  allOf: [{ $ref: '#/components/schemas/LedgerDay' }]
+                  description: The day the money arrived.
+                due_on:
+                  type: string
+                  format: ledger-day
+                  pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                amount: { type: integer, format: int64 }
+                memo: { type: string }
+      responses: { '201': { description: Created } }
+  /positions:
+    post:
+      operationId: createPosition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                booked_on: { $ref: '#/components/schemas/LedgerDay' }
+                line:
+                  type: object
+                  properties:
+                    account: { type: string }
+      responses: { '201': { description: Created } }
+components:
+  schemas:
+    LedgerDay:
+      type: string
+      format: ledger-day
+      pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+      description: A day in the ledger.
+";
+
+fn postings() -> Document {
+    Document::load(POSTINGS, &[]).expect("a document naming the kind of its days")
+}
+
+/// Every value of one operation that is of a named kind, as the half of the
+/// request it travels in and the name the document gives it.
+fn carried(op: &Operation, format: &str) -> Vec<String> {
+    op.carrying(format)
+        .map(|carrier| match carrier {
+            Carrier::Param(_) => format!("param {}", carrier.name()),
+            Carrier::Field(_) => format!("field {}", carrier.name()),
+        })
+        .collect()
+}
+
+/// The question a guard asks: which of the values this operation sends are of
+/// a kind I have something to say about. A `pattern` cannot state a calendar,
+/// so the document names the kind and the adopter supplies the meaning — and
+/// what makes that general rather than a list of field names kept by hand is
+/// that both halves of the operation answer, whichever road the kind arrived
+/// by: a `$ref` at the named schema, a wrapper around that reference, the items
+/// of a list, or the keyword written on the property itself.
+#[test]
+fn an_operation_names_the_values_of_a_kind_the_document_declares() {
+    let doc = postings();
+    let op = doc.get("createPosting").expect("createPosting");
+
+    assert_eq!(
+        carried(op, "ledger-day"),
+        [
+            "param period",
+            "param opened",
+            "field booked_on",
+            "field paid_on",
+            "field due_on",
+        ]
+    );
+    // A format OpenAPI names itself is a kind like any other, and comes back
+    // in the document's own spelling rather than in this crate's.
+    assert_eq!(carried(op, "int64"), ["field amount"]);
+    // A kind nothing declares names nothing — not everything that declares no
+    // kind at all.
+    assert!(
+        carried(op, "money").is_empty(),
+        "no schema here says an amount is anything"
+    );
+    assert!(
+        carried(op, "").is_empty(),
+        "a document that declares no kind declares no kind"
+    );
+}
+
+/// A sentence is about the field that carries a value; a kind is about the
+/// value itself. So the two follow opposite preferences, and `paid_on` carries
+/// both: its own words about why this day matters here, over a reference whose
+/// schema says what kind of thing every field pointing at it holds. Reading
+/// the kind off the schema that states it is also what leaves an adoption one
+/// vocabulary — it is the node a generator hands typify, so the Rust type the
+/// kind stands for and the kind reported here come off the same words.
+#[test]
+fn the_sentence_is_the_fields_own_and_the_kind_is_the_named_schemas() {
+    let doc = postings();
+    let Body::JsonFields(fields) = doc.get("createPosting").unwrap().body() else {
+        panic!("every property of the body is a scalar");
+    };
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|field| field.name() == name)
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+
+    assert_eq!(
+        field("paid_on").description(),
+        Some("The day the money arrived.")
+    );
+    assert_eq!(field("paid_on").format(), Some("ledger-day"));
+    assert_eq!(
+        field("booked_on").description(),
+        Some("A day in the ledger.")
+    );
+    assert_eq!(field("booked_on").format(), Some("ledger-day"));
+    assert_eq!(field("memo").format(), None);
+}
+
+/// A kind is about a value, so a shape that carries no value names none. Both
+/// of these are worth knowing before a guard is written over what the answer
+/// names: a parameter this CLI cannot spell gets no flag and no place in the
+/// request, and a body with one nested property goes out whole and has no
+/// fields at all — so the kinds its properties declare are not reachable, and
+/// a guard over such a body is a guard the adopter writes over the JSON.
+#[test]
+fn a_shape_that_carries_no_value_names_no_kind() {
+    let doc = postings();
+    let op = doc.get("createPosting").expect("createPosting");
+    let session = op.param("session").expect("it is in the reduction");
+    assert!(matches!(
+        session.shape(),
+        Shape::Unreachable(Unsupported::Cookie)
+    ));
+    assert_eq!(
+        session.format(),
+        None,
+        "the document names the kind; the parameter carries no value"
+    );
+
+    let nested = doc.get("createPosition").expect("createPosition");
+    assert!(matches!(nested.body(), Body::JsonWhole { .. }));
+    assert!(
+        carried(nested, "ledger-day").is_empty(),
+        "a body that goes out whole has no fields to name"
+    );
+}
+
+/// One parameter under a rule, with `kind` standing where a `format` would go:
+/// the same document, reduced with and without a kind named beside the rule.
+fn period(kind: &str) -> Document {
+    let document = synthetic(&format!(
+        "  /postings:\n\
+         \x20   get:\n\
+         \x20     operationId: listPostings\n\
+         \x20     parameters:\n\
+         \x20       - name: period\n\
+         \x20         in: query\n\
+         \x20         schema: {{ type: string, {kind}pattern: '^[0-9-]+$', minLength: 7 }}\n\
+         \x20     responses: {{ \"200\": {{ description: OK }} }}\n"
+    ));
+    Document::load(&document, &[]).expect("a document")
+}
+
+/// A kind names a rule and is not one, so naming it changes nothing a value is
+/// held to. The same value gets the same verdict and the same sentence with
+/// the kind and without it — which is what keeps every rule in one place, and
+/// what a kind that reached `Scalar` would break on its first value.
+#[test]
+fn a_kind_named_beside_a_rule_changes_no_value_the_parser_admits_or_refuses() {
+    let plain = period("");
+    let tagged = period("format: ledger-period, ");
+    let param = |doc: &Document| {
+        doc.get("listPostings")
+            .expect("listPostings")
+            .param("period")
+            .expect("period")
+            .clone()
+    };
+    let (plain, tagged) = (param(&plain), param(&tagged));
+    assert_eq!(tagged.format(), Some("ledger-period"));
+    assert_eq!(plain.format(), None);
+
+    let (plain, tagged) = (scalar_of(&plain), scalar_of(&tagged));
+    // The rules are the same rules, down to the value.
+    assert_eq!(plain, tagged);
+    assert_eq!(plain.note(), tagged.note());
+    for raw in ["2026-09", "2026-09-14", "2026", "", "x", "not-a-day"] {
+        assert_eq!(plain.parse(raw), tagged.parse(raw), "{raw}");
+    }
+}
+
+/// The help line carries rules: every note beside a flag is something a value
+/// can be refused for, and the refusal is the same rendering. A kind is
+/// nothing a value can be refused for, so a kind on that line would be a
+/// promise this crate leaves the server to keep.
+#[test]
+fn a_kind_reaches_no_flags_help_line() {
+    let doc = postings();
+    let op = doc.get("createPosting").expect("createPosting");
+    let rendered = tree::command(op).render_long_help().to_string();
+    assert!(
+        rendered.contains("matches ^[0-9]"),
+        "the rule is on the line: {rendered}"
+    );
+    for kind in ["ledger-day", "int64"] {
+        assert!(
+            !rendered.contains(kind),
+            "`{kind}` is on a help line:\n{rendered}"
+        );
+    }
+}
+
+/// A kind travels in the blob, because the binary that has something to say
+/// about a kind is the binary that never reads a document.
+#[test]
+fn a_kind_survives_the_reduction_the_bless_step_writes() {
+    let doc = postings();
+    let blob = doc.to_blob().expect("the reduction encodes");
+    let shipped = Document::from_blob(&blob).expect("and decodes");
+    let named: Vec<&str> = shipped
+        .get("createPosting")
+        .expect("createPosting")
+        .carrying("ledger-day")
+        .map(Carrier::name)
+        .collect();
+    assert_eq!(
+        named,
+        ["period", "opened", "booked_on", "paid_on", "due_on"]
+    );
+}
+
 /// One query parameter that is a list of strings. `explode` is the one line
 /// that decides how its values reach the wire.
 const LISTED: &str = r"  /vouchers:
@@ -921,6 +1186,15 @@ fn flag_of(param: &Param) -> &str {
     match param.shape() {
         Shape::Flag { flag, .. } => flag,
         Shape::Unreachable(why) => panic!("`{}` has no flag: it is {why}", param.name()),
+    }
+}
+
+/// The rules a parameter's values are held to, for a test that is about the
+/// rules rather than about the flag.
+fn scalar_of(param: &Param) -> &Scalar {
+    match param.shape() {
+        Shape::Flag { scalar, .. } => scalar,
+        Shape::Unreachable(why) => panic!("`{}` takes no value: it is {why}", param.name()),
     }
 }
 
