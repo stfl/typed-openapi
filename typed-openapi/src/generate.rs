@@ -189,12 +189,17 @@ impl Settings {
         let header = self.rust_header(&spec);
         let document = format!("{}{}", self.document_header(), corrected.yaml);
 
+        // The types are emitted first because the wrappers name them, and
+        // `names` is how they are named: `ops` looks a schema up in what
+        // `types` wrote rather than deriving a spelling of its own.
+        let (source, names) = types::emit(&corrected.api, &header, &self.replacements)?;
+
         write_bytes(&spec, document.as_bytes())?;
+        write_rust(&types, &source)?;
         write_rust(
-            &types,
-            &types::emit(&corrected.api, &header, &self.replacements)?,
+            &ops,
+            &ops::emit(&corrected.api, &corrected.model, &header, &names)?,
         )?;
-        write_rust(&ops, &ops::emit(&corrected.api, &corrected.model, &header)?)?;
         write_model(&model, &corrected.model)?;
 
         Ok(vec![spec, types, ops, model])
@@ -437,6 +442,14 @@ pub enum GenerateError {
     },
     #[error("typify cannot build Rust types from the document's schemas: {0}")]
     Typify(#[source] typify::Error),
+    /// A wrapper would have to name a type the generated schemas do not
+    /// define. Emitting it anyway is how an adopter ends up bisecting a
+    /// generated file, so the schema is named here instead.
+    #[error(
+        "the document's schema `{schema}` has no generated type: a wrapper \
+         would name `{rust}`, which the generated types do not define"
+    )]
+    NoType { schema: String, rust: String },
     #[error("{0}")]
     Unsupported(String),
     #[error("the generated {file} is not valid Rust: {source}")]

@@ -19,6 +19,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::GenerateError;
+use super::types::Names;
 use crate::model::{Body, Shape};
 use crate::{Document, Operation};
 
@@ -49,8 +50,13 @@ fn unsupported(reason: impl Into<String>) -> GenerateError {
     GenerateError::Unsupported(reason.into())
 }
 
-pub(super) fn emit(api: &OpenAPI, model: &Document, header: &str) -> Result<String, GenerateError> {
-    let ops = gather(api, model)?;
+pub(super) fn emit(
+    api: &OpenAPI,
+    model: &Document,
+    header: &str,
+    names: &Names,
+) -> Result<String, GenerateError> {
+    let ops = gather(api, model, names)?;
     let operation_id = operation_id(&ops);
     let inventory = inventory(&ops);
     let methods = ops.iter().map(|op| &op.method);
@@ -82,7 +88,7 @@ pub(super) fn emit(api: &OpenAPI, model: &Document, header: &str) -> Result<Stri
 
 /// One pass over the document, in its order — which is the order every
 /// generated list below is in, and the order `Api::new` checks.
-fn gather(api: &OpenAPI, model: &Document) -> Result<Vec<Emitted>, GenerateError> {
+fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>, GenerateError> {
     model
         .iter()
         .map(|op| {
@@ -96,9 +102,9 @@ fn gather(api: &OpenAPI, model: &Document) -> Result<Vec<Emitted>, GenerateError
                 id: id.to_owned(),
                 group: op.group().as_str().to_owned(),
                 command: op.command().as_str().to_owned(),
-                body: json_body_type(op, operation)?,
-                method: wrapper(op, path_item, operation)?,
-                builder_method: builder_wrapper(op, path_item, operation)?,
+                body: json_body_type(op, operation, names)?,
+                method: wrapper(op, path_item, operation, names)?,
+                builder_method: builder_wrapper(op, path_item, operation, names)?,
             })
         })
         .collect()
@@ -249,9 +255,10 @@ fn variant_of(op: &Operation) -> Ident {
 fn json_body_type(
     op: &Operation,
     operation: &openapiv3::Operation,
+    names: &Names,
 ) -> Result<Option<TokenStream>, GenerateError> {
     match op.body() {
-        Body::JsonFields(_) | Body::JsonWhole { .. } => body_type(operation).map(Some),
+        Body::JsonFields(_) | Body::JsonWhole { .. } => body_type(operation, names).map(Some),
         Body::None | Body::Opaque { .. } | Body::Multipart { .. } => Ok(None),
     }
 }
@@ -272,6 +279,7 @@ fn wrapper(
     op: &Operation,
     item: &openapiv3::PathItem,
     operation: &openapiv3::Operation,
+    names: &Names,
 ) -> Result<TokenStream, GenerateError> {
     let name = format_ident!("{}", op.id().to_snake_case());
     let summary = op.summary().unwrap_or(op.id());
@@ -285,8 +293,8 @@ fn wrapper(
         // The delegate beside this one forwards the argument names; a
         // positional call has no use for them.
         names: _,
-    } = signature_of(op, item, operation)?;
-    let response = response_type(operation);
+    } = signature_of(op, item, operation, names)?;
+    let response = response_type(operation, names)?;
     let notes = notes
         .iter()
         .map(|note| quote! { #[doc = ""] #[doc = #note] });
@@ -344,11 +352,16 @@ fn builder_wrapper(
     op: &Operation,
     item: &openapiv3::PathItem,
     operation: &openapiv3::Operation,
+    names: &Names,
 ) -> Result<TokenStream, GenerateError> {
     let plain = format_ident!("{}", op.id().to_snake_case());
     let name = format_ident!("{}_builder", op.id().to_snake_case());
-    let Signature { args, names, .. } = signature_of(op, item, operation)?;
-    let response = response_type(operation);
+    let Signature {
+        args,
+        names: arguments,
+        ..
+    } = signature_of(op, item, operation, names)?;
+    let response = response_type(operation, names)?;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
          required argument is a compile error."
@@ -357,7 +370,7 @@ fn builder_wrapper(
         #[doc = #doc]
         #[builder]
         pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
-            self.#plain(#(#names),*)
+            self.#plain(#(#arguments),*)
         }
     })
 }
@@ -375,6 +388,7 @@ fn signature_of(
     op: &Operation,
     item: &openapiv3::PathItem,
     operation: &openapiv3::Operation,
+    names: &Names,
 ) -> Result<Signature, GenerateError> {
     let mut out = Signature {
         args: Vec::new(),
@@ -383,12 +397,12 @@ fn signature_of(
         notes: Vec::new(),
     };
     for param in op.params() {
-        add_param(&mut out, param, item, operation)?;
+        add_param(&mut out, param, item, operation, names)?;
     }
     match op.body() {
         Body::None => {}
         Body::JsonFields(_) | Body::JsonWhole { .. } => {
-            let ty = body_type(operation)?;
+            let ty = body_type(operation, names)?;
             out.args.push(quote! { body: &#ty });
             out.names.push(format_ident!("body"));
             out.builder.push(quote! { .json(crate::to_json(body)?) });
@@ -421,6 +435,7 @@ fn add_param(
     param: &crate::Param,
     item: &openapiv3::PathItem,
     operation: &openapiv3::Operation,
+    names: &Names,
 ) -> Result<(), GenerateError> {
     let join = match param.shape() {
         Shape::Flag { join, .. } => join,
@@ -440,15 +455,15 @@ fn add_param(
     if join.is_some() {
         // A list parameter is the wire name given once per value, which is the
         // repetition a repeated flag reaches the request builder with.
-        let ty = list_type(param.name(), schema)?;
+        let ty = list_type(param.name(), schema, names)?;
         out.args.push(quote! { #ident: Vec<#ty> });
         out.builder.push(quote! { .each(#wire, #ident) });
     } else if param.required() {
-        let ty = scalar_type(schema)?;
+        let ty = scalar_type(schema, names)?;
         out.args.push(quote! { #ident: #ty });
         out.builder.push(quote! { .param(#wire, #ident) });
     } else {
-        let ty = scalar_type(schema)?;
+        let ty = scalar_type(schema, names)?;
         out.args.push(quote! { #ident: Option<#ty> });
         out.builder.push(quote! { .maybe(#wire, #ident) });
     }
@@ -493,7 +508,11 @@ fn param_schema<'d>(
 /// Only an inline `type: array` has one here. Following a `$ref` to an array
 /// schema would mean resolving against `components`, which this generator does
 /// not carry, so the parameter names itself rather than being guessed at.
-fn list_type(name: &str, schema: &ReferenceOr<Schema>) -> Result<TokenStream, GenerateError> {
+fn list_type(
+    name: &str,
+    schema: &ReferenceOr<Schema>,
+    names: &Names,
+) -> Result<TokenStream, GenerateError> {
     let ReferenceOr::Item(schema) = schema else {
         return Err(unsupported(format!(
             "`{name}` is a list, and a list parameter must declare `items` inline"
@@ -509,14 +528,14 @@ fn list_type(name: &str, schema: &ReferenceOr<Schema>) -> Result<TokenStream, Ge
             "`{name}` is an array declaring no `items`"
         )));
     };
-    scalar_type(&items.clone().unbox())
+    scalar_type(&items.clone().unbox(), names)
 }
 
 /// A scalar schema's Rust spelling. A `$ref` to a named schema keeps its name,
 /// so an enumerated parameter is the generated enum rather than a string.
-fn scalar_type(schema: &ReferenceOr<Schema>) -> Result<TokenStream, GenerateError> {
+fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStream, GenerateError> {
     if let Some(name) = ref_name(schema) {
-        let ident = format_ident!("{name}");
+        let ident = names.get(name)?;
         return Ok(quote!(crate::types::#ident));
     }
     let ReferenceOr::Item(schema) = schema else {
@@ -538,7 +557,10 @@ fn scalar_type(schema: &ReferenceOr<Schema>) -> Result<TokenStream, GenerateErro
 
 /// The type of a JSON request body. A `$ref` keeps its name; anything else is
 /// a `serde_json::Value`, because the document did not name a shape to generate.
-fn body_type(operation: &openapiv3::Operation) -> Result<TokenStream, GenerateError> {
+fn body_type(
+    operation: &openapiv3::Operation,
+    names: &Names,
+) -> Result<TokenStream, GenerateError> {
     let Some(ReferenceOr::Item(body)) = &operation.request_body else {
         return Err(unsupported("requestBody $refs are not followed"));
     };
@@ -552,52 +574,58 @@ fn body_type(operation: &openapiv3::Operation) -> Result<TokenStream, GenerateEr
     let Some(schema) = &media.schema else {
         return Ok(quote!(serde_json::Value));
     };
-    Ok(named_or_value(schema))
+    named_or_value(schema, names)
 }
 
 /// The type a successful response deserialises into.
-fn response_type(operation: &openapiv3::Operation) -> TokenStream {
+fn response_type(
+    operation: &openapiv3::Operation,
+    names: &Names,
+) -> Result<TokenStream, GenerateError> {
     let success =
         operation.responses.responses.iter().find(
             |(status, _)| matches!(status, StatusCode::Code(code) if (200..300).contains(code)),
         );
     let Some((_, ReferenceOr::Item(success))) = success else {
-        return quote!(NoContent);
+        return Ok(quote!(NoContent));
     };
     let Some(media) = success
         .content
         .iter()
         .find_map(|(name, media)| crate::schema::is_json(name).then_some(media))
     else {
-        return quote!(NoContent);
+        return Ok(quote!(NoContent));
     };
     let Some(schema) = &media.schema else {
-        return quote!(NoContent);
+        return Ok(quote!(NoContent));
     };
     if let Some(name) = ref_name(schema) {
-        let ident = format_ident!("{name}");
-        return quote!(crate::types::#ident);
+        let ident = names.get(name)?;
+        return Ok(quote!(crate::types::#ident));
     }
     let ReferenceOr::Item(schema) = schema else {
-        return quote!(serde_json::Value);
+        return Ok(quote!(serde_json::Value));
     };
     let SchemaKind::Type(Type::Array(array)) = &schema.schema_kind else {
-        return quote!(serde_json::Value);
+        return Ok(quote!(serde_json::Value));
     };
     let Some(items) = &array.items else {
-        return quote!(serde_json::Value);
+        return Ok(quote!(serde_json::Value));
     };
     let items = items.clone().unbox();
-    let inner = named_or_value(&items);
-    quote!(Vec<#inner>)
+    let inner = named_or_value(&items, names)?;
+    Ok(quote!(Vec<#inner>))
 }
 
-fn named_or_value(schema: &ReferenceOr<Schema>) -> TokenStream {
+fn named_or_value(
+    schema: &ReferenceOr<Schema>,
+    names: &Names,
+) -> Result<TokenStream, GenerateError> {
     if let Some(name) = ref_name(schema) {
-        let ident = format_ident!("{name}");
-        return quote!(crate::types::#ident);
+        let ident = names.get(name)?;
+        return Ok(quote!(crate::types::#ident));
     }
-    quote!(serde_json::Value)
+    Ok(quote!(serde_json::Value))
 }
 
 fn ref_name(schema: &ReferenceOr<Schema>) -> Option<&str> {

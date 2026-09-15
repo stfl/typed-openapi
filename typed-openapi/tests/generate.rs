@@ -308,3 +308,102 @@ fn a_document_that_is_not_there_is_named() {
         "{error}"
     );
 }
+
+/// A document whose schema names are not already Rust type names.
+///
+/// Nothing here is unusual in a vendor's document: an underscore, a dash, a
+/// leading digit, a name that is already camel rather than pascal. Every one of
+/// them is a name typify has to change before it can be a type, which is the
+/// whole point of the fixture — the toy's own schemas are spelled `Voucher` and
+/// `Currency` and so agree with typify by accident.
+const AWKWARDLY_NAMED: &str = r##"
+openapi: 3.0.3
+info: { title: Awkward, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /vouchers:
+    post:
+      operationId: addVoucher
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Model_voucher" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/voucher-summary" }
+  /vouchers/recent:
+    get:
+      operationId: listRecentVouchers
+      parameters:
+        - name: since
+          in: query
+          schema: { $ref: "#/components/schemas/2fa_stamp" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/voucher-summary" }
+components:
+  schemas:
+    Model_voucher:
+      type: object
+      properties:
+        total: { type: string }
+    voucher-summary:
+      type: object
+      properties:
+        count: { type: integer }
+    2fa_stamp:
+      type: string
+"##;
+
+/// Every type a wrapper names, as `ops.rs` spells it.
+fn named_by_wrappers(ops: &str) -> Vec<String> {
+    ops.split("crate::types::")
+        .skip(1)
+        .map(|after| {
+            after
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect()
+        })
+        .collect()
+}
+
+/// A wrapper that names a type the schemas did not generate is a crate that
+/// does not compile, and the compiler is the adopter's rather than this
+/// crate's — so the two emitters cannot be left to derive a schema's Rust name
+/// each for themselves. This is that agreement, asserted on a document whose
+/// names force typify to rename every one of them.
+#[test]
+fn every_type_a_wrapper_names_is_one_the_generated_schemas_define() {
+    for (name, document) in [("awkward", AWKWARDLY_NAMED), ("patterned", PATTERNED)] {
+        let dir = out(name);
+        Settings::new(wrote(&dir, "document.yaml", document))
+            .write_to(&dir)
+            .expect("the document generates");
+        let types = read(&dir.join("src/types.rs"));
+        let ops = read(&dir.join("src/ops.rs"));
+
+        let named = named_by_wrappers(&ops);
+        assert!(
+            !named.is_empty(),
+            "{name}: no wrapper names a generated type, so this proves nothing"
+        );
+        for ty in named {
+            assert!(
+                types.contains(&format!("pub struct {ty}"))
+                    || types.contains(&format!("pub enum {ty}"))
+                    || types.contains(&format!("pub type {ty}")),
+                "{name}: a wrapper names `crate::types::{ty}`, which the \
+                 generated schemas do not define:\n{ops}"
+            );
+        }
+    }
+}
