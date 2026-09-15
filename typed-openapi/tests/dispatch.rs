@@ -16,9 +16,13 @@
 )]
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use http::Method;
+use http::{Method, StatusCode};
+use serde_json::json;
 use typed_openapi::tree::{self, DispatchError, Outcome};
-use typed_openapi::{Answers, COMMIT, Document, HttpRequest, Plan, Recorder, Values, render};
+use typed_openapi::{
+    Answers, COMMIT, Document, HttpRequest, Plan, Recorder, RecorderError, SyncClient, Values,
+    render,
+};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
 const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
@@ -602,4 +606,50 @@ fn a_gate_flag_a_command_never_declared_reads_as_unanswered() {
     // panics: nothing was asked, so nothing is answered.
     let bare = Command::new("bare").get_matches_from(["bare"]);
     assert_eq!(tree::answers(op, &bare), Answers::new());
+}
+
+/// An adopter with one production client and one [`Recorder`] holds a trait
+/// object, and the crate's own `send` takes one.
+///
+/// Both lines below rest on the blanket impl: a reference to a client is a
+/// client. The `&dyn` one rests on its `?Sized` half as well — bounded to sized
+/// clients the impl covers `&Recorder` and still not the trait object, which is
+/// the case that wanted a delegating newtype in the first place.
+#[test]
+fn a_reference_and_a_trait_object_both_reach_the_crates_own_send() {
+    let doc = document();
+    let client = Recorder::new()
+        .answering_route(
+            Method::GET,
+            "/vouchers/5",
+            StatusCode::OK,
+            &json!({"id": 5}),
+        )
+        .answering_route(
+            Method::GET,
+            "/vouchers/6",
+            StatusCode::OK,
+            &json!({"id": 6}),
+        );
+
+    let through_reference: &Recorder = &client;
+    let through_object: &dyn SyncClient<Error = RecorderError> = &client;
+
+    let five = parse(&doc, &["toy", "vouchers", "get", "--id", "5"]);
+    let six = parse(&doc, &["toy", "vouchers", "get", "--id", "6"]);
+    let by_reference = tree::dispatch(&doc, doc.base(), &through_reference, &five)
+        .expect("a reference to a client is a client");
+    let by_object = tree::dispatch(&doc, doc.base(), &through_object, &six)
+        .expect("a trait object over a client is a client");
+
+    for outcome in [by_reference, by_object] {
+        assert!(matches!(outcome, Outcome::Sent(_)), "{outcome:?}");
+    }
+    let paths: Vec<String> = client
+        .take()
+        .iter()
+        .map(|request| request.uri().path().to_owned())
+        .collect();
+    assert_eq!(paths, ["/vouchers/5", "/vouchers/6"]);
+    assert_eq!(client.unused(), 0, "both answers were reached");
 }

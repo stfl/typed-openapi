@@ -142,6 +142,30 @@ pub trait SyncClient {
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error>;
 }
 
+/// A reference to a client is a client, which is what the `&self` receiver on
+/// [`SyncClient::send`] already promises.
+///
+/// Without this, a caller holding `&dyn SyncClient<Error = E>` — the natural
+/// way to hold one of two clients, a production one and a [`Recorder`] — cannot
+/// hand it to anything in this crate, because every `send` here is generic over
+/// `C: SyncClient` and the trait object is not one. The delegating newtype that
+/// closes the gap carries no decision, so the crate closes it instead.
+///
+/// `?Sized` is the load-bearing half: bounded to `C: Sized` the impl covers
+/// `&ConcreteClient` and still not `&dyn SyncClient<Error = E>`, which is the
+/// case that wanted the newtype.
+///
+/// The cost, which is a decision rather than a side effect: `&C` is spoken for,
+/// so a downstream crate cannot write `impl SyncClient for &Theirs`. It writes
+/// the impl on `Theirs` and takes the reference from here.
+impl<C: SyncClient + ?Sized> SyncClient for &C {
+    type Error = C::Error;
+
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, C::Error> {
+        (**self).send(request)
+    }
+}
+
 /// The same, for a caller inside a runtime. `Send` on the future so that a
 /// call can be `tokio::spawn`ed.
 pub trait AsyncClient {
@@ -151,6 +175,26 @@ pub trait AsyncClient {
         &self,
         request: HttpRequest,
     ) -> impl Future<Output = Result<HttpResponse, Self::Error>> + Send;
+}
+
+/// The same for the async flavour, for the same reason and at the same cost.
+///
+/// Two things differ. The future handed back is `C`'s own and the trait already
+/// declares that one `Send`, so nothing here asks for `C: Sync`: what crosses a
+/// `tokio::spawn` is the inner future, not the reference, and a client whose
+/// answer is ready before the future is built is free to be `!Sync`. And the
+/// trait returns `impl Future`, which makes it dyn-incompatible, so there is no
+/// `&dyn AsyncClient` for `?Sized` to reach here — it is written this way so the
+/// two impls are one shape rather than two rules to remember.
+impl<C: AsyncClient + ?Sized> AsyncClient for &C {
+    type Error = C::Error;
+
+    fn send(
+        &self,
+        request: HttpRequest,
+    ) -> impl Future<Output = Result<HttpResponse, C::Error>> + Send {
+        (**self).send(request)
+    }
 }
 
 /// The failure a script asked for, carrying the message it was queued with.
@@ -462,8 +506,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AsyncClient, HttpRequest, HttpResponse, Method, Recorder, Request, StatusCode, SyncClient,
-        header, json_response,
+        AsyncClient, HttpRequest, HttpResponse, Method, Recorder, RecorderError, Request,
+        StatusCode, SyncClient, header, json_response,
     };
 
     fn request(method: Method, uri: &str) -> HttpRequest {
@@ -738,5 +782,51 @@ mod tests {
         // Never awaited: the work happens in `send`, so the refusal lands on
         // this line rather than wherever the future is polled.
         let _refused = AsyncClient::send(&client, request(Method::GET, "/vouchers"));
+    }
+
+    /// An async client that is not `Sync`, and whose future is `Send` all the
+    /// same because the answer is ready before the future is built.
+    ///
+    /// The `Cell` is the whole of it: an atomic counter here would make `Eager`
+    /// `Sync` and the test below would stop asking its question.
+    struct Eager(std::cell::Cell<usize>);
+
+    impl AsyncClient for Eager {
+        type Error = RecorderError;
+
+        fn send(
+            &self,
+            _request: HttpRequest,
+        ) -> impl Future<Output = Result<HttpResponse, RecorderError>> + Send {
+            self.0.set(self.0.get() + 1);
+            std::future::ready(Ok(json_response(
+                StatusCode::OK,
+                &json!({ "answered": self.0.get() }),
+            )))
+        }
+    }
+
+    /// A reference to a client is a client on the async path, and the client it
+    /// refers to owes no `Sync`.
+    ///
+    /// What the blanket impl hands back is the future `Eager` itself declares
+    /// `Send`, so the reference never has to cross a thread for the promise to
+    /// hold — `is_send` is where that is pinned rather than assumed.
+    #[test]
+    fn a_reference_to_a_client_is_an_async_client_and_the_client_owes_no_sync() {
+        fn is_send<F: Send>(future: F) -> F {
+            future
+        }
+
+        let client = Eager(std::cell::Cell::new(0));
+        let through_reference: &Eager = &client;
+
+        let pending = is_send(AsyncClient::send(
+            &through_reference,
+            request(Method::GET, "/vouchers"),
+        ));
+        let answered = block_on(pending).expect("the eager client answers");
+
+        assert_eq!(body(&answered), json!({ "answered": 1 }));
     }
 }

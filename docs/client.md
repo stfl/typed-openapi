@@ -8,6 +8,7 @@ any feature combination, and it never will. The primer is
 ## Contents
 
 - [The seam](#the-seam)
+- [A reference to a client is a client](#a-reference-to-a-client-is-a-client)
 - [Writing an adapter](#writing-an-adapter)
 - [`Recorder`, the one client this crate ships](#recorder-the-one-client-this-crate-ships)
 
@@ -38,6 +39,31 @@ Keeping the client out is what lets one generated crate serve a binary that
 uses ureq and a service that uses `reqwest`, and it is why the default feature
 set is 30 crates — 21 without `clap`. It is also where authentication goes:
 nothing here signs a request, so your adapter does.
+
+## A reference to a client is a client
+
+`&C` implements both traits wherever `C` does, which is what the `&self`
+receiver on `send` promises. So a caller holding a reference passes it through
+untouched, and a run that picks between a live client and a `Recorder` holds the
+choice as a trait object and hands that to any `send` in the crate:
+
+```rust,ignore
+let client: &dyn SyncClient<Error = MyError> = if recording { &recorder } else { &live };
+
+tree::dispatch(&document, document.base(), &client, &matches)?;
+```
+
+The extra `&` is not a slip: every `send` here is generic over `C: SyncClient`
+and a generic parameter is sized, so the type that satisfies it is
+`&dyn SyncClient<Error = MyError>` rather than the trait object itself.
+
+`AsyncClient` returns `impl Future`, which makes it dyn-incompatible — there is
+no `&dyn AsyncClient` to hold. A run choosing between two async clients holds
+them in an enum of its own and implements `AsyncClient` on that.
+
+These impls spend `&C` on the crate: an `impl SyncClient for &Theirs` in a crate
+of your own collides with the blanket one. Write the impl on the client itself
+and take the reference from here.
 
 ## Writing an adapter
 
