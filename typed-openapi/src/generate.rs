@@ -414,40 +414,85 @@ fn unrunnable(prose: &str) -> String {
 }
 
 /// `prose` with no line indented deeply enough to open a code block, and no
-/// fence that rustdoc would read as Rust.
+/// fence rustdoc would read as Rust.
+///
+/// A line is capped before it is read as a fence, and in that order: Markdown
+/// reads a fence at three columns or fewer, so an indented one is not a fence
+/// at all but the start of an indented code block — and capping it first is
+/// what turns it into the fence the vendor meant, rather than leaving a block
+/// whose first line happens to be three backticks.
 fn capped_lines(prose: &str) -> String {
     let mut fenced = false;
     let lines: Vec<String> = prose
         .split('\n')
-        .map(|line| match fence(line) {
-            Some(language) => {
-                fenced = !fenced;
-                // A fence that names no language is Rust as far as rustdoc is
-                // concerned. Naming it keeps the block rendered as a block and
-                // stops it being run. A closing fence names nothing and means
-                // nothing, so it is left as the vendor wrote it.
-                if fenced && language.is_empty() {
-                    format!("{}text", line.trim_end())
-                } else {
-                    line.to_owned()
-                }
+        .map(|line| {
+            // Inside a fence the content is the vendor's sample, kept as they
+            // wrote it — the fence above it already says nobody will run it.
+            if fenced && fence(line).is_none() {
+                return line.to_owned();
             }
-            // Inside a fence the content is the vendor's sample, and the fence
-            // above it already says nobody will run it.
-            None if fenced => line.to_owned(),
-            None => capped(line),
+            let capped = capped(line);
+            let Some((marker, language)) = fence(&capped) else {
+                return capped;
+            };
+            if fenced {
+                fenced = false;
+                return capped;
+            }
+            fenced = true;
+            if compiled(language) {
+                let indent: String = capped.chars().take_while(|c| c.is_whitespace()).collect();
+                format!("{indent}{marker}{INERT}")
+            } else {
+                capped
+            }
         })
         .collect();
     lines.join("\n")
 }
 
-/// The language an opening fence names, if this line is a fence at all.
-fn fence(line: &str) -> Option<&str> {
-    let line = line.trim();
-    let rest = line
-        .strip_prefix("```")
-        .or_else(|| line.strip_prefix("~~~"))?;
-    Some(rest.trim().trim_start_matches(['`', '~']))
+/// The language named on a fence rustdoc will not compile.
+///
+/// Any word it does not recognise does, and this one says what the block is.
+const INERT: &str = "text";
+
+/// The words rustdoc reads above a code block as *attributes of Rust* rather
+/// than as the name of a language.
+///
+/// A fence carrying one of them — or carrying nothing — is a block rustdoc
+/// compiles and runs, so a vendor who wrote `rust` over a line of pseudocode
+/// has written a doctest without meaning to. Every other word names a language
+/// rustdoc leaves alone, and the vendor's own is worth keeping: it is what a
+/// reader's syntax highlighting goes by.
+const COMPILED: [&str; 7] = [
+    "compile_fail",
+    "ignore",
+    "no_run",
+    "rust",
+    "should_panic",
+    "standalone_crate",
+    "test_harness",
+];
+
+/// Would rustdoc compile a block a fence naming `language` opens?
+fn compiled(language: &str) -> bool {
+    let word = language.split([',', ' ', '\t']).next().unwrap_or(language);
+    word.is_empty() || word.starts_with("edition") || COMPILED.contains(&word)
+}
+
+/// The marker this line fences with and the language it names, if it is a
+/// fence.
+///
+/// A fence is three or more backticks or tildes. Whether it is indented too
+/// far to be one is settled before this is asked, by capping the line.
+fn fence(line: &str) -> Option<(&str, &str)> {
+    let body = line.trim_start();
+    let mark = ['`', '~']
+        .into_iter()
+        .find(|mark| body.chars().take(3).filter(|c| c == mark).count() == 3)?;
+    let run = body.len() - body.trim_start_matches(mark).len();
+    let (marker, language) = body.split_at(run);
+    Some((marker, language.trim()))
 }
 
 /// `line` with its indentation capped at [`KEEP`].

@@ -605,6 +605,36 @@ components:
             ```
             {"id": "1"}
             ```
+        labelled:
+          type: string
+          description: |
+            An example the vendor labelled:
+
+            ```rust
+            this is pseudocode, not Rust
+            ```
+
+            and the same with tildes:
+
+            ~~~rust
+            nor is this
+            ~~~
+        buried:
+          type: string
+          description: |
+            An example the vendor indented under its heading:
+
+                ```
+                {"id": "1"}
+                ```
+        highlighted:
+          type: string
+          description: |
+            An example whose language rustdoc does not run:
+
+            ```json
+            {"id": "1"}
+            ```
         aside:
           type: string
           description: |
@@ -700,6 +730,14 @@ fn prose_that_was_never_code_is_still_prose() {
     assert!(
         types.contains("```text"),
         "a fence naming no language was left as Rust:\n{types}"
+    );
+    assert!(
+        !types.contains("```rust") && !types.contains("~~~rust"),
+        "a fence the vendor labelled `rust` was left for rustdoc to compile:\n{types}"
+    );
+    assert!(
+        types.contains("```json"),
+        "a language rustdoc does not run was renamed for nothing:\n{types}"
     );
     assert!(
         types.contains("//! in passing"),
