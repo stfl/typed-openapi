@@ -104,6 +104,26 @@ impl Values {
         }
     }
 
+    /// Every value of a list parameter, under the name the document gives it.
+    ///
+    /// A list reaches the request builder as the name repeated, which is exactly
+    /// what a repeated flag reaches it with — so the two consumers hand over the
+    /// same thing, and how the repeats are laid out in the request is the
+    /// document's to say rather than either caller's. An empty list adds
+    /// nothing, and is the same as not naming the parameter at all.
+    #[must_use]
+    pub fn each(
+        mut self,
+        name: impl Into<String>,
+        values: impl IntoIterator<Item = impl ToString>,
+    ) -> Self {
+        let name = name.into();
+        for value in values {
+            self.params.push((name.clone(), value.to_string()));
+        }
+        self
+    }
+
     #[must_use]
     pub fn json(mut self, value: serde_json::Value) -> Self {
         self.body = Some(Payload::Json(value));

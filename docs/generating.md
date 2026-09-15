@@ -256,9 +256,14 @@ Three things are worth knowing:
   meant — is a `LoadError` naming the operation and the key, rather than bytes
   sent under a `Content-Type` no server reads. The repair is an Overlay action,
   and [overlay.md](overlay.md#1-plain-corrections) writes one out.
-- **Parameters must be scalars.** A parameter declared with `content` rather
-  than `schema`, or one whose schema is an object or an array, is a
-  `GenerateError::Unsupported` rather than a guess.
+- **A parameter becomes an argument only where a command line could spell it.**
+  A scalar is one argument; an array of scalars is a `Vec` argument the wrapper
+  fills by repeating the wire name, which is what a repeated flag does. A
+  parameter neither can supply — `in: cookie`, one declared with `content`
+  rather than `schema`, one whose schema is an object — is an argument on
+  neither, and the wrapper's own documentation says which parameter it does not
+  carry and why. An array must declare its `items` inline: a `$ref` to an array
+  schema is a `GenerateError::Unsupported` naming the parameter.
 
 [typify]: https://docs.rs/typify
 [bon]: https://bon-rs.com

@@ -15,7 +15,9 @@
 )]
 
 use typed_openapi::model::Body;
-use typed_openapi::{Document, Effect, Invocation, Operation, Values, render, tree};
+use typed_openapi::{
+    Document, Effect, Invocation, Operation, Param, Shape, Unsupported, Values, render, tree,
+};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
 const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
@@ -134,7 +136,7 @@ fn every_body_is_exactly_one_flag_set() {
 fn a_body_field_moves_aside_for_a_path_parameter_of_the_same_name() {
     let doc = document();
     let update = doc.get("updateVoucher").unwrap();
-    assert_eq!(update.param("id").unwrap().flag(), "id");
+    assert_eq!(flag_of(update.param("id").unwrap()), "id");
     let Body::JsonFields(fields) = update.body() else {
         panic!("updateVoucher takes a flat JSON body");
     };
@@ -519,6 +521,380 @@ fn an_all_of_that_is_more_than_a_wrapper_is_not_a_scalar() {
          \x20                 allOf: [{ $ref: '#/components/schemas/Day' }]\n"
     ));
 }
+/// One query parameter that is a list of strings. `explode` is the one line
+/// that decides how its values reach the wire.
+const LISTED: &str = r"  /vouchers:
+    get:
+      operationId: listVouchers
+      parameters:
+        - name: tag
+          in: query
+          explode: true
+          schema: { type: array, items: { type: string } }
+      responses: { '200': { description: OK } }
+";
+
+/// One operation declaring three shapes at once — a list this CLI spells, an
+/// object it cannot, and a plain integer — beside a second operation that
+/// declares none of them.
+const SHAPES: &str = r"  /vouchers:
+    get:
+      operationId: listVouchers
+      parameters:
+        - name: tag
+          in: query
+          schema: { type: array, items: { type: string } }
+        - name: filter
+          in: query
+          required: false
+          schema:
+            type: object
+            properties:
+              opened:
+                type: object
+                properties:
+                  from: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses: { '200': { description: OK } }
+  /contacts:
+    post:
+      operationId: createContact
+      responses: { '201': { description: OK } }
+";
+
+/// The request one document builds from one set of values, as a whole URL.
+fn sent(document: &str, id: &str, values: Values) -> String {
+    let doc = Document::load(document, &[]).expect("a document");
+    let op = doc.get(id).unwrap_or_else(|| panic!("{id}"));
+    Invocation::new(op, values)
+        .expect("the values satisfy the operation")
+        .request(doc.base())
+        .expect("the base URL is a URL")
+        .uri()
+        .to_string()
+}
+
+/// A list is one flag given more than once, and what becomes of the repeats is
+/// the document's `explode` rather than this crate's preference. `form` with
+/// `explode: true` is what OpenAPI defaults a query parameter to.
+#[test]
+fn a_list_parameter_reaches_the_query_the_way_the_document_explodes_it() {
+    let both = |document: &str| {
+        sent(
+            document,
+            "listVouchers",
+            Values::new().each("tag", ["a", "b"]),
+        )
+    };
+
+    assert_eq!(
+        both(&synthetic(LISTED)),
+        "http://localhost:9999/vouchers?tag=a&tag=b"
+    );
+    // The default is the same rendering, written down.
+    assert_eq!(
+        both(&synthetic(&LISTED.replace("          explode: true\n", ""))),
+        "http://localhost:9999/vouchers?tag=a&tag=b"
+    );
+    assert_eq!(
+        both(&synthetic(
+            &LISTED.replace("explode: true", "explode: false")
+        )),
+        "http://localhost:9999/vouchers?tag=a,b"
+    );
+}
+
+/// Percent-encoding runs before the comma is written, so the comma *between*
+/// two values and a comma *inside* one value are not the same character on the
+/// wire, and a server reading the field gets the two values that were given.
+#[test]
+fn a_comma_inside_a_value_is_not_the_comma_between_two_values() {
+    assert_eq!(
+        sent(
+            &synthetic(&LISTED.replace("explode: true", "explode: false")),
+            "listVouchers",
+            Values::new().each("tag", ["a,b", "c"]),
+        ),
+        "http://localhost:9999/vouchers?tag=a%2Cb,c"
+    );
+}
+
+/// The regression this shape exists for. One parameter no flag can carry is an
+/// operation's problem; it used to be the whole document's, which made every
+/// other operation in it unreachable as well.
+#[test]
+fn a_parameter_no_flag_can_carry_leaves_every_other_operation_standing() {
+    let doc = Document::load(&synthetic(SHAPES), &[])
+        .expect("an unreachable parameter does not stop the document reducing");
+    let list = doc.get("listVouchers").expect("listVouchers");
+
+    assert!(
+        matches!(
+            list.param("filter")
+                .expect("it is in the reduction")
+                .shape(),
+            Shape::Unreachable(Unsupported::Structured)
+        ),
+        "an object parameter is carried, not dropped and not refused"
+    );
+    // The operation that declares it is mounted, and its other parameters work.
+    assert_eq!(flag_of(list.param("limit").expect("limit")), "limit");
+    assert_eq!(
+        sent(
+            &synthetic(SHAPES),
+            "listVouchers",
+            Values::new().each("tag", ["a"]).param("limit", 5),
+        ),
+        "http://localhost:9999/vouchers?tag=a&limit=5"
+    );
+    // And so is every operation that never mentioned it.
+    assert!(doc.get("createContact").is_some(), "the other operation");
+
+    // A value for it is refused rather than dropped: a request quietly missing
+    // the filter it was given is worse than one that was never built.
+    let refused = Invocation::new(list, Values::new().param("filter", "{}"))
+        .expect_err("there is nowhere to put it");
+    assert_eq!(
+        refused.to_string(),
+        "listVouchers: `filter` is neither a value nor a list of values, \
+         so there is nowhere in the request to put a value for it"
+    );
+}
+
+/// An operation whose caller *must* send what this CLI cannot spell could never
+/// be invoked correctly, so it is named while the document is reduced rather
+/// than mounted as a subcommand guaranteed to build the wrong request.
+#[test]
+fn a_required_parameter_no_flag_can_carry_names_itself_and_the_way_out() {
+    let error = Document::load(
+        &synthetic(&SHAPES.replace("required: false", "required: true")),
+        &[],
+    )
+    .expect_err("a required parameter with no flag");
+    assert_eq!(
+        error.to_string(),
+        "listVouchers: parameter `filter` is neither a value nor a list of values, \
+         and the document requires it; correct the parameter in an Overlay, \
+         or drop its `required`"
+    );
+}
+
+/// `in: cookie` and a parameter described by `content` are the same shape as an
+/// object: something one operation asks for that this CLI has no spelling for.
+/// One rule covers all three, so none of them costs the document anything.
+#[test]
+fn a_cookie_and_a_content_parameter_are_carried_the_way_an_object_is() {
+    const NEIGHBOURS: &str = r"  /vouchers:
+    get:
+      operationId: listVouchers
+      parameters:
+        - name: session
+          in: cookie
+          schema: { type: string }
+        - name: window
+          in: query
+          content:
+            application/json:
+              schema: { type: object }
+      responses: { '200': { description: OK } }
+";
+
+    let doc = Document::load(&synthetic(NEIGHBOURS), &[]).expect("the document still reduces");
+    let op = doc.get("listVouchers").expect("listVouchers");
+    let why = |name: &str| match op.param(name).expect("it is in the reduction").shape() {
+        Shape::Unreachable(why) => why.clone(),
+        Shape::Flag { .. } => panic!("`{name}` has no command-line spelling"),
+    };
+    assert_eq!(why("session"), Unsupported::Cookie);
+    assert_eq!(why("window"), Unsupported::Encoded);
+
+    // Neither grows a flag, and the long help says why rather than leaving a
+    // reader of `--help` to wonder where the parameter went.
+    let command = tree::command(op);
+    let longs: Vec<&str> = command
+        .get_arguments()
+        .filter_map(clap::Arg::get_long)
+        .collect();
+    assert!(
+        !longs.contains(&"session") && !longs.contains(&"window"),
+        "{longs:?}"
+    );
+    let long_about = command.get_long_about().expect("a long help").to_string();
+    assert!(
+        long_about
+            .contains("`session` has no flag: it is `in: cookie`, which this CLI does not send."),
+        "{long_about}"
+    );
+    assert!(
+        long_about.contains(
+            "`window` has no flag: it is described by `content`, which this CLI does not encode."
+        ),
+        "{long_about}"
+    );
+}
+
+/// A serialisation this crate does not write is named on the parameter that
+/// declares it. Writing it as `form` instead would put the values on the wire
+/// in a shape the server does not read, which is a request that looks sent.
+#[test]
+fn a_style_this_crate_does_not_serialise_names_itself() {
+    const STYLED: &str = r"  /vouchers:
+    get:
+      operationId: listVouchers
+      parameters:
+        - name: tag
+          in: query
+          required: false
+          style: pipeDelimited
+          schema: { type: array, items: { type: string } }
+      responses: { '200': { description: OK } }
+";
+
+    /// The same list in a path segment, where a parameter has styles of its own
+    /// and is required by definition.
+    const SEGMENTED: &str = r"  /vouchers/{ids}:
+    get:
+      operationId: getVouchers
+      parameters:
+        - name: ids
+          in: path
+          required: true
+          style: matrix
+          schema: { type: array, items: { type: integer } }
+      responses: { '200': { description: OK } }
+";
+
+    for style in ["spaceDelimited", "pipeDelimited", "deepObject"] {
+        let document = synthetic(&STYLED.replace("pipeDelimited", style));
+        let doc = Document::load(&document, &[]).expect("the document still reduces");
+        let op = doc.get("listVouchers").expect("listVouchers");
+        let Shape::Unreachable(why) = op.param("tag").expect("tag").shape() else {
+            panic!("`{style}` is not a serialisation this crate writes");
+        };
+        assert_eq!(
+            why.to_string(),
+            format!("declared with `style: {style}`, which this CLI does not serialise")
+        );
+
+        // Required, the same parameter is the document's problem, and the
+        // refusal carries the style's own spelling.
+        let error = Document::load(&document.replace("required: false", "required: true"), &[])
+            .expect_err("a required parameter with no flag");
+        assert!(
+            error.to_string().contains(&format!("`style: {style}`")),
+            "{error}"
+        );
+    }
+
+    // A path has styles of its own, and they are not only about delimiters:
+    // `matrix` puts a `;ids=` in front of one value as surely as in front of a
+    // list, so both schemas answer the same way. A path parameter is required
+    // by definition, so both are the document's problem.
+    for style in ["matrix", "label"] {
+        for schema in [
+            "{ type: integer }",
+            "{ type: array, items: { type: integer } }",
+        ] {
+            let document = synthetic(
+                &SEGMENTED
+                    .replace("matrix", style)
+                    .replace("{ type: array, items: { type: integer } }", schema),
+            );
+            let error =
+                Document::load(&document, &[]).expect_err("a path style this crate does not write");
+            assert!(
+                error.to_string().contains(&format!("`style: {style}`")),
+                "{schema}: {error}"
+            );
+        }
+    }
+}
+
+/// A path segment and a header are `style: simple`, which comma-separates a list
+/// however it explodes. A path parameter given twice is one segment, not a
+/// second value silently dropped.
+#[test]
+fn a_list_in_a_path_segment_or_a_header_is_comma_separated() {
+    const SEGMENTED: &str = r"  /vouchers/{ids}:
+    get:
+      operationId: getVouchers
+      parameters:
+        - name: ids
+          in: path
+          required: true
+          schema: { type: array, items: { type: integer } }
+        - name: X-Trace
+          in: header
+          schema: { type: array, items: { type: string } }
+      responses: { '200': { description: OK } }
+";
+
+    let doc = Document::load(&synthetic(SEGMENTED), &[]).expect("a document");
+    let op = doc.get("getVouchers").expect("getVouchers");
+    let request = Invocation::new(
+        op,
+        Values::new()
+            .each("ids", [3, 4, 5])
+            .each("X-Trace", ["one", "two"]),
+    )
+    .expect("the values satisfy the operation")
+    .request(doc.base())
+    .expect("the base URL is a URL");
+
+    assert_eq!(request.uri().path(), "/vouchers/3,4,5");
+    assert_eq!(
+        request.headers().get("x-trace").expect("the header"),
+        "one,two"
+    );
+}
+
+/// A parameter the document declares one value for, given two, is refused: the
+/// list the caller meant is not a list the document describes.
+#[test]
+fn a_parameter_that_is_not_a_list_is_refused_a_second_value() {
+    let doc = Document::load(&synthetic(SHAPES), &[]).expect("a document");
+    let op = doc.get("listVouchers").expect("listVouchers");
+    let refused = Invocation::new(op, Values::new().each("limit", [5, 6]))
+        .expect_err("`limit` is one integer");
+    assert_eq!(
+        refused.to_string(),
+        "listVouchers: `limit` takes one value, and was given 2"
+    );
+}
+
+/// The command line's half of the same facts: the flag is repeatable, its help
+/// line says what the repeats become, and what the tree reads back builds the
+/// request the document describes.
+#[test]
+fn a_repeatable_flag_says_what_it_does_and_reaches_the_request_builder_repeated() {
+    let doc = Document::load(&synthetic(SHAPES), &[]).expect("a document");
+    let op = doc.get("listVouchers").expect("listVouchers");
+    let command = tree::command(op);
+    let tag = command
+        .get_arguments()
+        .find(|arg| arg.get_long() == Some("tag"))
+        .expect("--tag");
+
+    assert!(matches!(tag.get_action(), clap::ArgAction::Append));
+    let help = tag.get_help().expect("a help line").to_string();
+    assert!(
+        help.contains("repeatable; each value is sent as its own field"),
+        "{help}"
+    );
+
+    let matches = clap::Command::new("toy")
+        .subcommands(tree::commands(&doc))
+        .get_matches_from(["toy", "vouchers", "list", "--tag", "a", "--tag", "b"]);
+    let selected = tree::select(&doc, &matches).expect("the subcommand names an operation");
+    let request = Invocation::new(selected.operation(), selected.values().clone())
+        .expect("the flags satisfy the operation")
+        .request(doc.base())
+        .expect("the base URL is a URL");
+
+    assert_eq!(request.uri().query(), Some("tag=a&tag=b"));
+}
 
 /// The two doors onto one reduction. A bless step writes the blob, a binary
 /// reads it, and nothing between them may change what the document said —
@@ -537,6 +913,15 @@ fn a_reduction_survives_the_round_trip_the_bless_step_makes() {
 fn a_blob_that_is_not_a_reduction_is_refused_by_name() {
     let error = Document::from_blob(b"not a reduction").expect_err("not a reduction");
     assert!(error.to_string().contains("reduced model"), "{error}");
+}
+
+/// The flag a parameter grows, for a test that is about the name rather than
+/// about the shape.
+fn flag_of(param: &Param) -> &str {
+    match param.shape() {
+        Shape::Flag { flag, .. } => flag,
+        Shape::Unreachable(why) => panic!("`{}` has no flag: it is {why}", param.name()),
+    }
 }
 
 /// A document of this test's own, `paths` and nothing else — for the naming

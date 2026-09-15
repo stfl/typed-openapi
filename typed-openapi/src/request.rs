@@ -13,7 +13,7 @@
 use http::{Request, Uri, header};
 use thiserror::Error;
 
-use crate::model::{Body, Location, Operation};
+use crate::model::{Body, Join, Location, Operation, Param, Shape, Unsupported};
 use crate::multipart;
 use crate::scalar::ScalarError;
 use crate::values::{Payload, Values};
@@ -25,6 +25,22 @@ pub enum ValueError {
     MissingParam { op: String, name: String },
     #[error("{op}: there is no `{name}` parameter")]
     UnknownParam { op: String, name: String },
+    /// A value for a parameter no flag and no wrapper argument can carry.
+    /// Dropping it silently would send a request the caller did not ask for.
+    #[error("{op}: `{name}` is {why}, so there is nowhere in the request to put a value for it")]
+    UnsupportedParam {
+        op: String,
+        name: String,
+        why: Unsupported,
+    },
+    /// Several values for a parameter the document declares one value for. The
+    /// list the caller meant is not a list the document describes.
+    #[error("{op}: `{name}` takes one value, and was given {given}")]
+    RepeatedParam {
+        op: String,
+        name: String,
+        given: usize,
+    },
     #[error("{op}: `{name}`: {source}")]
     BadValue {
         op: String,
@@ -56,21 +72,40 @@ impl<'a> Invocation<'a> {
                 op: name(),
                 name: wire.clone(),
             })?;
-            param
-                .scalar()
-                .parse(raw)
-                .map_err(|source| ValueError::BadValue {
-                    op: name(),
-                    name: wire.clone(),
-                    source,
-                })?;
+            match param.shape() {
+                Shape::Flag { scalar, .. } => {
+                    scalar.parse(raw).map_err(|source| ValueError::BadValue {
+                        op: name(),
+                        name: wire.clone(),
+                        source,
+                    })?;
+                }
+                Shape::Unreachable(why) => {
+                    return Err(ValueError::UnsupportedParam {
+                        op: name(),
+                        name: wire.clone(),
+                        why: why.clone(),
+                    });
+                }
+            }
         }
         for param in op.params() {
-            let given = values.params().iter().any(|(wire, _)| wire == param.name());
-            if param.required() && !given {
+            let given = values
+                .params()
+                .iter()
+                .filter(|(wire, _)| wire == param.name())
+                .count();
+            if param.required() && given == 0 {
                 return Err(ValueError::MissingParam {
                     op: name(),
                     name: param.name().to_owned(),
+                });
+            }
+            if given > 1 && !param.shape().repeatable() {
+                return Err(ValueError::RepeatedParam {
+                    op: name(),
+                    name: param.name().to_owned(),
+                    given,
                 });
             }
         }
@@ -88,8 +123,11 @@ impl<'a> Invocation<'a> {
         let mut builder = Request::builder()
             .method(self.op.method().clone())
             .uri(self.url(base));
-        for (name, value) in self.located(Location::Header) {
-            builder = builder.header(name, value);
+        for sent in self.placed(Location::Header) {
+            // A header's style is `simple`, which comma-separates a list. The
+            // values are not percent-encoded on the way in: a header is not a
+            // URL, and nothing here is a delimiter in it but the comma.
+            builder = builder.header(sent.name, sent.values.join(","));
         }
         match self.body() {
             None => builder.body(Vec::new()),
@@ -136,15 +174,15 @@ impl<'a> Invocation<'a> {
         url.push_str(base.path().trim_end_matches('/'));
 
         let mut path = self.op.path().to_owned();
-        for (name, value) in self.located(Location::Path) {
-            path = path.replace(&format!("{{{name}}}"), &encode(value));
+        for sent in self.placed(Location::Path) {
+            // A path parameter's style is `simple`, which comma-separates a list
+            // however it explodes, so there is one rendering here and no branch.
+            let placeholder = format!("{{{}}}", sent.name);
+            path = path.replace(&placeholder, &commas(&sent.values));
         }
         url.push_str(&path);
 
-        let query: Vec<String> = self
-            .located(Location::Query)
-            .map(|(name, value)| format!("{}={}", encode(name), encode(value)))
-            .collect();
+        let query = self.query();
         if !query.is_empty() {
             url.push('?');
             url.push_str(&query.join("&"));
@@ -152,15 +190,69 @@ impl<'a> Invocation<'a> {
         url
     }
 
-    fn located(&self, location: Location) -> impl Iterator<Item = (&str, &str)> {
-        self.values
-            .params()
-            .iter()
-            .filter_map(move |(name, value)| {
-                let param = self.op.param(name)?;
-                (param.location() == location).then_some((name.as_str(), value.as_str()))
-            })
+    /// The query string's fields, in the order the caller first named each
+    /// parameter.
+    ///
+    /// A repeated flag is one parameter holding several values, so the values
+    /// are grouped before they are rendered: `?embed=a&embed=b` and `?embed=a,b`
+    /// are one list spelled two ways, and which one it is, is the document's to
+    /// say.
+    fn query(&self) -> Vec<String> {
+        let mut fields: Vec<String> = Vec::new();
+        for sent in self.placed(Location::Query) {
+            let name = encode(sent.name);
+            match sent.join {
+                Some(Join::Pairs) => fields.extend(
+                    sent.values
+                        .iter()
+                        .map(|value| format!("{name}={}", encode(value))),
+                ),
+                Some(Join::Commas) | None => {
+                    fields.push(format!("{name}={}", commas(&sent.values)));
+                }
+            }
+        }
+        fields
     }
+
+    /// Every value the caller gave for a parameter that goes in `location`,
+    /// grouped under the parameter it belongs to, with the join the document
+    /// declared for it.
+    ///
+    /// A parameter this CLI cannot supply never reaches here — `Invocation::new`
+    /// refuses a value for one — so grouping is over the parameters that have a
+    /// place in the request and nothing else.
+    fn placed(&self, location: Location) -> Vec<Sent<'_>> {
+        let mut out: Vec<Sent<'_>> = Vec::new();
+        for (name, value) in self.values.params() {
+            let Some(Shape::Flag {
+                location: at, join, ..
+            }) = self.op.param(name).map(Param::shape)
+            else {
+                continue;
+            };
+            if *at != location {
+                continue;
+            }
+            match out.iter_mut().find(|sent| sent.name == name.as_str()) {
+                Some(sent) => sent.values.push(value),
+                None => out.push(Sent {
+                    name,
+                    join: *join,
+                    values: vec![value],
+                }),
+            }
+        }
+        out
+    }
+}
+
+/// One parameter on its way into the request: the wire name, how the document
+/// joins repeats of it, and the values in the order the caller gave them.
+struct Sent<'v> {
+    name: &'v str,
+    join: Option<Join>,
+    values: Vec<&'v str>,
 }
 
 /// Does the body the caller brought match the body the operation asks for?
@@ -199,6 +291,22 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
         (Body::Multipart { .. }, Some(_)) => wrong("multipart/form-data"),
         (Body::Opaque { media_type, .. }, Some(_)) => wrong(media_type),
     }
+}
+
+/// One parameter's values as a single field: each percent-encoded, joined by
+/// commas.
+///
+/// This is what RFC 6570's `simple` gives a list, and what OpenAPI's `form` with
+/// `explode: false` gives one. Encoding runs first, so a comma *inside* a value
+/// is `%2C` and the comma *between* two values is the delimiter the document
+/// asked for — whoever reads the request can tell them apart.
+fn commas(values: &[&str]) -> String {
+    values
+        .iter()
+        .copied()
+        .map(encode)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Percent-encode everything outside RFC 3986's unreserved set. Both path

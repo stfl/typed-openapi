@@ -69,6 +69,16 @@ the document saying something this crate has no reading for, so both are a
 what the vendor meant is a correction, and a correction is the adopter's to
 write in an Overlay where a reviewer can see it.
 
+**A shape this crate cannot spell stops at the operation, not at the document.**
+A parameter that is `in: cookie`, described by `content`, neither a value nor a
+list of values, or declaring a `style` this crate does not serialise, is
+carried as `Shape::Unreachable` — named on the subcommand's long help and in the
+wrapper's documentation, and given no flag, no argument and no place in the
+request — and only a *required* one is a `LoadError`, because an operation that
+could never build a correct request is worth refusing by name. It is the rule a
+body already follows, where one nested property sends the whole body through
+`--json-body` rather than refusing the document that holds it.
+
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
