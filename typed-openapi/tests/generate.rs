@@ -558,8 +558,15 @@ fn every_string_newtype_prints_and_none_of_them_twice() {
     }
 }
 
-/// Descriptions in every shape a vendor writes prose in, including the three
+/// Descriptions in every shape a vendor writes prose in, including the four
 /// that Markdown turns into code and rustdoc then compiles.
+///
+/// The hanging list marker is carried three times because no one position
+/// stands for the others: under a paragraph line and under a blank line in a
+/// property's description, and under a paragraph line in an operation's
+/// summary. rustc strips a leading `*` out of some `/* */` comments and leaves
+/// it in others, so what the gap between marker and content has to survive is
+/// not the same in all three.
 const PROSE: &str = r##"
 openapi: 3.0.3
 info: { title: Prose, version: "1.0" }
@@ -570,6 +577,7 @@ paths:
       operationId: listVouchers
       summary: |
         List the vouchers.
+        *     A summary the vendor hung from a marker.
 
             A summary the vendor indented.
       responses:
@@ -635,6 +643,22 @@ components:
             ```json
             {"id": "1"}
             ```
+        hanging:
+          type: string
+          description: |
+            A list whose content the vendor hung five columns from its marker:
+            *     the content of that item.
+        hanging_apart:
+          type: string
+          description: |
+            The same, set off from its lead-in by a blank line:
+
+            *     the content of that item too.
+        hanging_numbered:
+          type: string
+          description: |
+            An ordered list hung the same way:
+            1.     the content of that item as well.
         aside:
           type: string
           description: |
@@ -742,6 +766,24 @@ fn prose_that_was_never_code_is_still_prose() {
     assert!(
         types.contains("//! in passing"),
         "a line mentioning a doc comment did not survive:\n{types}"
+    );
+    assert!(
+        types.contains("*   the content of that item."),
+        "a hanging list item lost its marker, or kept the gap that opens a code \
+         block inside it:\n{types}"
+    );
+    assert!(
+        types.contains("1.   the content of that item as well."),
+        "an ordered marker is a list marker too:\n{types}"
+    );
+
+    // The same rule reaching a wrapper's doc, where the vendor's prose is a
+    // summary rather than a property's description. The two positions differ in
+    // what rustc does with them afterwards, so neither stands in for the other.
+    let ops = read(&dir.join("src/ops.rs"));
+    assert!(
+        ops.contains("*   A summary the vendor hung from a marker."),
+        "a hanging list item in a summary was left as the vendor wrote it:\n{ops}"
     );
 }
 

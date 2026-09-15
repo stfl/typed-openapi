@@ -364,6 +364,12 @@ fn wrapper(
 /// sits at while a `///` fragment carries none. Mixing them leaves nothing to
 /// strip, and a vendor's summary arrives four spaces in — a code block, which
 /// rustdoc then compiles. A single fragment cannot be mixed with anything.
+///
+/// A summary that is itself several paragraphs is what makes this reachable,
+/// and one attribute per paragraph is what would reach it: the multi-line
+/// summary becomes the `/* */` fragment and the generated paragraphs beside it
+/// the `///` ones. `PROSE` carries such a summary, so the doctest runner is
+/// what holds this rather than the argument above it.
 fn paragraphs(parts: impl IntoIterator<Item = String>) -> String {
     parts
         .into_iter()

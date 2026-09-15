@@ -351,12 +351,13 @@ fn read(path: &Path) -> Result<String, GenerateError> {
 ///
 /// Every description in the document becomes a doc comment, and rustdoc
 /// compiles and executes the code blocks in a doc comment. Markdown makes a
-/// code block out of two ordinary shapes of prose: a run of lines indented four
-/// spaces or more, and a fence that names no language. A vendor writing a
-/// nested list or a hanging example writes both without meaning either, and
-/// what the adopter gets is `cargo test --doc` failing on the vendor's
-/// sentences — which no lint allowance reaches, because a doctest is executed
-/// rather than linted.
+/// code block out of three ordinary shapes of prose: a run of lines indented
+/// four spaces or more, a list item whose content sits five columns from its
+/// marker, and a fence that names no language. A vendor writing a nested list,
+/// a column of items lined up under the widest marker, or a hanging example
+/// writes all three without meaning any of them, and what the adopter gets is
+/// `cargo test --doc` failing on the vendor's sentences — which no lint
+/// allowance reaches, because a doctest is executed rather than linted.
 ///
 /// So each line is made unrunnable where it would otherwise be run, and left
 /// alone everywhere else. The generator is what put the prose where rustdoc
@@ -395,6 +396,9 @@ const TAB: usize = 4;
 /// is a crate whose tests run.
 const KEEP: usize = 3;
 
+/// The most digits Markdown reads as one ordered list marker.
+const ORDERED: usize = 9;
+
 /// `prose` with nothing in it that rustdoc would compile.
 fn unrunnable(prose: &str) -> String {
     let capped = capped_lines(prose);
@@ -405,22 +409,26 @@ fn unrunnable(prose: &str) -> String {
     }
     // More than one line is a `/* */` comment, and `rustfmt` indents its body
     // to the item it sits on — every line but the first, which stays flush
-    // against the opening `/*`. rustc strips the indentation every line of a
-    // comment shares, so a flush first line means nothing is stripped from the
-    // rest, and the vendor's second paragraph arrives four spaces in: a code
-    // block, whatever it says. Opening on a blank line puts the first line
-    // inside the indented body with the others, where the strip reaches it.
+    // against the opening `/*`. rustc strips the indentation a comment's lines
+    // share, and a flush first line holds that strip down to almost nothing, so
+    // the rest of the body arrives still carrying the column the item sits at:
+    // a paragraph the vendor indented three spaces lands six in, which is a
+    // code block. Opening on a blank line puts the first line inside the
+    // indented body with the others, where the strip reaches it, and that same
+    // paragraph lands back on its three.
     format!("\n{capped}\n")
 }
 
-/// `prose` with no line indented deeply enough to open a code block, and no
-/// fence rustdoc would read as Rust.
+/// `prose` with no line indented deeply enough to open a code block, no list
+/// item hanging its content far enough to open one, and no fence rustdoc would
+/// read as Rust.
 ///
-/// A line is capped before it is read as a fence, and in that order: Markdown
-/// reads a fence at three columns or fewer, so an indented one is not a fence
-/// at all but the start of an indented code block — and capping it first is
-/// what turns it into the fence the vendor meant, rather than leaving a block
-/// whose first line happens to be three backticks.
+/// A line is capped, then unhung, then read as a fence, and the order is the
+/// rule: Markdown reads a fence at three columns or fewer, so an indented one
+/// is not a fence at all but the start of an indented code block — capping it
+/// first is what turns it into the fence the vendor meant, rather than leaving
+/// a block whose first line happens to be three backticks. Unhanging cannot
+/// disturb that, because a run of backticks is not a list marker.
 fn capped_lines(prose: &str) -> String {
     let mut fenced = false;
     let lines: Vec<String> = prose
@@ -431,20 +439,20 @@ fn capped_lines(prose: &str) -> String {
             if fenced && fence(line).is_none() {
                 return line.to_owned();
             }
-            let capped = capped(line);
-            let Some((marker, language)) = fence(&capped) else {
-                return capped;
+            let tamed = unhung(&capped(line));
+            let Some((marker, language)) = fence(&tamed) else {
+                return tamed;
             };
             if fenced {
                 fenced = false;
-                return capped;
+                return tamed;
             }
             fenced = true;
             if compiled(language) {
-                let indent: String = capped.chars().take_while(|c| c.is_whitespace()).collect();
+                let indent: String = tamed.chars().take_while(|c| c.is_whitespace()).collect();
                 format!("{indent}{marker}{INERT}")
             } else {
-                capped
+                tamed
             }
         })
         .collect();
@@ -498,18 +506,79 @@ fn fence(line: &str) -> Option<(&str, &str)> {
 /// `line` with its indentation capped at [`KEEP`].
 fn capped(line: &str) -> String {
     let content = line.trim_start();
-    if content.is_empty() {
-        return line.to_owned();
-    }
-    let indent = line
-        .chars()
-        .take_while(|c| c.is_whitespace())
-        .map(|c| if c == '\t' { TAB } else { 1 })
-        .sum::<usize>();
-    if indent <= KEEP {
+    if content.is_empty() || columns(line) <= KEEP {
         return line.to_owned();
     }
     format!("{}{content}", " ".repeat(KEEP))
+}
+
+/// How many columns the whitespace at the start of `text` is worth.
+///
+/// Markdown counts a tab as [`TAB`], and both caps are stated in columns, so
+/// this is the one place that reading is made.
+fn columns(text: &str) -> usize {
+    text.chars()
+        .take_while(|c| c.is_whitespace())
+        .map(|c| if c == '\t' { TAB } else { 1 })
+        .sum()
+}
+
+/// `line` with the gap between a list marker and its content capped at
+/// [`KEEP`].
+///
+/// This is the code block [`capped`] cannot see. A vendor lining the text of
+/// several items up under the widest marker writes five spaces after a short
+/// one, and Markdown reads content that far from a marker as an indented code
+/// block *inside* the item — while the line's own indentation, which is all
+/// [`capped`] measures, is nothing at all.
+///
+/// Two readings have to survive the cap and they settle on the same number.
+/// Content five columns from a marker opens a block, so four would do for the
+/// line as the vendor wrote it. But rustc strips a leading `*` out of a
+/// `/* */` comment whenever every line it weighs carries one, which leaves the
+/// gap standing alone as ordinary indentation — and four columns of that,
+/// under a blank line, opens a block of its own. Three survives both readings,
+/// which is [`KEEP`] again and for the second of those reasons.
+///
+/// The line is left alone when the marker carries no content: a marker on its
+/// own opens nothing, and there is no gap to measure.
+fn unhung(line: &str) -> String {
+    let content = line.trim_start();
+    let Some(width) = list_marker(content) else {
+        return line.to_owned();
+    };
+    let (indent, rest) = line.split_at(line.len() - content.len());
+    let (marker, after) = rest.split_at(width);
+    let text = after.trim_start();
+    if text.is_empty() || columns(after) <= KEEP {
+        return line.to_owned();
+    }
+    format!("{indent}{marker}{}{text}", " ".repeat(KEEP))
+}
+
+/// How wide the list marker at the start of `content` is, if it is one.
+///
+/// Markdown's markers are `-`, `+` or `*`, and up to [`ORDERED`] digits
+/// followed by `.` or `)`. Whitespace after it is what makes it a marker at
+/// all, which is also what keeps `*emphasis*` at the start of a line out of
+/// this.
+fn list_marker(content: &str) -> Option<usize> {
+    let width = if content.starts_with(['-', '+', '*']) {
+        1
+    } else {
+        let digits = content.chars().take_while(char::is_ascii_digit).count();
+        if digits == 0 || digits > ORDERED {
+            return None;
+        }
+        if !content.get(digits..)?.starts_with(['.', ')']) {
+            return None;
+        }
+        digits + 1
+    };
+    content
+        .get(width..)?
+        .starts_with([' ', '\t'])
+        .then_some(width)
 }
 
 /// Write a file, creating the directory it goes in if it is missing.
