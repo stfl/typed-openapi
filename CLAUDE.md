@@ -62,6 +62,18 @@ the generated type accepts by construction. No `format` is special-cased: a
 format names a rule and is not one, and a document that wants a rule states it
 in JSON Schema everything can read.
 
+`Scalar` reads the document, and that is deliberate rather than incidental.
+progenitor decides the same question the other way — `cli.rs` asks typify
+`prop_type.has_impl(TypeSpaceImpl::FromStr)`, letting the *generated type*
+settle whether a field is a flag — and it is the better instinct in general,
+the one this crate follows for a schema's Rust name. It does not transfer here.
+A command line is decided while the document is reduced and travels in the
+postcard blob, so a shipped binary derives nothing and the generated types are
+not in the picture at all; `has_impl` is answerable only from a `TypeSpace` at
+bless time. Taking it would tie the command line to the generated types, which
+this crate keeps apart on purpose, and it would still not supply the `pattern`
+and the bounds `Scalar::parse` enforces.
+
 **A shape the reduction cannot read is refused by name, never approximated.** A
 `pattern` no engine runs and a `content` key that is not a media type are both
 the document saying something this crate has no reading for, so both are a
