@@ -89,6 +89,7 @@ pub(super) fn emit(
             source,
         })?;
     ThroughThisCrate.visit_file_mut(&mut file);
+    super::Prose.visit_file_mut(&mut file);
     let names = Names::of(declared.iter().map(String::as_str), &file);
     let mut displays = display_impls(&file)?;
     file.items.append(&mut displays);

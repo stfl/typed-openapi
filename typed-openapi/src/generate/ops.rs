@@ -17,6 +17,7 @@ use heck::{ToPascalCase, ToSnakeCase};
 use openapiv3::{OpenAPI, ReferenceOr, Schema, SchemaKind, StatusCode, Type};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
+use syn::visit_mut::VisitMut as _;
 
 use super::GenerateError;
 use super::types::Names;
@@ -61,7 +62,7 @@ pub(super) fn emit(
     let inventory = inventory(&ops);
     let methods = ops.iter().map(|op| &op.method);
     let builder_methods = ops.iter().map(|op| &op.builder_method);
-    let file: syn::File = syn::parse2(quote! {
+    let mut file: syn::File = syn::parse2(quote! {
         use typed_openapi::{Part, Values};
 
         use crate::{Api, Call, Error, NoContent};
@@ -83,6 +84,9 @@ pub(super) fn emit(
         file: "ops.rs",
         source,
     })?;
+    // A summary and a description are the vendor's prose, and a wrapper's doc
+    // is where they land.
+    super::Prose.visit_file_mut(&mut file);
     Ok(format!("{header}{}", prettyplease::unparse(&file)))
 }
 
@@ -337,21 +341,35 @@ fn wrapper(
         names: _,
     } = signature_of(op, item, operation, names)?;
     let response = response_type(operation, names)?;
-    let notes = notes
-        .iter()
-        .map(|note| quote! { #[doc = ""] #[doc = #note] });
     let variant = variant_of(op)?;
+    let doc = paragraphs(
+        [summary, &signature, &gate]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(notes),
+    );
     parses(quote! {
-        #[doc = #summary]
-        #[doc = ""]
-        #[doc = #signature]
-        #[doc = ""]
-        #[doc = #gate]
-        #(#notes)*
+        #[doc = #doc]
         pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
             self.call(OperationId::#variant, Values::new() #(#builder)*)
         }
     })
+}
+
+/// One doc comment out of the paragraphs it is made of.
+///
+/// One rather than several, and this is the reason: rustc rebuilds a doc
+/// comment's text by stripping the indentation *all* of an item's doc
+/// fragments share, and a `/* */` fragment carries the indentation the item
+/// sits at while a `///` fragment carries none. Mixing them leaves nothing to
+/// strip, and a vendor's summary arrives four spaces in — a code block, which
+/// rustdoc then compiles. A single fragment cannot be mixed with anything.
+fn paragraphs(parts: impl IntoIterator<Item = String>) -> String {
+    parts
+        .into_iter()
+        .map(|part| part.trim().to_owned())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// A wrapper, checked to be Rust before it joins six thousand lines of its

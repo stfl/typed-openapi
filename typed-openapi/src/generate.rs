@@ -59,6 +59,7 @@ mod types;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use syn::visit_mut::VisitMut;
 use thiserror::Error;
 
 use crate::model::DocumentError;
@@ -331,6 +332,126 @@ fn read(path: &Path) -> Result<String, GenerateError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+/// A vendor's description, kept where rustdoc will not run it.
+///
+/// Every description in the document becomes a doc comment, and rustdoc
+/// compiles and executes the code blocks in a doc comment. Markdown makes a
+/// code block out of two ordinary shapes of prose: a run of lines indented four
+/// spaces or more, and a fence that names no language. A vendor writing a
+/// nested list or a hanging example writes both without meaning either, and
+/// what the adopter gets is `cargo test --doc` failing on the vendor's
+/// sentences — which no lint allowance reaches, because a doctest is executed
+/// rather than linted.
+///
+/// So each line is made unrunnable where it would otherwise be run, and left
+/// alone everywhere else. The generator is what put the prose where rustdoc
+/// would execute it, so the generator is where it is made safe; an adopter
+/// switching doctests off for the whole crate would be hiding this and taking
+/// their own hand-written files with it.
+struct Prose;
+
+impl VisitMut for Prose {
+    fn visit_attribute_mut(&mut self, attr: &mut syn::Attribute) {
+        let syn::Meta::NameValue(pair) = &mut attr.meta else {
+            return;
+        };
+        if !pair.path.is_ident("doc") {
+            return;
+        }
+        let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(text),
+            ..
+        }) = &mut pair.value
+        else {
+            return;
+        };
+        *text = syn::LitStr::new(&unrunnable(&text.value()), text.span());
+    }
+}
+
+/// How wide Markdown counts a tab when it measures indentation.
+const TAB: usize = 4;
+
+/// The deepest indentation that cannot open a code block.
+///
+/// Four opens one, so three is what is left. It is enough to keep a nested list
+/// nested — a list marker needs only to reach its parent's content column — so
+/// what capping costs is the depth of an unusually deep one, and what it buys
+/// is a crate whose tests run.
+const KEEP: usize = 3;
+
+/// `prose` with nothing in it that rustdoc would compile.
+fn unrunnable(prose: &str) -> String {
+    let capped = capped_lines(prose);
+    if !capped.contains('\n') {
+        // One line is one `///`, where nothing is indented and there is
+        // nothing to strip.
+        return capped;
+    }
+    // More than one line is a `/* */` comment, and `rustfmt` indents its body
+    // to the item it sits on — every line but the first, which stays flush
+    // against the opening `/*`. rustc strips the indentation every line of a
+    // comment shares, so a flush first line means nothing is stripped from the
+    // rest, and the vendor's second paragraph arrives four spaces in: a code
+    // block, whatever it says. Opening on a blank line puts the first line
+    // inside the indented body with the others, where the strip reaches it.
+    format!("\n{capped}\n")
+}
+
+/// `prose` with no line indented deeply enough to open a code block, and no
+/// fence that rustdoc would read as Rust.
+fn capped_lines(prose: &str) -> String {
+    let mut fenced = false;
+    let lines: Vec<String> = prose
+        .split('\n')
+        .map(|line| match fence(line) {
+            Some(language) => {
+                fenced = !fenced;
+                // A fence that names no language is Rust as far as rustdoc is
+                // concerned. Naming it keeps the block rendered as a block and
+                // stops it being run. A closing fence names nothing and means
+                // nothing, so it is left as the vendor wrote it.
+                if fenced && language.is_empty() {
+                    format!("{}text", line.trim_end())
+                } else {
+                    line.to_owned()
+                }
+            }
+            // Inside a fence the content is the vendor's sample, and the fence
+            // above it already says nobody will run it.
+            None if fenced => line.to_owned(),
+            None => capped(line),
+        })
+        .collect();
+    lines.join("\n")
+}
+
+/// The language an opening fence names, if this line is a fence at all.
+fn fence(line: &str) -> Option<&str> {
+    let line = line.trim();
+    let rest = line
+        .strip_prefix("```")
+        .or_else(|| line.strip_prefix("~~~"))?;
+    Some(rest.trim().trim_start_matches(['`', '~']))
+}
+
+/// `line` with its indentation capped at [`KEEP`].
+fn capped(line: &str) -> String {
+    let content = line.trim_start();
+    if content.is_empty() {
+        return line.to_owned();
+    }
+    let indent = line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .map(|c| if c == '\t' { TAB } else { 1 })
+        .sum::<usize>();
+    if indent <= KEEP {
+        return line.to_owned();
+    }
+    format!("{}{content}", " ".repeat(KEEP))
 }
 
 /// Write a file, creating the directory it goes in if it is missing.

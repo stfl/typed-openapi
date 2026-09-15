@@ -15,6 +15,7 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use typed_openapi::Document;
@@ -555,4 +556,153 @@ fn every_string_newtype_prints_and_none_of_them_twice() {
              compiles with exactly one:\n{types}"
         );
     }
+}
+
+/// Descriptions in every shape a vendor writes prose in, including the three
+/// that Markdown turns into code and rustdoc then compiles.
+const PROSE: &str = r##"
+openapi: 3.0.3
+info: { title: Prose, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /vouchers:
+    get:
+      operationId: listVouchers
+      summary: |
+        List the vouchers.
+
+            A summary the vendor indented.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Voucher" }
+components:
+  schemas:
+    Voucher:
+      type: object
+      properties:
+        kind:
+          type: string
+          description: |
+            The kind of the voucher.
+
+                A paragraph the vendor indented four spaces.
+        parts:
+          type: string
+          description: |
+            What a complete voucher needs:
+
+            - a contact
+                - with an address
+                - and a name
+        sample:
+          type: string
+          description: |
+            An example of one:
+
+            ```
+            {"id": "1"}
+            ```
+        aside:
+          type: string
+          description: |
+            A description that mentions //! in passing.
+"##;
+
+/// Every doc comment in `source`, verbatim and in its own column, on items
+/// that depend on nothing.
+///
+/// The column is the point. rustc reconstructs a `/* */` comment's value by
+/// stripping the indentation its lines share, so where the lines sit is half of
+/// what decides whether the vendor's second paragraph is prose or a code block.
+/// Copying the bytes and their positions is what makes this a fair question to
+/// put to the doctest runner; generating a crate it could compile directly
+/// would mean handing it serde as well, and the answer would be the same.
+fn doc_comments_alone(source: &str) -> String {
+    let mut out = String::from("pub struct Docs {\n");
+    let mut fields = 0;
+    let mut block = false;
+    let mut carrying = false;
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let is_doc = block || trimmed.starts_with("/**") || trimmed.starts_with("///");
+        if is_doc {
+            out.push_str(line);
+            out.push('\n');
+            block = (block || trimmed.starts_with("/**")) && !trimmed.ends_with("*/");
+            carrying = !block;
+            continue;
+        }
+        if carrying {
+            let _ = writeln!(out, "    pub f{fields}: i64,");
+            fields += 1;
+            carrying = false;
+        }
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// rustdoc compiles and runs the code blocks in a doc comment, and Markdown
+/// makes a code block out of two shapes of ordinary prose: a run of lines
+/// indented four spaces, and a fence naming no language. Both are things a
+/// vendor writes without meaning Rust, and neither is reachable by a lint
+/// allowance — a doctest is executed, not linted. So the comments are handed to
+/// the doctest runner, which is the only thing that answers the question
+/// properly.
+#[test]
+fn a_vendors_prose_carries_nothing_rustdoc_will_run() {
+    let dir = out("prose");
+    Settings::new(wrote(&dir, "document.yaml", PROSE))
+        .write_to(&dir)
+        .expect("the document generates");
+
+    for (file, alone) in [
+        ("src/types.rs", "types_docs.rs"),
+        ("src/ops.rs", "ops_docs.rs"),
+    ] {
+        let comments = doc_comments_alone(&read(&dir.join(file)));
+        let path = wrote(&dir, alone, &comments);
+        let ran = std::process::Command::new("rustdoc")
+            .args(["--test", "--edition", "2024"])
+            .arg(&path)
+            .output()
+            .expect("rustdoc is on PATH beside the rustfmt a bless step already needs");
+        let said = String::from_utf8_lossy(&ran.stdout);
+        let complained = String::from_utf8_lossy(&ran.stderr);
+        assert!(
+            said.contains("running 0 tests"),
+            "rustdoc found something to run in {file}:\n{said}{complained}\n{comments}"
+        );
+    }
+}
+
+/// What capping the indentation costs, stated where it can be seen: a nested
+/// list stays nested, and the words are the vendor's own.
+#[test]
+fn prose_that_was_never_code_is_still_prose() {
+    let dir = out("prose-kept");
+    Settings::new(wrote(&dir, "document.yaml", PROSE))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert!(
+        types.contains("- a contact") && types.contains("   - with an address"),
+        "a nested list did not survive the capping:\n{types}"
+    );
+    assert!(
+        types.contains("A paragraph the vendor indented four spaces."),
+        "the vendor's words did not survive:\n{types}"
+    );
+    assert!(
+        types.contains("```text"),
+        "a fence naming no language was left as Rust:\n{types}"
+    );
+    assert!(
+        types.contains("//! in passing"),
+        "a line mentioning a doc comment did not survive:\n{types}"
+    );
 }
