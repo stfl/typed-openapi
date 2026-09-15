@@ -1,0 +1,291 @@
+# A control, not a tutorial. Do not tidy this document.
+#
+# `toy.yaml` beside it is a worked example: it was written by the people who
+# wrote this crate, out of this crate's own vocabulary, and it converges on the
+# shapes the crate handles well. That makes it a good thing to read first and a
+# poor thing to test against — its consistency is invisible, so a reduction that
+# quietly depends on that consistency passes.
+#
+# This document is the other half. Every shape in it is one a real vendor
+# document has written by accident: schema names that differ only in case,
+# parameters named after Rust keywords, one wire name in two places, a property
+# whose name has no letters in it, a description whose list markers Markdown
+# reads as code, a body that is an array, a body with no properties, and five
+# parameters this crate cannot spell. The vocabulary is deliberately nothing
+# this repository uses anywhere else, because half of what is being tested is
+# whether a name survives the trip from the document to a flag and to Rust.
+#
+# Nothing here is an example of good practice and nothing here should be made
+# consistent. `tests/hostile.rs` pins what each shape produces, defects
+# included; softening a shape here makes one of those tests pass for the wrong
+# reason. Documents that this crate *refuses* live beside their assertions in
+# that file instead, because a document holding one cannot also demonstrate the
+# shapes that load.
+openapi: 3.0.3
+info:
+  title: Sagger Works Firing Log
+  version: "0.3"
+servers:
+  - url: http://localhost:9411
+paths:
+  /firings:
+    get:
+      operationId: listFirings
+      summary: List firings
+      parameters:
+        # Seven parameters named after Rust words. Four of them are keywords a
+        # raw identifier carries; `self`, `crate` and `Self` are not.
+        - name: type
+          in: query
+          schema: { type: string }
+        - name: match
+          in: query
+          schema: { type: string }
+        - name: ref
+          in: query
+          schema: { type: string }
+        - name: move
+          in: query
+          schema: { type: string }
+        - name: self
+          in: query
+          schema: { type: string }
+        - name: crate
+          in: query
+          schema: { type: string }
+        # Differs from `self` only in case, and snake-cases onto it.
+        - name: Self
+          in: query
+          schema: { type: string }
+        # An enumeration with one member: a flag whose only legal value is the
+        # one it would have had anyway.
+        - name: kilnState
+          in: query
+          schema:
+            type: string
+            enum: [bisque]
+        # An enumeration one of whose members is the empty string.
+        - name: crazing
+          in: query
+          schema:
+            type: string
+            enum: ["", crazed]
+        # A `format` naming a kind no specification defines, on a type that has
+        # no such format.
+        - name: saggarTally
+          in: query
+          schema:
+            type: integer
+            format: sagger-count
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/kilnLog'
+    post:
+      operationId: startFiring
+      summary: Start a firing
+      # A body the operation states where it uses it, whose properties point at
+      # named schemas: one carrying a `pattern`, one carrying prose.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cone, soak]
+              properties:
+                cone:
+                  $ref: '#/components/schemas/Cone'
+                soak:
+                  $ref: '#/components/schemas/Soak'
+                bare_cone:
+                  type: string
+                  format: cone-number
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/kilnLog'
+  /firings/{ref}/log-entries:
+    post:
+      operationId: appendLogEntry
+      summary: Append one line to a firing's log
+      parameters:
+        # One wire name in two places, which is a thing OpenAPI allows and a
+        # command line cannot spell twice.
+        - name: ref
+          in: path
+          required: true
+          schema: { type: string }
+        - name: ref
+          in: query
+          schema: { type: string }
+      # A body stated inline one of whose properties is an object, which sends
+      # the whole body through a file rather than growing dead flags beside it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entry]
+              properties:
+                entry:
+                  $ref: '#/components/schemas/LogEntry'
+      responses:
+        "201":
+          description: Created
+  /firings/{ref}/withdraw:
+    post:
+      operationId: withdrawFiring
+      summary: Withdraw a firing from the schedule
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: { type: string }
+        # Five parameters this crate cannot put on a flag, one of each kind it
+        # recognises. Every one of them is optional, so the operation keeps the
+        # flags it can spell.
+        - name: saggarSeal
+          in: cookie
+          schema: { type: string }
+        - name: rampProfile
+          in: query
+          content:
+            application/json:
+              schema: { type: object }
+        - name: soakWindow
+          in: query
+          schema:
+            type: object
+            properties:
+              from: { type: string }
+              to: { type: string }
+        - name: waddingMix
+          in: query
+          style: deepObject
+          schema:
+            type: object
+            properties:
+              grog: { type: string }
+        - name: crazingMarks
+          in: query
+          style: pipeDelimited
+          schema:
+            type: array
+            items: { type: string }
+      responses:
+        "200":
+          description: OK
+  /wadding:
+    post:
+      operationId: packWadding
+      summary: Record a wadding mix
+      # A property whose name has no letter or digit in it, required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["*", grog]
+              properties:
+                "*": { type: string }
+                grog: { type: string }
+      responses:
+        "201":
+          description: Created
+  /wadding/tallies:
+    post:
+      operationId: tallyWadding
+      summary: Post a tally of cones used
+      # A body that is an array at the top level.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/Cone'
+      responses:
+        "201":
+          description: Created
+  /glaze-recipes:
+    post:
+      operationId: fileGlazeRecipe
+      summary: File a glaze recipe
+      # An object that declares no properties at all.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/glaze_recipe'
+components:
+  schemas:
+    # Three names in three casings that do not reduce to one Rust type, which is
+    # what makes them legal. The pair that does is refused, and lives in
+    # `tests/hostile.rs` beside that assertion.
+    kilnLog:
+      type: object
+      required: [ref]
+      properties:
+        ref:
+          type: string
+        cone:
+          $ref: '#/components/schemas/Cone'
+    glaze_recipe:
+      type: object
+      properties:
+        grog:
+          type: string
+    PYROCone:
+      type: string
+      format: cone-number
+      pattern: '^0[1-9][0-9]?$'
+    # A name whose last word is what an adopter's replacement path ends in, kept
+    # beside `PYROCone`, whose name is not.
+    Cone:
+      type: string
+      format: cone-number
+      pattern: '^0[1-9][0-9]?$'
+    LogEntry:
+      type: object
+      required: [cone]
+      properties:
+        cone:
+          $ref: '#/components/schemas/Cone'
+        alias:
+          $ref: '#/components/schemas/PYROCone'
+        note:
+          type: string
+    Soak:
+      type: string
+      description: |
+        How long the kiln is held at top temperature, written the way the
+        operator writes it in the log.
+
+        *     bisque, twenty minutes
+
+        *     glaze, an hour, and somebody watches the cone through the spyhole
+
+        Anything longer than that is written out in full:
+
+            soak=90m
