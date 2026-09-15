@@ -152,6 +152,15 @@ impl Settings {
     /// document, so the rule the CLI validates against and the rule the Rust
     /// type stands for are the same bytes. `rust_type` is written into the
     /// generated source verbatim, so it is a path the generated crate can name.
+    ///
+    /// A named schema carrying the format becomes a newtype over `rust_type`
+    /// whose impls are written in terms of it: `Display` forwards to it,
+    /// `FromStr` parses into it and names `<rust_type as FromStr>::Err` as its
+    /// own error. So the type needs `FromStr` and `Display` beside the
+    /// `Serialize`, `Deserialize`, `Clone`, `Debug` and `PartialEq` every
+    /// generated type has. `docs/generating.md` says what a missing one looks
+    /// like, and why the document's `pattern` and the type's own reading are
+    /// two rules that a test has to hold together.
     #[must_use]
     pub fn replace(mut self, format: impl Into<String>, rust_type: impl Into<String>) -> Self {
         self.replacements.push((format.into(), rust_type.into()));
