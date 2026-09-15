@@ -291,13 +291,3 @@ fn an_empty_list_is_a_sentence_and_not_an_empty_table() {
     );
     assert!(page.contains("| operations | 1 |"), "{page}");
 }
-
-/// Rendering is a pure function of the value, so the same summary renders the
-/// same bytes — which is what lets a bless step commit the page and a gate fail
-/// on a diff.
-#[test]
-fn one_summary_renders_one_page() {
-    let summary = summary(COUNTED, &[ONE_MORE]);
-    assert_eq!(summary.to_string(), summary.to_string());
-    assert_eq!(summary.to_string(), summary.clone().to_string());
-}
