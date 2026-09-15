@@ -25,6 +25,16 @@
 //! `TypeSpace`, and it travels out beside the source for `ops` to look a
 //! schema up in.
 //!
+//! # A schema stated inline is converted here too
+//!
+//! [`names::sites`](super::names::sites) finds every schema an operation
+//! states where it uses it rather than under a name, and each one is handed to
+//! typify beside the named ones. That is the whole of what makes an inline
+//! request body a type: typify converts any schema it is given, and the named
+//! schemas were the only ones being offered. A conversion the adopter asked
+//! for reaches them too, so a `format` declared inside an inline body becomes
+//! their type exactly as it does inside a named schema.
+//!
 //! [`with_conversion`]: typify::TypeSpaceSettings::with_conversion
 
 use std::collections::BTreeSet;
@@ -36,10 +46,14 @@ use syn::visit_mut::VisitMut;
 use typify::{TypeSpace, TypeSpaceImpl, TypeSpaceSettings};
 
 use super::GenerateError;
-use super::names::Names;
+use super::names::{Names, Site};
+use crate::Document;
 
 /// One schema of the document, under its own name, in typify's dialect.
 type Definition = (String, Value);
+
+/// One schema an operation states inline, in typify's dialect.
+type Stated = (Site, Value);
 
 /// The crate typify writes into a generated `pattern` check.
 const ENGINE: &str = "regress";
@@ -51,15 +65,22 @@ const ENGINE: &str = "regress";
 /// the result rather than deriving its own — see [`Names`].
 pub(super) fn emit(
     api: &openapiv3::OpenAPI,
+    model: &Document,
     header: &str,
     replacements: &[(String, String)],
 ) -> Result<(String, Names), GenerateError> {
     let definitions = definitions(api)?;
+    let stated = stated(api, model)?;
 
     let mut settings = TypeSpaceSettings::default();
     settings.with_derive("PartialEq".to_owned());
+    let shapes: Vec<&Value> = definitions
+        .iter()
+        .map(|(_, schema)| schema)
+        .chain(stated.iter().map(|(_, schema)| schema))
+        .collect();
     for (format, rust) in replacements {
-        for shape in shapes_declaring(&definitions, format) {
+        for shape in shapes_declaring(&shapes, format) {
             let shape: schemars::schema::SchemaObject =
                 serde_json::from_value(shape).map_err(|source| {
                     GenerateError::Unsupported(format!(
@@ -80,7 +101,11 @@ pub(super) fn emit(
     space
         .add_ref_types(schemas(definitions)?)
         .map_err(GenerateError::Typify)?;
-    let names = Names::read(&mut space, declared.iter().map(String::as_str))?;
+    let names = Names::read(
+        &mut space,
+        declared.iter().map(String::as_str),
+        inline(stated)?,
+    )?;
 
     let mut file: syn::File =
         syn::parse2(space.to_stream()).map_err(|source| GenerateError::NotRust {
@@ -315,15 +340,50 @@ fn schemas(
         .collect()
 }
 
+/// Every schema an operation states inline, in the model's order.
+///
+/// They are read in typify's dialect like the named ones, so a `$ref` on a
+/// property of an inline body reaches the same definition a named schema's
+/// property would.
+fn stated(api: &openapiv3::OpenAPI, model: &Document) -> Result<Vec<Stated>, GenerateError> {
+    super::names::sites(api, model)
+        .into_iter()
+        .map(|(site, schema)| {
+            let value = serde_json::to_value(schema).map_err(|source| GenerateError::Schema {
+                name: site.described(),
+                source,
+            })?;
+            Ok((site, as_json_schema(value)))
+        })
+        .collect()
+}
+
+/// The same schemas as typify's own type.
+fn inline(stated: Vec<Stated>) -> Result<Vec<(Site, schemars::schema::Schema)>, GenerateError> {
+    stated
+        .into_iter()
+        .map(|(site, value)| {
+            let schema: schemars::schema::Schema =
+                serde_json::from_value(value).map_err(|source| {
+                    GenerateError::Unsupported(format!(
+                        "{} is not a JSON Schema typify accepts: {source}",
+                        site.described()
+                    ))
+                })?;
+            Ok((site, schema))
+        })
+        .collect()
+}
+
 /// Every distinct schema in the document that declares `format`, in document
 /// order.
 ///
 /// typify matches a conversion on the whole shape, so a document that spells
 /// one format two ways gets one conversion per spelling rather than a silent
 /// miss on the second.
-fn shapes_declaring(definitions: &[Definition], format: &str) -> Vec<Value> {
+fn shapes_declaring(schemas: &[&Value], format: &str) -> Vec<Value> {
     let mut found = Vec::new();
-    for (_, schema) in definitions {
+    for schema in schemas {
         collect(schema, format, &mut found);
     }
     found

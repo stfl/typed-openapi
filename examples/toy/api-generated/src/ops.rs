@@ -86,8 +86,11 @@ impl OperationId {
     }
     ///Does `body` fit the type this operation's wrapper takes?
     ///
-    ///An operation whose body this crate has no type for accepts
-    ///anything, which is the document's own position on it.
+    ///Every operation that sends JSON has such a type, whether the
+    ///document named the schema or stated it where it is used. The
+    ///operations that answer for any value are the ones that send no
+    ///JSON at all — a multipart or verbatim body, or no body — and
+    ///the ones whose JSON body the document states no schema for.
     pub fn check_body(
         self,
         body: &serde_json::Value,
@@ -177,7 +180,7 @@ impl Api {
         status: Option<crate::types::VoucherStatus>,
         limit: Option<i64>,
         r#type: Option<&str>,
-    ) -> Result<Call<'_, Vec<crate::types::Voucher>>, Error> {
+    ) -> Result<Call<'_, ::std::vec::Vec<crate::types::Voucher>>, Error> {
         self.call(
             OperationId::ListVouchers,
             Values::new()
@@ -333,7 +336,7 @@ impl Api {
         status: Option<crate::types::VoucherStatus>,
         limit: Option<i64>,
         r#type: Option<&str>,
-    ) -> Result<Call<'_, Vec<crate::types::Voucher>>, Error> {
+    ) -> Result<Call<'_, ::std::vec::Vec<crate::types::Voucher>>, Error> {
         self.list_vouchers(status, limit, r#type)
     }
     ///The same call as [`Api::create_voucher`], with its arguments named. A missing required argument is a compile error.

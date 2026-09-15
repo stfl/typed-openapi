@@ -384,7 +384,10 @@ fn named_by_wrappers(ops: &str) -> Vec<String> {
 /// names force typify to rename every one of them.
 #[test]
 fn every_type_a_wrapper_names_is_one_the_generated_schemas_define() {
-    for (name, document) in [("awkward", AWKWARDLY_NAMED), ("patterned", PATTERNED)] {
+    for (name, document) in [
+        ("awkward-wrappers", AWKWARDLY_NAMED),
+        ("patterned-wrappers", PATTERNED),
+    ] {
         let dir = out(name);
         Settings::new(wrote(&dir, "document.yaml", document))
             .write_to(&dir)
@@ -1079,12 +1082,494 @@ fn two_schemas_that_reduce_to_one_type_are_refused_by_name() {
     let failure = Settings::new(wrote(&dir, "document.yaml", COLLIDING))
         .write_to(&dir)
         .expect_err("one name cannot be two types");
-    let said = failure.to_string();
+    assert_eq!(
+        failure.to_string(),
+        "the schema `voucher-summary` and the schema `Voucher_Summary` are both \
+         `VoucherSummary` in Rust; rename one of them in an Overlay",
+        "the refusal has to name both schemas and the type they share"
+    );
+}
+
+/// `source` with the layout taken out of it: no whitespace, and no comma left
+/// hanging before a closing bracket.
+///
+/// A generated file is `rustfmt`'s to lay out, so where it broke a line is not
+/// something an assertion should depend on — what a call names and what a
+/// struct holds is. The trailing comma goes with the line break that caused
+/// it: `rustfmt` writes one into a list it split across lines and leaves it out
+/// of one it did not.
+fn dense(source: &str) -> String {
+    let packed: String = source.split_whitespace().collect();
+    packed
+        .replace(",>", ">")
+        .replace(",)", ")")
+        .replace(",]", "]")
+}
+
+/// One item of a generated file, from the line that opens it to its closing
+/// brace at column zero.
+fn item(source: &str, opens: &str) -> String {
+    let lines: Vec<&str> = source
+        .lines()
+        .skip_while(|line| !line.starts_with(opens))
+        .take_while(|line| *line != "}")
+        .collect();
+    assert!(!lines.is_empty(), "`{opens}` is not in:\n{source}");
+    lines.join("\n")
+}
+
+/// The fixture's `createLedgerEntry` describes its request body where it uses
+/// it rather than under a name in `components.schemas`, which is an ordinary
+/// thing for a document to do and says nothing about how much the document
+/// describes: the body states a `required` list, one property that is a `$ref`
+/// to a schema carrying a `pattern`, one that declares a `format`, and one
+/// that is another named schema.
+///
+/// A body type of `serde_json::Value` would drop every one of those, and an
+/// adopter reading `fits::<serde_json::Value>` reads it as the document having
+/// no opinion — so both roads to the request are pinned here: the wrapper a
+/// Rust caller uses and the check a `--json-body` file goes through.
+#[test]
+fn a_request_body_stated_inline_is_a_type_rather_than_a_bag_of_json() {
+    let dir = out("inline-body");
+    layered().write_to(&dir).expect("the fixtures generate");
+    let types = read(&dir.join("src/types.rs"));
+    let ops = dense(&read(&dir.join("src/ops.rs")));
 
     assert!(
-        said.contains("`voucher-summary`")
-            && said.contains("`Voucher_Summary`")
-            && said.contains("`VoucherSummary`"),
-        "the refusal does not name both schemas and the type they share: {said}"
+        types.contains("pub struct CreateLedgerEntryBody"),
+        "the schema the operation states inline generated no type:\n{types}"
     );
+    assert!(
+        ops.contains("body:&crate::types::CreateLedgerEntryBody"),
+        "the wrapper does not take the type the document describes"
+    );
+    assert!(
+        ops.contains(r#"fits::<crate::types::CreateLedgerEntryBody>("createLedgerEntry",body)"#),
+        "a `--json-body` file is not held to the schema the document states"
+    );
+    assert!(
+        !ops.contains(r#"fits::<serde_json::Value>("createLedgerEntry""#),
+        "the body check accepts anything at all"
+    );
+}
+
+/// The claim the type exists is not the claim that matters. What matters is
+/// that a rule the document states about a value is a rule the generated code
+/// runs, and this is that chain, link by link: the body's `account` is the
+/// newtype the named schema became, that newtype's `FromStr` carries the
+/// document's own `pattern`, and deserialising one goes through that `FromStr`
+/// rather than around it. A value the pattern forbids therefore does not
+/// deserialise into the body type — which is what an adopter's body check is
+/// for.
+#[test]
+fn a_rule_the_document_states_runs_on_a_body_stated_inline() {
+    let dir = out("inline-rule");
+    layered().write_to(&dir).expect("the fixtures generate");
+    let types = read(&dir.join("src/types.rs"));
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+
+    assert!(
+        ops.contains("body:&crate::types::CreateLedgerEntryBody")
+            && ops.contains(
+                r#"fits::<crate::types::CreateLedgerEntryBody>("createLedgerEntry",body)"#
+            ),
+        "neither road to the request names the type the rules are on, so nothing \
+         below this runs on a body that is actually sent"
+    );
+    assert!(
+        item(&types, "pub struct CreateLedgerEntryBody").contains("pub account: LedgerAccount,"),
+        "the body's field is not the type the `$ref` names:\n{types}"
+    );
+    assert!(
+        item(&types, "impl ::std::str::FromStr for LedgerAccount").contains(r#"("^[0-9]{4}$")"#),
+        "the newtype does not carry the document's own rule:\n{types}"
+    );
+    assert!(
+        dense(&item(
+            &types,
+            "impl<'de> ::serde::Deserialize<'de> for LedgerAccount"
+        ))
+        .contains("String::deserialize(deserializer)?.parse()"),
+        "deserialising the newtype does not go through the rule:\n{types}"
+    );
+}
+
+/// Which properties a body may leave out is part of what the document says
+/// about it, and it reaches the type the same way the rest does.
+#[test]
+fn a_required_list_on_a_body_stated_inline_reaches_the_generated_type() {
+    let dir = out("inline-required");
+    layered().write_to(&dir).expect("the fixtures generate");
+    let types = read(&dir.join("src/types.rs"));
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+    let body = item(&types, "pub struct CreateLedgerEntryBody");
+
+    assert!(
+        ops.contains("body:&crate::types::CreateLedgerEntryBody"),
+        "the wrapper does not take the type the list is on"
+    );
+
+    assert!(
+        body.contains("pub account: LedgerAccount,"),
+        "a property the document requires is optional:\n{body}"
+    );
+    assert!(
+        body.contains("pub memo: ::std::option::Option<Memo>,"),
+        "a property the document does not require is not:\n{body}"
+    );
+}
+
+/// An answer is described the same way a request is, so it is read the same
+/// way: the fixture's response is an inline object and its list of vouchers is
+/// an inline array, and both come back as types rather than as values to pick
+/// apart by hand.
+#[test]
+fn a_response_stated_inline_is_a_type_too() {
+    let dir = out("inline-response");
+    layered().write_to(&dir).expect("the fixtures generate");
+    let types = read(&dir.join("src/types.rs"));
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+
+    assert!(
+        types.contains("pub struct CreateLedgerEntryResponse"),
+        "the response the operation states inline generated no type:\n{types}"
+    );
+    assert!(
+        ops.contains("Result<Call<'_,crate::types::CreateLedgerEntryResponse>,Error>"),
+        "the wrapper does not deserialise into it"
+    );
+    assert!(
+        ops.contains("Result<Call<'_,::std::vec::Vec<crate::types::Voucher>>,Error>"),
+        "a list stated inline lost the type of what is in it"
+    );
+}
+
+/// A document whose answer is a list of a shape it states in the same breath.
+const NESTED: &str = r##"
+openapi: 3.0.3
+info: { title: Nested, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /positions:
+    get:
+      operationId: listPositions
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [sku]
+                  properties:
+                    sku: { $ref: "#/components/schemas/Sku" }
+components:
+  schemas:
+    Sku:
+      type: string
+      pattern: "^[A-Z]{3}-[0-9]{4}$"
+"##;
+
+/// The item of a list is a schema like any other, and nothing about being
+/// nested makes the rules on it less real — this is the shape a command line
+/// has no per-field flag for, so the type is the whole of what holds a caller
+/// to the document.
+#[test]
+fn the_item_of_a_list_stated_inline_is_a_type() {
+    let dir = out("nested");
+    Settings::new(wrote(&dir, "document.yaml", NESTED))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+
+    assert!(
+        ops.contains(
+            "Result<Call<'_,::std::vec::Vec<crate::types::ListPositionsResponseItem>>,Error>"
+        ),
+        "the item of the list is not a type:\n{ops}"
+    );
+    assert!(
+        item(&types, "pub struct ListPositionsResponseItem").contains("pub sku: Sku,"),
+        "the rule on the item's property did not survive being nested:\n{types}"
+    );
+}
+
+/// A body stated inline, reaching a type the adopter owns by both routes: one
+/// property points at a named schema carrying the format, and the other spells
+/// a format the document declares nowhere else.
+const OWNED_INLINE: &str = r##"
+openapi: 3.0.3
+info: { title: Owned inline, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /ledger/entries:
+    post:
+      operationId: createLedgerEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { $ref: "#/components/schemas/Cents" }
+                stated: { type: string, format: cash }
+      responses:
+        "201": { description: Created }
+components:
+  schemas:
+    Cents:
+      type: string
+      format: money
+"##;
+
+/// `Settings::replace` is the adopter's whole say over the generated types, and
+/// it reaches a property of a body the document states inline exactly as it
+/// reaches a property of a named schema — whether the property names the
+/// format itself or points at a schema that does. This is the case the first
+/// adoption lost: a monetary amount on a body nobody generated a type for is a
+/// rule enforced nowhere.
+#[test]
+fn a_type_the_adopter_owns_reaches_a_body_stated_inline() {
+    let dir = out("owned-inline");
+    Settings::new(wrote(&dir, "document.yaml", OWNED_INLINE))
+        .replace("money", "cents::Cents")
+        .replace("cash", "cash::Cash")
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+    let body = item(&types, "pub struct CreateLedgerEntryBody");
+
+    assert!(
+        ops.contains("body:&crate::types::CreateLedgerEntryBody"),
+        "the wrapper does not take the type the adopter's own reaches through"
+    );
+    assert!(
+        body.contains("pub amount: cents::Cents,"),
+        "a `$ref` to a schema the adopter owns is not their type:\n{types}"
+    );
+    assert!(
+        body.contains("pub stated: ::std::option::Option<cash::Cash>,"),
+        "a format the body declares itself, which the document declares nowhere \
+         else, is not their type:\n{types}"
+    );
+    assert!(
+        !types.contains("struct Cents") && !types.contains("struct Cash"),
+        "typify defined a type the adopter owns:\n{types}"
+    );
+}
+
+/// Four bodies stated inline that are not objects: a list, a bare string, a
+/// choice between two shapes, and a body the document states no schema for at
+/// all.
+const UNSHAPED: &str = r##"
+openapi: 3.0.3
+info: { title: Unshaped, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /vouchers/bulk:
+    post:
+      operationId: addVouchers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: "#/components/schemas/Voucher" }
+      responses:
+        "201": { description: Created }
+  /vouchers/note:
+    post:
+      operationId: noteVoucher
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: string }
+      responses:
+        "201": { description: Created }
+  /vouchers/either:
+    post:
+      operationId: eitherVoucher
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - { $ref: "#/components/schemas/Voucher" }
+                - { type: string }
+      responses:
+        "201": { description: Created }
+  /vouchers/anything:
+    post:
+      operationId: anythingVoucher
+      requestBody:
+        required: true
+        content:
+          application/json: {}
+      responses:
+        "201": { description: Created }
+components:
+  schemas:
+    Voucher:
+      type: object
+      properties:
+        id: { type: integer }
+"##;
+
+/// Nothing says a request body has to be an object, and a document that states
+/// something else has still stated it — so each of these is the type the
+/// document describes rather than a refusal. `serde_json::Value` is left for
+/// the one body that earns it: the one the document states no schema for,
+/// where the document really does have no opinion.
+#[test]
+fn a_body_stated_inline_that_is_not_an_object_is_still_what_the_document_says() {
+    let dir = out("unshaped");
+    Settings::new(wrote(&dir, "document.yaml", UNSHAPED))
+        .write_to(&dir)
+        .expect("a body that is not an object is a body");
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+
+    for (what, spelling) in [
+        ("a list", "body:&::std::vec::Vec<crate::types::Voucher>"),
+        ("a bare string", "body:&::std::string::String"),
+        (
+            "a choice of shapes",
+            "body:&crate::types::EitherVoucherBody",
+        ),
+        ("a body with no schema", "body:&serde_json::Value"),
+    ] {
+        assert!(
+            ops.contains(spelling),
+            "{what} stated inline is not `{spelling}`"
+        );
+    }
+    assert!(
+        read(&dir.join("src/types.rs")).contains("pub enum EitherVoucherBody"),
+        "a choice between two shapes generated no type"
+    );
+}
+
+/// A document whose inline body reduces to the name one of its own schemas
+/// already has.
+const CLAIMED: &str = r#"
+openapi: 3.0.3
+info: { title: Claimed, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /ledger/entries:
+    post:
+      operationId: createLedgerEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                account: { type: string }
+      responses:
+        "201": { description: Created }
+components:
+  schemas:
+    CreateLedgerEntryBody:
+      type: object
+      properties:
+        total: { type: string }
+"#;
+
+/// A name derived from an operation can land on a name the document already
+/// uses, and typify answers that by handing back the type it already has —
+/// which would give the wrapper a body type describing a different shape,
+/// silently. Two things under one name are refused by name here, the way two
+/// schemas reducing to one type already are, because a generator picking a
+/// public name nobody asked for is the worse answer.
+#[test]
+fn a_body_stated_inline_that_claims_a_schemas_name_is_refused_by_name() {
+    let dir = out("claimed");
+    let failure = Settings::new(wrote(&dir, "document.yaml", CLAIMED))
+        .write_to(&dir)
+        .expect_err("one name cannot be two types");
+
+    assert_eq!(
+        failure.to_string(),
+        "the schema `CreateLedgerEntryBody` and the request body stated inline by \
+         `createLedgerEntry` are both `CreateLedgerEntryBody` in Rust; rename one \
+         of them in an Overlay",
+        "the refusal has to say which of the two is the operation's own"
+    );
+}
+
+/// The same body, under a name the document gives it.
+const TITLED: &str = r#"
+openapi: 3.0.3
+info: { title: Titled, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /ledger/entries:
+    post:
+      operationId: createLedgerEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              title: LedgerEntry
+              type: object
+              properties:
+                account: { type: string }
+      responses:
+        "201": { description: Created }
+"#;
+
+/// `title` is what OpenAPI offers for naming a shape, so a vendor who wrote one
+/// has named the type and the name derived from the operation stands aside. It
+/// is a fact of the document either way, which is what makes a bless run
+/// reproduce it.
+#[test]
+fn a_body_stated_inline_takes_the_name_the_document_gives_it() {
+    let dir = out("titled");
+    Settings::new(wrote(&dir, "document.yaml", TITLED))
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+
+    assert!(
+        ops.contains("body:&crate::types::LedgerEntry"),
+        "the name the document gave the shape was overruled:\n{ops}"
+    );
+    assert!(
+        !ops.contains("CreateLedgerEntryBody"),
+        "the derived name was used beside the one the document gave"
+    );
+}
+
+/// A body of scalars is a body a command line can take apart, and generating a
+/// type for it must not change that: the flags come off the reduced model,
+/// which knows nothing about Rust types, and both roads still reach one request
+/// builder.
+#[test]
+fn a_flat_body_stated_inline_still_grows_a_flag_per_field() {
+    const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
+    const CLI: &str = include_str!("fixtures/cli.yaml");
+    let document = read(Path::new(TOY));
+    let doc = Document::load(&document, &[CORRECTIONS, CLI]).expect("the fixtures reduce");
+
+    let typed_openapi::model::Body::JsonFields(fields) = doc
+        .get("createLedgerEntry")
+        .expect("createLedgerEntry")
+        .body()
+    else {
+        panic!("a body of scalars is taken apart into flags");
+    };
+    let named: Vec<&str> = fields.iter().map(typed_openapi::Field::name).collect();
+    assert_eq!(named, ["account", "amount", "memo"]);
 }

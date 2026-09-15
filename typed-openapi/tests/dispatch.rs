@@ -408,6 +408,7 @@ fn operations_are_mounted_under_the_resource_their_path_names() {
             ("contacts".to_owned(), vec!["create".to_owned()]),
             ("documents".to_owned(), vec!["create".to_owned()]),
             ("documents-multipart".to_owned(), vec!["create".to_owned()]),
+            ("ledger".to_owned(), vec!["entries".to_owned()]),
         ]
     );
 }

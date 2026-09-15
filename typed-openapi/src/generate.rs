@@ -206,7 +206,12 @@ impl Settings {
         // The types are emitted first because the wrappers name them, and
         // `names` is how they are named: `ops` looks a schema up in what
         // `types` wrote rather than deriving a spelling of its own.
-        let (source, names) = types::emit(&corrected.api, &header, &self.replacements)?;
+        let (source, names) = types::emit(
+            &corrected.api,
+            &corrected.model,
+            &header,
+            &self.replacements,
+        )?;
 
         write_bytes(&spec, document.as_bytes())?;
         write_rust(&types, &source)?;
@@ -750,14 +755,16 @@ pub enum GenerateError {
          wrapper can name the type it would be"
     )]
     NoType { schema: String },
-    /// Two of the document's schemas reduce to one Rust type. typify writes a
-    /// definition per schema and uniquifies nothing, so emitting them is a file
+    /// Two of the document's shapes reduce to one Rust type. typify writes a
+    /// definition per shape and uniquifies nothing, so emitting them is a file
     /// that defines the same type twice; renaming one here would be a generator
     /// choosing a public name nobody asked for.
-    #[error(
-        "the document's schemas `{first}` and `{second}` are both `{rust}` in Rust; \
-         rename one of them in an Overlay"
-    )]
+    ///
+    /// `first` and `second` are sentences naming where each shape stands — a
+    /// schema the document declares, or a body or response an operation states
+    /// inline — because the two are refused together and a reader needs to know
+    /// which is which.
+    #[error("{first} and {second} are both `{rust}` in Rust; rename one of them in an Overlay")]
     OneType {
         first: String,
         second: String,

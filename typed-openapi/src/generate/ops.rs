@@ -14,13 +14,13 @@
 //! `--json-body` file is held to the same schema a Rust caller is.
 
 use heck::{ToPascalCase, ToSnakeCase};
-use openapiv3::{OpenAPI, ReferenceOr, Schema, SchemaKind, StatusCode, Type};
+use openapiv3::{OpenAPI, ReferenceOr, Schema, SchemaKind, Type};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use syn::visit_mut::VisitMut as _;
 
 use super::GenerateError;
-use super::names::Names;
+use super::names::{JsonBody, Names, Site};
 use crate::model::{Body, Shape};
 use crate::{Document, Operation};
 
@@ -96,7 +96,7 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
     model
         .iter()
         .map(|op| {
-            let (path_item, operation) = find(api, op).ok_or_else(|| {
+            let (path_item, operation) = super::names::find(api, op).ok_or_else(|| {
                 unsupported(format!("`{}` is not in the overlaid document", op.id()))
             })?;
             let (id, method, path) = (op.id(), op.method().as_str(), op.path());
@@ -194,8 +194,11 @@ fn check_body(ops: &[Emitted]) -> TokenStream {
     quote! {
         #[doc = "Does `body` fit the type this operation's wrapper takes?"]
         #[doc = ""]
-        #[doc = "An operation whose body this crate has no type for accepts"]
-        #[doc = "anything, which is the document's own position on it."]
+        #[doc = "Every operation that sends JSON has such a type, whether the"]
+        #[doc = "document named the schema or stated it where it is used. The"]
+        #[doc = "operations that answer for any value are the ones that send no"]
+        #[doc = "JSON at all — a multipart or verbatim body, or no body — and"]
+        #[doc = "the ones whose JSON body the document states no schema for."]
         pub fn check_body(
             self,
             body: &serde_json::Value,
@@ -304,21 +307,9 @@ fn json_body_type(
     names: &Names,
 ) -> Result<Option<TokenStream>, GenerateError> {
     match op.body() {
-        Body::JsonFields(_) | Body::JsonWhole { .. } => body_type(operation, names).map(Some),
+        Body::JsonFields(_) | Body::JsonWhole { .. } => body_type(op, operation, names).map(Some),
         Body::None | Body::Opaque { .. } | Body::Multipart { .. } => Ok(None),
     }
-}
-
-/// The document's own entry for an operation the model already accepted.
-fn find<'a>(
-    api: &'a OpenAPI,
-    op: &Operation,
-) -> Option<(&'a openapiv3::PathItem, &'a openapiv3::Operation)> {
-    let item = api.paths.paths.get(op.path())?.as_item()?;
-    let operation = item.iter().find_map(|(_, candidate)| {
-        (candidate.operation_id.as_deref() == Some(op.id())).then_some(candidate)
-    })?;
-    Some((item, operation))
 }
 
 fn wrapper(
@@ -340,7 +331,7 @@ fn wrapper(
         // positional call has no use for them.
         names: _,
     } = signature_of(op, item, operation, names)?;
-    let response = response_type(operation, names)?;
+    let response = response_type(op, operation, names)?;
     let variant = variant_of(op)?;
     let doc = paragraphs(
         [summary, &signature, &gate]
@@ -442,7 +433,7 @@ fn builder_wrapper(
         names: arguments,
         ..
     } = signature_of(op, item, operation, names)?;
-    let response = response_type(operation, names)?;
+    let response = response_type(op, operation, names)?;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
          required argument is a compile error."
@@ -483,7 +474,7 @@ fn signature_of(
     match op.body() {
         Body::None => {}
         Body::JsonFields(_) | Body::JsonWhole { .. } => {
-            let ty = body_type(operation, names)?;
+            let ty = body_type(op, operation, names)?;
             out.args.push(quote! { body: &#ty });
             out.names.push(format_ident!("body"));
             out.builder.push(quote! { .json(crate::to_json(body)?) });
@@ -640,75 +631,58 @@ fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStrea
     })
 }
 
-/// The type of a JSON request body. A `$ref` keeps its name; anything else is
-/// a `serde_json::Value`, because the document did not name a shape to generate.
+/// The type of a JSON request body.
+///
+/// A `$ref` keeps the named schema's type and a schema the operation states
+/// inline gets one of its own, so a body the document describes is a body the
+/// generated code holds a caller to. `serde_json::Value` is left for the one
+/// case that earns it: a JSON body the document states no schema for at all.
 fn body_type(
+    op: &Operation,
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let Some(ReferenceOr::Item(body)) = &operation.request_body else {
-        return Err(unsupported("requestBody $refs are not followed"));
-    };
-    let Some(media) = body
-        .content
-        .iter()
-        .find_map(|(name, media)| crate::schema::is_json(name).then_some(media))
-    else {
-        return Err(unsupported("no JSON request body"));
-    };
-    let Some(schema) = &media.schema else {
-        return Ok(quote!(serde_json::Value));
-    };
-    named_or_value(schema, names)
+    match super::names::json_body(operation) {
+        JsonBody::Referenced => Err(unsupported("requestBody $refs are not followed")),
+        JsonBody::NotJson => Err(unsupported("no JSON request body")),
+        JsonBody::Shapeless => Ok(quote!(serde_json::Value)),
+        JsonBody::Stated(schema) => named_or_stated(schema, &Site::body(op.id()), names),
+    }
 }
 
 /// The type a successful response deserialises into.
 fn response_type(
+    op: &Operation,
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let success =
-        operation.responses.responses.iter().find(
-            |(status, _)| matches!(status, StatusCode::Code(code) if (200..300).contains(code)),
-        );
-    let Some((_, ReferenceOr::Item(success))) = success else {
+    let Some(schema) = super::names::success(operation) else {
         return Ok(quote!(NoContent));
     };
-    let Some(media) = success
-        .content
-        .iter()
-        .find_map(|(name, media)| crate::schema::is_json(name).then_some(media))
-    else {
-        return Ok(quote!(NoContent));
-    };
-    let Some(schema) = &media.schema else {
-        return Ok(quote!(NoContent));
-    };
-    if let Some(name) = ref_name(schema) {
-        return names.get(name).cloned();
-    }
-    let ReferenceOr::Item(schema) = schema else {
-        return Ok(quote!(serde_json::Value));
-    };
-    let SchemaKind::Type(Type::Array(array)) = &schema.schema_kind else {
-        return Ok(quote!(serde_json::Value));
-    };
-    let Some(items) = &array.items else {
-        return Ok(quote!(serde_json::Value));
-    };
-    let items = items.clone().unbox();
-    let inner = named_or_value(&items, names)?;
-    Ok(quote!(Vec<#inner>))
+    named_or_stated(schema, &Site::response(op.id()), names)
 }
 
-fn named_or_value(
+/// The type a schema became, whether the document named it or stated it where
+/// it is used.
+///
+/// A `$ref` is answered from the named schemas so that one pointing nowhere is
+/// refused by the reference it names, which is what an adopter can act on.
+/// Everything else was converted under [`Site`], and a site with no type would
+/// be this emitter and [`names::sites`](super::names::sites) disagreeing about
+/// what the document states — which they read through the same two functions,
+/// so they do not.
+fn named_or_stated(
     schema: &ReferenceOr<Schema>,
+    site: &Site,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
     if let Some(name) = ref_name(schema) {
         return names.get(name).cloned();
     }
-    Ok(quote!(serde_json::Value))
+    names
+        .at(site)
+        .cloned()
+        .ok_or_else(|| unsupported("the schema it states inline has no Rust spelling"))
 }
 
 fn ref_name(schema: &ReferenceOr<Schema>) -> Option<&str> {
