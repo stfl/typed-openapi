@@ -10,7 +10,7 @@ the only thing you write is a binary that calls it.
 
 ## Contents
 
-- [The four artefacts](#the-four-artefacts)
+- [The five artefacts](#the-five-artefacts)
 - [`Settings`](#settings)
 - [Layers](#layers)
 - [Wiring your own `xtask`](#wiring-your-own-xtask)
@@ -18,9 +18,9 @@ the only thing you write is a binary that calls it.
 - [The `builder` feature](#the-builder-feature)
 - [Requirements and limits](#requirements-and-limits)
 
-## The four artefacts
+## The five artefacts
 
-All four come out of one run of the Overlay chain, which is why none of them can
+All five come out of one run of the Overlay chain, which is why none of them can
 describe a different API from the others. `<name>` is the vendor document's own
 file stem.
 
@@ -30,6 +30,7 @@ file stem.
 | `src/types.rs` | `components.schemas` as Rust types, from [typify]. A named schema stating a `pattern` becomes a newtype that enforces it, with `Display` beside the `FromStr` | your code, and the wrappers |
 | `src/ops.rs` | one typed wrapper per operation, the closed `OperationId` set, and the `(operationId, method, path)` inventory | your code, and a CLI's dispatch |
 | `src/model.postcard` | the corrected document already reduced to the facts a command line needs | the shipped binary, through `Document::from_blob` |
+| `src/summary.md` | what that reduction did, counted off it: operations, groups, reads and writes, the operations behind each named gate, bodiless operations, bodies with no per-field flags, parameters carried without a flag | you, and the docs you write |
 
 The reduction is the reason a binary parses no YAML on startup and enables
 neither the `document` nor the `generate` feature: the expensive read happened
@@ -41,6 +42,44 @@ Every generated Rust file opens with the command that rewrites it, where a
 correction belongs, and one `#![allow(...)]` block — generated source is not
 graded on style, and the exemption travels with the file it exempts rather than
 with a wrapping module.
+
+### The summary page
+
+Every adoption ends up counting something about its own API — how many
+operations there are, how many of them write, which stand behind which gate —
+and putting the number in a doc comment, a README or a reference page. Nothing
+re-counts it when an Overlay adds an operation, so the page goes quietly stale
+and reads exactly like a page that is right.
+
+`src/summary.md` is that count taken off the reduction instead. It opens with an
+HTML comment naming the command that counts it again and every document it was
+counted from, then carries a table of the tallies, the groups by name, one row
+per gate, and one row per parameter carried without a flag — the operation, the
+parameter, and why. Nothing on it is stored in the model: `Document::summary`
+derives every number from the operations the model already holds, so the page
+and the blob cannot come apart, and neither can carry a number the other does
+not.
+
+Two consumers, one measurement. Quote the page in your prose, and assert against
+[`Summary`] in a test:
+
+```rust
+let summary = api.document().summary();
+assert!(README.contains(&format!("**{} operations**", summary.operations())));
+```
+
+`Summary` needs no feature: it is derived from a reduced `Document`, so a binary
+that loaded a blob answers the question a bless step answered.
+`examples/toy/api/tests/summary.rs` is that test in the worked example, holding
+the toy adoption's own README paragraph to the reduction behind it — which is
+the half that matters, because a page quoting a count fails nothing when the
+count moves unless something holds the page to it.
+
+Put the page in the list your bless check compares against the committed tree.
+An artefact nothing checks is an artefact that can rot, and this is the one
+adopters quote numbers out of.
+
+[`Summary`]: https://docs.rs/typed-openapi/latest/typed_openapi/summary/struct.Summary.html
 
 ## `Settings`
 
@@ -147,12 +186,12 @@ the line is a promise to whoever opens the file next.
 
 ### `Settings::write_to(crate_dir) -> Result<Vec<PathBuf>, GenerateError>`
 
-Write the four artefacts under `crate_dir` and answer with their paths, in the
+Write the five artefacts under `crate_dir` and answer with their paths, in the
 order of the table above. Directories are created as needed. Each Rust file is
 handed to `rustfmt` after it is written, so what lands in the tree is what
 `cargo fmt --check` expects.
 
-The sink is a directory rather than four values you place yourself: the
+The sink is a directory rather than five values you place yourself: the
 generated crate embeds the corrected document and the reduced model by relative
 path, and each Rust header states where the others are, so the layout is not the
 caller's to choose.

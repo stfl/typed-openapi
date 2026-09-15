@@ -149,8 +149,8 @@ crate that owns the decision.
 
 ## Test time: the committed artefacts
 
-A bless step writes four files and the CLI only ever reads one of them — the
-binary blob. Four checks hold the set together.
+A bless step writes five files and the CLI only ever reads one of them — the
+binary blob. Five checks hold the set together.
 
 [`api/tests/typed.rs`](../examples/toy/api/tests/typed.rs) reduces the
 *committed document* again and compares it with the *committed blob*, operation
@@ -213,16 +213,35 @@ arbitrary-precision integer. A narrower one would refuse amounts the document
 allows, and this page would have to list the gap — a second test says so, at
 nineteen, twenty, forty and a hundred digits.
 
+[`api/tests/summary.rs`](../examples/toy/api/tests/summary.rs) is the fifth, and
+it is the one that holds *prose*. `src/summary.md` is counted off the reduction
+and `README.md` quotes those counts, so the test builds each sentence out of
+`Document::summary` and looks for it in the page a reader arrives at:
+
+```
+the README does not say `**12 operations**`; the reduction moved and the paragraph did not
+```
+
+It also holds the committed page to the committed blob, so a page committed
+without the model beside it fails without re-running the generator.
+
 ## What is not caught
 
 A page that claims everything is caught is worth less than one that says where
 the holes are.
 
-**An operation the vendor adds.** The bless step picks it up, emits a wrapper
-and mounts a subcommand, and `OPERATION_COUNT` moves. Nothing asserts on that
-number, and `corrections.rs` is satisfied — the operation is in the vendor's
-document *and* mounted, which is exactly the state it checks for. The new
-operation shows up as a `git diff` after `just bless` and nowhere else.
+**An operation the vendor adds, in Rust that does not call it.** The bless step
+picks it up, emits a wrapper and mounts a subcommand, and `corrections.rs` is
+satisfied — the operation is in the vendor's document *and* mounted, which is
+exactly the state it checks for. No Rust has to change for the CLI to grow a
+subcommand.
+
+What does move is the count: `OPERATION_COUNT`, `src/summary.md`, and therefore
+every sentence `summary.rs` builds out of the summary, so the `README.md`
+paragraph stating how big this API is turns red until somebody rewrites it. That
+is a prompt to read the diff rather than a check on the operation itself — an
+adoption that states no counts gets no prompt, and one that states counts about
+something else gets none about this.
 
 **A field added to a schema nothing destructures.** `Posting::of` covers
 `Voucher`. Add a property to `Contact` and the library compiles clean; only a

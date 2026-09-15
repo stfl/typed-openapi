@@ -142,8 +142,30 @@ caller needs.
 `api-generated` take the library with `default-features = false`.
 `just clap-free` is the check.
 
+**A count about the document is derived from it, never written down.**
+`Document::summary` in `src/summary.rs` answers every count an adoption is
+tempted to keep by hand — operations, groups, reads and writes, what stands
+behind each named gate, bodiless operations, bodies with no per-field flags,
+parameters carried without a flag — off the operations already in the reduced
+model. Nothing is stored: a stored count and the model it counts can disagree,
+which is the whole defect this exists to retire, and deriving also keeps the
+postcard blob the size it is. The type is feature-free, because a shipped binary
+that loaded a blob has to answer the question a bless step answered.
+
+`Summary`'s `Display` is the page a bless step commits as the fifth artefact,
+and the counts a test asserts against are the accessors on the same value — so
+the sentence a reader is shown and the number a test pins cannot drift apart.
+The page carries its provenance from `Settings::summary_header`, beside the
+headers the other generated files get: the command that counts it again and the
+documents it was counted from, because a count a reader cannot re-take is a
+claim rather than a measurement, and the two look identical on the page.
+`examples/toy/api/tests/summary.rs` is the demonstration that the shape is
+right — it builds the toy README's own sentences out of the summary — and any
+count this crate adds owes a row there.
+
 **Generated files are never edited.** `examples/toy/api-generated/src/{types,ops}.rs`,
-`src/model.postcard` and `spec/toy.overlaid.yaml` are written by `just bless`.
+`src/model.postcard`, `src/summary.md` and `spec/toy.overlaid.yaml` are written
+by `just bless`.
 A correction belongs in `examples/toy/spec/corrections.yaml` or, where only a
 command line cares, `examples/toy/spec/cli.yaml`. `just bless` must
 leave `git diff` empty when nothing upstream has changed — a non-empty diff

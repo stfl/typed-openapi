@@ -122,11 +122,15 @@ test:
 # Everything CI runs, in the order CI runs it.
 gate: check features test blessed package
 
-# The four artefacts under `api-generated` are committed, so the generator has
+# The five artefacts under `api-generated` are committed, so the generator has
 # to be able to reproduce them. A diff here is either the vendor's document
 # moving or the generator's output changing — both worth looking at, and
 # neither should reach main unnoticed. Without this recipe nothing in the gate
 # runs the generator at all.
+#
+# `src/summary.md` is in the list for the same reason as the rest and for one
+# more: it is the artefact adopters quote counts out of, so an unchecked copy of
+# it would be exactly the stale number it exists to retire.
 
 # Regenerate, and fail if anything committed changed.
 blessed:
@@ -141,6 +145,7 @@ blessed:
         examples/toy/api-generated/src/types.rs
         examples/toy/api-generated/src/ops.rs
         examples/toy/api-generated/src/model.postcard
+        examples/toy/api-generated/src/summary.md
     )
     if ! git diff --quiet HEAD -- "${written[@]}"; then
         echo "bless changed committed output:" >&2

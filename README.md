@@ -67,11 +67,15 @@ from the tool rather than bring it.
 
 ## The bless step
 
-One command turns the vendor's document and your Overlays into four committed
+One command turns the vendor's document and your Overlays into five committed
 files: the corrected document, the schemas as Rust types, one typed wrapper per
-operation, and the document reduced to what a command line needs. A shipped
-binary reads that reduction — it parses no YAML and links no OpenAPI object
-model.
+operation, the document reduced to what a command line needs, and a page
+counting what that reduction did. A shipped binary reads that reduction — it
+parses no YAML and links no OpenAPI object model.
+
+The count is there so that a number in your own docs — how many operations,
+how many writes, what stands behind each gate — is a measurement your tests can
+assert against rather than one somebody typed.
 
 Corrections come in layers, applied in the order you name them, so the one that
 repairs the vendor's mistakes stays a document worth handing back to the vendor

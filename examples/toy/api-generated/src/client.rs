@@ -1,4 +1,5 @@
-//! The two embedded artefacts, and the handle the generated wrappers hang off.
+//! The three embedded artefacts, and the handle the generated wrappers hang
+//! off.
 //!
 //! Everything generic — building a request, sending it, mapping a status into
 //! an error, deserialising the answer — lives in [`typed_openapi::client`].
@@ -29,6 +30,16 @@ pub const DOCUMENT: &str = include_str!("../spec/toy.overlaid.yaml");
 /// startup, so a `--help` still describes the document rather than a snapshot
 /// someone generated clap code from.
 pub const MODEL: &[u8] = include_bytes!("model.postcard");
+
+/// What that reduction did, as a page: the operations, the groups, the reads
+/// and writes, what stands behind each named gate, and the parameters carried
+/// without a flag. Written by the same bless step, off the same reduction.
+///
+/// This is what a doc page or a README quotes a count out of. Quoting it is
+/// only half the cure — a page that quotes a number still fails nothing when
+/// the number moves — so `api/tests/summary.rs` holds this adoption's own prose
+/// to [`typed_openapi::Summary`], which is where these bytes came from.
+pub const SUMMARY: &str = include_str!("summary.md");
 
 /// The Toy Accounting API, as the document describes it.
 ///

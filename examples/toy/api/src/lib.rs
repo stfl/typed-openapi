@@ -5,11 +5,11 @@
 //! lives in an Overlay as standard OpenAPI Overlay actions: `spec/corrections.yaml`
 //! for what the vendor got wrong, then `spec/cli.yaml` for what only a command
 //! line needs. `cargo run -p xtask -- bless` applies them in that order and
-//! writes four things into the `api-generated` crate beneath this one:
+//! writes five things into the `api-generated` crate beneath this one:
 //!
 //! - `spec/toy.overlaid.yaml` — the corrected document, embedded as
 //!   [`DOCUMENT`]. It is the reviewable record of what the rest was emitted
-//!   from, and `tests/typed.rs` holds the other three to it.
+//!   from, and `tests/typed.rs` holds the reduction and the inventory to it.
 //! - `src/model.postcard` — that document already reduced to the facts a CLI
 //!   needs. The CLI builds its whole command tree from it at startup, so the
 //!   CLI and this crate cannot disagree about the API and neither one parses
@@ -24,9 +24,13 @@
 //!   a generated type anywhere.
 //! - `src/ops.rs` — [`OperationId`], one typed method per operation, and the
 //!   `(operationId, method, path)` inventory [`ops::documented`] reads.
+//! - `src/summary.md` — what that reduction did, counted off it and embedded as
+//!   [`SUMMARY`]. Every count this adoption states in prose is asserted against
+//!   it by `tests/summary.rs`, so a sentence about how many operations there
+//!   are fails when an Overlay adds one.
 //!
 //! They live one crate down so that an edit here recompiles the lines written
-//! here and not the emitted volume. Everything the four artefacts offer is
+//! here and not the emitted volume. Everything the five artefacts offer is
 //! re-exported from this crate, which is the only one an adopter's own code
 //! needs to name.
 //!
@@ -75,7 +79,7 @@ mod posting;
 pub use api_generated::ops;
 pub use api_generated::ops::{OPERATION_COUNT, OPERATIONS, OperationId, documented};
 pub use api_generated::types::*;
-pub use api_generated::{Api, BodyError, Call, DOCUMENT, Error, NoContent, to_json};
+pub use api_generated::{Api, BodyError, Call, DOCUMENT, Error, NoContent, SUMMARY, to_json};
 pub use corrections::{CORRECTIONS, Correction};
 // The crate holding the one type the generated code names rather than defines.
 // It is re-exported whole so that an adopter's own code names `api` and nothing

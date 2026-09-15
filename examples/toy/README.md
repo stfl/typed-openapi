@@ -73,6 +73,26 @@ error: the following required arguments were not provided:
 That one is a `GET`. HTTP cannot say "this GET writes", so the Overlay does,
 with `x-cli-writes` — and the gate treats it like any `POST`.
 
+## How big this API is
+
+`just bless` writes [`api-generated/src/summary.md`](api-generated/src/summary.md)
+beside the reduced model: what the bless step counted, counted off the model
+rather than off anybody's memory of it.
+
+This adoption reduces to **11 operations** in **4 groups**: **2 reads** sent on
+sight and **9 writes** held behind `--commit`. Two of those writes are more than
+one question, so the document names **2 gates** — `--enshrine` and `--email`,
+with **1 operation** behind each. **5 operations** are asked for no body at all,
+**3 bodies** go out whole because a command line cannot take a nested object, a
+PDF or a multipart upload apart, and **0 parameters** are carried without a flag.
+
+Every number in that paragraph is asserted against the summary by
+[`api/tests/summary.rs`](api/tests/summary.rs), and that is the point rather
+than a nicety: a page quoting a count fails nothing when the count moves unless
+something holds the page to it. An Overlay that adds an operation fails that
+test until the paragraph is rewritten — and `just bless` has already rewritten
+the page the paragraph came from.
+
 ## What the vendor gets wrong, and where it is fixed
 
 Every correction is a standard [OpenAPI Overlay][overlay] action, in one of two

@@ -1275,6 +1275,40 @@ impl Field {
 }
 
 impl Body {
+    /// Whether the document asks for a request body at all.
+    ///
+    /// The question a count of body-less operations asks, answered here rather
+    /// than by a caller matching on one variant: a body kind added later is a
+    /// body, and this says so without anyone revisiting the caller.
+    #[must_use]
+    pub fn present(&self) -> bool {
+        match self {
+            Self::None => false,
+            Self::JsonFields(_)
+            | Self::JsonWhole { .. }
+            | Self::Multipart { .. }
+            | Self::Opaque { .. } => true,
+        }
+    }
+
+    /// Whether this body goes out whole: one flag for the lot, and no flag per
+    /// property.
+    ///
+    /// A document that asks for no body answers `false` — there is nothing here
+    /// to go out whole or in pieces — so an operation with no per-field flags is
+    /// either this or body-less, and the two are worth counting apart: one has
+    /// nothing to fill in, the other is a body an adopter has to hand over
+    /// themselves. A flat body of no properties is one of these too, because
+    /// what it offers a command line is `--json-body` and nothing else.
+    #[must_use]
+    pub fn whole(&self) -> bool {
+        match self {
+            Self::None => false,
+            Self::JsonFields(fields) => fields.is_empty(),
+            Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => true,
+        }
+    }
+
     /// The per-field flags this body offers, and none for a body that offers
     /// none — which is every body but a flat JSON one, whether because it has
     /// no properties to offer or because it goes out whole.

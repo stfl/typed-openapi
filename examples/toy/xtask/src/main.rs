@@ -6,7 +6,7 @@
 //! ```
 //!
 //! This is the whole of an adopter's generator. Everything it calls ships in
-//! `typed-openapi` under the `generate` feature, so the four artefacts under
+//! `typed-openapi` under the `generate` feature, so the five artefacts under
 //! `api-generated/` are reproducible from a published crate rather than from
 //! this workspace.
 

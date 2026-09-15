@@ -1,7 +1,7 @@
 //! Everything `cargo run -p xtask -- bless` writes, and the handle the
 //! generated methods are written on.
 //!
-//! Four files here are emitted by the bless step and none of them is edited:
+//! Five files here are emitted by the bless step and none of them is edited:
 //!
 //! - `spec/toy.overlaid.yaml` — the corrected document, embedded as
 //!   [`DOCUMENT`]. It is the reviewable record of what this crate was built
@@ -18,6 +18,10 @@
 //!   crate holding it.
 //! - `src/ops.rs` — [`ops::OperationId`], one typed method per operation, and
 //!   the `(operationId, method, path)` inventory [`ops::documented`] reads.
+//! - `src/summary.md` — what that reduction did, counted off it and embedded as
+//!   [`SUMMARY`]: how many operations there are, in how many groups, how many
+//!   of them write, what stands behind each named gate. It is the page this
+//!   adoption's prose quotes a count out of instead of remembering one.
 //!
 //! `src/client.rs` is the exception: [`Api`] itself, the newtype the generated
 //! `impl` block hangs off. A generated method on a foreign type would not
@@ -36,7 +40,7 @@ mod client;
 pub mod ops;
 pub mod types;
 
-pub use client::{Api, BodyError, Call, DOCUMENT, Error, MODEL, NoContent, to_json};
+pub use client::{Api, BodyError, Call, DOCUMENT, Error, MODEL, NoContent, SUMMARY, to_json};
 
 /// The named-argument builder the `builder` feature adds beside every
 /// generated wrapper.
