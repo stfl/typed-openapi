@@ -156,11 +156,22 @@ blessed:
 # `--allow-dirty` so the recipe answers the same question while work is in
 # progress. It is not a licence to publish a dirty tree: `cargo publish` is
 # run by the release workflow from a tag, never from here.
+#
+# The unpacked crate is scratch and the recipe clears it. `cargo package`
+# leaves the tarball's contents at `target/package/<name>-<version>/`, a whole
+# source tree — `src/`, `tests/` and all — inside a directory everything else
+# reads as build output. A tool that walks `target/` takes that `tests/` for a
+# build profile and looks for the nested target directories a profile of that
+# name carries; `Swatinem/rust-cache` does, and reports the two it cannot find
+# on every run it caches. The verification build's artefacts are in
+# `target/debug` with the rest of the workspace's, so clearing the unpacked
+# copy costs the next run nothing.
 
 # Verify the published crate packages and builds from its own tarball.
 package:
     cargo package -p typed-openapi --list --allow-dirty
     cargo package -p typed-openapi --allow-dirty
+    rm -rf target/package
 
 # Regenerate the example adoption from the vendor document and the Overlay.
 # Everything it writes is committed, so a diff after this recipe is the answer
