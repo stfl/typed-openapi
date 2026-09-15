@@ -90,6 +90,14 @@ const RESERVED: [&str; 6] = [
     FIELD_PART,
 ];
 
+/// What a refusal calls the request body.
+///
+/// An operation's values are the parameters and the body, and the document names
+/// every one of them but the body — so the body is named by the key it is
+/// written under, which is the word an adopter goes looking for.
+#[cfg(feature = "document")]
+const BODY: &str = "requestBody";
+
 /// Every operation the document describes, in document order, plus the server
 /// it describes them against.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -480,8 +488,25 @@ pub enum LoadError {
     /// judgement, and a judgement belongs in an Overlay a reviewer can read.
     #[error(transparent)]
     Phantom(#[from] crate::required::PhantomKeys),
+    /// A `$ref` met where there is no value yet to name it beside: one standing
+    /// in for a whole path item, or for a whole parameter object.
     #[error(transparent)]
     Reference(#[from] RefError),
+    /// The same failure met under one value of one operation, which is where
+    /// almost all of them are met.
+    ///
+    /// Named rather than reported bare, because the invariant every other
+    /// refusal here keeps is that a shape the reduction cannot read is refused
+    /// *by name*: a document of a thousand operations is not searchable by the
+    /// reference alone, and an adopter meeting one is being asked to go and
+    /// correct it in an Overlay.
+    #[error("{op}: `{name}`: {source}")]
+    Unresolvable {
+        op: String,
+        name: String,
+        #[source]
+        source: RefError,
+    },
     /// A parameter this CLI cannot supply that the document says a caller must.
     ///
     /// Every other unsupported parameter is carried as [`Shape::Unreachable`]
@@ -620,7 +645,7 @@ impl Document {
 
         let mut ops: Vec<Operation> = Vec::new();
         for (path, item) in &doc.paths.paths {
-            let item = item.as_item().ok_or_else(|| RefError {
+            let item = item.as_item().ok_or_else(|| RefError::Missing {
                 reference: format!("paths[{path}]"),
             })?;
             for (method, op) in item.iter() {
@@ -1139,11 +1164,11 @@ fn shape_of(
     // whichever schema describes the value is the one everything about that
     // value is read off — so a list's rules and its declared kind are its
     // items', which is where a list of days says that a day is what it holds.
-    let (value, repeats) = match items_of(schema, components)? {
+    let (value, repeats) = match under(items_of(schema, components), op, &data.name)? {
         Some(items) => (Cow::Owned(items), true),
         None => (Cow::Borrowed(schema), false),
     };
-    let Some(scalar) = scalar_of(&value, components)? else {
+    let Some(scalar) = under(scalar_of(&value, components), op, &data.name)? else {
         return Ok(Shape::Unreachable(Unsupported::Structured));
     };
     runnable(&scalar, op, &data.name)?;
@@ -1160,7 +1185,7 @@ fn shape_of(
         location,
         scalar,
         join: repeats.then_some(join),
-        format: format_of(&value, components)?,
+        format: under(format_of(&value, components), op, &data.name)?,
     })
 }
 
@@ -1331,10 +1356,14 @@ impl Body {
         let Some(body) = &op.request_body else {
             return Ok(Self::None);
         };
-        let body = resolve(
-            body,
-            |key| components.request_bodies.get(key),
-            "requestBodies",
+        let body = under(
+            resolve(
+                body,
+                |key| components.request_bodies.get(key),
+                "requestBodies",
+            ),
+            id,
+            BODY,
         )?;
         let required = body.required;
         // The JSON entry if the document offers one, else whatever it offers
@@ -1399,11 +1428,11 @@ fn json_body(
     let whole = || {
         Ok(Body::JsonWhole {
             required,
-            template: template(schema, components)?,
+            template: under(template(schema, components), id, BODY)?,
         })
     };
     let SchemaKind::Type(openapiv3::Type::Object(object)) =
-        &resolve_schema(schema, components)?.schema_kind
+        &under(resolve_schema(schema, components), id, BODY)?.schema_kind
     else {
         return whole();
     };
@@ -1411,7 +1440,7 @@ fn json_body(
     let mut fields = Vec::with_capacity(object.properties.len());
     for (name, property) in &object.properties {
         let property = property.clone().unbox();
-        let Some(scalar) = scalar_of(&property, components)? else {
+        let Some(scalar) = under(scalar_of(&property, components), id, name)? else {
             // One nested property is enough: the whole body goes through
             // `--json-body`, and no sibling gets a flag the request builder
             // would then throw away.
@@ -1423,11 +1452,29 @@ fn json_body(
             name: name.clone(),
             required: required && object.required.iter().any(|r| r == name),
             scalar,
-            format: format_of(&property, components)?,
-            description: description_of(&property, components)?,
+            format: under(format_of(&property, components), id, name)?,
+            description: under(description_of(&property, components), id, name)?,
         });
     }
     Ok(Body::JsonFields(fields))
+}
+
+/// Read a schema on one value's behalf, so that a `$ref` under it is refused by
+/// name.
+///
+/// Every `$ref` this reduction follows is reached through a parameter or a body
+/// property, and the reference on its own is not something an adopter can find:
+/// one `#/components/schemas/…` stands under a dozen operations, and only one of
+/// them is the one to correct. So the reads under a value go through
+/// here, which is why [`runnable`] stands beside it — both turn a failure about
+/// a schema into a refusal saying which value stated it.
+#[cfg(feature = "document")]
+fn under<T>(read: Result<T, RefError>, op: &str, name: &str) -> Result<T, LoadError> {
+    read.map_err(|source| LoadError::Unresolvable {
+        op: op.to_owned(),
+        name: name.to_owned(),
+        source,
+    })
 }
 
 /// Refuse a rule that cannot be run, naming the operation and the value it was

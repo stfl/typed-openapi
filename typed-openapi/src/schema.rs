@@ -19,6 +19,8 @@
 //! `--help` cannot state — so the walk that decided the body was not flat also
 //! writes down what it saw, as the JSON skeleton a user fills in.
 
+use std::collections::BTreeSet;
+
 use openapiv3::{
     ArrayType, Components, IntegerType, NumberType, ObjectType, ReferenceOr, Schema, SchemaKind,
     StringType, Type, VariantOrUnknownOrEmpty,
@@ -29,15 +31,22 @@ use thiserror::Error;
 
 use crate::scalar::{Bounds, Limit, Scalar, Text};
 
-/// A `$ref` that does not lead anywhere.
+/// A `$ref` this crate cannot follow to what it names.
+///
+/// The two are different things to say and are worth saying apart: a reference
+/// nothing answers is a name to go and look for, where a cycle is a document
+/// describing a value of no finite depth. Reporting the second for the first —
+/// or for neither — tells an adopter to look for something their document does
+/// not contain.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("`{reference}` does not resolve")]
-pub struct RefError {
-    pub reference: String,
+pub enum RefError {
+    /// A reference naming nothing this document holds.
+    #[error("`{reference}` does not resolve")]
+    Missing { reference: String },
+    /// A reference reached a second time while following one chain.
+    #[error("`{reference}` is a reference cycle")]
+    Cycle { reference: String },
 }
-
-/// How deep a chain of `$ref`s may go before it is called a cycle.
-const MAX_HOPS: usize = 8;
 
 /// How deep a body template spells the document out.
 ///
@@ -57,31 +66,64 @@ pub fn resolve<'c, T>(
     section: impl Fn(&str) -> Option<&'c ReferenceOr<T>>,
     name: &str,
 ) -> Result<&'c T, RefError> {
+    follow(value, &section, name, &mut BTreeSet::new())
+}
+
+/// The same walk, with the references already taken handed in.
+///
+/// What terminates it is that set and not a count of the hops, which is the
+/// argument [`crate::required`] makes about its own walk and it holds here for
+/// the same reason. A count is a floor under how deep a *legal* document may
+/// go: a chain of nine references is finite, resolves, and describes one value,
+/// and a limit of eight refuses it while telling the adopter their document has
+/// a cycle it does not contain. The set terminates on the cycle itself, and
+/// truncates nothing — so the word `cycle` is true wherever it appears.
+///
+/// [`stated`] hands in a set of its own because a composition it unwraps is the
+/// same chain seen through `allOf`: a schema whose single member leads back to
+/// it returns to a reference this walk has taken, and one set spanning both is
+/// what sees that.
+fn follow<'c, T>(
+    value: &'c ReferenceOr<T>,
+    section: &impl Fn(&str) -> Option<&'c ReferenceOr<T>>,
+    name: &str,
+    seen: &mut BTreeSet<&'c str>,
+) -> Result<&'c T, RefError> {
     let prefix = format!("#/components/{name}/");
     let mut current = value;
-    for _ in 0..MAX_HOPS {
+    loop {
         match current {
             ReferenceOr::Item(item) => return Ok(item),
             ReferenceOr::Reference { reference } => {
+                if !seen.insert(reference.as_str()) {
+                    return Err(RefError::Cycle {
+                        reference: reference.clone(),
+                    });
+                }
                 current = reference
                     .strip_prefix(&prefix)
-                    .and_then(&section)
-                    .ok_or_else(|| RefError {
+                    .and_then(section)
+                    .ok_or_else(|| RefError::Missing {
                         reference: reference.clone(),
                     })?;
             }
         }
     }
-    Err(RefError {
-        reference: "a reference cycle".to_owned(),
-    })
 }
 
 pub fn resolve_schema<'c>(
     schema: &'c ReferenceOr<Schema>,
     components: &'c Components,
 ) -> Result<&'c Schema, RefError> {
-    resolve(schema, |key| components.schemas.get(key), "schemas")
+    resolve(schema, schemas(components), "schemas")
+}
+
+/// The section every schema reference in this module resolves against.
+///
+/// One closure rather than one per call site, because [`stated`] hands the same
+/// one to every hop of the walk it shares a `seen` set with.
+fn schemas<'c>(components: &'c Components) -> impl Fn(&str) -> Option<&'c ReferenceOr<Schema>> {
+    move |key| components.schemas.get(key)
 }
 
 /// The schema that states the rules: `$ref` hops followed, and a single-element
@@ -97,23 +139,29 @@ pub fn resolve_schema<'c>(
 /// One element is where this stops. An `allOf` of two schemas is a real
 /// composition, and a composition is not a scalar: it comes back as itself, and
 /// [`scalar_of`] answers `None` for it.
+///
+/// Unwrapping and following are one walk, so they share one set of the
+/// references taken: a schema whose only member leads back to the schema is a
+/// value of no finite depth however many wrappers stand between the two ends,
+/// and a set spanning both is what meets it. Nothing bounds the number of
+/// wrappers, because every one of them that is not a reference is a step
+/// further into a document that is finite.
 fn stated<'c>(
     schema: &'c ReferenceOr<Schema>,
     components: &'c Components,
 ) -> Result<&'c Schema, RefError> {
-    let mut current = resolve_schema(schema, components)?;
-    for _ in 0..MAX_HOPS {
+    let schemas = schemas(components);
+    let mut seen = BTreeSet::new();
+    let mut current = follow(schema, &schemas, "schemas", &mut seen)?;
+    loop {
         let SchemaKind::AllOf { all_of } = &current.schema_kind else {
             return Ok(current);
         };
         let [only] = all_of.as_slice() else {
             return Ok(current);
         };
-        current = resolve_schema(only, components)?;
+        current = follow(only, &schemas, "schemas", &mut seen)?;
     }
-    Err(RefError {
-        reference: "a reference cycle".to_owned(),
-    })
 }
 
 /// `Some(scalar)` when this schema fits on one flag, `None` when it does not.

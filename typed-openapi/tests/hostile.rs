@@ -19,13 +19,11 @@
 //!
 //! # Outcomes that are pinned rather than endorsed
 //!
-//! Two shapes here produce something this crate would not choose. They are
-//! pinned exactly as they are, with the test saying so, because a
-//! characterisation is what makes a repair visible: the day one is fixed, the
-//! test naming it goes red and whoever fixed it reads what the old behaviour
-//! was. They are
-//! [`a_ref_chain_longer_than_the_hop_limit_is_refused_as_a_cycle_it_is_not`]
-//! and [`a_property_whose_name_has_no_letters_becomes_a_flag_with_no_name`].
+//! One shape here produces something this crate would not choose. It is pinned
+//! exactly as it is, with the test saying so, because a characterisation is
+//! what makes a repair visible: the day it is fixed, the test naming it goes
+//! red and whoever fixed it reads what the old behaviour was. It is
+//! [`a_property_whose_name_has_no_letters_becomes_a_flag_with_no_name`].
 
 #![expect(
     clippy::expect_used,
@@ -889,15 +887,13 @@ paths:
     );
 }
 
-/// A schema whose `allOf` holds itself describes a value of no finite depth.
-/// Following it terminates rather than hanging, which is the part that matters.
-///
-/// **A defect in what it says, pinned as it stands.** The refusal names neither
-/// the operation nor the parameter that led to the schema, where every other
-/// refusal here names both — so an adopter meeting this on a document of a
-/// thousand operations is told a cycle exists and not where.
+/// A schema whose `allOf` holds itself describes a value of no finite depth, so
+/// following it terminates rather than hanging — and the refusal names the
+/// operation, the parameter that led to the schema, and the reference the walk
+/// came back to. A document of a thousand operations is not searchable by the
+/// reference alone, and every other refusal here names both.
 #[test]
-fn a_schema_that_composes_itself_is_refused_without_naming_where() {
+fn a_schema_that_composes_itself_is_refused_and_names_where() {
     const OUROBOROS: &str = r##"
 openapi: 3.0.3
 info: { title: Ouroboros, version: "1.0" }
@@ -922,23 +918,28 @@ components:
     let refused = Document::load(OUROBOROS, &[]).expect_err("the composition never bottoms out");
     assert_eq!(
         refused.to_string(),
-        "`a reference cycle` does not resolve",
-        "expected today: the refusal names neither `listFirings` nor `saggar`"
+        "listFirings: `saggar`: `#/components/schemas/Saggar` is a reference cycle"
+    );
+    assert!(
+        matches!(refused, LoadError::Unresolvable { .. }),
+        "and it is the refusal about a reference, not some other one: {refused:?}"
     );
 }
 
-/// **A defect, pinned as it stands.**
+/// A chain of `$ref`s resolves however long it is, and what refuses one is its
+/// returning rather than its length.
 ///
-/// Following a `$ref` stops after eight hops, and a chain that runs past the
-/// limit is reported as a cycle. A chain of eight is legal and finite and
-/// resolves to a string; the document is refused all the same, and the sentence
-/// an adopter reads describes something the document does not contain.
+/// The two documents differ in one character — what the last hop names — so the
+/// pair pins that the edge is the shape of the chain and not a count of it. A
+/// limit would be a floor under how deep a legal document may go, and a
+/// document refused for passing it would be told it holds a cycle it does not.
 ///
-/// The document below the assertion is the one hop shorter that loads, so the
-/// pair pins where the edge is as well as what is said at it.
+/// Forty is past any limit anyone would have written down, and it is a document
+/// a vendor produces by generating one `$ref` per version of a schema.
 #[test]
-fn a_ref_chain_longer_than_the_hop_limit_is_refused_as_a_cycle_it_is_not() {
-    fn chained(hops: usize) -> String {
+fn a_ref_chain_resolves_however_long_it_is_and_only_a_cycle_refuses() {
+    /// `hops` references leading to `last`, reached through one parameter.
+    fn chained(hops: usize, last: &str) -> String {
         use std::fmt::Write as _;
 
         let mut schemas = String::new();
@@ -949,7 +950,7 @@ fn a_ref_chain_longer_than_the_hop_limit_is_refused_as_a_cycle_it_is_not() {
                 hop + 1
             );
         }
-        let _ = writeln!(schemas, "    Hop{hops}: {{ type: string }}");
+        let _ = writeln!(schemas, "    Hop{hops}: {last}");
         format!(
             r##"
 openapi: 3.0.3
@@ -971,15 +972,21 @@ components:
         )
     }
 
-    assert!(
-        Document::load(&chained(6), &[]).is_ok(),
-        "a chain inside the limit resolves"
-    );
-    let refused = Document::load(&chained(8), &[]).expect_err("a chain past the limit does not");
+    const ENDS: &str = "{ type: string }";
+    const RETURNS: &str = r##"{ $ref: "#/components/schemas/Hop0" }"##;
+
+    for hops in [1, 6, 8, 9, 40] {
+        assert!(
+            Document::load(&chained(hops, ENDS), &[]).is_ok(),
+            "a chain of {hops} hops is finite and resolves"
+        );
+    }
+
+    let refused =
+        Document::load(&chained(8, RETURNS), &[]).expect_err("the chain returns to its start");
     assert_eq!(
         refused.to_string(),
-        "`a reference cycle` does not resolve",
-        "expected today: a finite chain is reported as a cycle"
+        "listFirings: `cone`: `#/components/schemas/Hop0` is a reference cycle"
     );
 }
 
