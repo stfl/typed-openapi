@@ -364,9 +364,9 @@ fn object_skeleton(
 ///
 /// An empty list is a body the server accepts and the user learns nothing
 /// from, and what goes *in* the list is exactly what they came here to find
-/// out. One element, itself a skeleton, says that much and is no more sendable
-/// than the rest of the template. A list whose `items` the document omits is
-/// the one case with nothing to put in it.
+/// out. One element, itself a skeleton, says that much and is written the same
+/// way as every other value in the template. A list whose `items` the document
+/// omits is the one case with nothing to put in it.
 fn array_skeleton(
     array: &ArrayType,
     components: &Components,
@@ -387,15 +387,23 @@ fn array_skeleton(
 
 /// The emptiest value of one kind.
 ///
-/// Empty and zero rather than plausible, on purpose: a template a user can send
-/// unmodified by accident is a worse artefact than none. `""` against a
-/// `pattern` and `0` against a `minimum` are values the document itself rules
-/// out, so a template nobody filled in is a body the server refuses rather than
-/// one it acts on.
+/// Empty and zero where nothing better is known, on purpose: `""` and `0` claim
+/// no more than that a value belongs here, so a key nobody filled in reads as a
+/// skeleton and not as a suggestion. Against a `pattern` or a `minimum` they
+/// are values the document itself rules out, and a server handed one refuses
+/// it.
 ///
 /// An enumeration is the one kind with no empty member, so it shows the first
 /// value the document lists. A value the enumeration does not list would be a
 /// lie about the API, and there is nothing else to show.
+///
+/// That floor is not a promise that a template cannot be sent. An
+/// enumeration's first value is one the enumeration admits, and the `example`
+/// [`skeleton`] takes whole is one the document states about the API — so a
+/// template drawing every key from those two carries nothing the document
+/// forbids. A template is checked against nothing and is not meant to go out
+/// unread: it says where the values belong, and the values are the caller's to
+/// put there.
 fn empty(scalar: &Scalar) -> Value {
     match scalar {
         Scalar::Text(_) => Value::String(String::new()),

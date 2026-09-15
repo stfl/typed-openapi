@@ -217,12 +217,18 @@ What is in it:
 | an array | a one-element list, the element a skeleton of `items` |
 | a property this crate has no reading for — a `oneOf`, an `allOf` of two | `null` |
 
-**The values are empty, not plausible.** `""` against a `pattern` and `0`
-against a `minimum` are values the document itself rules out, so a template
-nobody filled in is a body the server refuses rather than one it acts on. A
-template you can send unmodified by accident would be a worse artefact than
-none. An enumeration is the one exception, because it has no empty member: a
-value it does not list would be a lie about the API.
+**A value is empty where the document offers nothing better.** `""` against a
+`pattern` and `0` against a `minimum` are values the document itself rules out,
+so a key nobody filled in is one the server refuses rather than one it acts on.
+Where the document does offer something, the template carries it: an enumeration
+has no empty member, so it shows the first value listed, and an `example` is
+taken whole. Both are values the API admits, so a template drawing every key
+from those two holds nothing the document forbids and can go out as it stands.
+
+**A template is checked against nothing.** It is a skeleton to read and fill in,
+not a body to send unread. What holds the file you then pass to `--json-body` is
+whatever the adopter mounted on the [`select`](#mounting-the-tree) seam; the
+library's own check is of kind and not of content.
 
 **Optional properties are absent**, and JSON has no comment to have marked them
 with. An optional key carrying an empty value is a key the caller never asked to
