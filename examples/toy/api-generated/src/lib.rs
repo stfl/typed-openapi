@@ -76,6 +76,15 @@ pub use client::{Api, BodyError, Call, DOCUMENT, Error, MODEL, NoContent, to_jso
 ///     typed_openapi::render(&positional.request()?),
 ///     typed_openapi::render(&named.request()?),
 /// );
+///
+/// // A parameter the document named after a Rust keyword keeps the
+/// // document's own word here too, raw: the builder's setter is what the
+/// // vendor called the parameter, not something this crate invented for it.
+/// let filtered = api.list_vouchers_builder().r#type("credit").call()?;
+/// assert_eq!(
+///     filtered.request()?.uri().path_and_query().unwrap(),
+///     "/vouchers?type=credit",
+/// );
 /// # Ok(())
 /// # }
 /// ```

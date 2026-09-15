@@ -176,10 +176,14 @@ impl Api {
         &self,
         status: Option<crate::types::VoucherStatus>,
         limit: Option<i64>,
+        r#type: Option<&str>,
     ) -> Result<Call<'_, Vec<crate::types::Voucher>>, Error> {
         self.call(
             OperationId::ListVouchers,
-            Values::new().maybe("status", status).maybe("limit", limit),
+            Values::new()
+                .maybe("status", status)
+                .maybe("limit", limit)
+                .maybe("type", r#type),
         )
     }
     /**
@@ -328,8 +332,9 @@ impl Api {
         &self,
         status: Option<crate::types::VoucherStatus>,
         limit: Option<i64>,
+        r#type: Option<&str>,
     ) -> Result<Call<'_, Vec<crate::types::Voucher>>, Error> {
-        self.list_vouchers(status, limit)
+        self.list_vouchers(status, limit, r#type)
     }
     ///The same call as [`Api::create_voucher`], with its arguments named. A missing required argument is a compile error.
     #[builder]

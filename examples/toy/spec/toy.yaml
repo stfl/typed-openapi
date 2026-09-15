@@ -21,6 +21,11 @@ paths:
           schema:
             type: integer
             format: int32
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         '200':
           description: OK

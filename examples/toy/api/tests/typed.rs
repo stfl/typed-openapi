@@ -178,16 +178,20 @@ fn the_undocumented_operation_is_a_wrapper_like_any_other() {
 #[test]
 fn a_query_parameter_is_omitted_when_it_is_none() {
     let api = api();
-    let all = api.list_vouchers(None, None).unwrap().request().unwrap();
+    let all = api
+        .list_vouchers(None, None, None)
+        .unwrap()
+        .request()
+        .unwrap();
     assert_eq!(all.uri().path_and_query().unwrap(), "/vouchers");
     let some = api
-        .list_vouchers(Some(VoucherStatus::Paid), Some(10))
+        .list_vouchers(Some(VoucherStatus::Paid), Some(10), Some("credit"))
         .unwrap()
         .request()
         .unwrap();
     assert_eq!(
         some.uri().path_and_query().unwrap(),
-        "/vouchers?status=paid&limit=10"
+        "/vouchers?status=paid&limit=10&type=credit"
     );
 }
 
