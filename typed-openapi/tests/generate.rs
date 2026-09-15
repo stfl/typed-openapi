@@ -152,6 +152,12 @@ fn the_written_model_is_the_written_documents_reduction() {
 /// adopter's prose one way while their binary went another; a page of bare
 /// numbers would be indistinguishable from the remembered ones it exists to
 /// replace, and a reader who cannot tell those apart cannot act on either.
+///
+/// The page is held to the rendering twice over, because comparing two
+/// renderings is satisfied by two renderings that state nothing: once as the
+/// whole of what follows the header, and once by reading a count back out of
+/// the page and holding it to the accessor the same `Summary` answers — which
+/// is the use an adopter quoting a row makes of it.
 #[test]
 fn the_summary_page_is_the_written_models_count_and_says_where_it_came_from() {
     let dir = out("summary");
@@ -161,13 +167,6 @@ fn the_summary_page_is_the_written_models_count_and_says_where_it_came_from() {
         .write_to(&dir)
         .expect("the fixtures generate");
     let page = read(&written[4]);
-
-    let blob = std::fs::read(&written[3]).expect("the reduced model");
-    let shipped = Document::from_blob(&blob).expect("the written blob is a reduction");
-    assert!(
-        page.ends_with(&shipped.summary().to_string()),
-        "the page is not the written model's own count:\n{page}"
-    );
 
     // The provenance: what counts them again, and what they were counted from.
     assert!(
@@ -180,6 +179,32 @@ fn the_summary_page_is_the_written_models_count_and_says_where_it_came_from() {
             "the page does not name {input}, which it was counted from:\n{page}"
         );
     }
+
+    let blob = std::fs::read(&written[3]).expect("the reduced model");
+    let shipped = Document::from_blob(&blob).expect("the written blob is a reduction");
+    let counted = shipped.summary();
+
+    // Below that header the page is the written model's own rendering, with
+    // nothing the generator added and nothing it dropped.
+    let (_, body) = page
+        .split_once("-->\n\n")
+        .expect("the page carries the generated header");
+    assert_eq!(
+        body,
+        counted.to_string(),
+        "the page below its header is not the written model's rendered count:\n{page}"
+    );
+
+    // And the rendering states the counts, so that equality cannot hold by
+    // both sides saying nothing.
+    assert!(
+        counted.operations() > 0,
+        "the fixtures reduce to no operations, so the page has nothing to count"
+    );
+    assert!(
+        body.contains(&format!("| operations | {} |", counted.operations())),
+        "the page does not state the operation count the model holds:\n{page}"
+    );
 }
 
 /// An adoption that quotes no count gets no page, and is not told it got one.
