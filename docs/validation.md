@@ -89,10 +89,28 @@ knowing before you decide how much to put in the document.
 | a whole body from `--json-body FILE` | nothing in this crate | — |
 
 A parameter never passes through a generated type, so `Scalar` is the only thing
-that can ever check one. A body field has both roads, and they run the same
-rule.
+that can ever check one. A body field has both roads, and they run the same rule
+for as long as the rule is one the *schema* states: the flag runs every rule
+`Scalar` carries, and a `pattern` among them is the same expression on the same
+engine the generated newtype's `FromStr` runs.
 
-The gap is the last row. `check_body` in
+The roads part where a field's reading lives in a Rust type rather than in the
+schema. A property whose `format` an adopter claims with `Settings::replace`, on
+a schema that states no rule of its own, is read by that type on the typed road
+and by nothing at all on the flag. `createLedgerEntry`'s `amount` is
+`format: money` with no `pattern`: a body carrying `"12,50"` is refused by
+`money::Money`, and `--amount 12,50` is accepted.
+[`examples/toy/api/tests/inline.rs`](../examples/toy/api/tests/inline.rs) holds
+that gap open in both directions so it cannot close unnoticed.
+
+So a flag is worth relying on for what the document states about a value, and
+for nothing a `format` only implies. To have the command line refuse a value,
+put the rule in the schema: an Overlay pointing the property at a schema that
+carries a `pattern` is the repair, and
+[`examples/toy/spec/corrections.yaml`](../examples/toy/spec/corrections.yaml)
+does exactly that for `Voucher.total`.
+
+The other gap is the last row. `check_body` in
 [`src/request.rs`](../typed-openapi/src/request.rs) asks whether a JSON body was
 supplied where JSON is wanted and stops there — holding the *content* of a file
 to a schema needs the generated `struct`, which only the adopter's crate can
