@@ -364,6 +364,18 @@ fn read(path: &Path) -> Result<String, GenerateError> {
 /// would execute it, so the generator is where it is made safe; an adopter
 /// switching doctests off for the whole crate would be hiding this and taking
 /// their own hand-written files with it.
+///
+/// # What may be edited, and what may not
+///
+/// **The generated page has to render what the vendor wrote.** Every edit here
+/// is chosen against that: it changes bytes the vendor has no stake in, so that
+/// the rendering is the one they meant. Capping an indentation keeps a nested
+/// list nested instead of letting it become a code block; pulling a hanging
+/// item's content back keeps it an item; writing a bullet as `-` keeps the
+/// bullet, which rustc would otherwise eat. What none of them may do is change
+/// what the page says — the inside of a fence is the vendor's sample and is
+/// passed through untouched, and a fence's language is renamed rather than
+/// dropped, because the word is what a reader's highlighting goes by.
 struct Prose;
 
 impl VisitMut for Prose {
@@ -396,6 +408,24 @@ const TAB: usize = 4;
 /// is a crate whose tests run.
 const KEEP: usize = 3;
 
+/// The widest gap between a list marker and its content that cannot open a
+/// code block.
+///
+/// Markdown measures a list item's content from the end of its marker rather
+/// than from the start of the line, so this is one wider than [`KEEP`]: five
+/// columns after a marker open a code block inside the item, four do not.
+/// Measured on `-`, `+`, `*` and an ordered marker alike.
+///
+/// Four is safe only where the marker survives to hold the gap off the margin,
+/// which is [`dashed`]'s doing; [`unhung`] says what happens where it does
+/// not.
+const HANG: usize = 4;
+
+/// The bullet a list marker is written with.
+///
+/// `-` rather than `*`, and [`dashed`] says why.
+const BULLET: char = '-';
+
 /// The most digits Markdown reads as one ordered list marker.
 const ORDERED: usize = 9;
 
@@ -420,15 +450,16 @@ fn unrunnable(prose: &str) -> String {
 }
 
 /// `prose` with no line indented deeply enough to open a code block, no list
-/// item hanging its content far enough to open one, and no fence rustdoc would
-/// read as Rust.
+/// item hanging its content far enough to open one, no bullet rustc will eat,
+/// and no fence rustdoc would read as Rust.
 ///
-/// A line is capped, then unhung, then read as a fence, and the order is the
-/// rule: Markdown reads a fence at three columns or fewer, so an indented one
-/// is not a fence at all but the start of an indented code block — capping it
-/// first is what turns it into the fence the vendor meant, rather than leaving
-/// a block whose first line happens to be three backticks. Unhanging cannot
-/// disturb that, because a run of backticks is not a list marker.
+/// A line is capped, then unhung, then dashed, then read as a fence, and the
+/// first step's place in that order is the rule: Markdown reads a fence at
+/// three columns or fewer, so an indented one is not a fence at all but the
+/// start of an indented code block — capping it first is what turns it into the
+/// fence the vendor meant, rather than leaving a block whose first line happens
+/// to be three backticks. The two list steps cannot disturb that, because a run
+/// of backticks is not a list marker.
 fn capped_lines(prose: &str) -> String {
     let mut fenced = false;
     let lines: Vec<String> = prose
@@ -439,7 +470,7 @@ fn capped_lines(prose: &str) -> String {
             if fenced && fence(line).is_none() {
                 return line.to_owned();
             }
-            let tamed = unhung(&capped(line));
+            let tamed = dashed(&unhung(&capped(line)));
             let Some((marker, language)) = fence(&tamed) else {
                 return tamed;
             };
@@ -524,7 +555,7 @@ fn columns(text: &str) -> usize {
 }
 
 /// `line` with the gap between a list marker and its content capped at
-/// [`KEEP`].
+/// [`HANG`].
 ///
 /// This is the code block [`capped`] cannot see. A vendor lining the text of
 /// several items up under the widest marker writes five spaces after a short
@@ -532,13 +563,12 @@ fn columns(text: &str) -> usize {
 /// block *inside* the item — while the line's own indentation, which is all
 /// [`capped`] measures, is nothing at all.
 ///
-/// Two readings have to survive the cap and they settle on the same number.
-/// Content five columns from a marker opens a block, so four would do for the
-/// line as the vendor wrote it. But rustc strips a leading `*` out of a
-/// `/* */` comment whenever every line it weighs carries one, which leaves the
-/// gap standing alone as ordinary indentation — and four columns of that,
-/// under a blank line, opens a block of its own. Three survives both readings,
-/// which is [`KEEP`] again and for the second of those reasons.
+/// The cap holds at four only because [`dashed`] has taken `*` off the front of
+/// every bullet. Where a `*` survives, rustc eats it out of a `/* */` comment
+/// and leaves the gap standing alone as ordinary indentation, and four columns
+/// of that under a blank line opens a block of its own. The two rules are one
+/// rule, and `PROSE`'s list set off by a blank line is what holds them
+/// together.
 ///
 /// The line is left alone when the marker carries no content: a marker on its
 /// own opens nothing, and there is no gap to measure.
@@ -550,10 +580,31 @@ fn unhung(line: &str) -> String {
     let (indent, rest) = line.split_at(line.len() - content.len());
     let (marker, after) = rest.split_at(width);
     let text = after.trim_start();
-    if text.is_empty() || columns(after) <= KEEP {
+    if text.is_empty() || columns(after) <= HANG {
         return line.to_owned();
     }
-    format!("{indent}{marker}{}{text}", " ".repeat(KEEP))
+    format!("{indent}{marker}{}{text}", " ".repeat(HANG))
+}
+
+/// `line` with a `*` bullet written as [`BULLET`].
+///
+/// rustc rebuilds a `/* */` comment by stripping a leading `*` off every line
+/// whenever all of the lines it weighs carry one at the same column, which is
+/// the shape a vendor's bullet list takes exactly. What reaches the reader is
+/// then a run of sentences where the vendor wrote a list, and nothing on the
+/// page says a marker went missing.
+///
+/// Markdown draws the same bullet for `-` and `*`, so this is one character the
+/// vendor has no stake in and the rendering is the one they wrote. `+` and the
+/// ordered markers are left alone: rustc eats none of them.
+fn dashed(line: &str) -> String {
+    let content = line.trim_start();
+    if !content.starts_with('*') || list_marker(content).is_none() {
+        return line.to_owned();
+    }
+    let (indent, rest) = line.split_at(line.len() - content.len());
+    let (_, after) = rest.split_at(1);
+    format!("{indent}{BULLET}{after}")
 }
 
 /// How wide the list marker at the start of `content` is, if it is one.

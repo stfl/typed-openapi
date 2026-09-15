@@ -566,7 +566,12 @@ fn every_string_newtype_prints_and_none_of_them_twice() {
 /// property's description, and under a paragraph line in an operation's
 /// summary. rustc strips a leading `*` out of some `/* */` comments and leaves
 /// it in others, so what the gap between marker and content has to survive is
-/// not the same in all three.
+/// not the same in all three, and the one set off by a blank line is where the
+/// gap's cap and the rewritten bullet have to hold together.
+///
+/// The asterisk-bulleted list beside them is the plain case of the same rustc
+/// rule: a list whose every line carries a marker at one column is the shape it
+/// eats.
 const PROSE: &str = r##"
 openapi: 3.0.3
 info: { title: Prose, version: "1.0" }
@@ -659,6 +664,13 @@ components:
           description: |
             An ordered list hung the same way:
             1.     the content of that item as well.
+        starred:
+          type: string
+          description: |
+            A list the vendor bulleted with asterisks:
+
+            * one item under an asterisk
+            * and a second one
         aside:
           type: string
           description: |
@@ -768,13 +780,22 @@ fn prose_that_was_never_code_is_still_prose() {
         "a line mentioning a doc comment did not survive:\n{types}"
     );
     assert!(
-        types.contains("*   the content of that item."),
+        types.contains("-    the content of that item."),
         "a hanging list item lost its marker, or kept the gap that opens a code \
          block inside it:\n{types}"
     );
     assert!(
-        types.contains("1.   the content of that item as well."),
+        types.contains("1.    the content of that item as well."),
         "an ordered marker is a list marker too:\n{types}"
+    );
+    assert!(
+        types.contains("- one item under an asterisk") && types.contains("- and a second one"),
+        "a list the vendor bulleted with asterisks is spelled with a bullet \
+         rustc leaves alone:\n{types}"
+    );
+    assert!(
+        !types.contains("* one item under an asterisk"),
+        "an asterisk bullet survives into the comment rustc eats it out of:\n{types}"
     );
 
     // The same rule reaching a wrapper's doc, where the vendor's prose is a
@@ -782,7 +803,7 @@ fn prose_that_was_never_code_is_still_prose() {
     // what rustc does with them afterwards, so neither stands in for the other.
     let ops = read(&dir.join("src/ops.rs"));
     assert!(
-        ops.contains("*   A summary the vendor hung from a marker."),
+        ops.contains("-    A summary the vendor hung from a marker."),
         "a hanging list item in a summary was left as the vendor wrote it:\n{ops}"
     );
 }
