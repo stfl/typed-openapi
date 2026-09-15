@@ -272,11 +272,12 @@ Three things are worth knowing:
 - **`generate` needs a newer compiler than the crate's MSRV.** typify reaches
   `regress`, which uses let-chains. That costs a shipping binary nothing,
   because a shipping binary never enables the feature.
-- **The generator emits from what the document names.** A `$ref` to a named
-  schema keeps its name; a request body or response the document spelled inline
-  becomes `serde_json::Value`, because there was no name to generate a type
-  under. `requestBody` `$ref`s are not followed, and only
-  `#/components/schemas/` references are.
+- **The generator emits from what the document describes, named or not.** A
+  `$ref` to a named schema keeps that schema's name; a body or response an
+  operation states inline is converted under its own `title`, or under a name
+  derived from the operation. `serde_json::Value` is left for a JSON body the
+  document states no schema for. `requestBody` `$ref`s are not followed, and
+  only `#/components/schemas/` references are.
 - **A `content` key must be a media type.** A request body declared under a key
   with no `type/subtype` in it — `form-data` where `multipart/form-data` was
   meant — is a `LoadError` naming the operation and the key, rather than bytes

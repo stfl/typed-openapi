@@ -106,8 +106,9 @@ above the seam needs no socket and no fixture server. Both are
 ## What it does not do
 
 - **No authentication.** Sign the `http::Request` in your adapter.
-- **No `oneOf` / `allOf` / `anyOf` request bodies.** A nested body is
-  `--json-body FILE`; per-field flags exist only for flat ones.
+- **No per-field flags for a nested body.** A body that is nested, `oneOf`,
+  `allOf` or `anyOf` is `--json-body FILE` on the command line; flags exist
+  only for flat ones. The typed wrapper takes the generated type either way.
 - **No object parameters.** A list of scalars is a repeatable flag, laid out by
   its own `style` and `explode`. An object, an `in: cookie`, a
   `content`-described parameter and an unserialisable `style` carry no flag:
