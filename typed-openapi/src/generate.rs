@@ -452,6 +452,16 @@ pub enum GenerateError {
     NoType { schema: String, rust: String },
     #[error("{0}")]
     Unsupported(String),
+    /// A failure while emitting one operation's wrapper, named by the
+    /// operation it came from. Everything else this crate refuses says which
+    /// operation it is about, and a generated file is too large to bisect by
+    /// hand for one that does not.
+    #[error("{op}: {source}")]
+    Operation {
+        op: String,
+        #[source]
+        source: Box<GenerateError>,
+    },
     #[error("the generated {file} is not valid Rust: {source}")]
     NotRust {
         file: &'static str,

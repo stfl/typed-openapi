@@ -407,3 +407,94 @@ fn every_type_a_wrapper_names_is_one_the_generated_schemas_define() {
         }
     }
 }
+
+/// An operation whose parameter is named after a Rust keyword.
+///
+/// `type` is an ordinary thing for an API to filter on, and the document is
+/// under no obligation to avoid Rust's vocabulary. `ref`, `match` and `move`
+/// are the same case.
+const KEYWORDED: &str = r##"
+openapi: 3.0.3
+info: { title: Keyworded, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /vouchers:
+    get:
+      operationId: listVouchers
+      parameters:
+        - name: type
+          in: query
+          schema: { type: string }
+        - name: ref
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Voucher" }
+components:
+  schemas:
+    Voucher:
+      type: object
+      properties:
+        id: { type: integer }
+"##;
+
+/// A parameter named after a keyword keeps the document's own word, as a raw
+/// identifier, because a mangled `type_` reads as something the generator
+/// invented. What crosses the wire is unaffected either way: the wire name
+/// travels beside the argument as the literal the request builder is given.
+#[test]
+fn a_parameter_named_after_a_keyword_is_a_raw_identifier_and_keeps_its_wire_name() {
+    let dir = out("keyworded");
+    Settings::new(wrote(&dir, "document.yaml", KEYWORDED))
+        .write_to(&dir)
+        .expect("a keyword is a spelling problem, not a document this crate refuses");
+
+    let ops = read(&dir.join("src/ops.rs"));
+    assert!(
+        ops.contains("r#type: Option<&str>") && ops.contains("r#ref: Option<&str>"),
+        "a keyword parameter is not a raw identifier:\n{ops}"
+    );
+    assert!(
+        ops.contains(r#".maybe("type", r#type)"#) && ops.contains(r#".maybe("ref", r#ref)"#),
+        "the wire name did not survive the spelling:\n{ops}"
+    );
+}
+
+/// A wrapper this crate cannot spell names the operation it belongs to. The
+/// alternative is what a bare parse failure over a generated file gives an
+/// adopter: a `syn` error with a position in a token stream and nothing to open.
+#[test]
+fn an_operation_that_cannot_be_spelled_names_itself() {
+    let dir = out("unspellable");
+    // A leading digit survives snake-casing and is not the start of any
+    // identifier, raw or otherwise.
+    let document = KEYWORDED.replace("operationId: listVouchers", "operationId: 2listVouchers");
+    let failure = Settings::new(wrote(&dir, "document.yaml", &document))
+        .write_to(&dir)
+        .expect_err("`2listVouchers` has no spelling as a Rust identifier");
+    assert_eq!(
+        failure.to_string(),
+        "2listVouchers: the operationId has no spelling as a Rust identifier",
+        "the failure has to name the operation: a generated file is six thousand \
+         lines and a `syn` position is not something an adopter can open"
+    );
+}
+
+/// The same naming, for a parameter: what the adopter needs is the operation
+/// and the parameter, not a position in a token stream.
+#[test]
+fn a_parameter_that_cannot_be_spelled_names_itself_and_its_operation() {
+    let dir = out("unspellable-param");
+    let document = KEYWORDED.replace("- name: type", "- name: \"2\"");
+    let failure = Settings::new(wrote(&dir, "document.yaml", &document))
+        .write_to(&dir)
+        .expect_err("`2` has no spelling as a Rust identifier");
+    assert_eq!(
+        failure.to_string(),
+        "listVouchers: parameter `2` has no spelling as a Rust identifier",
+    );
+}

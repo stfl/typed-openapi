@@ -96,15 +96,25 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                 unsupported(format!("`{}` is not in the overlaid document", op.id()))
             })?;
             let (id, method, path) = (op.id(), op.method().as_str(), op.path());
-            Ok(Emitted {
-                row: quote! { (#id, #method, #path) },
-                variant: variant_of(op),
-                id: id.to_owned(),
-                group: op.group().as_str().to_owned(),
-                command: op.command().as_str().to_owned(),
-                body: json_body_type(op, operation, names)?,
-                method: wrapper(op, path_item, operation, names)?,
-                builder_method: builder_wrapper(op, path_item, operation, names)?,
+            // Every failure below is about this one operation, and a generated
+            // file is far too large to bisect by hand — so the operation is
+            // named here, once, rather than at each of the places that can
+            // fail.
+            let emitted = || {
+                Ok(Emitted {
+                    row: quote! { (#id, #method, #path) },
+                    variant: variant_of(op)?,
+                    id: id.to_owned(),
+                    group: op.group().as_str().to_owned(),
+                    command: op.command().as_str().to_owned(),
+                    body: json_body_type(op, operation, names)?,
+                    method: wrapper(op, path_item, operation, names)?,
+                    builder_method: builder_wrapper(op, path_item, operation, names)?,
+                })
+            };
+            emitted().map_err(|source| GenerateError::Operation {
+                op: id.to_owned(),
+                source: Box::new(source),
             })
         })
         .collect()
@@ -244,8 +254,40 @@ fn inventory(ops: &[Emitted]) -> TokenStream {
 }
 
 /// The `OperationId` variant for an operation: the `operationId`, PascalCased.
-fn variant_of(op: &Operation) -> Ident {
-    format_ident!("{}", op.id().to_pascal_case())
+fn variant_of(op: &Operation) -> Result<Ident, GenerateError> {
+    operation_ident(&op.id().to_pascal_case())
+}
+
+/// An identifier built from an operationId. [`gather`] names the operation, so
+/// this says only what about it could not be spelled.
+fn operation_ident(word: &str) -> Result<Ident, GenerateError> {
+    ident(word).ok_or_else(|| unsupported("the operationId has no spelling as a Rust identifier"))
+}
+
+/// `word` as an identifier the generated source can carry.
+///
+/// A document is free to name a parameter `type` or an operation `match`, and a
+/// keyword is not an identifier. A raw identifier is what keeps the document's
+/// own word: `r#type` reads as what the document said, where a mangled `type_`
+/// reads as something this generator invented. Four words cannot be written raw
+/// at all — `crate`, `self`, `Self` and `super` — and those take the underscore
+/// instead, which is the one place a name is changed rather than quoted.
+///
+/// Nothing about a request depends on which of the two a name gets. The wire
+/// name travels beside the argument, as the literal the request builder is
+/// given, so an argument is free to be spelled however Rust requires.
+///
+/// A word with no spelling at all — one that starts with a digit, or that
+/// case-conversion emptied — is an error rather than a panic, because
+/// `format_ident!` panics and a bless step is a library call.
+fn ident(word: &str) -> Option<Ident> {
+    if typify::accept_as_ident(word) {
+        return syn::parse_str(word).ok();
+    }
+    match word {
+        "crate" | "self" | "Self" | "super" => Some(format_ident!("{word}_")),
+        _ => syn::parse_str(&format!("r#{word}")).ok(),
+    }
 }
 
 /// The Rust type of an operation's JSON request body, when it has one.
@@ -281,7 +323,7 @@ fn wrapper(
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let name = format_ident!("{}", op.id().to_snake_case());
+    let name = operation_ident(&op.id().to_snake_case())?;
     let summary = op.summary().unwrap_or(op.id());
     let signature = format!("{} {}", op.method(), op.path());
     let gate = gate_note(op);
@@ -298,8 +340,8 @@ fn wrapper(
     let notes = notes
         .iter()
         .map(|note| quote! { #[doc = ""] #[doc = #note] });
-    let variant = variant_of(op);
-    Ok(quote! {
+    let variant = variant_of(op)?;
+    parses(quote! {
         #[doc = #summary]
         #[doc = ""]
         #[doc = #signature]
@@ -310,6 +352,21 @@ fn wrapper(
             self.call(OperationId::#variant, Values::new() #(#builder)*)
         }
     })
+}
+
+/// A wrapper, checked to be Rust before it joins six thousand lines of its
+/// kind.
+///
+/// The whole file is parsed once at the end anyway, and a failure there names a
+/// position in a token stream nobody can open. Parsing each wrapper as it is
+/// built costs one small parse per operation and puts the failure inside the
+/// operation that caused it, where [`gather`] names it.
+fn parses(wrapper: TokenStream) -> Result<TokenStream, GenerateError> {
+    syn::parse2::<syn::ImplItemFn>(wrapper.clone()).map_err(|source| GenerateError::NotRust {
+        file: "ops.rs",
+        source,
+    })?;
+    Ok(wrapper)
 }
 
 /// What a wrapper's doc says about the gate a command line holds the operation
@@ -354,8 +411,8 @@ fn builder_wrapper(
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let plain = format_ident!("{}", op.id().to_snake_case());
-    let name = format_ident!("{}_builder", op.id().to_snake_case());
+    let plain = operation_ident(&op.id().to_snake_case())?;
+    let name = format_ident!("{plain}_builder");
     let Signature {
         args,
         names: arguments,
@@ -366,7 +423,7 @@ fn builder_wrapper(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
          required argument is a compile error."
     );
-    Ok(quote! {
+    parses(quote! {
         #[doc = #doc]
         #[builder]
         pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
@@ -448,7 +505,12 @@ fn add_param(
             return Ok(());
         }
     };
-    let ident = format_ident!("{}", param.name().to_snake_case());
+    let ident = ident(&param.name().to_snake_case()).ok_or_else(|| {
+        unsupported(format!(
+            "parameter `{}` has no spelling as a Rust identifier",
+            param.name()
+        ))
+    })?;
     let schema = param_schema(item, operation, param.name())?;
     let wire = param.name();
     out.names.push(ident.clone());
