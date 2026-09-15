@@ -196,11 +196,22 @@ for carrier in operation.carrying("ledger-day") {
 ```
 
 `Operation::carrying` reads the reduced model, so a shipped binary answers with
-no document, no reader and no second pass; `Param::format` and `Field::format`
-are the same fact one value at a time. A guard written over the answer is
+no document, no reader and no second pass. A guard written over the answer is
 general — it covers the field the vendor adds next revision, because the
 document is what names it — where a compiled-in list of field names protects
 whatever it was written against and nothing else.
+
+The halves are yours too, for a guard that means only one of them:
+`Operation::params` with `Param::format`, and `Body::fields` with
+`Field::format`. `Body::fields` is the door to a flat JSON body's properties
+generally — walk it to render a body, to document one, or to check one — and it
+answers with nothing for every body that offers no per-property flag, so the
+walk needs no match over the body kinds and covers one added later.
+
+Prefer `carrying` when the question is about the operation. Chaining the two
+halves by hand gets the same answer, and a guard that chains only the first gets
+a shorter one without saying so: the parameters pass, the body fields were never
+looked at, and nothing about the result reads as incomplete.
 
 The kind is read off the schema that *states* it, so a dozen properties
 pointing a `$ref` at `LedgerDay` are a dozen days, and a wrapper around that

@@ -26,7 +26,7 @@
 )]
 
 use api::{CreateLedgerEntryBody, DOCUMENT, LedgerAccount, Memo, OperationId, money};
-use typed_openapi::{Body, Document, Scalar};
+use typed_openapi::{Document, Scalar};
 
 /// Every edge the `LedgerAccount` schema's `pattern` has, and whether the
 /// document admits it.
@@ -68,13 +68,14 @@ fn field(name: &str) -> (Scalar, bool) {
     let operation = document
         .get("createLedgerEntry")
         .expect("createLedgerEntry is in the document this crate embeds");
-    let Body::JsonFields(fields) = operation.body() else {
-        panic!("createLedgerEntry takes a flat JSON body");
-    };
-    let field = fields
+    let field = operation
+        .body()
+        .fields()
         .iter()
         .find(|field| field.name() == name)
-        .unwrap_or_else(|| panic!("`{name}` is a field of the body"));
+        .unwrap_or_else(|| {
+            panic!("`{name}` is a per-field flag of the body createLedgerEntry states")
+        });
     (field.scalar().clone(), field.required())
 }
 

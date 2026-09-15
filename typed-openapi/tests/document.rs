@@ -17,8 +17,8 @@
 use typed_openapi::model::Body;
 use typed_openapi::tree::Asked;
 use typed_openapi::{
-    Carrier, Document, Effect, Invocation, Operation, Param, Scalar, Shape, Unsupported, Values,
-    render, tree,
+    Carrier, Document, Effect, Field, Invocation, Operation, Param, Scalar, Shape, Unsupported,
+    Values, render, tree,
 };
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
@@ -132,6 +132,79 @@ fn every_body_is_exactly_one_flag_set() {
         body("uploadDocumentMultipart"),
         Body::Multipart { .. }
     ));
+}
+
+/// The properties of a body are reachable without matching on the body, and
+/// every body that offers none says so the same way.
+///
+/// This is the door anything walking a body a value at a time goes through — a
+/// guard, a renderer, a page of documentation — and the point of it being one
+/// door is that a caller writes no match: the four bodies with nothing to offer
+/// answer with nothing, so a walk is complete without knowing which of them it
+/// has, and a body kind added later is covered where it stands.
+#[test]
+fn every_bodys_properties_are_reachable_without_matching_on_the_body() {
+    let doc = document();
+    let named = |id: &str| -> Vec<&str> {
+        doc.get(id)
+            .unwrap_or_else(|| panic!("{id}"))
+            .body()
+            .fields()
+            .iter()
+            .map(Field::name)
+            .collect()
+    };
+
+    assert_eq!(
+        named("createVoucher"),
+        ["id", "total", "currency", "status", "internal_ref"],
+        "a flat JSON body offers its properties in document order"
+    );
+    for (id, why) in [
+        ("getVoucher", "the document asks for no body"),
+        ("createContact", "one nested property sends the body whole"),
+        ("uploadDocument", "the bytes go out as they arrived"),
+        ("uploadDocumentMultipart", "the parts are files and text"),
+    ] {
+        assert!(named(id).is_empty(), "`{id}` offers properties, and {why}");
+    }
+}
+
+/// Asking an operation which of its values are of a kind covers both halves of
+/// the request, which is what the halves alone cannot promise.
+///
+/// The parts are public and a caller may take them: `Param::format` over
+/// `Operation::params`, `Field::format` over `Body::fields`. What `carrying`
+/// adds is that neither is forgotten — a guard over the parameters alone passes
+/// on every body field it was written to cover, silently. So the whole is held
+/// to the parts here: a `carrying` that stopped reading one half would still
+/// answer, and only this says the answer is short.
+#[test]
+fn asking_for_a_kind_reads_both_halves_of_the_request() {
+    let doc = postings();
+    let op = doc.get("createPosting").expect("createPosting");
+
+    let by_hand: Vec<&str> = op
+        .params()
+        .iter()
+        .filter(|param| param.format() == Some("ledger-day"))
+        .map(Param::name)
+        .chain(
+            op.body()
+                .fields()
+                .iter()
+                .filter(|field| field.format() == Some("ledger-day"))
+                .map(Field::name),
+        )
+        .collect();
+    let asked: Vec<&str> = op.carrying("ledger-day").map(Carrier::name).collect();
+
+    assert_eq!(asked, by_hand, "the whole is not the two halves");
+    assert!(
+        asked.contains(&"period") && asked.contains(&"booked_on"),
+        "the fixture no longer names a kind in both halves, so this test \
+         compares nothing: {asked:?}"
+    );
 }
 
 #[test]

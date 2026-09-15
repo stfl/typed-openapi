@@ -909,6 +909,16 @@ impl Operation {
     /// nested property goes through `--json-body` whole — so the kinds its
     /// properties declare are not reachable from here, and a guard over such a
     /// body is a guard over JSON the adopter reads themselves.
+    ///
+    /// The halves are reachable on their own: [`Operation::params`] with
+    /// [`Param::format`], and [`Body::fields`] with [`Field::format`]. Take
+    /// them where one half is what the caller means. What this adds over
+    /// chaining them is the *other* half — a guard written over the parameters
+    /// and not the body passes every body field it was meant to cover, and an
+    /// omission announces itself the way no wrong answer does, which is not at
+    /// all. [`Carrier`] is then what makes one list out of two: both halves
+    /// name themselves with a `&str`, and the two go to a request by different
+    /// roads, so the name alone does not say which road.
     pub fn carrying(&self, format: &str) -> impl Iterator<Item = Carrier<'_>> {
         let params = self
             .params
@@ -1359,10 +1369,25 @@ impl Body {
         }
     }
 
-    /// The per-field flags this body offers, and none for a body that offers
-    /// none — which is every body but a flat JSON one, whether because it has
-    /// no properties to offer or because it goes out whole.
-    fn fields(&self) -> &[Field] {
+    /// The properties this body offers a flag each, in document order.
+    ///
+    /// A flat JSON body — an object whose every property is a scalar — is the
+    /// one shape a command line takes apart, so it is the one shape with
+    /// fields. Every other body answers with nothing, and each of them is empty
+    /// for a reason a caller can act on: [`Body::None`] because the document
+    /// asks for no body, [`Body::JsonWhole`] because a single nested property
+    /// sends the whole body through `--json-body` and its properties are never
+    /// reduced to fields, [`Body::Multipart`] because its parts are files and
+    /// text rather than properties, and [`Body::Opaque`] because the bytes go
+    /// out as they arrived.
+    ///
+    /// That is what makes this the door for anything walking a body a value at
+    /// a time — a guard, a renderer, a page of documentation. An empty answer
+    /// is the true one: what is not here is not reachable a property at a time
+    /// by anything, so a walk needs no match over the variants to be complete,
+    /// and a body kind added later is covered without revisiting the caller.
+    #[must_use]
+    pub fn fields(&self) -> &[Field] {
         match self {
             Self::JsonFields(fields) => fields,
             Self::None | Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => {

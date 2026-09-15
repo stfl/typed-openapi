@@ -76,9 +76,9 @@ and the bounds `Scalar::parse` enforces.
 
 **A declared `format` travels beside the rules and is inert.** `Shape::Flag` and
 `Field` carry the `format` the value's schema declares, in the document's own
-spelling; `Operation::carrying` is the one way to ask which values of an
-operation are of a kind, and `Carrier` says which half of the request each is
-in. It is deliberately *not* on `Scalar`: everything a `Scalar` carries is a
+spelling; `Operation::carrying` asks which values of an operation are of a kind,
+and `Carrier` says which half of the request each is in. It is deliberately
+*not* on `Scalar`: everything a `Scalar` carries is a
 rule `Scalar::parse` enforces and `Scalar::note` renders, so a format placed
 there would be a rule by the back door — the defect the invariant above exists
 to prevent. Where there is no value there is no kind, which is why an
@@ -88,6 +88,20 @@ is read off the same schema the `Scalar` was read off — the items' for a list.
 keys on too, so the generated types and the reduced model name one vocabulary.
 Unlike `description_of`, the named schema wins over the field: a sentence is
 about the field, a kind is about the value.
+
+**`Operation::carrying` is the whole question; `Body::fields` and
+`Param::format` are its parts, and all three are public.** `Body::fields` is the
+door to a flat body's properties for anything walking one — a guard, a renderer,
+documentation — and answers empty for every other body, so a walk is complete
+with no match over `Body` and covers a variant added later. Keeping it private
+is what once forced `carrying` to be the only route. `carrying` stays beside it
+because chaining the two halves by hand is not the cost: *omitting* one is, and
+a guard over the parameters alone passes on every body field it was written to
+cover without reading short. `tests/document.rs` holds the whole to the parts so
+that a `carrying` which stopped reading one half is named rather than merely
+answering. `Carrier` is what makes one list out of two — both halves name
+themselves with a `&str`, and `Values` keeps parameters and body apart, so the
+name alone does not say where the value goes.
 
 **A shape the reduction cannot read is refused by name, never approximated.** A
 `pattern` no engine runs and a `content` key that is not a media type are both
