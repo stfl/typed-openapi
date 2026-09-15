@@ -266,6 +266,9 @@ preference. The practical argument is also small and immediate: a tripwire that
 stops the bless names the file it is in, so a failure points at whoever owns
 that layer.
 
+Which layer an action belongs in is a judgement nothing here can make, and
+[docs/adoption.md](adoption.md) works that one through with three others.
+
 The example adoption commits two of the three. Writing the third with nothing
 in it is not possible — an Overlay with no actions is not a valid Overlay 1.1
 document, and an empty file is a worse artefact than none — so what a

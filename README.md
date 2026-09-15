@@ -135,6 +135,7 @@ the tests, and the crate built from its own tarball.
 |---|---|
 | [docs/generating.md][gen] | the bless step, the `Settings` interface, wiring your own `xtask` |
 | [docs/overlay.md][ov] | writing corrections as Overlay actions, and the tripwire form |
+| [docs/adoption.md][ad] | taking this to a vendor's document: the judgement calls no check reaches |
 | [docs/cli.md][cli] | mounting the tree, the gate, flag naming, completion |
 | [docs/client.md][client] | the client seam, writing an adapter, `Recorder` |
 | [docs/validation.md][val] | every rule that is enforced, where it runs, and what the engine costs |
@@ -149,6 +150,7 @@ Licensed under either of Apache-2.0 or MIT, at your option.
 [gen]: https://github.com/stfl/typed-openapi/blob/main/docs/generating.md
 [drift]: https://github.com/stfl/typed-openapi/blob/main/docs/drift.md
 [ov]: https://github.com/stfl/typed-openapi/blob/main/docs/overlay.md
+[ad]: https://github.com/stfl/typed-openapi/blob/main/docs/adoption.md
 [cli]: https://github.com/stfl/typed-openapi/blob/main/docs/cli.md
 [val]: https://github.com/stfl/typed-openapi/blob/main/docs/validation.md
 [bu]: https://github.com/stfl/typed-openapi/blob/main/docs/builders.md
