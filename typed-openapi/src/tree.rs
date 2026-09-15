@@ -14,6 +14,12 @@
 //! body to a generated type, say — between what the user typed and what goes
 //! out. [`dispatch`] is the two of them in order.
 //!
+//! The seam also answers the gate on its own: [`Selection::plan`] builds the
+//! request and returns what the gate decided, with nothing sent and no client
+//! asked for. An adopter whose client costs something to build — a credential a
+//! dry run has no use for — asks there, and builds one only for a request the
+//! gate is letting through.
+//!
 //! The flag-to-wire-name translation lives here and nowhere else: below this
 //! module the vocabulary is the document's own names, which is why a Rust
 //! caller can use the same request builder without ever meeting a flag.
@@ -310,8 +316,14 @@ pub enum DispatchError {
 /// One operation the user named, with its arguments read and its gate answered
 /// — everything needed to send it, and nothing sent yet.
 ///
-/// This is the seam an adopter puts a check of their own into. `send` consumes
-/// it, so the request is built once and cannot be sent twice.
+/// This is the seam an adopter puts a check of their own into. It has two
+/// exits: [`send`] builds the request, puts it to the gate and carries the
+/// verdict out, and [`plan`] stops at the verdict and hands it over. Both
+/// consume the selection, so the request is built once and cannot be sent
+/// twice.
+///
+/// [`send`]: Selection::send
+/// [`plan`]: Selection::plan
 #[derive(Debug)]
 pub struct Selection<'d> {
     operation: &'d Operation,
@@ -342,9 +354,35 @@ impl<'d> Selection<'d> {
         &self.answers
     }
 
+    /// Build the request and put it to the gate, with nothing sent.
+    ///
+    /// The gate decides before a client exists, and that is what this is for: a
+    /// dry run is reached with no socket and no credential, so a user who has
+    /// configured neither can still ask what a write would send. [`send`] wants
+    /// a client in hand to carry the verdict out; this hands the verdict over.
+    ///
+    /// A [`Plan::Send`] goes out through the client's own `send`, where the
+    /// error that comes back is the client's own type: nothing is boxed, so
+    /// there is nothing to downcast. `docs/client.md` shows both routes.
+    ///
+    /// [`send`]: Selection::send
+    pub fn plan(self, base: &Uri) -> Result<Plan, DispatchError> {
+        Ok(Plan::build(
+            self.operation,
+            base,
+            self.values,
+            &self.answers,
+        )?)
+    }
+
     /// Build the request, put it to the gate, and do what the gate decided.
+    ///
+    /// [`plan`] is the first half on its own, for a caller who has to know the
+    /// verdict before there is a client to hand over.
+    ///
+    /// [`plan`]: Selection::plan
     pub fn send<C: SyncClient>(self, client: &C, base: &Uri) -> Result<Outcome, DispatchError> {
-        match Plan::build(self.operation, base, self.values, &self.answers)? {
+        match self.plan(base)? {
             Plan::Send(request) => client
                 .send(request)
                 .map(Outcome::Sent)
