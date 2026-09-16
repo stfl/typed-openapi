@@ -134,6 +134,77 @@ fn every_body_is_exactly_one_flag_set() {
     ));
 }
 
+/// A `required` list is what a body must carry *if the caller sends one*, and
+/// whether the caller must send one at all is the other `required` — the
+/// boolean on the request body. A property is demanded on the command line only
+/// where both say so.
+///
+/// Reading the list alone would put the two statements at odds: the document
+/// says the body may be left out, and the subcommand would then refuse to run
+/// without a property of the body that was left out. `createMemo` beside it is
+/// the control — the same list under a body the document does demand, where the
+/// flag is demanded with it — so this says the reading is conditional rather
+/// than merely lenient.
+#[test]
+fn a_property_is_demanded_only_where_the_document_demands_the_body_holding_it() {
+    const EITHER_WAY: &str = r#"  /notes:
+    post:
+      operationId: createNote
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+      responses: { "201": { description: Created } }
+  /memos:
+    post:
+      operationId: createMemo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+      responses: { "201": { description: Created } }
+"#;
+
+    let doc = Document::load(&synthetic(EITHER_WAY), &[]).expect("a document");
+    let demanded = |id: &str| {
+        let Body::JsonFields(fields) = doc.get(id).expect(id).body() else {
+            panic!("`{id}` states a flat body");
+        };
+        fields
+            .iter()
+            .find(|field| field.name() == "label")
+            .expect("the body declares `label`")
+            .required()
+    };
+    assert!(
+        !demanded("createNote"),
+        "a body the document does not ask for demands a property of itself"
+    );
+    assert!(demanded("createMemo"), "and one it does ask for does");
+
+    // The same two answers where a user meets them: a subcommand whose body is
+    // optional runs with nothing typed at all.
+    let root = || clap::Command::new("toy").subcommands(tree::commands(&doc));
+    root()
+        .try_get_matches_from(["toy", "notes", "create"])
+        .expect("an optional body is a body the caller may leave out");
+    let refused = root()
+        .try_get_matches_from(["toy", "memos", "create"])
+        .expect_err("a required body has to arrive somehow")
+        .to_string();
+    assert!(refused.contains("--label"), "{refused}");
+}
+
 /// The properties of a body are reachable without matching on the body, and
 /// every body that offers none says so the same way.
 ///
