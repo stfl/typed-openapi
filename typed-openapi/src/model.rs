@@ -26,7 +26,7 @@ use thiserror::Error;
 // `typed_openapi::LoadError` and `typed_openapi::model::LoadError` both name
 // the one type wherever the reading itself is written down.
 #[cfg(feature = "document")]
-pub use self::reduce::LoadError;
+pub use self::reduce::{ConfirmationError, LoadError, Loading};
 use crate::names::{CommandName, NameError, renamed, spelled};
 use crate::scalar::Scalar;
 
@@ -40,8 +40,22 @@ pub const RAW_BODY: &str = "raw-body";
 pub const FILE_PART: &str = "file";
 /// One text part of a multipart body.
 pub const FIELD_PART: &str = "field";
-/// The write gate.
+/// The write gate: the word a CLI confirms with unless an adopter chooses
+/// another one, which `Loading::commit` is how they do (the `document` feature).
 pub const COMMIT: &str = "commit";
+/// The argument id the confirmation is declared under, whatever word it wears.
+///
+/// clap wants an id unique within a subcommand, and the word itself is not safe
+/// to use as one: an adopter who moves the confirmation to `--yes` frees
+/// `commit` for a document property, and that property's flag would then be
+/// declared under the same id as the confirmation. The colon keeps this
+/// outside `[a-z0-9-]`, which is every spelling a document name can reduce to,
+/// so nothing a vendor writes can collide with it.
+///
+/// A hand-written verb that offers its own confirmation declares it under this
+/// id, so that `tree::answers` reads the same flag there as it does on
+/// a generated subcommand.
+pub const COMMIT_ID: &str = "cli:commit";
 
 /// Every operation the document describes, in document order, plus the server
 /// it describes them against.
@@ -49,6 +63,7 @@ pub const COMMIT: &str = "commit";
 pub struct Document {
     #[serde(with = "uri_string")]
     base: Uri,
+    commit: String,
     ops: Vec<Operation>,
 }
 
@@ -58,6 +73,7 @@ pub struct Operation {
     id: String,
     group: CommandName,
     command: CommandName,
+    commit: String,
     #[serde(with = "method_string")]
     method: Method,
     path: String,
@@ -436,6 +452,18 @@ impl Document {
         &self.base
     }
 
+    /// The word this CLI spends on confirming a write, without the `--`.
+    ///
+    /// `commit` unless the adopter chose another one while the document was
+    /// loaded. Anything that describes the confirmation in prose — a help
+    /// page, the summary, a generated doc comment — reads it from here rather
+    /// than spelling `--commit`, so that what a page says and what a
+    /// subcommand accepts are one string.
+    #[must_use]
+    pub fn commit(&self) -> &str {
+        &self.commit
+    }
+
     pub fn iter(&self) -> std::slice::Iter<'_, Operation> {
         self.ops.iter()
     }
@@ -589,6 +617,19 @@ impl Operation {
     #[must_use]
     pub fn gates(&self) -> &[Gate] {
         &self.gates
+    }
+
+    /// The word this CLI spends on confirming a write, without the `--`.
+    ///
+    /// Decided while the document was reduced and copied onto every operation,
+    /// because a subcommand is built from one operation alone: `tree` (the
+    /// `clap` feature) is handed an `Operation` and no document, and the flag it declares has
+    /// to be the word the adopter chose. [`Document::commit`] is the same
+    /// string, written from the same place, for a caller that has the document
+    /// and wants it once.
+    #[must_use]
+    pub fn commit(&self) -> &str {
+        &self.commit
     }
 
     /// The parameter the document spells `name`, if there is one.

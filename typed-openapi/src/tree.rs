@@ -39,7 +39,7 @@ use http::Uri;
 use thiserror::Error;
 
 use crate::model::{
-    Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, Gate, JSON_BODY,
+    Body, COMMIT_ID, Document, Effect, FIELD_PART, FILE_PART, Field, Gate, JSON_BODY,
     JSON_BODY_TEMPLATE, Location, Operation, Param, RAW_BODY, Shape,
 };
 use crate::names::{CommandName, renamed};
@@ -107,9 +107,14 @@ pub fn command(op: &Operation) -> Command {
     }
     cmd = body_args(cmd, op.body());
     if op.effect() == Effect::Write {
+        // The operation's own word, not this crate's constant: the adopter may
+        // have chosen another one. Everything that spells the confirmation out
+        // for a reader — this flag, a gate's help, the long about below, the
+        // summary page — reads it from the same place, so a page cannot name a
+        // flag the subcommand does not accept.
         cmd = cmd.arg(
-            Arg::new(COMMIT)
-                .long(COMMIT)
+            Arg::new(COMMIT_ID)
+                .long(op.commit().to_owned())
                 .action(ArgAction::SetTrue)
                 .help("Send the request. Without it this is a dry run that prints it"),
         );
@@ -203,22 +208,23 @@ fn apart(cmd: Command, body: &Body) -> Command {
 pub fn gates(cmd: Command, op: &Operation) -> Command {
     op.gates()
         .iter()
-        .fold(cmd, |cmd, gate| cmd.arg(gate_arg(gate)))
+        .fold(cmd, |cmd, gate| cmd.arg(gate_arg(gate, op.commit())))
 }
 
-/// One named gate: a flag that has to be typed in addition to `--commit`.
+/// One named gate: a flag that has to be typed in addition to the
+/// confirmation, whichever word the adopter confirms with.
 ///
 /// `required(true)` rather than merely read at the gate, and that is the whole
 /// point of naming a hazard: a dry run of the operation that mails a stranger
 /// is still a command line somebody had to write `--email` on. The word comes
 /// before the request exists, not after it is built.
-fn gate_arg(gate: &Gate) -> Arg {
+fn gate_arg(gate: &Gate, commit: &str) -> Arg {
     Arg::new(gate.as_str().to_owned())
         .long(gate.as_str().to_owned())
         .action(ArgAction::SetTrue)
         .required(true)
         .help(format!(
-            "Required, and demanded in addition to --commit: this operation \
+            "Required, and demanded in addition to --{commit}: this operation \
              stands behind the `{gate}` gate"
         ))
 }
@@ -242,15 +248,20 @@ fn long_about(op: &Operation) -> String {
         op.id()
     );
     if op.effect() == Effect::Write {
-        out.push_str("\n\nThis operation writes. Without --commit it is a dry run.");
+        let _ = write!(
+            out,
+            "\n\nThis operation writes. Without --{} it is a dry run.",
+            op.commit()
+        );
     }
     if !op.gates().is_empty() {
         let named: Vec<String> = op.gates().iter().map(|gate| format!("--{gate}")).collect();
         let _ = write!(
             out,
             "\n\nNamed gates: {}. Each one is required, and demanded in \
-             addition to --commit.",
-            named.join(", ")
+             addition to --{}.",
+            named.join(", "),
+            op.commit()
         );
     }
     // A parameter with no flag is said here, where a flag would have been. The
@@ -284,7 +295,7 @@ pub fn answers(op: &Operation, matches: &ArgMatches) -> Answers {
         return Answers::new();
     }
     let mut answered = Answers::new();
-    if flag(matches, COMMIT) {
+    if flag(matches, COMMIT_ID) {
         answered = answered.commit();
     }
     for gate in op.gates() {

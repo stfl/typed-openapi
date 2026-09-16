@@ -402,13 +402,14 @@ fn gate_note(op: &Operation) -> String {
         .collect();
     match (op.effect(), named.is_empty()) {
         (crate::Effect::Read, _) => "A read.".to_owned(),
-        (crate::Effect::Write, true) => {
-            "This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`."
-                .to_owned()
-        }
+        (crate::Effect::Write, true) => format!(
+            "This operation writes. A Rust caller is trusted; the CLI holds it behind `--{}`.",
+            op.commit()
+        ),
         (crate::Effect::Write, false) => format!(
             "This operation writes. A Rust caller is trusted; the CLI holds it behind \
-             `--commit` and {}.",
+             `--{}` and {}.",
+            op.commit(),
             named.join(" and ")
         ),
     }

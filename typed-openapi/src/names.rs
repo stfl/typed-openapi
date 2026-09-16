@@ -185,28 +185,87 @@ fn verb(method: &Method, addressed: bool) -> &'static str {
 /// a flag reports that once the document it came from is gone.
 #[cfg(feature = "document")]
 #[derive(Debug)]
-pub struct Namespace(Vec<String>);
+pub struct Namespace {
+    /// Every flag this subcommand has spent, guarded words included.
+    taken: Vec<String>,
+    /// The words a document name may not take over, and why each is guarded.
+    guarded: Vec<(String, Protected)>,
+}
+
+/// A word the command line spends on saying yes, and what it says yes to.
+///
+/// Both are typed by a person in order to let something irreversible happen, so
+/// neither may be quietly answered by a flag that carries data. A document name
+/// that wants one of these words is refused while the document is reduced, and
+/// [`Clash`] says which word so the refusal can name the way out.
+#[cfg(feature = "document")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protected {
+    /// The confirmation. Its spelling is the adopter's, so the way out is to
+    /// choose another one.
+    Commit,
+    /// One of the operation's named gates. Its spelling is the document's own
+    /// correction layer, so the way out is to rename it there.
+    Gate,
+}
+
+/// A document name that wanted a word the command line had already spent on
+/// saying yes.
+#[cfg(feature = "document")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Clash {
+    /// The word both of them wanted.
+    pub word: String,
+    /// Which kind of yes it is, and so which way out the refusal offers.
+    pub kind: Protected,
+}
 
 #[cfg(feature = "document")]
 impl Namespace {
     /// Start with the CLI's own flags already spent, so a document that happens
-    /// to name a field `commit` renames rather than colliding at startup.
+    /// to name a field `json-body` renames rather than colliding at startup,
+    /// and with the words that may not be renamed around at all.
     ///
-    /// The set is an iterator rather than a fixed list because part of it is a
-    /// fact about one operation: the flags standing in front of that
-    /// operation's named gates are spent here too, before the document's own
-    /// names are claimed.
+    /// The flags that carry a request's *data* move aside for each other, which
+    /// is what keeps a vendor's spelling from deciding whether a document loads.
+    /// The words that carry a person's *consent* do not: a `--commit` that
+    /// silently became `--body-commit` is a confirmation nobody typed and a
+    /// request nobody meant, so the document is refused instead and the adopter
+    /// picks which of the two names moves.
     #[must_use]
-    pub fn with_reserved<'r>(reserved: impl IntoIterator<Item = &'r str>) -> Self {
-        Self(reserved.into_iter().map(ToOwned::to_owned).collect())
+    pub fn guarding<'r>(
+        guarded: impl IntoIterator<Item = (&'r str, Protected)>,
+        reserved: impl IntoIterator<Item = &'r str>,
+    ) -> Self {
+        let guarded: Vec<(String, Protected)> = guarded
+            .into_iter()
+            .map(|(word, kind)| (word.to_owned(), kind))
+            .collect();
+        Self {
+            taken: guarded
+                .iter()
+                .map(|(word, _)| word.clone())
+                .chain(reserved.into_iter().map(ToOwned::to_owned))
+                .collect(),
+            guarded,
+        }
     }
 
     /// The flag to use: `preferred` when it is free, otherwise prefixed.
-    pub fn claim(&mut self, preferred: &str, prefix: &str) -> String {
+    ///
+    /// A `preferred` that is one of the guarded words is refused rather than
+    /// prefixed — see [`Namespace::guarding`].
+    pub fn claim(&mut self, preferred: &str, prefix: &str) -> Result<String, Clash> {
+        if let Some((word, kind)) = self.guarded.iter().find(|(word, _)| word == preferred) {
+            return Err(Clash {
+                word: word.clone(),
+                kind: *kind,
+            });
+        }
         let mut candidate = preferred.to_owned();
         let mut renamed = false;
         let mut suffix = 2;
-        while self.0.iter().any(|taken| taken == &candidate) {
+        while self.taken.iter().any(|taken| taken == &candidate) {
             candidate = if renamed {
                 format!("{prefix}-{preferred}-{suffix}")
             } else {
@@ -215,8 +274,8 @@ impl Namespace {
             renamed = true;
             suffix += 1;
         }
-        self.0.push(candidate.clone());
-        candidate
+        self.taken.push(candidate.clone());
+        Ok(candidate)
     }
 }
 
@@ -391,10 +450,50 @@ mod tests {
     #[cfg(feature = "document")]
     #[test]
     fn a_body_field_moves_aside_for_a_parameter_of_the_same_name() {
-        let mut flags = Namespace::with_reserved(["commit", "json-body"]);
-        assert_eq!(flags.claim("id", "param"), "id");
-        assert_eq!(flags.claim("id", "body"), "body-id");
-        assert_eq!(flags.claim("id", "body"), "body-id-3");
-        assert_eq!(flags.claim("commit", "body"), "body-commit");
+        let mut flags = Namespace::guarding([], ["json-body"]);
+        assert_eq!(flags.claim("id", "param").as_deref(), Ok("id"));
+        assert_eq!(flags.claim("id", "body").as_deref(), Ok("body-id"));
+        assert_eq!(flags.claim("id", "body").as_deref(), Ok("body-id-3"));
+        // Spent and not guarded: a flag carrying data moves aside for it.
+        assert_eq!(
+            flags.claim("json-body", "body").as_deref(),
+            Ok("body-json-body")
+        );
+    }
+
+    /// The words that carry consent do not move. A flag that carries data
+    /// cannot be allowed to answer one, and renaming the word silently is how
+    /// it would: the run would go out confirmed by a value somebody typed for
+    /// an entirely different reason.
+    #[cfg(feature = "document")]
+    #[test]
+    fn a_word_that_carries_consent_refuses_rather_than_moving_aside() {
+        let mut flags = Namespace::guarding(
+            [("commit", Protected::Commit), ("enshrine", Protected::Gate)],
+            ["json-body"],
+        );
+
+        assert_eq!(
+            flags.claim("commit", "body"),
+            Err(Clash {
+                word: "commit".to_owned(),
+                kind: Protected::Commit,
+            })
+        );
+        assert_eq!(
+            flags.claim("enshrine", "param"),
+            Err(Clash {
+                word: "enshrine".to_owned(),
+                kind: Protected::Gate,
+            })
+        );
+        // And everything else still behaves: guarding some words does not
+        // stop the rest of the namespace from moving aside for itself.
+        assert_eq!(
+            flags.claim("json-body", "body").as_deref(),
+            Ok("body-json-body")
+        );
+        assert_eq!(flags.claim("id", "param").as_deref(), Ok("id"));
+        assert_eq!(flags.claim("id", "body").as_deref(), Ok("body-id"));
     }
 }

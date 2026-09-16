@@ -24,10 +24,23 @@ An operation may name further gates in `x-cli-gates`, and they are demanded
 *in addition to* the confirmation: `Plan::Send` wants the commit and every gate
 answered, so adding a gate can only hold a request back. Each is a `required`
 flag, which is the point — the hazard is named before the request is built, dry
-run included. Their flags are reserved in the subcommand's `Namespace` before
-any parameter or field claims one, so a body field spelled like a gate moves
-aside rather than shadowing it. A gate on a read is refused while the document
-is reduced: a request sent on sight has nothing for a gate to hold.
+run included.
+
+**A word that carries consent is never renamed around.** A gate's flag and the
+confirmation are guarded in the subcommand's `Namespace`, so a parameter or body
+field spelled like one refuses the load — `GateTakenByName`, `CommitTakenByName`
+— rather than moving to `--body-<name>`. The document's names are the vendor's
+and go on the wire; a confirmation answerable by a flag somebody typed for
+another reason is not a confirmation. Each word moves on the side that owns it:
+a gate in the adopter's `x-cli-gates`, the confirmation through
+`Loading::commit` or `Settings::commit_word`. The five body flags in `TRANSPORT`
+are not consent and still yield, to `--body-<name>`.
+
+The confirmation is guarded on writes only, because only a write declares it,
+and a gate on a read is refused while the document is reduced: a request sent on
+sight has nothing for a gate to hold. The chosen word travels in the blob on the
+document and on every operation, so a help page, the summary and a generated doc
+comment all name the flag the binary accepts.
 
 `tree::gates` is the one place a gate becomes a flag, and `tree::command` goes
 through it, so a hand-written verb and a generated subcommand cannot spell one

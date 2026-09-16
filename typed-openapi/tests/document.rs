@@ -17,8 +17,8 @@
 use typed_openapi::model::Body;
 use typed_openapi::tree::Asked;
 use typed_openapi::{
-    Carrier, Document, Effect, Field, Invocation, Operation, Param, Scalar, Shape, Unsupported,
-    Values, render, tree,
+    Carrier, Document, Effect, Field, Invocation, Loading, Operation, Param, Scalar, Shape,
+    Unsupported, Values, render, tree,
 };
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
@@ -1819,9 +1819,17 @@ fn a_gate_the_command_line_cannot_offer_is_refused_by_name() {
         refused("post", "[\"???\"]"),
         "the x-cli-gates `???` does not kebab-case into [a-z0-9-]"
     );
+    // A gate spelled like the confirmation, and a gate spelled like a body
+    // flag, are refused for different reasons and say so: one word can move
+    // and the other cannot.
     assert_eq!(
         refused("post", "[commit]"),
-        "enshrineVoucher: the gate `commit` is one of the flags every subcommand \
+        "enshrineVoucher: the gate `commit` is the word this CLI confirms with; \
+         rename the gate in `x-cli-gates`, or confirm with another word"
+    );
+    assert_eq!(
+        refused("post", "[json-body]"),
+        "enshrineVoucher: the gate `json-body` is one of the flags every subcommand \
          already spends"
     );
     assert_eq!(
@@ -1837,12 +1845,18 @@ fn a_gate_the_command_line_cannot_offer_is_refused_by_name() {
     );
 }
 
-/// A gate's flag is claimed before the document's own names are, so a body
-/// field the vendor happens to spell like one moves aside instead of shadowing
-/// the word standing in front of the hazard.
+/// A word that carries consent is not a name a document may take over. A body
+/// field spelled like a gate is refused while the document is reduced, and the
+/// refusal names the way out — which is the adopter's own correction layer,
+/// because the gate's spelling is theirs.
+///
+/// Renaming the field would be the other way out, and it is the wrong one: the
+/// document's property names are the vendor's, they are what goes on the wire,
+/// and a flag quietly moved to `--body-enshrine` is a hazard the person at the
+/// keyboard no longer sees.
 #[test]
-fn a_body_field_that_collides_with_a_gate_moves_aside() {
-    let doc = Document::load(
+fn a_body_field_that_collides_with_a_gate_refuses_the_document() {
+    let error = Document::load(
         &synthetic(
             "  /vouchers/{id}/enshrine:\n\
              \x20   post:\n\
@@ -1859,17 +1873,175 @@ fn a_body_field_that_collides_with_a_gate_moves_aside() {
         ),
         &[],
     )
-    .expect("a document whose body field is spelled like its gate");
+    .expect_err("the property and the gate both want --enshrine");
 
-    let op = doc.get("enshrineVoucher").unwrap();
+    assert_eq!(
+        error.to_string(),
+        "enshrineVoucher: the property `enshrine` and the gate `enshrine` both want \
+         `--enshrine`; rename the gate in `x-cli-gates`, to `gate-enshrine` or another word"
+    );
+}
+
+/// The same for the confirmation, whose spelling is not in the document at all
+/// — so the refusal points at the call that loads it rather than at a file.
+#[test]
+fn a_body_field_that_collides_with_the_confirmation_refuses_the_document() {
+    let error = Document::load(
+        &synthetic(
+            "  /vouchers/{id}:\n\
+             \x20   put:\n\
+             \x20     operationId: updateVoucher\n\
+             \x20     requestBody:\n\
+             \x20       content:\n\
+             \x20         application/json:\n\
+             \x20           schema:\n\
+             \x20             type: object\n\
+             \x20             properties:\n\
+             \x20               commit: { type: string }\n\
+             \x20     responses: { \"200\": { description: OK } }\n",
+        ),
+        &[],
+    )
+    .expect_err("the property and the confirmation both want --commit");
+
+    assert_eq!(
+        error.to_string(),
+        "updateVoucher: the property `commit` and the confirmation both want `--commit`; \
+         confirm with another word — `Loading::commit`, or `Settings::commit_word` \
+         where a bless step generates"
+    );
+}
+
+/// And both ways out work, each on the side that owns the word: the gate is
+/// renamed where the adopter writes gates, the confirmation where the adopter
+/// loads the document. The document's own property keeps its name and its flag.
+#[test]
+fn each_word_moves_on_the_side_that_owns_it() {
+    const BOTH: &str = "  /vouchers/{id}/enshrine:\n\
+         \x20   post:\n\
+         \x20     operationId: enshrineVoucher\n\
+         \x20     x-cli-gates: [gate-enshrine]\n\
+         \x20     requestBody:\n\
+         \x20       content:\n\
+         \x20         application/json:\n\
+         \x20           schema:\n\
+         \x20             type: object\n\
+         \x20             properties:\n\
+         \x20               enshrine: { type: string }\n\
+         \x20               commit: { type: string }\n\
+         \x20     responses: { \"200\": { description: OK } }\n";
+
+    let doc = Document::load_with(
+        &synthetic(BOTH),
+        &[],
+        &Loading::new().commit("yes").expect("`yes` is spellable"),
+    )
+    .expect("both words moved out of the document's way");
+
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+    assert_eq!(op.commit(), "yes");
+
     let Body::JsonFields(fields) = op.body() else {
         panic!("enshrineVoucher takes a flat JSON body");
     };
-    let field = fields.iter().find(|f| f.name() == "enshrine").unwrap();
-    assert_eq!(field.flag(), "body-enshrine");
-    assert!(field.renamed(), "and it says so in its help line");
-    // Both flags are on the subcommand, which they could not be if one had
-    // shadowed the other: clap panics on a duplicate name, and this is where.
+    for name in ["enshrine", "commit"] {
+        let field = fields
+            .iter()
+            .find(|f| f.name() == name)
+            .expect("the document declares it");
+        assert_eq!(field.flag(), name, "the document's own name kept its flag");
+        assert!(!field.renamed(), "and nothing moved it aside");
+    }
+
+    // Every flag is on the subcommand and none shadows another: clap panics on
+    // a duplicate name, and this is where that would surface.
+    tree::command(op).debug_assert();
+}
+
+/// The chosen word reaches everything that spells the confirmation out for a
+/// reader, not just the flag. A help page naming a flag the subcommand does not
+/// accept is worse than no help: it is an instruction that fails.
+#[test]
+fn the_chosen_word_reaches_the_help_and_the_summary_too() {
+    let doc = Document::load_with(
+        TOY,
+        &[CORRECTIONS, CLI],
+        &Loading::new().commit("yes").expect("`yes` is spellable"),
+    )
+    .expect("the toy document loads under another confirmation word");
+
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+    let help = tree::command(op).render_long_help().to_string();
+
+    assert!(help.contains("--yes"), "{help}");
+    assert!(
+        !help.contains("--commit"),
+        "the help names a flag this subcommand does not accept: {help}"
+    );
+
+    let page = doc.summary().to_string();
+    assert!(page.contains("`--yes`"), "{page}");
+    assert!(
+        !page.contains("`--commit`"),
+        "the summary names a flag this binary does not accept: {page}"
+    );
+}
+
+/// A word every subcommand already declares cannot also be the confirmation:
+/// clap resolves two flags of one spelling at a user's startup, and an
+/// adopter's mistake belongs at their bless instead.
+#[test]
+fn a_confirmation_wearing_another_flags_name_is_refused() {
+    for taken in ["json-body", "raw-body", "file", "field", "help"] {
+        let refusal = Loading::new()
+            .commit(taken)
+            .expect_err("the word is one a subcommand already declares");
+        assert_eq!(
+            refusal.to_string(),
+            format!(
+                "`{taken}` is a flag every subcommand already declares, \
+                 so it cannot also be the word this CLI confirms with"
+            )
+        );
+    }
+
+    assert_eq!(
+        Loading::new()
+            .commit("???")
+            .expect_err("`???` is not a flag anybody can type")
+            .to_string(),
+        "the confirmation `???` does not kebab-case into [a-z0-9-]"
+    );
+}
+
+/// A read declares no confirmation, so a read has none to collide with: a
+/// document is free to call a query parameter `commit`, and refusing it would
+/// be refusing a valid document over a clash that cannot happen.
+#[test]
+fn a_read_may_name_a_parameter_after_the_confirmation() {
+    let doc = Document::load(
+        &synthetic(
+            "  /vouchers:\n\
+             \x20   get:\n\
+             \x20     operationId: listVouchers\n\
+             \x20     parameters:\n\
+             \x20       - { name: commit, in: query, schema: { type: string } }\n\
+             \x20     responses: { \"200\": { description: OK } }\n",
+        ),
+        &[],
+    )
+    .expect("a read that names a parameter `commit` clashes with nothing");
+
+    let op = doc.get("listVouchers").expect("the document describes it");
+    let param = op.param("commit").expect("the document declares it");
+    let Shape::Flag { flag, .. } = param.shape() else {
+        panic!("a query string parameter is a flag");
+    };
+    assert_eq!(flag, "commit", "the read's own parameter kept its flag");
     tree::command(op).debug_assert();
 }
 

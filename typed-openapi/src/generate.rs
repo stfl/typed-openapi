@@ -74,7 +74,7 @@ use thiserror::Error;
 
 use crate::model::DocumentError;
 use crate::overlay::OverlayError;
-use crate::{Document, LoadError, overlay};
+use crate::{ConfirmationError, Document, LoadError, Loading, overlay};
 
 /// The command a generated file tells its reader to run.
 ///
@@ -117,6 +117,7 @@ pub struct Settings {
     replacements: Vec<(String, String)>,
     command: String,
     summary: Option<PathBuf>,
+    loading: Loading,
 }
 
 impl Settings {
@@ -135,6 +136,7 @@ impl Settings {
             replacements: Vec::new(),
             command: DEFAULT_COMMAND.to_owned(),
             summary: None,
+            loading: Loading::new(),
         }
     }
 
@@ -151,6 +153,29 @@ impl Settings {
     pub fn overlay(mut self, overlay: impl Into<PathBuf>) -> Self {
         self.overlays.push(overlay.into());
         self
+    }
+
+    /// Confirm writes with this word rather than with `commit`.
+    ///
+    /// The confirmation is this crate's word and not the vendor's, so a
+    /// document whose own schema declares a property called `commit` is not
+    /// wrong — the two simply cannot both have `--commit`, and a generation
+    /// that found them fighting refuses rather than renaming the vendor's
+    /// property behind its author's back. This is the way out on the side that
+    /// owns the word; renaming a gate in `x-cli-gates` is the way out on the
+    /// other.
+    ///
+    /// The word is held to the spelling rule every flag is held to, and the
+    /// refusal comes back here rather than at generation time:
+    ///
+    /// ```
+    /// # use typed_openapi::generate::Settings;
+    /// let settings = Settings::new("toy.yaml").commit_word("yes")?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn commit_word(mut self, word: &str) -> Result<Self, ConfirmationError> {
+        self.loading = self.loading.commit(word)?;
+        Ok(self)
     }
 
     /// Emit `rust_type` wherever the document declares `format`.
@@ -297,7 +322,8 @@ impl Settings {
 
         // Refuse to emit against a document this crate cannot build a CLI from.
         // Everything below trusts that this succeeded.
-        let model = Document::load(&yaml, &[]).map_err(GenerateError::Unusable)?;
+        let model =
+            Document::load_with(&yaml, &[], &self.loading).map_err(GenerateError::Unusable)?;
         let api = serde_json::from_value(overlaid).map_err(GenerateError::NotOpenApi)?;
 
         Ok(Corrected { yaml, model, api })

@@ -214,6 +214,41 @@ The path is yours because nothing generated reads this page. The other four
 artefacts embed each other by relative path, which is why `write_to` decides
 where *they* go; a summary is reached only by whatever you point at it.
 
+### `Settings::commit_word(word) -> Result<Settings, ConfirmationError>`
+
+Confirm writes with `word` rather than with `commit`, spelled without the `--`.
+
+The confirmation is this crate's word, not the vendor's. A document whose schema
+declares a property called `commit` is not wrong — the two simply cannot both
+have `--commit`, and generation refuses rather than renaming the vendor's
+property behind its author's back:
+
+```
+updateVoucher: the property `commit` and the confirmation both want `--commit`;
+load the document with another confirmation word, such as `yes`
+```
+
+This is the way out on the side that owns the word. The other side is
+`x-cli-gates`, where you rename a gate that collides.
+
+```rust
+let written = Settings::new("vendor.yaml")
+    .commit_word("yes")?
+    .write_to("crates/api-generated")?;
+```
+
+Refused where `word` is not spellable as a flag (`[a-z0-9-]`), and where it is
+one every subcommand already declares — `json-body`, `json-body-template`,
+`raw-body`, `file`, `field`, or clap's own `help`. Those cannot move, so a
+confirmation wearing one of their names would be two flags with one spelling.
+
+The chosen word travels in the reduced model, so the binary you ship reads it
+rather than deriving one: the flag a subcommand accepts, the flag its `--help`
+names, the summary page and the generated doc comments are all this one string.
+
+`Document::load_with(document, &overlays, &Loading::new().commit("yes")?)` is
+the same choice for a caller who reduces a document without generating from it.
+
 ### `Settings::write_to(crate_dir) -> Result<Vec<PathBuf>, GenerateError>`
 
 Write the artefacts under `crate_dir` and answer with their paths: the four of

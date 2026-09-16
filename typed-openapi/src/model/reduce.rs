@@ -33,7 +33,7 @@ use super::{
     Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, Gate, JSON_BODY,
     JSON_BODY_TEMPLATE, Join, Location, Operation, Param, RAW_BODY, Shape, Unsupported,
 };
-use crate::names::{CommandName, Grouping, NameError, Namespace, spelled};
+use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
 use crate::scalar::Scalar;
 use crate::schema::{
     RefError, description_of, format_of, is_json, is_media_type, is_multipart, resolve,
@@ -57,19 +57,20 @@ const GROUP: &str = "x-cli-group";
 /// invents costs an Overlay line and not a release of this crate.
 const GATES: &str = "x-cli-gates";
 
-/// The flags every subcommand spends before the document has a say: the write
-/// gate and the five body flags.
+/// The five flags that carry a request's body, spent by every subcommand
+/// before the document has a say.
 ///
-/// A parameter or a body field that wants one of these moves aside, and a gate
-/// that names one is refused — a gate is a word of the adopter's own, and these
-/// six words are already spoken for.
+/// A parameter or a body field that wants one of these moves aside for it, and
+/// a gate that names one is refused. Nothing here is a person saying yes, which
+/// is why these yield where a gate and the confirmation do not: a
+/// `--body-json-body` is ugly and harmless, where a confirmation nobody typed
+/// is neither.
 ///
 /// Spending a word here changes the reduced model of any document that declares
 /// a field spelled the same way, which is the point: the field moves aside at
 /// bless time, where a reviewer sees it, rather than shadowing a flag the CLI
 /// needs.
-const RESERVED: [&str; 6] = [
-    COMMIT,
+const TRANSPORT: [&str; 5] = [
     JSON_BODY,
     JSON_BODY_TEMPLATE,
     RAW_BODY,
@@ -124,8 +125,50 @@ pub enum LoadError {
     GateList { op: String, key: &'static str },
     #[error("{op}: the gate `{gate}` is one of the flags every subcommand already spends")]
     ReservedGate { op: String, gate: Gate },
+    /// A gate spelled like the confirmation. Both are words a person types to
+    /// let something happen, and one flag cannot be two of them: answering the
+    /// gate would answer the confirmation, which is the one thing a gate is
+    /// there to make impossible.
+    ///
+    /// Either word may move, so the message names both doors.
+    #[error(
+        "{op}: the gate `{gate}` is the word this CLI confirms with; \
+         rename the gate in `x-cli-gates`, or confirm with another word"
+    )]
+    GateIsTheConfirmation { op: String, gate: Gate },
     #[error("{op}: the gate `{gate}` is named twice")]
     DuplicateGate { op: String, gate: Gate },
+    /// A document name that wanted the word a gate already spends. Refused
+    /// rather than renamed: a flag carrying data must never be able to answer
+    /// a gate, and a gate quietly moved aside is a hazard nobody typed.
+    ///
+    /// The gate's spelling belongs to the adopter's correction layer, so that
+    /// is where the way out is — and the message names it, because the person
+    /// reading this refusal is the person who wrote the layer.
+    #[error(
+        "{op}: the {what} `{name}` and the gate `{gate}` both want `--{gate}`; \
+         rename the gate in `x-cli-gates`, to `gate-{gate}` or another word"
+    )]
+    GateTakenByName {
+        op: String,
+        what: &'static str,
+        name: String,
+        gate: String,
+    },
+    /// The same, for the confirmation. Its spelling is the adopter's own —
+    /// chosen when the document is loaded — so the way out is to choose
+    /// another one rather than to edit the document.
+    #[error(
+        "{op}: the {what} `{name}` and the confirmation both want `--{commit}`; \
+         confirm with another word — `Loading::commit`, or `Settings::commit_word` \
+         where a bless step generates"
+    )]
+    CommitTakenByName {
+        op: String,
+        what: &'static str,
+        name: String,
+        commit: String,
+    },
     /// A read that names a gate is a document saying two things at once: a read
     /// is sent on sight, so there is nothing for the gate to hold back. Refused
     /// rather than mounted, because one of the two statements is a mistake and
@@ -201,6 +244,77 @@ pub enum LoadError {
     },
 }
 
+/// `--help`, which clap declares on every subcommand whether or not anyone
+/// asked. Nothing here can move it, so it is a name the confirmation may not
+/// take.
+const HELP: &str = "help";
+
+/// Why a word cannot be the confirmation.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum ConfirmationError {
+    /// Not a name a person could type as a flag.
+    #[error(transparent)]
+    Spelling(#[from] NameError),
+    /// A name some other flag on the same subcommand already wears. The others
+    /// cannot move — a body has to be reachable and `--help` is clap's — so
+    /// the confirmation is what gives way.
+    #[error(
+        "`{word}` is a flag every subcommand already declares, \
+         so it cannot also be the word this CLI confirms with"
+    )]
+    Taken {
+        /// The word both of them wanted.
+        word: String,
+    },
+}
+
+/// What the CLI brings to a reduction, as against what the document brings.
+///
+/// A type rather than a bare argument, so that a caller reading
+/// `Loading::new().commit("yes")?` at the call site can see which of the two
+/// the word belongs to.
+#[derive(Debug, Clone)]
+pub struct Loading {
+    commit: String,
+}
+
+impl Default for Loading {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Loading {
+    /// The defaults: `--commit` confirms a write.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            commit: COMMIT.to_owned(),
+        }
+    }
+
+    /// Confirm writes with this word instead, spelled without the `--`.
+    ///
+    /// Held to the one spelling rule every flag is held to, and refused rather
+    /// than mangled: a confirmation somebody cannot type is a confirmation
+    /// nobody gives.
+    ///
+    /// Refused too where the word is one a subcommand already declares — a
+    /// flag that carries the body, or the `--help` clap writes itself. Those
+    /// cannot move, so a confirmation wearing one of their names is two flags
+    /// with one spelling, which clap resolves at the user's startup and not at
+    /// the adopter's bless. The same words are refused for a gate, in
+    /// `gates_of`, and for the same reason.
+    pub fn commit(mut self, word: &str) -> Result<Self, ConfirmationError> {
+        let word = spelled("confirmation", word)?;
+        if TRANSPORT.contains(&word.as_str()) || word == HELP {
+            return Err(ConfirmationError::Taken { word });
+        }
+        self.commit = word;
+        Ok(self)
+    }
+}
+
 impl Document {
     /// Parse the vendor's document, lay the adopter's Overlays over it in
     /// order, and resolve the result into operations.
@@ -233,6 +347,41 @@ impl Document {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn load(document: &str, overlays: &[&str]) -> Result<Self, LoadError> {
+        Self::load_with(document, overlays, &Loading::new())
+    }
+
+    /// The same, with the CLI's own words chosen rather than defaulted.
+    ///
+    /// *Requires the `document` feature.*
+    ///
+    /// The one word this door adds is the confirmation. It is settable because
+    /// it is this crate's and not the vendor's: a document whose own schema
+    /// declares a property called `commit` has every right to, and the way out
+    /// is for the CLI to say yes in a different word rather than for the
+    /// document's property to be renamed behind its author's back.
+    ///
+    /// ```
+    /// use typed_openapi::{Document, Loading};
+    ///
+    /// let doc = Document::load_with(
+    ///     include_str!("../../tests/fixtures/toy.yaml"),
+    ///     &[
+    ///         include_str!("../../tests/fixtures/corrections.yaml"),
+    ///         include_str!("../../tests/fixtures/cli.yaml"),
+    ///     ],
+    ///     &Loading::new().commit("yes")?,
+    /// )?;
+    /// let op = doc
+    ///     .get("enshrineVoucher")
+    ///     .expect("the document describes it");
+    /// assert_eq!(op.commit(), "yes");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn load_with(
+        document: &str,
+        overlays: &[&str],
+        loading: &Loading,
+    ) -> Result<Self, LoadError> {
         let mut doc = crate::overlay::parse(document)?;
         for overlay in overlays {
             doc = crate::overlay::apply(doc, overlay)?;
@@ -243,10 +392,10 @@ impl Document {
         // inline body's schema among them — that this reading needs to see.
         crate::required::check(&doc)?;
         let doc: OpenAPI = serde_json::from_value(doc).map_err(LoadError::Shape)?;
-        Self::from_openapi(&doc)
+        Self::from_openapi(&doc, &loading.commit)
     }
 
-    fn from_openapi(doc: &OpenAPI) -> Result<Self, LoadError> {
+    fn from_openapi(doc: &OpenAPI, commit: &str) -> Result<Self, LoadError> {
         let server = doc.servers.first().ok_or(LoadError::NoServer)?;
         let base = Uri::try_from(&server.url).map_err(|source| LoadError::ServerUrl {
             url: server.url.clone(),
@@ -259,6 +408,7 @@ impl Document {
         let whole = Reading {
             components: doc.components.as_ref().unwrap_or(&empty),
             grouping: Grouping::of(&paths),
+            commit,
         };
 
         let mut ops: Vec<Operation> = Vec::new();
@@ -274,7 +424,11 @@ impl Document {
         if let Some(collision) = first_collision(&ops) {
             return Err(collision);
         }
-        Ok(Self { base, ops })
+        Ok(Self {
+            base,
+            commit: commit.to_owned(),
+            ops,
+        })
     }
 }
 
@@ -300,11 +454,26 @@ impl Operation {
         // belong in it: a body field the vendor happens to spell `enshrine`
         // moves aside rather than shadowing the word that stands in front of
         // the hazard.
-        let gates = gates_of(op, id, effect)?;
+        let gates = gates_of(op, id, effect, whole.commit)?;
 
-        // One namespace per subcommand: the CLI's own flags — this operation's
-        // gates, the confirmation and the body flags — are spent first.
-        let mut flags = Namespace::with_reserved(gates.iter().map(Gate::as_str).chain(RESERVED));
+        // One namespace per subcommand. The words that carry consent — this
+        // operation's gates and the confirmation — are guarded, so a document
+        // name that wants one refuses the load instead of pushing it aside.
+        // The flags that carry the body are merely spent, and move over.
+        //
+        // The confirmation is guarded on a write and nowhere else, because a
+        // read declares no confirmation to clash with: a document is free to
+        // call a query parameter `commit`, and an operation sent on sight has
+        // no word standing in front of it. A gate is refused on a read
+        // earlier still, and for the same reason.
+        let confirmation = (effect == Effect::Write).then_some((whole.commit, Protected::Commit));
+        let mut flags = Namespace::guarding(
+            gates
+                .iter()
+                .map(|gate| (gate.as_str(), Protected::Gate))
+                .chain(confirmation),
+            TRANSPORT,
+        );
         let params = params
             .map(|p| Param::build(id, p, whole.components, &mut flags))
             .collect::<Result<Vec<_>, _>>()?;
@@ -314,6 +483,7 @@ impl Operation {
             id: id.to_owned(),
             group,
             command,
+            commit: whole.commit.to_owned(),
             method,
             path: path.to_owned(),
             summary: op.summary.clone(),
@@ -334,6 +504,11 @@ impl Operation {
 struct Reading<'d> {
     components: &'d Components,
     grouping: Grouping,
+    /// The word this CLI spends on confirming a write. Read once here and then
+    /// written onto the document and onto every operation: a subcommand is
+    /// built from one operation with no document in reach, so the copy is what
+    /// lets `tree` declare the flag the adopter chose.
+    commit: &'d str,
 }
 
 /// Where an operation sits in the command tree: the grouping rule, with the
@@ -389,11 +564,22 @@ fn named<'o>(
 /// adopter's mistake, and all four are refused at their expense rather than at
 /// a user's — a gate that reaches a shipped binary is a gate somebody is about
 /// to type.
-fn gates_of(op: &openapiv3::Operation, id: &str, effect: Effect) -> Result<Vec<Gate>, LoadError> {
+fn gates_of(
+    op: &openapiv3::Operation,
+    id: &str,
+    effect: Effect,
+    commit: &str,
+) -> Result<Vec<Gate>, LoadError> {
     let mut gates: Vec<Gate> = Vec::new();
     for raw in listed(op, id, GATES)? {
         let gate = Gate::new(GATES, raw)?;
-        if RESERVED.contains(&gate.as_str()) {
+        if gate.as_str() == commit {
+            return Err(LoadError::GateIsTheConfirmation {
+                op: id.to_owned(),
+                gate,
+            });
+        }
+        if TRANSPORT.contains(&gate.as_str()) {
             return Err(LoadError::ReservedGate {
                 op: id.to_owned(),
                 gate,
@@ -560,7 +746,9 @@ fn shape_of(
         return Ok(Shape::Unreachable(Unsupported::Unspellable));
     };
     Ok(Shape::Flag {
-        flag: flags.claim(&spelling, "param"),
+        flag: flags
+            .claim(&spelling, "param")
+            .map_err(|clash| clashed(&clash, op, "parameter", &data.name))?,
         location,
         scalar,
         join: repeats.then_some(join),
@@ -739,7 +927,9 @@ fn json_body(
             return whole();
         };
         fields.push(Field {
-            flag: flags.claim(&spelling, "body"),
+            flag: flags
+                .claim(&spelling, "body")
+                .map_err(|clash| clashed(&clash, id, "property", name))?,
             name: name.clone(),
             required: required && object.required.iter().any(|r| r == name),
             scalar,
@@ -748,6 +938,29 @@ fn json_body(
         });
     }
     Ok(Body::JsonFields(fields))
+}
+
+/// A clash, said in the vocabulary of whoever can resolve it.
+///
+/// The two words are guarded for one reason and moved for two different ones,
+/// so the refusal is two sentences rather than one with a branch in it: the
+/// gate's spelling is in the document's correction layer, and the
+/// confirmation's is in the call that loads or generates from it.
+fn clashed(clash: &Clash, op: &str, what: &'static str, name: &str) -> LoadError {
+    match clash.kind {
+        Protected::Gate => LoadError::GateTakenByName {
+            op: op.to_owned(),
+            what,
+            name: name.to_owned(),
+            gate: clash.word.clone(),
+        },
+        Protected::Commit => LoadError::CommitTakenByName {
+            op: op.to_owned(),
+            what,
+            name: name.to_owned(),
+            commit: clash.word.clone(),
+        },
+    }
 }
 
 /// Read a schema on one value's behalf, so that a `$ref` under it is refused by

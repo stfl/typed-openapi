@@ -29,6 +29,7 @@
 //! the one thing this module exists to prevent, a written-down count that the
 //! thing it counts can move out from under.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -43,6 +44,9 @@ use crate::{Document, Operation};
 /// `to_string` — the `Display` is the page a bless step commits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Summary {
+    /// The word this CLI confirms with, so that the page names the flag the
+    /// binary it describes actually accepts.
+    commit: String,
     operations: usize,
     groups: Vec<CommandName>,
     reads: usize,
@@ -116,6 +120,7 @@ impl Summary {
                 Effect::Write => (reads, writes + 1),
             });
         Self {
+            commit: document.commit().to_owned(),
             operations: ops.len(),
             groups: groups(ops),
             reads,
@@ -146,7 +151,7 @@ impl Summary {
         self.reads
     }
 
-    /// Operations held behind `--commit`. With [`Summary::reads`] this is every
+    /// Operations held behind the confirmation. With [`Summary::reads`] this is every
     /// operation, because the gate is default-closed and an operation is one or
     /// the other.
     #[must_use]
@@ -199,18 +204,33 @@ impl Summary {
     ///
     /// One place decides how a count is worded, so the page and anything else
     /// that renders a summary describe the same measurement the same way.
-    fn tally(&self) -> [(&'static str, usize); 7] {
+    ///
+    /// `Cow`, because one of the seven names the confirmation and the word is
+    /// the adopter's rather than this crate's.
+    fn tally(&self) -> [(Cow<'_, str>, usize); 7] {
         [
-            ("operations", self.operations),
-            ("groups they are mounted under", self.groups.len()),
-            ("reads, sent on sight", self.reads),
-            ("writes, held behind `--commit`", self.writes),
-            ("operations the document asks no body of", self.bodiless),
+            (Cow::Borrowed("operations"), self.operations),
             (
-                "bodies that go out whole, with no flag per property",
+                Cow::Borrowed("groups they are mounted under"),
+                self.groups.len(),
+            ),
+            (Cow::Borrowed("reads, sent on sight"), self.reads),
+            (
+                Cow::Owned(format!("writes, held behind `--{}`", self.commit)),
+                self.writes,
+            ),
+            (
+                Cow::Borrowed("operations the document asks no body of"),
+                self.bodiless,
+            ),
+            (
+                Cow::Borrowed("bodies that go out whole, with no flag per property"),
                 self.whole_bodies,
             ),
-            ("parameters carried without a flag", self.unreachable.len()),
+            (
+                Cow::Borrowed("parameters carried without a flag"),
+                self.unreachable.len(),
+            ),
         ]
     }
 }
@@ -303,7 +323,8 @@ impl Summary {
         if self.gates.is_empty() {
             return writeln!(
                 out,
-                "No operation names a gate, so `--commit` is the whole of the confirmation."
+                "No operation names a gate, so `--{}` is the whole of the confirmation.",
+                self.commit
             );
         }
         writeln!(out, "| gate | operations behind it |")?;

@@ -20,8 +20,8 @@ use http::{Method, StatusCode};
 use serde_json::json;
 use typed_openapi::tree::{self, Asked, DispatchError, Outcome, Selection};
 use typed_openapi::{
-    Answers, COMMIT, Document, HttpRequest, JSON_BODY, JSON_BODY_TEMPLATE, Plan, Reach, Recorder,
-    RecorderError, SyncClient, Values, render,
+    Answers, COMMIT, COMMIT_ID, Document, HttpRequest, JSON_BODY, JSON_BODY_TEMPLATE, Plan, Reach,
+    Recorder, RecorderError, SyncClient, Values, render,
 };
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
@@ -1045,7 +1045,7 @@ fn a_gate_flag_a_command_never_declared_reads_as_unanswered() {
     // A verb of the caller's own that offers `--commit` and no gate flag: the
     // shape `tree::gates` exists to prevent, and the one that must still answer.
     let matches = Command::new("finalize-voucher")
-        .arg(Arg::new(COMMIT).long(COMMIT).action(ArgAction::SetTrue))
+        .arg(Arg::new(COMMIT_ID).long(COMMIT).action(ArgAction::SetTrue))
         .get_matches_from(["finalize-voucher", "--commit"]);
 
     let answered = tree::answers(op, &matches);

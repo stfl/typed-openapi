@@ -15,6 +15,12 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# The two words a command line spends on consent, and what a document that
+# wants one of them is told. It reads a document, so it wants that feature.
+[[example]]
+name = "clashing-words"
+required-features = ["document"]
+
 [features]
 default = ["clap"]
 

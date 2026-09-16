@@ -369,15 +369,28 @@ $ toy raw vouchers update --help
           Server-assigned id (sends `id`)
 ```
 
-Each subcommand's namespace starts with `commit`, `json-body`,
-`json-body-template`, `raw-body`, `file` and `field` already spent — plus every
-gate the operation names — so a
-document that names a field `commit`, or a field spelled like the gate standing
-in front of it, renames instead of colliding at startup. A global flag the
-surrounding CLI adds
-— `toy`'s `--base-url`, for instance — is not in that set.
+Each subcommand's namespace starts with `json-body`, `json-body-template`,
+`raw-body`, `file` and `field` already spent, so a document that names a field
+`raw-body` gets `--body-raw-body` instead of colliding at startup.
 [`src/names.rs`](../typed-openapi/src/names.rs) holds the rule: a name still
-taken after the first prefix gains a counter, `body-id`, `body-id-3`.
+taken after the first prefix gains a counter, `body-id`, `body-id-3`. A global
+flag the surrounding CLI adds — `toy`'s `--base-url`, for instance — is not in
+that set.
+
+The confirmation and the operation's gates are in the namespace too, and they
+behave differently: a document name that wants one of *those* refuses the load
+rather than moving aside. They are what a person types to let something
+irreversible happen, and a flag carrying data must never be able to answer one.
+Each moves on the side that owns it — the gate in your `x-cli-gates`, the
+confirmation in the call that loads or generates the document:
+
+```console
+$ cargo run --features document --example clashing-words
+enshrineVoucher: the property `enshrine` and the gate `enshrine` both want `--enshrine`; rename the gate in `x-cli-gates`, to `gate-enshrine` or another word
+```
+
+[Choosing the confirmation word](generating.md#choosing-the-confirmation-word)
+has the call; `typed-openapi/examples/README.md` walks the whole collision.
 
 ## Value checking
 

@@ -116,7 +116,7 @@ fn finalize_voucher(api: &Api) -> Command {
                     .help("The voucher to finalize"),
             )
             .arg(
-                Arg::new(typed_openapi::COMMIT)
+                Arg::new(typed_openapi::COMMIT_ID)
                     .long(typed_openapi::COMMIT)
                     .action(clap::ArgAction::SetTrue)
                     .help("Send the writes. Without it this is a dry run that prints them"),

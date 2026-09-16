@@ -88,12 +88,12 @@ pub mod values;
 #[cfg(feature = "builder")]
 pub use bon;
 pub use client::{Call, Client, NoContent};
-#[cfg(feature = "document")]
-pub use model::LoadError;
 pub use model::{
-    Body, COMMIT, Carrier, Document, DocumentError, Effect, Field, Gate, JSON_BODY,
+    Body, COMMIT, COMMIT_ID, Carrier, Document, DocumentError, Effect, Field, Gate, JSON_BODY,
     JSON_BODY_TEMPLATE, Join, Location, Operation, Param, RAW_BODY, Shape, Unsupported,
 };
+#[cfg(feature = "document")]
+pub use model::{ConfirmationError, LoadError, Loading};
 pub use names::{CommandName, kebab};
 pub use plan::{Answers, Plan, PlanError};
 /// `regress`, for generated code to name the regex engine through.
