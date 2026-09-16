@@ -110,6 +110,30 @@ the document saying something this crate has no reading for, so both are a
 what the vendor meant is a correction, and a correction is the adopter's to
 write in an Overlay where a reviewer can see it.
 
+**A document that requires a key nothing describes is refused, and the
+exemptions are measured against the generator.** `required::check` in
+`src/required.rs` reads the *overlaid* document, before the OpenAPI object model
+normalises an inline body away, and names every node whose `required` lists a
+name neither it nor anything it composes with declares. The reduced document is
+the vendor's plus the adopter's Overlays — the one that has to be right — so a
+name nothing describes is a vendor mistake the adopter repairs in an Overlay,
+where the correction is a line a reviewer reads. What a miss costs is measured
+rather than argued: typify writes `pub b: ::serde_json::Value`, required and
+with no `serde(default)`, so the generated type refuses the vendor's own
+responses.
+
+A node is exempt only where the walk cannot tell whether a name is declared
+*and* typify writes no such field either — a `$ref` leading out of the document,
+and `not`/`if`/`then`/`else`. Permission is not a declaration:
+`additionalProperties`, `patternProperties` and `unevaluatedProperties` exempt
+nothing, and neither do `$dynamicRef` and a `dependentSchemas` subschema, which
+hide a declaration but leave typify writing the untyped field all the same. The
+`emission` tests in `src/required.rs` hold the list to that, shape by shape, and
+they live there because typify is reachable only from inside the crate. An
+exemption added without a row there is a reading of the specification rather
+than a measurement, and a reading of the specification is what lets a shape the
+generator still spoils onto the list.
+
 **A shape this crate cannot spell stops at the operation, not at the document.**
 A parameter that is `in: cookie`, described by `content`, neither a value nor a
 list of values, declaring a `style` this crate does not serialise, or *named* in
