@@ -397,6 +397,58 @@ components:
     assert!(loaded(CONDITIONAL).is_ok());
 }
 
+/// A `$ref` this walk cannot follow hides the names behind it, and a name it
+/// cannot see is not a name it can call missing. So the node carrying one is
+/// read as open-ended, the same permission every other unreadable shape gets.
+///
+/// Two references arrive that way. One into another file is the adopter's
+/// bundler's to resolve and not this walk's, and a `#/` pointer this document
+/// holds nothing at is a document broken somewhere else entirely — neither is
+/// evidence that a required key is declared nowhere. Refusing over either is
+/// the false positive the lopsidedness exists to prevent: a refusal an adopter
+/// cannot override has to be wrong about nothing, and a phantom missed costs
+/// one untyped field where a document wrongly refused costs every operation in
+/// it.
+///
+/// `Reachable` is the control. Its reference leads somewhere, so the names
+/// behind it are names the walk has, and the one it requires and nothing
+/// declares is still named.
+#[test]
+fn a_reference_this_walk_cannot_follow_leaves_the_node_open_ended() {
+    const UNFOLLOWABLE: &str = r"paths:
+  /ledger:
+    get:
+      operationId: listEntries
+      responses: { '200': { description: OK } }
+components:
+  schemas:
+    Foreign:
+      type: object
+      required: [account]
+      allOf:
+        - $ref: 'other.yaml#/components/schemas/Entry'
+    Dangling:
+      type: object
+      required: [amount]
+      allOf:
+        - $ref: '#/components/schemas/Gone'
+    Reachable:
+      type: object
+      required: [period]
+      allOf:
+        - $ref: '#/components/schemas/Declared'
+    Declared:
+      type: object
+      properties:
+        account: { type: string }
+";
+
+    assert_eq!(
+        named(UNFOLLOWABLE),
+        ["$.components.schemas.Reachable requires `period`"]
+    );
+}
+
 /// A `required` inside an example, a default, an enum or a const is a value
 /// that happens to have that key — not a schema requiring one. So is a property
 /// a vendor spelled `required`. Reading either as a schema would refuse a
