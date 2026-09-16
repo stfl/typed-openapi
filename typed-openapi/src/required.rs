@@ -812,3 +812,169 @@ mod tests {
         assert_eq!(refused.nodes[0].at, "$.components.schemas.Entry.allOf[0]");
     }
 }
+
+/// The exemption list, put to the generator instead of read off the
+/// specification.
+///
+/// What the refusal protects is a generated type, so the only question that
+/// settles whether a shape belongs on the list is what the generator makes of
+/// a node carrying it — and that is a question a reading of the specification
+/// cannot answer. A shape exempted while typify still writes the required field
+/// of no stated type is the refusal waving through the very document it exists
+/// to catch, and nothing but this table would say so.
+///
+/// It stands here rather than in `tests/` because typify is this crate's own
+/// dependency: a test outside the crate cannot reach it, and a measurement of
+/// the generator taken through anything else is a measurement of the something
+/// else.
+#[cfg(all(test, feature = "generate"))]
+#[expect(
+    clippy::expect_used,
+    reason = "a test that cannot build its fixture should fail loudly and name it"
+)]
+mod emission {
+    use serde_json::Value;
+
+    use super::check;
+
+    /// What typify writes for a node whose `required` names a key the node does
+    /// not declare.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Emits {
+        /// `pub b: ::serde_json::Value`, required and with no `serde(default)`
+        /// — an optional one would read `Option<::serde_json::Value>` and a
+        /// declared one would name its type. Every payload lacking the key
+        /// fails to decode against this field, and nothing ever checks what is
+        /// under it.
+        UntypedField,
+        /// A type carrying no such field. A `not` leaves typify writing an
+        /// uninhabited enum, which has no fields to get wrong.
+        NoField,
+        /// No type whatsoever: typify has no reading for the node and panics
+        /// rather than writing one, so a document carrying the shape generates
+        /// nothing for a phantom to spoil.
+        NoType,
+    }
+
+    /// The schema every case varies: one declared property, and a `required`
+    /// naming a second key nothing declares.
+    fn schema(shape: &str) -> Value {
+        let text = format!(
+            "type: object\nproperties:\n  a: {{ type: string }}\nrequired: [a, b]\n{shape}"
+        );
+        serde_yaml_ng::from_str(&text).expect("the shape parses")
+    }
+
+    /// What this module makes of that schema, standing where a document puts a
+    /// named schema.
+    fn refused(shape: &str) -> bool {
+        check(&serde_json::json!({ "components": { "schemas": { "Entry": schema(shape) } } }))
+            .is_err()
+    }
+
+    /// What typify makes of the same schema.
+    ///
+    /// typify refuses a shape it cannot read by panicking, which is why the
+    /// call is caught rather than matched: a refusal is an answer here, and the
+    /// answer is that no type comes out. The panic's own message is printed to
+    /// this test's captured output and surfaces only if the test fails.
+    fn generated(shape: &str) -> Emits {
+        let schema: schemars::schema::Schema =
+            serde_json::from_value(schema(shape)).expect("typify's dialect reads the shape");
+        let written = std::panic::catch_unwind(move || {
+            let mut space = typify::TypeSpace::new(&typify::TypeSpaceSettings::default());
+            space.add_ref_types([("Entry".to_owned(), schema)]).ok()?;
+            let file: syn::File = syn::parse2(space.to_stream()).ok()?;
+            Some(prettyplease::unparse(&file))
+        });
+        match written {
+            Ok(Some(source)) if source.contains("pub b: ::serde_json::Value,") => {
+                Emits::UntypedField
+            }
+            Ok(Some(_)) => Emits::NoField,
+            Ok(None) | Err(_) => Emits::NoType,
+        }
+    }
+
+    /// Every shape that decides whether a node's undeclared name is refused,
+    /// and what typify writes for it.
+    ///
+    /// The first row is the subject with nothing added: the node the whole
+    /// module is about. Each of the others adds one keyword to it, and each of
+    /// the four `CONDITIONAL` keywords has a row of its own, so dropping one
+    /// from that list takes a row off this reading rather than going
+    /// unnoticed.
+    const SHAPES: &[(&str, Emits)] = &[
+        ("", Emits::UntypedField),
+        ("additionalProperties: false\n", Emits::UntypedField),
+        ("additionalProperties: true\n", Emits::UntypedField),
+        (
+            "additionalProperties: { type: string }\n",
+            Emits::UntypedField,
+        ),
+        (
+            "patternProperties: { '^b$': { type: string } }\n",
+            Emits::UntypedField,
+        ),
+        (
+            "unevaluatedProperties: { type: string }\n",
+            Emits::UntypedField,
+        ),
+        ("unevaluatedProperties: false\n", Emits::UntypedField),
+        (
+            "dependentSchemas: { a: { properties: { b: { type: string } } } }\n",
+            Emits::UntypedField,
+        ),
+        ("$dynamicRef: '#meta'\n", Emits::UntypedField),
+        (
+            "not: { properties: { b: { type: integer } } }\n",
+            Emits::NoField,
+        ),
+        (
+            "if: { properties: { a: { type: string } } }\n",
+            Emits::NoType,
+        ),
+        (
+            "then: { properties: { b: { type: string } } }\n",
+            Emits::NoType,
+        ),
+        (
+            "else: { properties: { b: { type: integer } } }\n",
+            Emits::NoType,
+        ),
+        (
+            "allOf: [{ $ref: 'other.yaml#/components/schemas/Base' }]\n",
+            Emits::NoType,
+        ),
+        (
+            "allOf: [{ $ref: '#/components/schemas/Nope' }]\n",
+            Emits::NoType,
+        ),
+    ];
+
+    /// The list and the measurement, a row at a time.
+    ///
+    /// The row itself pins what typify writes, so a version of it that starts
+    /// reading a keyword is a failure here rather than a silent change of what
+    /// the refusal is worth. The claim over the rows is the rule: a shape is
+    /// exempt exactly where no required untyped field comes out. A row that
+    /// breaks it is either an exemption protecting nothing or a refusal buying
+    /// nothing, and either one is the defect this test exists to name.
+    #[test]
+    fn a_shape_is_exempt_exactly_where_the_generated_type_carries_no_untyped_field() {
+        for (shape, expected) in SHAPES {
+            let shown = if shape.is_empty() { "<nothing>" } else { shape };
+            assert_eq!(
+                generated(shape),
+                *expected,
+                "typify's reading of `{shown}` is not the one this list is built on"
+            );
+            assert_eq!(
+                refused(shape),
+                *expected == Emits::UntypedField,
+                "`{shown}` is {} and typify writes {expected:?}",
+                if refused(shape) { "refused" } else { "exempt" }
+            );
+        }
+    }
+}
