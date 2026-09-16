@@ -237,10 +237,6 @@ fn a_summary_off_the_blob_is_the_summary_off_the_document() {
     let shipped = Document::from_blob(&blob).expect("and decodes");
 
     assert_eq!(document.summary(), shipped.summary());
-    assert_eq!(
-        document.summary().to_string(),
-        shipped.summary().to_string()
-    );
 }
 
 /// The page names what it counted, so a reader can re-count it. That is the

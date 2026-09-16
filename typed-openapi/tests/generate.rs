@@ -296,6 +296,19 @@ fn two_bless_runs_over_one_document_write_the_same_bytes() {
     let written = layered().write_to(&first).expect("the fixtures generate");
     layered().write_to(&second).expect("and generate again");
 
+    // What the comparison below runs over, named rather than counted: a loop
+    // over nothing, or over the wrong four files, compares nothing and passes.
+    assert_eq!(
+        written,
+        vec![
+            first.join("spec/toy.overlaid.yaml"),
+            first.join("src/types.rs"),
+            first.join("src/ops.rs"),
+            first.join("src/model.postcard"),
+        ],
+        "the artefacts this compares are not the ones a bless step writes"
+    );
+
     for path in &written {
         let name = path
             .strip_prefix(&first)
@@ -910,6 +923,10 @@ fn a_vendors_prose_carries_nothing_rustdoc_will_run() {
         ("src/ops.rs", "ops_docs.rs"),
     ] {
         let comments = doc_comments_alone(&read(&dir.join(file)));
+        assert!(
+            comments.contains("///") || comments.contains("/**"),
+            "{file}: no vendor prose was extracted, so this proves nothing"
+        );
         let path = wrote(&dir, alone, &comments);
         let ran = std::process::Command::new("rustdoc")
             .args(["--test", "--edition", "2024"])
