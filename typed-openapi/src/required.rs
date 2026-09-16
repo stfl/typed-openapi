@@ -3,13 +3,18 @@
 //! *Requires the `document` feature.*
 //!
 //! A *phantom* key is a name in a schema's `required` list that neither that
-//! schema nor anything it composes with declares. The document is saying two
-//! things at once — this key must be sent, and this key does not exist — and
-//! one of the two statements is a mistake that the document does not say which.
-//! Refused rather than reduced, because what a generator makes of it is a
-//! required field of no stated type: nothing checks a value for it, an
-//! adopter's own check over the body accepts anything, and the request goes out
-//! without the key its caller was told to send.
+//! schema nor anything it composes with declares. It is a mistake, and the
+//! document reduced here is the vendor's with the adopter's corrections applied
+//! — the one that has to be right. So a phantom is refused, and the adopter
+//! repairs it in an Overlay, where the correction is a line a reviewer reads.
+//!
+//! What a missed one costs is measured rather than argued. Handed
+//! `{ properties: { a }, required: [a, b] }`, typify writes
+//! `pub b: ::serde_json::Value` — required, and with no `serde(default)` — so
+//! the generated type refuses the vendor's own responses: every payload without
+//! that key fails to decode, nothing ever checks the value of the one field the
+//! caller was told to send, and an adopter's own check over the body accepts
+//! anything at all under it.
 //!
 //! [`check`] runs over the *overlaid* document and before it is read as an
 //! OpenAPI object model, for two reasons. An Overlay is where the repair is
@@ -31,12 +36,13 @@
 //! specification extension is why that has to be told. An object the
 //! specification lets a vendor extend carries that vendor's own arbitrary JSON
 //! under an `x-…` key, so an extension holding `required: [name, email]` beside
-//! no `properties` is a form the vendor described — not a schema contradicting
-//! itself. Judging every object by its shape alone refuses that document, and
-//! leaves the adopter writing an Overlay that deletes the vendor's extension to
-//! repair a defect that was never there. A link object's `parameters` is the
-//! same thing under a fixed key: its entries are the arguments the link passes
-//! on, and a `required` among them names a parameter.
+//! no `properties` is a form the vendor described — not a schema requiring a
+//! key it never describes. Judging every object by its shape alone refuses that
+//! document, and leaves the adopter writing an Overlay that deletes the
+//! vendor's extension to repair a defect that was never there. A link object's
+//! `parameters` is the same thing under a fixed key: its entries are the
+//! arguments the link passes on, and a `required` among them names a
+//! parameter.
 //!
 //! Which objects those are is the specification's to say, and `x-` is no rule
 //! about spelling. A map keyed by names somebody chose — a component, a
@@ -46,7 +52,7 @@
 //!
 //! What the rule costs is a schema standing somewhere this reading does not
 //! name, which goes unread — a phantom missed rather than a document wrongly
-//! refused, which is the trade the whole module is built on.
+//! refused, which is the trade this reading is built on.
 //!
 //! # What the walk reads
 //!
@@ -97,22 +103,55 @@
 //! spells out a form as `required: [name, email]` is writing a value, not
 //! requiring a key.
 //!
-//! # What makes a node open-ended
+//! # What is exempt, and why the list is a measurement
 //!
-//! Anything this walk cannot read makes the node open-ended, and an open-ended
-//! node requires nothing it cannot admit. `additionalProperties` that is not
-//! `false` says any name satisfies the node, so a name declared nowhere is
-//! still satisfiable and the document is not contradicting itself. The same
-//! reading is given to `patternProperties`, to `$dynamicRef`, to `not` and to
-//! `if`/`then`/`else` — none of which this walk reads a name out of, whether or
-//! not it descends into them — and to a `$ref` that leads nowhere this document
-//! holds.
+//! A node is exempt where this walk cannot tell whether a name is declared
+//! *and* the generator makes no field of it either. Both halves are needed. The
+//! first is what keeps a correct document from being refused over a declaration
+//! standing somewhere unreachable; the second is what keeps the list honest,
+//! because a shape exempted while typify still writes the required untyped
+//! field is the refusal waving through exactly the document it exists to catch.
 //!
-//! That lopsidedness is the point. A refusal an adopter cannot override must
-//! have no false positives on a valid document, so every shape the walk has no
-//! reading for is read as permission rather than as a defect: a phantom missed
-//! costs one untyped generated field, where a document wrongly refused costs
-//! every operation in it.
+//! Two shapes are on the list. A `$ref` leading nowhere this document holds —
+//! into another file, or at nothing — hides whatever it declares, and typify
+//! writes no type at all for a node carrying one. `not`, `if`, `then` and
+//! `else` state subschemas this walk reads no name out of: a `not` declares by
+//! ruling out, and the other three declare only of the instances that took that
+//! branch. typify has no reading for them either — an uninhabited enum with no
+//! fields for a `not`, no type at all for the other three — so exempting them
+//! costs no generated field, while refusing them would refuse a document that
+//! declares what it requires somewhere this walk cannot look.
+//!
+//! Permission is not a declaration, which is what keeps the list short.
+//! `additionalProperties` that is not `false`, and `patternProperties`, and
+//! `unevaluatedProperties`, each say the value may carry names beyond the
+//! declared ones. None of them says *this* name is one, and a document that
+//! requires a name it never describes is wrong whatever it permits. typify
+//! settles it: the same required `::serde_json::Value` comes out whether
+//! `additionalProperties` is absent, `true`, a schema or `false`, and it comes
+//! out for the other two as well.
+//!
+//! A `$dynamicRef` and a `dependentSchemas` subschema are the two that look
+//! like the exemptions and are not. Each can put a declaration where this walk
+//! does not read it — one behind an anchor it does not index, the other behind
+//! the property the subschema hangs on. But typify has a reading for a node
+//! carrying either, and that reading is the required untyped field: the
+//! generated type refuses the vendor's responses exactly as if nothing were
+//! there. Exempting them would cost the defect this refusal exists to catch,
+//! and what it would spare is a document whose generated type carries the
+//! untyped field either way — so both are refused, and the Overlay line that
+//! repairs one is the line that gives the field a type.
+//!
+//! # The way out is the Overlay
+//!
+//! Nothing turns this refusal off, and the Overlay is why nothing needs to. An
+//! Overlay is a file in the adoption, reviewed with the rest of it, so a
+//! decision about the vendor's document is recorded where the next reader meets
+//! it; a switch on the reduction would record the same decision nowhere and
+//! leave the generated type broken anyway. What that leaves is a vendor who
+//! requires an untyped key on purpose, and the repair is one Overlay line
+//! declaring the key — which is also the line that turns the generated field
+//! from a `serde_json::Value` into the type the vendor meant.
 //!
 //! # What the walk says nothing about
 //!
@@ -142,17 +181,17 @@ const ITEMS: &str = "items";
 /// declarations.
 const COMPOSED: [&str; 3] = ["allOf", "anyOf", "oneOf"];
 /// The keywords whose subschemas also constrain the value the node holding them
-/// constrains, but which this walk does not read as declarations. A node
-/// carrying one is open-ended, and so is everything under one.
+/// constrains, and out of which this walk reads no name: a `not` declares by
+/// ruling out, and a `then` or an `else` declares only of the instances that
+/// took that branch. A declaration may stand behind one, and typify writes no
+/// field out of one either — an uninhabited enum for a `not`, no type at all
+/// for the other three — so a node carrying one is exempt.
 const CONDITIONAL: [&str; 4] = ["not", "if", "then", "else"];
 /// The keyword whose subschemas are about the object a property stands in
 /// rather than about that property's value. `dependentSchemas: { foo: {
 /// required: [bar] } }` is the object requiring its own `bar` whenever it
 /// carries `foo`, so the object's `properties` are where `bar` is declared.
 const DEPENDENT: &str = "dependentSchemas";
-/// Everything else that puts a name beyond this walk's reach, and so makes the
-/// node carrying it open-ended.
-const OPEN: [&str; 2] = ["patternProperties", "$dynamicRef"];
 
 /// One node whose `required` names keys nothing it declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -362,8 +401,8 @@ impl Kind {
 ///
 /// Every keyword whose value is a schema, or a list or a map of them. A
 /// keyword left out states something other than a schema — a `type`, a bound,
-/// a `pattern` — or states one this walk has no reading for, and a node
-/// carrying one of those is open-ended rather than read.
+/// a `pattern` — or states one this walk has no reading for, and nothing under
+/// such a keyword is judged.
 fn keyword(key: &str) -> Option<Route> {
     Some(match key {
         PROPERTIES | "patternProperties" | "$defs" | "definitions" | DEPENDENT => {
@@ -498,7 +537,7 @@ impl<'d> Walk<'d> {
     }
 
     /// Whether this node's `required` — if it has the one this module is about
-    /// — names anything the value it describes cannot carry.
+    /// — names anything nothing describes.
     fn judge(&mut self, node: &'d Value) {
         let Some(names) = required_names(node) else {
             return;
@@ -547,18 +586,18 @@ fn items_of(node: &Value) -> Vec<&Value> {
     }
 }
 
-/// What a set of schemas admits: the names they declare, and whether they admit
-/// names they do not declare.
+/// What a set of schemas declares, and whether any of them puts a declaration
+/// where this walk cannot read it.
 #[derive(Debug, Default)]
 struct Admits<'d> {
     named: BTreeSet<&'d str>,
-    any: bool,
+    hidden: bool,
 }
 
 impl<'d> Admits<'d> {
     /// Everything these nodes and the schemas they compose with declare — the
-    /// union, because a name any one of them declares is a name the value can
-    /// carry.
+    /// union, because a name any one of them declares is a name the document
+    /// describes.
     fn of_each(nodes: impl IntoIterator<Item = &'d Value>, doc: &'d Value) -> Self {
         let mut admits = Self::default();
         let mut followed = BTreeSet::new();
@@ -581,15 +620,8 @@ impl<'d> Admits<'d> {
         if let Some(declared) = node.get(PROPERTIES).and_then(Value::as_object) {
             self.named.extend(declared.keys().map(String::as_str));
         }
-        if node
-            .get("additionalProperties")
-            .is_some_and(|open| open != &Value::Bool(false))
-            || OPEN
-                .iter()
-                .chain(&CONDITIONAL)
-                .any(|key| node.contains_key(*key))
-        {
-            self.any = true;
+        if CONDITIONAL.iter().any(|key| node.contains_key(*key)) {
+            self.hidden = true;
         }
         if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
             self.follow(reference, doc, followed);
@@ -608,11 +640,12 @@ impl<'d> Admits<'d> {
 
     /// One `$ref`, taken once.
     ///
-    /// A reference this walk cannot follow hides names it cannot then see are
-    /// missing, so it leaves the node open-ended rather than short of names.
+    /// A reference this walk cannot follow leads out of the document — into
+    /// another file, or at nothing that is there — so whatever it declares is
+    /// hidden rather than absent, and the node carrying it is exempt.
     fn follow(&mut self, reference: &'d str, doc: &'d Value, followed: &mut BTreeSet<&'d str>) {
         let Some(target) = pointed_at(doc, reference) else {
-            self.any = true;
+            self.hidden = true;
             return;
         };
         if followed.insert(reference) {
@@ -620,9 +653,10 @@ impl<'d> Admits<'d> {
         }
     }
 
-    /// Whether a value under this name is one these schemas admit.
+    /// Whether these schemas declare this name, or hide the place it would be
+    /// declared.
     fn covers(&self, name: &str) -> bool {
-        self.any || self.named.contains(name)
+        self.hidden || self.named.contains(name)
     }
 }
 
@@ -630,7 +664,8 @@ impl<'d> Admits<'d> {
 /// document holds one there.
 ///
 /// Only `#/...` is read. A reference into another file is one this walk cannot
-/// follow, and the caller reads that as open-ended rather than as a defect.
+/// follow, and the caller reads that as a declaration hidden rather than as one
+/// absent.
 fn pointed_at<'d>(doc: &'d Value, reference: &str) -> Option<&'d Value> {
     let mut node = doc;
     for step in reference.strip_prefix("#/")?.split('/') {

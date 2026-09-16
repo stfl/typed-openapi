@@ -2,14 +2,15 @@
 //! reduced, and a document that only looks like one is not.
 //!
 //! The refusal is the point of this file, but the tests that matter most are
-//! the ones holding it *back*: a check with no override has to be wrong about
-//! nothing. Two near misses have a test each. The first is that `required` is
-//! the name of two things in OpenAPI, and a document that spells the other one
-//! is every document. The second is that a `required` list is only a schema's
-//! where a schema stands — the same three words inside a specification
-//! extension, or among the arguments a link passes on, are the vendor's data.
-//! Against those stands one test that every place a schema *does* stand is
-//! still read, so that the walk cannot be made right by being switched off.
+//! the ones holding it *back*: the only way past it is an Overlay, so it has to
+//! be wrong about nothing a vendor wrote correctly. Two near misses have a test
+//! each. The first is that `required` is the name of two things in OpenAPI, and
+//! a document that spells the other one is every document. The second is that a
+//! `required` list is only a schema's where a schema stands — the same three
+//! words inside a specification extension, or among the arguments a link passes
+//! on, are the vendor's data. Against those stands one test that every place a
+//! schema *does* stand is still read, so that the walk cannot be made right by
+//! being switched off.
 
 #![expect(
     clippy::expect_used,
@@ -75,9 +76,9 @@ components:
         amount: { type: string }
 ";
 
-/// The refusal names where the contradiction is and which names are
-/// unreachable, and the location it prints is the target an Overlay repairs it
-/// at.
+/// The refusal names the node whose `required` asks for a key nothing
+/// describes and which names those are, and the location it prints is the
+/// target an Overlay repairs it at.
 #[test]
 fn a_required_key_nothing_declares_is_refused_and_named_where_it_stands() {
     // The way out the message names is the way out, and the check reads the
@@ -109,10 +110,10 @@ fn a_required_key_nothing_declares_is_refused_and_named_where_it_stands() {
     assert!(period.required(), "the document still requires it");
 }
 
-/// The same contradiction in a body written out where it is used. A check
-/// scoped to `components.schemas` passes every other test in this file and
-/// fails this one, which is why it is here: these stand in inline bodies as
-/// often as in named schemas.
+/// The same mistake in a body written out where it is used. A check scoped to
+/// `components.schemas` passes every other test in this file and fails this
+/// one, which is why it is here: these stand in inline bodies as often as in
+/// named schemas.
 #[test]
 fn a_required_key_nothing_declares_in_an_inline_body_is_refused_too() {
     const INLINE: &str = r"paths:
@@ -327,12 +328,17 @@ components:
     assert!(found.is_empty(), "{found:?}");
 }
 
-/// A node that admits any name cannot be contradicting itself: a name declared
-/// nowhere is still a name a value may carry. `additionalProperties: false` is
-/// the node saying the opposite, and is the only one of the three that is
-/// refused.
+/// Permitting a name is not describing it. A node that admits any name still
+/// declares none of them, and the type generated from it carries the same
+/// required field of no stated type as the closed node beside it — so every one
+/// of these is refused, and the Overlay line that repairs one is the line that
+/// gives its field a type.
+///
+/// `$dynamicRef` is here because it is the shape that most looks like an
+/// exemption and is not: it puts a declaration behind an anchor this walk does
+/// not index, and typify writes the field anyway.
 #[test]
-fn an_open_ended_node_admits_every_name_and_a_closed_one_admits_none() {
+fn a_node_that_permits_extra_names_still_describes_none_of_them() {
     const OPENNESS: &str = r"paths:
   /ledger:
     get:
@@ -348,6 +354,19 @@ components:
       type: object
       required: [account]
       additionalProperties: { type: string }
+    Patterned:
+      type: object
+      required: [account]
+      patternProperties:
+        '^acc': { type: string }
+    Unevaluated:
+      type: object
+      required: [account]
+      unevaluatedProperties: { type: string }
+    Dynamic:
+      type: object
+      required: [account]
+      $dynamicRef: '#meta'
     Closed:
       type: object
       required: [account]
@@ -358,16 +377,61 @@ components:
 
     assert_eq!(
         named(OPENNESS),
-        ["$.components.schemas.Closed requires `account`"]
+        [
+            "$.components.schemas.Any requires `account`",
+            "$.components.schemas.Strings requires `account`",
+            "$.components.schemas.Patterned requires `account`",
+            "$.components.schemas.Unevaluated requires `account`",
+            "$.components.schemas.Dynamic requires `account`",
+            "$.components.schemas.Closed requires `account`",
+        ]
     );
 }
 
-/// `not` and `if`/`then`/`else` are subschemas this walk does not follow, so a
-/// node carrying one is read as open-ended rather than refused over names those
+/// A `$ref` that leads out of this document hides whatever it declares, so the
+/// node carrying it is exempt: the key may well be declared in the file the
+/// reference names, and this walk has no way to find out. A reference the
+/// document does hold is followed, and a name neither end declares is still
+/// named.
+#[test]
+fn a_reference_this_walk_cannot_follow_leaves_the_node_exempt() {
+    const FOREIGN: &str = r"paths:
+  /ledger:
+    get:
+      operationId: listEntries
+      responses: { '200': { description: OK } }
+components:
+  schemas:
+    Elsewhere:
+      required: [account]
+      allOf:
+        - $ref: 'ledger.yaml#/components/schemas/Base'
+    Nowhere:
+      required: [account]
+      allOf:
+        - $ref: '#/components/schemas/Absent'
+    Here:
+      required: [account]
+      allOf:
+        - $ref: '#/components/schemas/Empty'
+    Empty:
+      type: object
+      properties:
+        amount: { type: string }
+";
+
+    assert_eq!(
+        named(FOREIGN),
+        ["$.components.schemas.Here requires `account`"]
+    );
+}
+
+/// `not` and `if`/`then`/`else` are subschemas this walk reads no name out of,
+/// so a node carrying one is exempt rather than refused over names those
 /// keywords might supply. The limit is stated in the module's own words, and
 /// this is what holds it.
 #[test]
-fn a_keyword_this_walk_does_not_follow_leaves_the_node_open_ended() {
+fn a_subschema_this_walk_reads_no_name_out_of_leaves_the_node_exempt() {
     const CONDITIONAL: &str = r"paths:
   /ledger:
     get:
@@ -557,9 +621,9 @@ fn the_committed_fixture_reduces_and_the_same_fixture_with_a_phantom_does_not() 
 
 /// A specification extension carries the vendor's own arbitrary JSON, and JSON
 /// that holds a `required` list beside no `properties` is a form the vendor
-/// described rather than a schema contradicting itself. Refusing over one
-/// leaves an adopter deleting the vendor's extension in an Overlay to repair a
-/// defect that was never there, which is why this test exists at all.
+/// described rather than a schema requiring a key it never describes. Refusing
+/// over one leaves an adopter deleting the vendor's extension in an Overlay to
+/// repair a defect that was never there, which is why this test exists at all.
 #[test]
 fn a_specification_extension_is_the_vendors_own_json_and_never_a_schema() {
     /// A callback object carries one too. It is checked rather than loaded
@@ -708,8 +772,8 @@ components:
 /// the two spellings of a definitions map.
 ///
 /// Four of the keywords carry their phantom one level further down, under a
-/// `properties` of their own. `not`, `if`, `then` and `else` make everything
-/// beneath them open-ended, so a phantom sitting directly under one is silent
+/// `properties` of their own. `not`, `if`, `then` and `else` exempt everything
+/// beneath them, so a phantom sitting directly under one is silent
 /// whether or not the walk goes there — and a route that cannot be observed is
 /// a route this test cannot hold. A `properties` inside describes a different
 /// value, which puts the phantom back where it can be seen.

@@ -135,13 +135,15 @@ pub enum LoadError {
          mark the operation `x-cli-writes: true` or drop the gate"
     )]
     GatedRead { op: String, gate: Gate },
-    /// A `required` naming a key nothing declares, which is the document
-    /// saying two things at once: this key must be sent, and this key does not
-    /// exist. Refused rather than reduced — a generator makes a required field
-    /// of no stated type out of it, so nothing downstream ever checks a value
-    /// for the key, and the request goes out without the one its caller was
-    /// told to send. Which of the two statements the vendor meant is a
-    /// judgement, and a judgement belongs in an Overlay a reviewer can read.
+    /// A `required` naming a key nothing describes, which is a mistake in the
+    /// document — and the document reduced here is the vendor's with the
+    /// adopter's Overlays applied, the one that has to be right. Refused rather
+    /// than reduced, because what a generator makes of it is a required field
+    /// of no stated type: the generated type then refuses the vendor's own
+    /// responses, nothing downstream checks a value for the key, and the
+    /// request goes out without the one its caller was told to send. The repair
+    /// is a judgement about what the vendor meant, and a judgement belongs in
+    /// an Overlay a reviewer can read.
     #[error(transparent)]
     Phantom(#[from] crate::required::PhantomKeys),
     /// A `$ref` met where there is no value yet to name it beside: one standing
