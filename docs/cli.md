@@ -210,7 +210,8 @@ What is in it:
 |---|---|
 | a required property | the key, with a skeleton of its own schema |
 | an optional property | nothing |
-| `example` on a schema or a property | that value, taken whole |
+| `example` on a property | that value, taken whole |
+| `example` on the schema a property points at | that value, where the property states none of its own |
 | `enum: [draft, open, paid]` | `"draft"` — the first value it lists |
 | `type: string` / `integer` / `number` / `boolean` | `""` / `0` / `0.0` / `false` |
 | a nested object | a nested object, to the depth the document nests it |

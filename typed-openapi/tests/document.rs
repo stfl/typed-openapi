@@ -471,6 +471,41 @@ fn an_example_the_document_states_wins_and_is_read_as_a_value() {
     );
 }
 
+/// A property pointing at a named schema and stating an `example` of its own
+/// describes one value twice, and the property's is what the template shows.
+///
+/// The reading a description gets, for the reason a description gets it: both
+/// are written *about* something, and what a property writes is about that
+/// property, where the named schema's is about every field sharing the rule. A
+/// `City` whose example is `Vienna` says what a city looks like; a `city`
+/// property that says `Graz` is telling its own caller something else, and a
+/// template showing `Vienna` there shows a value nobody wrote about this key.
+///
+/// `region` beside it is the control: a bare `$ref` states nothing of its own,
+/// so what it inherits is all there is and both readings reach it.
+#[test]
+fn a_propertys_own_example_wins_over_the_one_it_points_at() {
+    let template = templated(
+        &nested(
+            "\x20                 required: [city, region]\n\
+             \x20                 properties:\n\
+             \x20                   city:\n\
+             \x20                     allOf: [{ $ref: '#/components/schemas/City' }]\n\
+             \x20                     example: Graz\n\
+             \x20                   region: { $ref: '#/components/schemas/City' }\n",
+        ),
+        "\x20   City:\n\
+         \x20     type: string\n\
+         \x20     example: Vienna\n",
+    )
+    .expect("a nested body renders a template");
+
+    assert_eq!(
+        template,
+        "{\n  \"inner\": {\n    \"city\": \"Graz\",\n    \"region\": \"Vienna\"\n  }\n}"
+    );
+}
+
 /// One element rather than none. An empty list is a body a server accepts and
 /// a user learns nothing from, and what goes *in* the list is what they came
 /// here to find out.
