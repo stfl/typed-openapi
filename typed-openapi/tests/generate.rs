@@ -1531,6 +1531,41 @@ fn a_request_body_stated_inline_is_a_type_rather_than_a_bag_of_json() {
     );
 }
 
+/// The fixture's `createContact` is the other JSON body: `address` is an
+/// object, so the whole body goes through `--json-body` and no property gets a
+/// flag.
+///
+/// That is the one body kind nothing else stands in front of. A flat body's
+/// per-field flags each run the rules their own schema states before a request
+/// is built, and a body with no flags runs none — so the type named here is the
+/// whole of what a file is held to, and `cli/src/raw.rs` is the seam that asks.
+/// An operation that answered for any JSON would sit in the arm the bodiless
+/// and non-JSON operations share, which reads as a document with no opinion
+/// about a body it in fact describes in full.
+#[test]
+fn a_body_that_goes_whole_is_held_to_the_type_it_describes() {
+    let dir = out("whole-body");
+    layered().write_to(&dir).expect("the fixtures generate");
+    let types = read(&dir.join("src/types.rs"));
+    let check = dense(&item(
+        &read(&dir.join("src/ops.rs")),
+        "    pub fn check_body(",
+    ));
+
+    assert!(
+        item(&types, "pub struct Contact").contains("pub address: Address,"),
+        "`Contact` no longer nests, so this is not the body kind under test:\n{types}"
+    );
+    assert!(
+        check.contains(r#"fits::<crate::types::Contact>("createContact",body)"#),
+        "a `--json-body` file for a body with no flags is held to nothing:\n{check}"
+    );
+    assert!(
+        !check.contains(r#"fits::<serde_json::Value>("createContact""#),
+        "the body check accepts anything at all"
+    );
+}
+
 /// The claim the type exists is not the claim that matters. What matters is
 /// that a rule the document states about a value is a rule the generated code
 /// runs, and this is that chain, link by link: the body's `account` is the
