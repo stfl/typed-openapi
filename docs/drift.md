@@ -149,8 +149,9 @@ crate that owns the decision.
 
 ## Test time: the committed artefacts
 
-A bless step writes five files and the CLI only ever reads one of them — the
-binary blob. Five checks hold the set together.
+A bless step writes four files, plus the counts page where an adoption asks for
+one, and the CLI only ever reads one of them — the binary blob. Five checks hold
+the set together.
 
 [`api/tests/typed.rs`](../examples/toy/api/tests/typed.rs) reduces the
 *committed document* again and compares it with the *committed blob*, operation

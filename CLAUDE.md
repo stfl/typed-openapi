@@ -94,7 +94,7 @@ about the field, a kind is about the value.
 door to a flat body's properties for anything walking one — a guard, a renderer,
 documentation — and answers empty for every other body, so a walk is complete
 with no match over `Body` and covers a variant added later. Keeping it private
-is what once forced `carrying` to be the only route. `carrying` stays beside it
+would force `carrying` to be the only route. `carrying` stays beside it
 because chaining the two halves by hand is not the cost: *omitting* one is, and
 a guard over the parameters alone passes on every body field it was written to
 cover without reading short. `tests/document.rs` holds the whole to the parts so
