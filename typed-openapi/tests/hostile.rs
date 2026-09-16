@@ -1000,6 +1000,51 @@ paths:
     );
 }
 
+/// The same pattern on a body property, refused in the same words.
+///
+/// A rule is stated about a *value*, and a property of a flat body is a value
+/// exactly as a query parameter is: the reduction reads both through one door,
+/// and the refusal names the operation and the property that stated it.
+///
+/// What a document that blessed here would produce is two failures rather than
+/// one. The property's flag refuses every value it is given, because the rule
+/// it runs is one the engine cannot read — and the same `pattern` travels into
+/// the newtype typify writes for the property, where the engine is reached
+/// through a `Regex::new` that panics. So a rule nobody can run reaches a user
+/// on the command line and a Rust caller through a panic, and neither of them
+/// can see that the document is what was wrong.
+#[test]
+fn a_pattern_no_engine_runs_on_a_body_property_is_refused_and_names_the_property() {
+    const UNRUNNABLE_BODY: &str = r#"
+openapi: 3.0.3
+info: { title: Unrunnable, version: "1.0" }
+servers: [{ url: "http://localhost:9411" }]
+paths:
+  /firings:
+    post:
+      operationId: startFiring
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cone]
+              properties:
+                cone: { type: string, pattern: '(?P<cone>0[1-9])' }
+      responses:
+        "201": { description: Created }
+"#;
+
+    let refused =
+        Document::load(UNRUNNABLE_BODY, &[]).expect_err("the engine cannot read the pattern");
+    assert_eq!(
+        refused.to_string(),
+        "startFiring: `cone`: `(?P<cone>0[1-9])` is not a regular expression: \
+         Invalid group modifier"
+    );
+}
+
 /// A schema whose `allOf` holds itself describes a value of no finite depth, so
 /// following it terminates rather than hanging — and the refusal names the
 /// operation, the parameter that led to the schema, and the reference the walk
