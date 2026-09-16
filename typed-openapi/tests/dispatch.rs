@@ -20,8 +20,8 @@ use http::{Method, StatusCode};
 use serde_json::json;
 use typed_openapi::tree::{self, Asked, DispatchError, Outcome, Selection};
 use typed_openapi::{
-    Answers, COMMIT, Document, HttpRequest, Plan, Reach, Recorder, RecorderError, SyncClient,
-    Values, render,
+    Answers, COMMIT, Document, HttpRequest, JSON_BODY, JSON_BODY_TEMPLATE, Plan, Reach, Recorder,
+    RecorderError, SyncClient, Values, render,
 };
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
@@ -416,6 +416,192 @@ fn a_templates_write_wants_neither_the_confirmation_nor_the_body_it_describes() 
     assert!(
         conflict.contains("--json-body-template") && conflict.contains("cannot be used with"),
         "{conflict}"
+    );
+}
+
+/// An operation standing behind every kind of flag a subcommand grows: a
+/// required parameter, an optional one, a required body with no per-field
+/// flags, a write, and a named gate.
+const STANDS_ALONE: &str = "openapi: 3.0.3\n\
+     info: { title: t, version: \"1\" }\n\
+     servers: [{ url: 'http://localhost:9999' }]\n\
+     paths:\n\
+    \x20 /postings:\n\
+    \x20   post:\n\
+    \x20     operationId: createPosting\n\
+    \x20     x-cli-gates: [enshrine]\n\
+    \x20     parameters:\n\
+    \x20       - name: ledger\n\
+    \x20         in: query\n\
+    \x20         required: true\n\
+    \x20         schema: { type: string }\n\
+    \x20       - name: tag\n\
+    \x20         in: query\n\
+    \x20         required: false\n\
+    \x20         schema: { type: string }\n\
+    \x20     requestBody:\n\
+    \x20       required: true\n\
+    \x20       content:\n\
+    \x20         application/json:\n\
+    \x20           schema:\n\
+    \x20             type: object\n\
+    \x20             required: [period]\n\
+    \x20             properties:\n\
+    \x20               period:\n\
+    \x20                 type: object\n\
+    \x20                 required: [opens]\n\
+    \x20                 properties:\n\
+    \x20                   opens: { type: string }\n\
+    \x20     responses: { \"201\": { description: Created } }\n";
+
+/// The template takes none of the subcommand's own flags, and the subcommand
+/// asks it for none of them.
+///
+/// Both halves are one sentence: asking what a body looks like is not running
+/// the operation. So what running it demands — the required parameter, the body
+/// the template describes, the word the gate wants — is not demanded here, and
+/// a flag that belongs to a run is refused beside the template rather than
+/// accepted and ignored, because a line that asks for a shape *and* names a
+/// ledger to post to is two commands and only the user can say which.
+#[test]
+fn the_template_takes_none_of_the_subcommands_flags_and_is_asked_for_none() {
+    let doc = Document::load(STANDS_ALONE, &[]).expect("a document");
+    let rooted = || Command::new("toy").subcommands(tree::commands(&doc));
+
+    let asked = rooted()
+        .try_get_matches_from(["toy", "postings", "create", "--json-body-template"])
+        .expect("a shape is not a run, so nothing a run demands is demanded");
+    assert!(matches!(
+        tree::select(&doc, &asked).expect("the subcommand names an operation"),
+        Asked::Template(_)
+    ));
+
+    for (flag, value) in [
+        ("--ledger", Some("main")),
+        ("--tag", Some("q3")),
+        ("--json-body", Some("posting.json")),
+        ("--commit", None),
+        ("--enshrine", None),
+    ] {
+        let mut line = vec!["toy", "postings", "create", "--json-body-template", flag];
+        line.extend(value);
+        let conflict = rooted()
+            .try_get_matches_from(line)
+            .expect_err("two commands on one line")
+            .to_string();
+        assert!(
+            conflict.contains("--json-body-template") && conflict.contains("cannot be used with"),
+            "`{flag}` stood beside the template: {conflict}"
+        );
+    }
+}
+
+/// A flag the adopter mounted above this tree is not one of the subcommand's,
+/// and the template says nothing about it.
+///
+/// An adopter's root carries flags of its own — where the server is, which
+/// profile to read, what to log — and clap propagates a global down into every
+/// subcommand's matches. None of them is the second command the template is
+/// held apart from: they say how a request would be made, and this route makes
+/// none. Refusing them would also make the answer turn on where the user typed
+/// one, since only a global typed after the subcommand is in the subcommand's
+/// matches at all — so the same line would work or not by the order of two
+/// words that mean the same thing.
+#[test]
+fn a_global_mounted_above_the_tree_is_not_a_flag_of_the_subcommands() {
+    let doc = document();
+    let rooted = || {
+        Command::new("toy")
+            .subcommand_required(true)
+            .arg(
+                Arg::new("base-url")
+                    .long("base-url")
+                    .global(true)
+                    .action(ArgAction::Set),
+            )
+            .subcommands(tree::commands(&doc))
+    };
+    let lines: [&[&str]; 2] = [
+        &[
+            "toy",
+            "--base-url",
+            "http://localhost:1",
+            "contacts",
+            "create",
+            "--json-body-template",
+        ],
+        &[
+            "toy",
+            "contacts",
+            "create",
+            "--json-body-template",
+            "--base-url",
+            "http://localhost:1",
+        ],
+    ];
+
+    for line in lines {
+        let matches = rooted()
+            .try_get_matches_from(line)
+            .unwrap_or_else(|refused| panic!("{line:?} is not two commands: {refused}"));
+        assert!(
+            matches!(
+                tree::select(&doc, &matches).expect("the subcommand names an operation"),
+                Asked::Template(_)
+            ),
+            "{line:?}"
+        );
+    }
+}
+
+/// The template is answered before a value is read, and reading a value is what
+/// opens the file `--json-body` names.
+///
+/// On a subcommand this crate built the two flags refuse each other, so the
+/// order cannot be seen from there. It can be seen from where `tree` is
+/// documented to work: pointed at a command this crate did not build — a verb
+/// an adopter wrote, or one built before an Overlay moved something — which is
+/// free to declare both and let them stand together. Answering from the reduced
+/// model first is what makes the reading the same either way, and it is the
+/// reading the flag exists for: a user asking what a body looks like has no
+/// such file yet, which is the whole reason they are asking.
+#[test]
+fn a_template_is_answered_before_a_file_is_opened() {
+    const ABSENT: &str = concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/a-body-file-no-test-ever-writes.json"
+    );
+
+    let doc = document();
+    let matches = Command::new("toy")
+        .subcommand(
+            Command::new("contacts").subcommand(
+                Command::new("create")
+                    .arg(
+                        Arg::new(JSON_BODY)
+                            .long(JSON_BODY)
+                            .value_parser(clap::value_parser!(std::path::PathBuf)),
+                    )
+                    .arg(
+                        Arg::new(JSON_BODY_TEMPLATE)
+                            .long(JSON_BODY_TEMPLATE)
+                            .action(ArgAction::SetTrue),
+                    ),
+            ),
+        )
+        .get_matches_from([
+            "toy",
+            "contacts",
+            "create",
+            "--json-body",
+            ABSENT,
+            "--json-body-template",
+        ]);
+
+    let asked = tree::select(&doc, &matches).expect("no file is opened, so none can fail to open");
+    assert!(
+        matches!(asked, Asked::Template(_)),
+        "the file was read before the question was answered"
     );
 }
 

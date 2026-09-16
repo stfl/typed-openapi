@@ -135,11 +135,20 @@ deserialises through `deserialize_any`, which postcard answers with
 `WontImplement`. `tree::select` answers `--json-body-template` from that field
 and returns `Asked::Template` before any value is read, so the template route
 builds no request: `Plan::decide` stays the only place deciding whether one is
-sent, because this way round there is nothing for it to decide about. The flag
-is `exclusive`, which is what suppresses the confirmation, the gates and every
-other required flag — asking for a shape is not the hazard any of them stand in
-front of. `JSON_BODY_TEMPLATE` is in `RESERVED` for the same reason every other
-body flag is. `Asked` and `Outcome::Template` are arms rather than a flag left
+sent, because this way round there is nothing for it to decide about. `tree::apart`
+adds the flag last and sets it against the ids the subcommand declares: it
+conflicts with all of them, and each one the subcommand demands is
+`required_unless_present` the template instead — asking for a shape is not the
+hazard the confirmation or a gate stands in front of, and it is not a second
+command either. Those ids are read back off the `Command`, never written out: a
+conflict clap cannot match is a conflict clap says nothing about, so a list
+naming an id that has since been renamed compiles, runs, and quietly stops
+refusing the flag it was written for. `exclusive` is the other way to say it and
+is not this crate's to use — it reaches every argument the parse saw, including
+the globals an adopter mounts above the tree, and only those typed after the
+subcommand, so one spelling of a line would work and the other would not.
+`JSON_BODY_TEMPLATE` is in `RESERVED` for the same reason every other body flag
+is. `Asked` and `Outcome::Template` are arms rather than a flag left
 lying about: an adopter cannot declare the flag and fail to print it, which is
 the defect progenitor's `cli.rs` ships.
 

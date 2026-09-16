@@ -242,12 +242,18 @@ which is exactly what it asks of a caller.
 describes a value of no finite depth, so the walk stops eight levels down and
 writes the empty object there.
 
-**Nothing is sent, and nothing is built.** The flag takes no other flag — not
-`--commit`, not a required path parameter, not a named gate, not the
-`--json-body` it describes — and giving it one is a clap error rather than a
-silent ignore. It is not a dry run either: a dry run builds the request it would
-have sent, and this builds none. `createContact` is the proof, since its body is
-required and a request built for it with no body would have been refused.
+**Nothing is sent, and nothing is built.** The flag takes none of the
+subcommand's other flags — not `--commit`, not a required path parameter, not a
+named gate, not the `--json-body` it describes — and giving it one is a clap
+error rather than a silent ignore. By the same token none of them is demanded
+for it: `toy raw contacts create --json-body-template` answers although the body
+is required, which is the proof that no request was built. It is not a dry run
+either: a dry run builds the request it would have sent, and this builds none.
+
+The subcommand's flags, and only those. An argument you mount on your own root —
+a `--base-url`, a profile, a token — says how a request would be made, and this
+route makes none, so it stands beside the template wherever on the line you put
+it.
 
 The template is read off the reduced model, where the bless step wrote it. A
 shipped binary prints it and has no schema walk compiled into it to have derived

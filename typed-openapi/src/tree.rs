@@ -114,7 +114,74 @@ pub fn command(op: &Operation) -> Command {
                 .help("Send the request. Without it this is a dry run that prints it"),
         );
     }
-    gates(cmd, op)
+    apart(gates(cmd, op), op.body())
+}
+
+/// `--json-body-template`, added last and held apart from every flag the
+/// subcommand already declares.
+///
+/// Last of all is what makes it answerable: the flag is defined against the
+/// other flags, so they have to be there to be read. A body with no skeleton to
+/// print grows no flag to ask for one, and such a subcommand is handed back
+/// untouched.
+///
+/// Apart in both directions, and both are one sentence — asking what a body
+/// looks like is not running the operation. So what running it demands, a
+/// required parameter and the `--json-body` the template describes and every
+/// gate the operation names, is not demanded of a line that only asks for the
+/// shape; and a flag that belongs to a run is refused beside the template rather
+/// than accepted and ignored, because a line that asks for a shape *and*
+/// confirms a write is two commands and only the user can say which they meant.
+///
+/// # Why the ids are read off the command
+///
+/// Both halves are said as the ids this subcommand declares, read back from it
+/// here. A written-out list is the failure this shape rules out: clap matches a
+/// conflict against the arguments that exist and says nothing about a name that
+/// does not, so an id renamed anywhere above — the confirmation's, a body
+/// flag's — would leave a list that still compiles, still runs, and quietly
+/// stops refusing the flag it was written for. Reading the command says what
+/// this means instead of restating it: everything this subcommand has, whatever
+/// it ended up called, including whatever it grows next.
+///
+/// # Why not `exclusive`
+///
+/// `exclusive` is about every argument the *parse* saw, and an adopter's root is
+/// free to carry arguments of its own — where the server is, which profile to
+/// read — which clap propagates down into every subcommand. None of those is the
+/// second command this stands apart from: they say how a request would be made,
+/// and this route makes none. Refusing them would also make the answer turn on
+/// where on the line the user typed one, since only a global typed after the
+/// subcommand reaches the subcommand's own validation — so one spelling of a
+/// line would work and the other would not.
+fn apart(cmd: Command, body: &Body) -> Command {
+    let Body::JsonWhole {
+        template: Some(_), ..
+    } = body
+    else {
+        return cmd;
+    };
+    let mut declared: Vec<String> = Vec::new();
+    let mut demanded: Vec<String> = Vec::new();
+    for arg in cmd.get_arguments() {
+        let id = arg.get_id().as_str().to_owned();
+        if arg.is_required_set() {
+            demanded.push(id.clone());
+        }
+        declared.push(id);
+    }
+    // `required` and `required_unless_present` are two spellings of one setting
+    // and clap refuses both at once, so the flat answer gives way to the
+    // conditional one. It says the same thing on every line that does not carry
+    // the template, and the id it names is the one [`template_arg`] declares the
+    // flag under — one constant, read in the two places that have to agree.
+    let cmd = demanded.into_iter().fold(cmd, |cmd, id| {
+        cmd.mut_arg(id, |arg| {
+            arg.required(false)
+                .required_unless_present(JSON_BODY_TEMPLATE)
+        })
+    });
+    cmd.arg(template_arg().conflicts_with_all(declared))
 }
 
 /// The gate flags one operation names, added to a command of your own.
@@ -629,16 +696,12 @@ fn body_args(cmd: Command, body: &Body) -> Command {
     match body {
         Body::None => cmd,
         Body::JsonFields(fields) => json_field_args(cmd, fields),
-        Body::JsonWhole { required, template } => {
-            let cmd = cmd.arg(file_arg(JSON_BODY, *required).help(
-                "JSON body read from a file; `-` is stdin. This body is nested, so it has \
-                 no per-field flags",
-            ));
-            match template {
-                None => cmd,
-                Some(_) => cmd.arg(template_arg()),
-            }
-        }
+        // The flag that asks what this body looks like is `apart`'s to add,
+        // once every other flag of the subcommand is there for it to name.
+        Body::JsonWhole { required, .. } => cmd.arg(file_arg(JSON_BODY, *required).help(
+            "JSON body read from a file; `-` is stdin. This body is nested, so it has \
+             no per-field flags",
+        )),
         Body::Multipart { names, required } => multipart_args(cmd, names, *required),
         Body::Opaque {
             media_type,
@@ -753,15 +816,10 @@ fn file_arg(flag: &'static str, required: bool) -> Arg {
 /// because that is where the question is asked — the user is already typing the
 /// operation whose body they cannot spell.
 ///
-/// `exclusive`, which is clap answering two of the three things this flag has to
-/// be true of, before any code of this crate's runs. Asking what a body looks
-/// like is not running the operation, so the operation's own required flags — a
-/// path parameter, a required body, every gate it names — are not demanded for
-/// it; and `--commit` beside it is refused rather than quietly ignored, because
-/// a command line that confirms a write *and* asks what the write would look
-/// like is two commands, and only the user can say which one they meant.
+/// Two of the three things this flag has to be true of are clap's, answered
+/// before any code of this crate's runs, and [`apart`] is where they are said.
 ///
-/// The third thing — that nothing is sent — is not clap's to promise. It holds
+/// The third — that nothing is sent — is not clap's to promise. It holds
 /// because [`select`] answers this from the reduced model and hands back an
 /// [`Asked::Template`], which carries no values, builds no request and has no
 /// exit that takes a client. [`Plan::decide`] stays the only place that decides
@@ -773,11 +831,10 @@ fn template_arg() -> Arg {
     Arg::new(JSON_BODY_TEMPLATE)
         .long(JSON_BODY_TEMPLATE)
         .action(ArgAction::SetTrue)
-        .exclusive(true)
         .help(
             "Print a skeleton of the JSON body and stop, for --json-body to be filled \
              in from. Required properties only, with empty values. Nothing is built \
-             and nothing is sent, so this takes no other flag",
+             and nothing is sent, so this takes none of the subcommand's other flags",
         )
 }
 
