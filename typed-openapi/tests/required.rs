@@ -693,6 +693,8 @@ const EVERYWHERE: &str = r"paths:
           headers:
             X-Page:
               schema: { type: object, required: [onResponseHeader] }
+            x-pagination:
+              schema: { type: object, required: [onHeaderNamedLikeAnExtension] }
           content:
             application/json:
               schema:
@@ -714,15 +716,49 @@ const EVERYWHERE: &str = r"paths:
                   application/json:
                     schema: { type: object, required: [onCallbackBody] }
               responses: { '204': { description: No Content } }
+  /methods:
+    get:
+      parameters: [{ name: n, in: query, schema: { type: object, required: [onGet] } }]
+    put:
+      parameters: [{ name: n, in: query, schema: { type: object, required: [onPut] } }]
+    post:
+      parameters: [{ name: n, in: query, schema: { type: object, required: [onPost] } }]
+    delete:
+      parameters: [{ name: n, in: query, schema: { type: object, required: [onDelete] } }]
+    options:
+      parameters: [{ name: n, in: query, schema: { type: object, required: [onOptions] } }]
+    head:
+      parameters: [{ name: n, in: query, schema: { type: object, required: [onHead] } }]
+    patch:
+      parameters: [{ name: n, in: query, schema: { type: object, required: [onPatch] } }]
+    trace:
+      parameters: [{ name: n, in: query, schema: { type: object, required: [onTrace] } }]
+webhooks:
+  settled:
+    post:
+      operationId: onWebhook
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [onWebhook] }
+      responses: { '204': { description: No Content } }
 components:
   parameters:
     Period:
       name: period
       in: query
       schema: { type: object, required: [onComponentParameter] }
+    x-tenant:
+      name: tenant
+      in: query
+      schema: { type: object, required: [onComponentNamedLikeAnExtension] }
   headers:
     X-Total:
       schema: { type: object, required: [onComponentHeader] }
+    X-Filter:
+      content:
+        application/json:
+          schema: { type: object, required: [onHeaderContent] }
   requestBodies:
     Entry:
       content:
@@ -734,6 +770,13 @@ components:
       content:
         application/json:
           schema: { type: object, required: [onComponentResponse] }
+  pathItems:
+    Settled:
+      parameters: [{ name: n, in: query, schema: { type: object, required: [onPathItem] } }]
+  callbacks:
+    Settled:
+      '{$request.body#/url}':
+        parameters: [{ name: n, in: query, schema: { type: object, required: [onCallback] } }]
   schemas:
     Named:
       type: object
@@ -741,48 +784,130 @@ components:
       properties:
         nested: { type: object, required: [onNestedProperty] }
         x-audit: { type: object, required: [onPropertyNamedLikeAnExtension] }
+    Composed:
+      allOf: [{ type: object, required: [onAllOf] }]
+      anyOf: [{ type: object, required: [onAnyOf] }]
+      oneOf: [{ type: object, required: [onOneOf] }]
+    Conditional:
+      not:
+        properties: { denied: { type: object, required: [onNot] } }
+      if:
+        properties: { tested: { type: object, required: [onIf] } }
+      then:
+        properties: { held: { type: object, required: [onThen] } }
+      else:
+        properties: { otherwise: { type: object, required: [onElse] } }
+    Dependent:
+      dependentSchemas:
+        flag: { type: object, required: [onDependentSchemas] }
+    Patterned:
+      patternProperties:
+        '^on': { type: object, required: [onPatternProperties] }
+    Defined:
+      $defs:
+        Inner: { type: object, required: [onDefs] }
+      definitions:
+        Legacy: { type: object, required: [onDefinitions] }
+    Listed:
+      type: array
+      prefixItems: [{ type: object, required: [onPrefixItems] }]
+      contains: { type: object, required: [onContains] }
+      unevaluatedItems: { type: object, required: [onUnevaluatedItems] }
+    Keyed:
+      type: object
+      propertyNames: { type: object, required: [onPropertyNames] }
+      unevaluatedProperties: { type: object, required: [onUnevaluatedProperties] }
+    Encoded:
+      type: string
+      contentSchema: { type: object, required: [onContentSchema] }
     x-Legacy:
       type: object
       required: [onSchemaNamedLikeAnExtension]
 ";
 
+/// What [`EVERYWHERE`] is refused for, a line per route.
+///
+/// The four entries named after an extension are where the extension rule
+/// stops. Only the Paths Object, the Responses Object and a Callback Object are
+/// maps the specification lets a vendor hang JSON of its own inside; every
+/// other map here is keyed by names somebody chose. `x-audit` is an ordinary
+/// thing for a JSON body to carry a field called, `x-pagination` is an ordinary
+/// response header, and a component or a schema may be named either way — so
+/// `x-` there is a name and not a vendor's aside.
+const EVERY_PHANTOM: &[&str] = &[
+    "$.paths['/ledger'].parameters[0].schema requires `shared`",
+    "$.paths['/ledger'].post.parameters[0].content['application/json'].schema \
+     requires `onParameterContent`",
+    "$.paths['/ledger'].post.requestBody.content['multipart/form-data'].encoding.file\
+     .headers['X-Checksum'].schema requires `onEncodingHeader`",
+    "$.paths['/ledger'].post.responses['200'].headers['X-Page'].schema \
+     requires `onResponseHeader`",
+    "$.paths['/ledger'].post.responses['200'].headers['x-pagination'].schema \
+     requires `onHeaderNamedLikeAnExtension`",
+    "$.paths['/ledger'].post.responses['200'].content['application/json'].schema\
+     .properties.rows.items requires `onItems`",
+    "$.paths['/ledger'].post.responses['200'].content['application/json'].schema\
+     .properties.spare.additionalProperties requires `onAdditional`",
+    "$.paths['/ledger'].post.callbacks.settled['{$request.body#/url}'].post.requestBody\
+     .content['application/json'].schema requires `onCallbackBody`",
+    "$.paths['/methods'].get.parameters[0].schema requires `onGet`",
+    "$.paths['/methods'].put.parameters[0].schema requires `onPut`",
+    "$.paths['/methods'].post.parameters[0].schema requires `onPost`",
+    "$.paths['/methods'].delete.parameters[0].schema requires `onDelete`",
+    "$.paths['/methods'].options.parameters[0].schema requires `onOptions`",
+    "$.paths['/methods'].head.parameters[0].schema requires `onHead`",
+    "$.paths['/methods'].patch.parameters[0].schema requires `onPatch`",
+    "$.paths['/methods'].trace.parameters[0].schema requires `onTrace`",
+    "$.webhooks.settled.post.requestBody.content['application/json'].schema \
+     requires `onWebhook`",
+    "$.components.parameters.Period.schema requires `onComponentParameter`",
+    "$.components.parameters['x-tenant'].schema \
+     requires `onComponentNamedLikeAnExtension`",
+    "$.components.headers['X-Total'].schema requires `onComponentHeader`",
+    "$.components.headers['X-Filter'].content['application/json'].schema \
+     requires `onHeaderContent`",
+    "$.components.requestBodies.Entry.content['application/json'].schema \
+     requires `onComponentRequestBody`",
+    "$.components.responses.Problem.content['application/json'].schema \
+     requires `onComponentResponse`",
+    "$.components.pathItems.Settled.parameters[0].schema requires `onPathItem`",
+    "$.components.callbacks.Settled['{$request.body#/url}'].parameters[0].schema \
+     requires `onCallback`",
+    "$.components.schemas.Named requires `onNamedSchema`",
+    "$.components.schemas.Named.properties.nested requires `onNestedProperty`",
+    "$.components.schemas.Named.properties['x-audit'] \
+     requires `onPropertyNamedLikeAnExtension`",
+    "$.components.schemas.Composed.allOf[0] requires `onAllOf`",
+    "$.components.schemas.Composed.anyOf[0] requires `onAnyOf`",
+    "$.components.schemas.Composed.oneOf[0] requires `onOneOf`",
+    "$.components.schemas.Conditional.not.properties.denied requires `onNot`",
+    "$.components.schemas.Conditional.if.properties.tested requires `onIf`",
+    "$.components.schemas.Conditional.then.properties.held requires `onThen`",
+    "$.components.schemas.Conditional.else.properties.otherwise requires `onElse`",
+    "$.components.schemas.Dependent.dependentSchemas.flag \
+     requires `onDependentSchemas`",
+    "$.components.schemas.Patterned.patternProperties['^on'] \
+     requires `onPatternProperties`",
+    "$.components.schemas.Defined['$defs'].Inner requires `onDefs`",
+    "$.components.schemas.Defined.definitions.Legacy requires `onDefinitions`",
+    "$.components.schemas.Listed.prefixItems[0] requires `onPrefixItems`",
+    "$.components.schemas.Listed.contains requires `onContains`",
+    "$.components.schemas.Listed.unevaluatedItems requires `onUnevaluatedItems`",
+    "$.components.schemas.Keyed.propertyNames requires `onPropertyNames`",
+    "$.components.schemas.Keyed.unevaluatedProperties \
+     requires `onUnevaluatedProperties`",
+    "$.components.schemas.Encoded.contentSchema requires `onContentSchema`",
+    "$.components.schemas['x-Legacy'] requires `onSchemaNamedLikeAnExtension`",
+];
+
 /// The other half of reading by position: every place the specification does
 /// put a schema is still read, so that the walk was narrowed rather than
-/// switched off. One phantom per route, and the refusal names all of them.
+/// switched off.
 ///
-/// The last two are where the extension rule stops. A map of schemas is keyed
-/// by names an author chose — `x-audit` is an ordinary thing for a JSON body
-/// to carry a field called, and a schema may be named that way too — so `x-`
-/// there is a name and not a vendor's aside.
+/// An allowlist fails by dropping a route in silence, and this is the test that
+/// would say so — so the fixture spells every key the table does rather than a
+/// representative few, and deleting one of them takes a line off the reading.
 #[test]
 fn every_position_a_schema_stands_in_is_still_read() {
-    assert_eq!(
-        named(EVERYWHERE),
-        [
-            "$.paths['/ledger'].parameters[0].schema requires `shared`",
-            "$.paths['/ledger'].post.parameters[0].content['application/json'].schema \
-             requires `onParameterContent`",
-            "$.paths['/ledger'].post.requestBody.content['multipart/form-data'].encoding.file\
-             .headers['X-Checksum'].schema requires `onEncodingHeader`",
-            "$.paths['/ledger'].post.responses['200'].headers['X-Page'].schema \
-             requires `onResponseHeader`",
-            "$.paths['/ledger'].post.responses['200'].content['application/json'].schema\
-             .properties.rows.items requires `onItems`",
-            "$.paths['/ledger'].post.responses['200'].content['application/json'].schema\
-             .properties.spare.additionalProperties requires `onAdditional`",
-            "$.paths['/ledger'].post.callbacks.settled['{$request.body#/url}'].post.requestBody\
-             .content['application/json'].schema requires `onCallbackBody`",
-            "$.components.parameters.Period.schema requires `onComponentParameter`",
-            "$.components.headers['X-Total'].schema requires `onComponentHeader`",
-            "$.components.requestBodies.Entry.content['application/json'].schema \
-             requires `onComponentRequestBody`",
-            "$.components.responses.Problem.content['application/json'].schema \
-             requires `onComponentResponse`",
-            "$.components.schemas.Named requires `onNamedSchema`",
-            "$.components.schemas.Named.properties.nested requires `onNestedProperty`",
-            "$.components.schemas.Named.properties['x-audit'] \
-             requires `onPropertyNamedLikeAnExtension`",
-            "$.components.schemas['x-Legacy'] requires `onSchemaNamedLikeAnExtension`",
-        ]
-    );
+    assert_eq!(named(EVERYWHERE), EVERY_PHANTOM);
 }

@@ -28,15 +28,21 @@
 //! key naming no such step is not followed at all.
 //!
 //! Position is what tells a schema from JSON that merely looks like one, and a
-//! specification extension is why that has to be told. `x-…` carries the
-//! vendor's own arbitrary JSON wherever it stands, so an extension holding
-//! `required: [name, email]` beside no `properties` is a form the vendor
-//! described — not a schema contradicting itself. Judging every object by its
-//! shape alone refuses that document, and leaves the adopter writing an
-//! Overlay that deletes the vendor's extension to repair a defect that was
-//! never there. A link object's `parameters` is the same thing under a fixed
-//! key: its entries are the arguments the link passes on, and a `required`
-//! among them names a parameter.
+//! specification extension is why that has to be told. An object the
+//! specification lets a vendor extend carries that vendor's own arbitrary JSON
+//! under an `x-…` key, so an extension holding `required: [name, email]` beside
+//! no `properties` is a form the vendor described — not a schema contradicting
+//! itself. Judging every object by its shape alone refuses that document, and
+//! leaves the adopter writing an Overlay that deletes the vendor's extension to
+//! repair a defect that was never there. A link object's `parameters` is the
+//! same thing under a fixed key: its entries are the arguments the link passes
+//! on, and a `required` among them names a parameter.
+//!
+//! Which objects those are is the specification's to say, and `x-` is no rule
+//! about spelling. A map keyed by names somebody chose — a component, a
+//! response header, a media type, a property — holds an entry under `x-total`
+//! as it holds one under any other name, and reading that name as an aside
+//! would leave a schema unread.
 //!
 //! What the rule costs is a schema standing somewhere this reading does not
 //! name, which goes unread — a phantom missed rather than a document wrongly
@@ -272,8 +278,30 @@ enum Route {
     /// One node of this kind — or, where the key holds a list of them, each
     /// member of it.
     Node(Kind),
-    /// A map whose values are each one node of this kind.
-    Map(Kind),
+    /// A map whose values are each one node of this kind, under keys the
+    /// specification either lets a vendor write beside or does not.
+    Map(Kind, Keys),
+}
+
+/// What the keys of a map are.
+///
+/// The specification names the objects a vendor may hang JSON of its own
+/// inside, and two of them are maps this walk enters as maps: the Paths Object
+/// and the Responses Object. A Callback Object is the third, and it is read a
+/// key at a time instead, because nothing but the runtime expressions names its
+/// entries.
+///
+/// Every other map is keyed by names somebody chose — a component, a response
+/// header, a media type, a property — and there `x-total` is a name like any
+/// other. Reading it as an aside would leave whatever schema stands under it
+/// unread.
+#[derive(Debug, Clone, Copy)]
+enum Keys {
+    /// Every key names one entry.
+    Names,
+    /// Every key names one entry but an `x-…`, which is the vendor's own JSON
+    /// standing beside them.
+    NamesAndExtensions,
 }
 
 impl Kind {
@@ -285,35 +313,45 @@ impl Kind {
     /// wrongly refused — so it names what the specification names, and a shape
     /// the specification leaves to the vendor is not in it.
     fn route(self, key: &str) -> Option<Route> {
+        use Keys::{Names, NamesAndExtensions};
         use Kind::{
             Callback, Components, Encoding, Header, MediaType, Operation, Parameter, PathItem,
             RequestBody, Response, Root, Schema,
         };
         use Route::{Map, Node};
-        // Grouped by where a key leads rather than by the node it sits on, so
-        // that no two arms say the same thing.
+        // Grouped by where a key leads and by what the keys under it are,
+        // rather than by the node it sits on, so that no two arms say the same
+        // thing.
         Some(match (self, key) {
             (Root, "components") => Node(Components),
-            (Root, "paths" | "webhooks") | (Components, "pathItems") => Map(PathItem),
+            // The Paths Object is one of the two maps here that the
+            // specification also lets a vendor hang JSON of its own inside.
+            // `webhooks` and `components.pathItems` are plain maps of path
+            // items under names somebody chose.
+            (Root, "paths") => Map(PathItem, NamesAndExtensions),
+            (Root, "webhooks") | (Components, "pathItems") => Map(PathItem, Names),
             // Nothing names a callback's keys but the expressions themselves,
             // so each of them addresses a path item — bar an extension, which
             // is the vendor's JSON standing beside them rather than one more.
             (Callback, key) if !is_extension(key) => Node(PathItem),
-            (Components | Operation, "callbacks") => Map(Callback),
+            (Components | Operation, "callbacks") => Map(Callback, Names),
             (
                 PathItem,
                 "get" | "put" | "post" | "delete" | "options" | "head" | "patch" | "trace",
             ) => Node(Operation),
             (PathItem | Operation, "parameters") => Node(Parameter),
-            (Components, "parameters") => Map(Parameter),
+            (Components, "parameters") => Map(Parameter, Names),
             (Operation, "requestBody") => Node(RequestBody),
-            (Components, "requestBodies") => Map(RequestBody),
-            (Components | Operation, "responses") => Map(Response),
-            (Components | Response | Encoding, "headers") => Map(Header),
-            (Parameter | Header | RequestBody | Response, "content") => Map(MediaType),
-            (MediaType, "encoding") => Map(Encoding),
+            (Components, "requestBodies") => Map(RequestBody, Names),
+            // The Responses Object is the other one. `components.responses` is
+            // a plain map, where a response called `x-problem` is a response.
+            (Operation, "responses") => Map(Response, NamesAndExtensions),
+            (Components, "responses") => Map(Response, Names),
+            (Components | Response | Encoding, "headers") => Map(Header, Names),
+            (Parameter | Header | RequestBody | Response, "content") => Map(MediaType, Names),
+            (MediaType, "encoding") => Map(Encoding, Names),
             (Parameter | Header | MediaType, "schema") => Node(Schema),
-            (Components, "schemas") => Map(Schema),
+            (Components, "schemas") => Map(Schema, Names),
             (Schema, key) => return keyword(key),
             _ => return None,
         })
@@ -329,7 +367,7 @@ impl Kind {
 fn keyword(key: &str) -> Option<Route> {
     Some(match key {
         PROPERTIES | "patternProperties" | "$defs" | "definitions" | DEPENDENT => {
-            Route::Map(Kind::Schema)
+            Route::Map(Kind::Schema, Keys::Names)
         }
         ITEMS
         | "prefixItems"
@@ -360,9 +398,10 @@ fn about_the_same_value(key: &str) -> bool {
     COMPOSED.contains(&key) || CONDITIONAL.contains(&key) || key == DEPENDENT
 }
 
-/// A specification extension: a key the specification says carries the vendor's
-/// own arbitrary JSON, so what stands under it is never read as part of the
-/// document.
+/// A specification extension: where the specification lets an object carry one,
+/// an `x-…` key holds the vendor's own arbitrary JSON rather than a part of the
+/// document. Where it does not, the same spelling is an ordinary name, so the
+/// callers of this are the positions the specification names and no others.
 fn is_extension(key: &str) -> bool {
     key.starts_with("x-")
 }
@@ -441,20 +480,15 @@ impl<'d> Walk<'d> {
     fn follow(&mut self, route: Route, value: &'d Value) {
         match route {
             Route::Node(kind) => self.read(kind, value),
-            Route::Map(kind) => self.entries(kind, value),
+            Route::Map(kind, keys) => self.entries(kind, keys, value),
         }
     }
 
-    /// Every entry of a map of nodes of one kind.
-    ///
-    /// A map of schemas is keyed by names an author chose, and `x-total` is an
-    /// ordinary thing to call a property or a schema. Every other map here
-    /// holds objects the specification describes, beside which it lets a
-    /// vendor hang JSON of its own — and that is not one more entry.
-    fn entries(&mut self, kind: Kind, map: &'d Value) {
-        let by_name = matches!(kind, Kind::Schema);
+    /// Every entry of a map of nodes of one kind, which is every key of it
+    /// unless the route said the specification lets a vendor write beside them.
+    fn entries(&mut self, kind: Kind, keys: Keys, map: &'d Value) {
         for (key, entry) in map.as_object().into_iter().flatten() {
-            if !by_name && is_extension(key) {
+            if matches!(keys, Keys::NamesAndExtensions) && is_extension(key) {
                 continue;
             }
             self.at.push(Step::Key(key));
