@@ -134,13 +134,19 @@ a real difference with no row fails.
 
 ## Why five crates
 
-| crate | lines | written by | holds |
-|---|---|---|---|
-| [`money`](money) | 428 | the adopter | one type: a fixed-point amount, which the generated code wraps |
-| [`api-generated`](api-generated) | 732 | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
-| [`api`](api) | 1151 | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
-| [`cli`](cli) | 1311 | the adopter | the `toy` binary, and `examples/root.rs` beside it |
-| [`xtask`](xtask) | 50 | the adopter | the bless step — the generator itself ships in `typed-openapi` |
+| crate | written by | holds |
+|---|---|---|
+| [`money`](money) | the adopter | one type: a fixed-point amount, which the generated code wraps |
+| [`api-generated`](api-generated) | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
+| [`api`](api) | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
+| [`cli`](cli) | the adopter | the `toy` binary, and `examples/root.rs` beside it |
+| [`xtask`](xtask) | the adopter | the bless step — the generator itself ships in `typed-openapi` |
+
+No line counts in that table, on the argument the section above makes: a count
+in prose fails nothing when it moves, and a count of lines is one nothing can
+hold — every commit moves it, so a test pinning it would be a test that is
+rewritten rather than run. `find api -name '*.rs' | xargs wc -l` answers it for
+whichever crate you are curious about, at the moment you ask.
 
 The split is about what recompiles, and about what can name what. An edit to
 `api` rebuilds the adopter's own lines and not the generated volume beneath
@@ -195,8 +201,9 @@ same call the generated subcommand makes — and reads them back with
 enshrine` does.
 
 [`cli/examples/root.rs`](cli/examples/root.rs) is the other shape: the
-operations *are* the CLI, 53 lines, no `raw` layer and no dispatch of its own.
-That is what an adoption looks like on day one.
+operations *are* the CLI — no `raw` layer, no dispatch of its own, and one file
+short enough to read before deciding whether to copy it. That is what an
+adoption looks like on day one.
 
 [`cli/src/raw.rs`](cli/src/raw.rs) is worth reading if you are adopting. It is
 the one thing the library cannot do for you — holding a CLI-built JSON body to
