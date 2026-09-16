@@ -531,3 +531,64 @@ fn as_json_schema(value: Value) -> Value {
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PLACEHOLDER, owned};
+
+    /// Every format the adopter named, as `(format, placeholder, type)`.
+    fn read(named: &[(&str, &str)]) -> Vec<(String, String, String)> {
+        let named: Vec<(String, String)> = named
+            .iter()
+            .map(|(format, rust)| ((*format).to_owned(), (*rust).to_owned()))
+            .collect();
+        owned(&named)
+            .into_iter()
+            .map(|it| (it.format, it.placeholder, it.rust))
+            .collect()
+    }
+
+    /// One format is one decision, and the call that made it is the first one.
+    ///
+    /// A [`Settings`] is assembled a call at a time and read once, so a second
+    /// call naming a format the first already decided arrives after everything
+    /// that decision reached — the definition every schema declaring the format
+    /// was rewritten into, and the promise the generated crate is held to. It is
+    /// dropped whole rather than registered beside the first, because a format
+    /// with two definitions standing for it has one more than it has types.
+    ///
+    /// [`Settings`]: super::super::Settings
+    #[test]
+    fn a_format_named_twice_keeps_the_first_call_and_one_definition() {
+        assert_eq!(
+            read(&[("cents", "money::Cents"), ("cents", "second::Cents")]),
+            [(
+                "cents".to_owned(),
+                format!("{PLACEHOLDER}0"),
+                "money::Cents".to_owned()
+            )]
+        );
+    }
+
+    /// Two formats are two decisions, each reached through a definition of its
+    /// own — which is what says the rule above is about one format rather than
+    /// about any second call.
+    #[test]
+    fn two_formats_are_two_definitions_in_the_order_they_were_named() {
+        assert_eq!(
+            read(&[("cents", "money::Cents"), ("amount", "money::Amount")]),
+            [
+                (
+                    "cents".to_owned(),
+                    format!("{PLACEHOLDER}0"),
+                    "money::Cents".to_owned()
+                ),
+                (
+                    "amount".to_owned(),
+                    format!("{PLACEHOLDER}1"),
+                    "money::Amount".to_owned()
+                )
+            ]
+        );
+    }
+}
