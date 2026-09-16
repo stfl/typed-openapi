@@ -597,7 +597,70 @@ fn a_link_passes_arguments_on_and_states_no_schema() {
     assert_eq!(scanned(LINKS), Ok(()), "no diagnostic at all");
 }
 
-/// One phantom in every position the specification puts a schema in.
+/// A `dependentSchemas` subschema states what the object carrying the property
+/// must satisfy, not what the property's own value must — so *if `foo` is
+/// present then `bar` is required* is the object requiring its own `bar`, and
+/// the object's `properties` are where `bar` is declared. Judging the subschema
+/// on its own refuses the one idiom the keyword exists for, which is the same
+/// mistake as judging an `allOf` member on its own.
+///
+/// The other two schemas are what keeps the reading from being the blanket
+/// "anything under a schema inherits it". A name declared on the object is no
+/// declaration for a property's value, which is a different value; and a
+/// subschema constraining the same value still has to be read, so a name
+/// neither it nor the object declares is still named.
+#[test]
+fn a_dependent_subschema_is_held_to_the_object_that_carries_the_property() {
+    const DEPENDENT: &str = r"paths:
+  /ledger:
+    get:
+      operationId: listEntries
+      responses: { '200': { description: OK } }
+components:
+  schemas:
+    Entry:
+      type: object
+      properties:
+        foo: { type: string }
+        bar: { type: string }
+      dependentSchemas:
+        foo:
+          required: [bar]
+    Unknown:
+      type: object
+      properties:
+        foo: { type: string }
+      dependentSchemas:
+        foo:
+          required: [side]
+    Nested:
+      type: object
+      properties:
+        bar: { type: string }
+        inner:
+          type: object
+          required: [bar]
+";
+
+    assert_eq!(
+        named(DEPENDENT),
+        [
+            "$.components.schemas.Unknown.dependentSchemas.foo requires `side`",
+            "$.components.schemas.Nested.properties.inner requires `bar`",
+        ]
+    );
+}
+
+/// One phantom in every position the specification puts a schema in: one per
+/// key the walk's table spells, down to each of the eight methods and each of
+/// the two spellings of a definitions map.
+///
+/// Four of the keywords carry their phantom one level further down, under a
+/// `properties` of their own. `not`, `if`, `then` and `else` make everything
+/// beneath them open-ended, so a phantom sitting directly under one is silent
+/// whether or not the walk goes there — and a route that cannot be observed is
+/// a route this test cannot hold. A `properties` inside describes a different
+/// value, which puts the phantom back where it can be seen.
 const EVERYWHERE: &str = r"paths:
   /ledger:
     parameters:

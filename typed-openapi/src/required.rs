@@ -67,6 +67,15 @@
 //! same value, so what a member is held to is every node it sits inside as well
 //! as itself. Judging a member on its own would refuse an ordinary document.
 //!
+//! The same holds wherever a keyword states a further schema about the value
+//! the node itself describes, which `dependentSchemas` does while reading like
+//! a step into a property: `dependentSchemas: { foo: { required: [bar] } }`
+//! says the *object* must carry `bar` whenever it carries `foo`, so the
+//! object's own `properties` are where `bar` is declared. Every other keyword
+//! leads to a different value — a property, an item, a property name, the
+//! document a string decodes to — and what stands out here declares nothing
+//! about that one.
+//!
 //! # What the walk steps over
 //!
 //! `required` is the name of two things in OpenAPI. The one this module is
@@ -130,6 +139,11 @@ const COMPOSED: [&str; 3] = ["allOf", "anyOf", "oneOf"];
 /// constrains, but which this walk does not read as declarations. A node
 /// carrying one is open-ended, and so is everything under one.
 const CONDITIONAL: [&str; 4] = ["not", "if", "then", "else"];
+/// The keyword whose subschemas are about the object a property stands in
+/// rather than about that property's value. `dependentSchemas: { foo: {
+/// required: [bar] } }` is the object requiring its own `bar` whenever it
+/// carries `foo`, so the object's `properties` are where `bar` is declared.
+const DEPENDENT: &str = "dependentSchemas";
 /// Everything else that puts a name beyond this walk's reach, and so makes the
 /// node carrying it open-ended.
 const OPEN: [&str; 2] = ["patternProperties", "$dynamicRef"];
@@ -314,7 +328,7 @@ impl Kind {
 /// carrying one of those is open-ended rather than read.
 fn keyword(key: &str) -> Option<Route> {
     Some(match key {
-        PROPERTIES | "patternProperties" | "$defs" | "definitions" | "dependentSchemas" => {
+        PROPERTIES | "patternProperties" | "$defs" | "definitions" | DEPENDENT => {
             Route::Map(Kind::Schema)
         }
         ITEMS
@@ -328,6 +342,22 @@ fn keyword(key: &str) -> Option<Route> {
         key if COMPOSED.contains(&key) || CONDITIONAL.contains(&key) => Route::Node(Kind::Schema),
         _ => return None,
     })
+}
+
+/// Whether the schemas a schema states under this keyword constrain the value
+/// that schema constrains, rather than some value inside it.
+///
+/// It is what a subschema's own `required` is judged against. A member of a
+/// composition, a `then`, and a `dependentSchemas` subschema are each one half
+/// of a single statement about a single value, so the whole of that statement
+/// is what they are held to — judging such a half on its own refuses an
+/// ordinary document. Every other keyword this walk follows leads to a
+/// different value: a property, an item, a property *name*, the document a
+/// string decodes to. What is declared out here says nothing about that one.
+/// `$defs` leads to a schema constraining nothing at all until a `$ref` names
+/// it.
+fn about_the_same_value(key: &str) -> bool {
+    COMPOSED.contains(&key) || CONDITIONAL.contains(&key) || key == DEPENDENT
 }
 
 /// A specification extension: a key the specification says carries the vendor's
@@ -379,10 +409,11 @@ impl<'d> Walk<'d> {
     /// and of which value it is about.
     ///
     /// A key the document does not lead to a schema through is not read at
-    /// all. A composition keyword keeps talking about the value `node` talks
-    /// about, so `node` joins what its members are held to. Every other key — a
-    /// property, an item, a response, a path — is a different value, and the
-    /// schemas out here have nothing to say about it.
+    /// all. A keyword stating further schemas about the same value keeps
+    /// talking about the value `node` talks about, so `node` joins what those
+    /// schemas are held to. Every other key — a property, an item, a response,
+    /// a path — is a different value, and the schemas out here have nothing to
+    /// say about it.
     fn field(&mut self, kind: Kind, node: &'d Value, key: &'d str, value: &'d Value) {
         let Some(route) = kind.route(key) else {
             return;
@@ -395,7 +426,7 @@ impl<'d> Walk<'d> {
     /// The step itself: one node, or every entry of a map of them, with
     /// whatever the key means for the schemas the value under it is held to.
     fn descend(&mut self, node: &'d Value, key: &'d str, route: Route, value: &'d Value) {
-        if COMPOSED.contains(&key) || CONDITIONAL.contains(&key) {
+        if about_the_same_value(key) {
             self.enclosing.push(node);
             self.follow(route, value);
             self.enclosing.pop();
