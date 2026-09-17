@@ -128,7 +128,7 @@ content-type: application/json
 dry run: nothing was sent. Add --commit to send it.
 
 $ toy raw vouchers create --json-body bad.json
-toy: createVoucher: the request body does not fit the schema the document declares
+toy: createVoucher: the request body does not fit the schema the document declares at `status`
   caused by: unknown variant `nope`, expected one of `draft`, `open`, `paid`
 ```
 

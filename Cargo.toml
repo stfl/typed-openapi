@@ -59,6 +59,7 @@ roas-overlay = "0.3"
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+serde_path_to_error = "0.1"
 serde_yaml_ng = "0.10"
 syn = { version = "3", features = ["parsing", "printing", "full", "visit-mut"] }
 thiserror = "2"

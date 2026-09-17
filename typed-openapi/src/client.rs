@@ -127,12 +127,17 @@ impl Client {
 /// A request body that does not deserialise into the type the document
 /// describes for it.
 ///
-/// This is what a `--json-body` file gets checked against. The source is
-/// serde's own message, which names the field that is missing or ill-typed.
+/// This is what a `--json-body` file gets checked against. `path` is where in
+/// the body the deserialiser stopped, written the way `jq` writes one —
+/// `positions[1].flag`, and `.` for the body itself — and the source is
+/// serde's own message about the value it found there. The two are apart
+/// because serde's message names a value and the type it wanted, and never
+/// which element of which list held it.
 #[derive(Debug, Error)]
-#[error("{op}: the request body does not fit the schema the document declares")]
+#[error("{op}: the request body does not fit the schema the document declares at `{path}`")]
 pub struct BodyError {
     pub op: String,
+    pub path: String,
     #[source]
     pub source: serde_json::Error,
 }
@@ -143,11 +148,12 @@ pub struct BodyError {
 /// operation, which is how a body assembled on a command line is held to the
 /// same schema as a body passed from Rust — before a request is built.
 pub fn fits<T: DeserializeOwned>(op: &str, body: &serde_json::Value) -> Result<(), BodyError> {
-    serde_json::from_value::<T>(body.clone())
+    serde_path_to_error::deserialize::<_, T>(body)
         .map(drop)
-        .map_err(|source| BodyError {
+        .map_err(|refused| BodyError {
             op: op.to_owned(),
-            source,
+            path: refused.path().to_string(),
+            source: refused.into_inner(),
         })
 }
 
@@ -223,4 +229,60 @@ fn parse<T: DeserializeOwned>(response: &HttpResponse) -> Result<T, Error> {
 /// The request body of a typed wrapper, as JSON.
 pub fn to_json<T: Serialize>(value: &T) -> Result<serde_json::Value, Error> {
     serde_json::to_value(value).map_err(Error::Encode)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used, reason = "a failed unwrap is a failing test")]
+
+    use serde::Deserialize;
+    use serde_json::json;
+
+    use super::fits;
+
+    /// A body with a list of objects in it, which is the shape whose refusal
+    /// is hardest to place by eye: serde's own message names the value and the
+    /// type it wanted, and not which element of which list held it.
+    #[derive(Debug, Deserialize)]
+    struct Save {
+        #[expect(dead_code, reason = "read only by the deserialiser under test")]
+        positions: Vec<Position>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Position {
+        #[expect(dead_code, reason = "read only by the deserialiser under test")]
+        flag: bool,
+    }
+
+    #[test]
+    fn a_body_that_does_not_fit_names_the_place_it_stopped_at() {
+        let body = json!({"positions": [{"flag": true}, {"flag": "1"}]});
+
+        let refused = fits::<Save>("save", &body).unwrap_err();
+
+        assert_eq!(refused.path, "positions[1].flag");
+        assert!(
+            refused.to_string().contains("`positions[1].flag`"),
+            "the refusal does not say where the body went wrong: {refused}"
+        );
+        assert_eq!(
+            refused.source.to_string(),
+            "invalid type: string \"1\", expected a boolean",
+            "serde's own reading of the value was lost"
+        );
+    }
+
+    #[test]
+    fn a_field_missing_from_the_top_of_the_body_is_placed_at_the_body_itself() {
+        let refused = fits::<Save>("save", &json!({})).unwrap_err();
+
+        assert_eq!(refused.path, ".");
+        assert_eq!(refused.source.to_string(), "missing field `positions`");
+    }
+
+    #[test]
+    fn a_body_that_fits_is_not_refused() {
+        assert!(fits::<Save>("save", &json!({"positions": [{"flag": false}]})).is_ok());
+    }
 }

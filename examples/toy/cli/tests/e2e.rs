@@ -319,7 +319,7 @@ fn a_json_body_that_does_not_fit_the_document_is_refused_with_nothing_sent() {
     let message = format!("{error}");
     assert_eq!(
         message,
-        "createContact: the request body does not fit the schema the document declares"
+        "createContact: the request body does not fit the schema the document declares at `.`"
     );
     assert_eq!(
         std::error::Error::source(&error).map(ToString::to_string),

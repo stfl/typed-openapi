@@ -72,6 +72,12 @@ roas-overlay = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# A body refused by `client::fits` names where it stopped — `positions[1].flag`
+# — which serde's own message does not, and a nested body sent whole through a
+# file is exactly where a caller cannot find the field by eye. It wraps the
+# deserialiser serde_json already drives and brings `itoa` with it; tracking
+# the path by hand is that same wrapper written again.
+serde_path_to_error = { workspace = true }
 serde_yaml_ng = { workspace = true, optional = true }
 syn = { workspace = true, optional = true }
 thiserror = { workspace = true }
