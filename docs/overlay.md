@@ -259,7 +259,7 @@ else could use this?*
 |---|---|---|
 | `corrections.yaml` | what is true of the API and the vendor got wrong or left out | anyone — the vendor, a TypeScript generator, a mock server, a request validator |
 | `client.yaml` | what is true of *your* client but not of the API | you, in any language |
-| `cli.yaml` | `x-cli-writes`, `x-cli-gates`, `x-cli-group`, `x-cli-command` | the command-line half of this crate |
+| `cli.yaml` | `x-cli-writes`, `x-cli-gates`, `x-cli-group`, `x-cli-command`, `x-cli-requires` | the command-line half of this crate |
 
 Later layers may say things earlier ones must not, so the order is not a
 preference. The practical argument is also small and immediate: a tripwire that
@@ -481,7 +481,7 @@ uses one layer down. The difference is only who the statement is true of — see
 
 ### 3. Grouping and the command line
 
-**What only this crate reads** — the four `x-cli-` extensions, under the `x-`
+**What only this crate reads** — the five `x-cli-` extensions, under the `x-`
 prefix OpenAPI reserves for exactly this.
 [`examples/toy/spec/cli.yaml`](../examples/toy/spec/cli.yaml) is this layer,
 and it is last because nothing else has any use for what is in it.
@@ -492,6 +492,7 @@ and it is last because nothing else has any use for what is in it.
 | `x-cli-gates: [<name>, …]` | an operation | demand one flag per name as well, each required |
 | `x-cli-group: <name>` | an operation | mount it under this group rather than the one its path names |
 | `x-cli-command: <name>` | an operation | call it this rather than what its path and method name |
+| `x-cli-requires: [<parameter>, …]` | a parameter | refuse it unless each named parameter of the same operation is given too |
 
 The last two are also the only way out of a name collision — two operations
 reducing to one `<group> <command>` is a `LoadError` at bless time naming both
@@ -524,6 +525,23 @@ release. What each becomes on the command line is in
 [docs/cli.md](cli.md#named-gates); a name that is not a usable flag, one the
 command line already spends, one given twice, and one on an operation that is
 sent on sight are each a `LoadError` while the document is reduced.
+
+**A pair of parameters that only mean something together** is the other thing
+OpenAPI cannot say. A reference spelled across a query string — an id and the
+kind of object it names — is two parameters, and a server that answers the id
+alone with a `400` is one the document should hold to both:
+
+```yaml
+  - target: $.paths['/positions'].get.parameters[?(@.name == 'voucher[id]')]
+    description: The id is read only beside the kind of object it names.
+    update:
+      x-cli-requires: ['voucher[objectName]']
+```
+
+The requirement runs one way, from the parameter carrying the marker. The
+command line refuses the flag without its companion, and `Invocation::new`
+refuses the same `Values` a typed wrapper builds. A name that is not a parameter
+of the operation, or names one this crate cannot send, is a `LoadError`.
 
 ## Owning the type yourself
 

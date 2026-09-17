@@ -200,6 +200,7 @@ pub struct Param {
     required: bool,
     shape: Shape,
     description: Option<String>,
+    requires: Vec<String>,
 }
 
 /// What one parameter is worth on a command line.
@@ -712,6 +713,21 @@ impl Param {
     #[must_use]
     pub fn required(&self) -> bool {
         self.required
+    }
+
+    /// The other parameters of this operation that have to be given whenever
+    /// this one is, by wire name, in the order the document's
+    /// `x-cli-requires` lists them.
+    ///
+    /// OpenAPI has no way to say that two parameters only mean something
+    /// together — an id and the kind of object it names, spelled across a
+    /// query string — so the document says it with that marker. The reduction
+    /// has already checked that every name is a parameter a request can carry;
+    /// [`Invocation::new`](crate::Invocation::new) and the command line both
+    /// refuse this one without them.
+    #[must_use]
+    pub fn requires(&self) -> &[String] {
+        &self.requires
     }
 
     #[must_use]

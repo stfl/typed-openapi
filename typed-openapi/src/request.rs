@@ -48,6 +48,13 @@ pub enum ValueError {
         #[source]
         source: ScalarError,
     },
+    /// A parameter given without one the document says has to come with it.
+    #[error("{op}: `{name}` is given, and `{requires}` has to be given with it")]
+    MissingCompanion {
+        op: String,
+        name: String,
+        requires: String,
+    },
     #[error("{op}: a request body is required")]
     MissingBody { op: String },
     #[error("{op}: takes no request body")]
@@ -106,6 +113,18 @@ impl<'a> Invocation<'a> {
                     op: name(),
                     name: param.name().to_owned(),
                     given,
+                });
+            }
+            if given > 0
+                && let Some(requires) = param
+                    .requires()
+                    .iter()
+                    .find(|requires| !values.params().iter().any(|(wire, _)| wire == *requires))
+            {
+                return Err(ValueError::MissingCompanion {
+                    op: name(),
+                    name: param.name().to_owned(),
+                    requires: requires.clone(),
                 });
             }
         }

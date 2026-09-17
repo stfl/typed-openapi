@@ -793,6 +793,93 @@ fn every_rule_a_parameter_states_is_checked_because_nothing_else_can_check_it() 
     );
 }
 
+/// Two query parameters that only mean something together, the way a
+/// reference is spelled across a query string: an id and the kind of object it
+/// names.
+const COMPANIONS: &str = "  /positions:\n\
+     \x20   get:\n\
+     \x20     operationId: listPositions\n\
+     \x20     parameters:\n\
+     \x20       - { name: 'voucher[id]', in: query, schema: { type: string }, x-cli-requires: ['voucher[objectName]'] }\n\
+     \x20       - { name: 'voucher[objectName]', in: query, schema: { type: string } }\n\
+     \x20     responses: { \"200\": { description: OK } }\n";
+
+/// A parameter the document says needs another is refused without it, before a
+/// request is built, on the road a typed wrapper takes as well as on the command
+/// line's. The requirement runs one way: the companion alone is an ordinary
+/// parameter.
+#[test]
+fn a_parameter_that_requires_another_is_refused_without_it() {
+    let doc = Document::load(&synthetic(COMPANIONS), &[]).expect("a document");
+    let op = doc.get("listPositions").unwrap();
+
+    assert_eq!(
+        op.param("voucher[id]").unwrap().requires(),
+        ["voucher[objectName]"]
+    );
+    assert_eq!(
+        Invocation::new(op, Values::new().param("voucher[id]", "5"))
+            .expect_err("`voucher[id]` alone")
+            .to_string(),
+        "listPositions: `voucher[id]` is given, and `voucher[objectName]` has to be given with it"
+    );
+    assert!(
+        Invocation::new(
+            op,
+            Values::new()
+                .param("voucher[id]", "5")
+                .param("voucher[objectName]", "Voucher"),
+        )
+        .is_ok()
+    );
+    assert!(Invocation::new(op, Values::new().param("voucher[objectName]", "Voucher")).is_ok());
+    assert!(Invocation::new(op, Values::new()).is_ok());
+}
+
+/// A requirement the command line could never meet is the document's mistake,
+/// so it is refused while the document is reduced rather than mounted as a flag
+/// that refuses every run giving it.
+#[test]
+fn a_requirement_no_request_could_meet_is_refused_while_the_document_is_reduced() {
+    let refused = |parameters: &str| {
+        Document::load(
+            &synthetic(&format!(
+                "  /positions:\n\
+                 \x20   get:\n\
+                 \x20     operationId: listPositions\n\
+                 \x20     parameters:\n{parameters}\
+                 \x20     responses: {{ \"200\": {{ description: OK }} }}\n"
+            )),
+            &[],
+        )
+        .expect_err("the document asks for a companion nothing can supply")
+        .to_string()
+    };
+
+    assert_eq!(
+        refused(
+            "\x20       - { name: 'voucher[id]', in: query, schema: { type: string }, x-cli-requires: ['voucher[name]'] }\n"
+        ),
+        "listPositions: `voucher[id]` requires `voucher[name]`, which is not a parameter \
+         of this operation"
+    );
+    assert_eq!(
+        refused(
+            "\x20       - { name: 'voucher[id]', in: query, schema: { type: string }, x-cli-requires: ['session'] }\n\
+             \x20       - { name: session, in: cookie, schema: { type: string } }\n"
+        ),
+        "listPositions: `voucher[id]` requires `session`, and `session` is \
+         `in: cookie`, which this CLI does not send"
+    );
+    assert_eq!(
+        refused(
+            "\x20       - { name: 'voucher[id]', in: query, schema: { type: string }, x-cli-requires: 'voucher[objectName]' }\n\
+             \x20       - { name: 'voucher[objectName]', in: query, schema: { type: string } }\n"
+        ),
+        "listPositions: `x-cli-requires` on `voucher[id]` is not a list of parameter names"
+    );
+}
+
 /// A `pattern` the engine cannot read would refuse every value at the flag,
 /// which is a command line nothing can satisfy. The document is refused while
 /// it is reduced instead, naming the operation and the value it was stated

@@ -171,6 +171,7 @@ own type rather than the box `DispatchError::Transport` carries.
 | no request body | nothing |
 | an operation that writes | `--commit` |
 | `x-cli-gates: [enshrine, email]` on an operation | `--enshrine` and `--email`, both required |
+| `x-cli-requires: [other]` on a parameter | its flag is refused unless `--other` is given too |
 
 One nested property is enough to make the whole body `--json-body` only: no
 sibling gets a flag the request builder would then throw away. `contacts create`

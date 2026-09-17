@@ -56,6 +56,10 @@ const GROUP: &str = "x-cli-group";
 /// itself. One list rather than one marker per name, so a gate an adoption
 /// invents costs an Overlay line and not a release of this crate.
 const GATES: &str = "x-cli-gates";
+/// The other parameters a parameter needs beside it, by wire name. OpenAPI
+/// cannot say that two parameters only mean something together, so the marker
+/// sits on the parameter that needs the other.
+const REQUIRES: &str = "x-cli-requires";
 
 /// The five flags that carry a request's body, spent by every subcommand
 /// before the document has a say.
@@ -241,6 +245,29 @@ pub enum LoadError {
         name: String,
         #[source]
         source: crate::scalar::ScalarError,
+    },
+    /// An `x-cli-requires` that is present and is not a list of names. Refused
+    /// rather than passed over, for the reason a gate list is: one name written
+    /// where a list goes would otherwise be no requirement at all.
+    #[error("{op}: `{REQUIRES}` on `{name}` is not a list of parameter names")]
+    RequiresList { op: String, name: String },
+    /// A parameter that requires a name the operation declares no parameter
+    /// under. Every run giving it would be refused, and the spelling that was
+    /// meant is the adopter's to correct.
+    #[error("{op}: `{name}` requires `{requires}`, which is not a parameter of this operation")]
+    RequiresUnknown {
+        op: String,
+        name: String,
+        requires: String,
+    },
+    /// A parameter that requires one this crate cannot put in a request, so no
+    /// request giving the first could ever be built.
+    #[error("{op}: `{name}` requires `{requires}`, and `{requires}` is {why}")]
+    RequiresUnreachable {
+        op: String,
+        name: String,
+        requires: String,
+        why: Unsupported,
     },
 }
 
@@ -477,6 +504,7 @@ impl Operation {
         let params = params
             .map(|p| Param::build(id, p, whole.components, &mut flags))
             .collect::<Result<Vec<_>, _>>()?;
+        companions(id, &params)?;
         let body = Body::build(id, op, whole.components, &mut flags)?;
 
         Ok(Self {
@@ -696,8 +724,55 @@ impl Param {
             required: data.required,
             shape,
             description: data.description.clone(),
+            requires: requires_of(op, data)?,
         })
     }
+}
+
+/// The names one parameter's `x-cli-requires` lists, if it lists any.
+fn requires_of(op: &str, data: &ParameterData) -> Result<Vec<String>, LoadError> {
+    let reject = || LoadError::RequiresList {
+        op: op.to_owned(),
+        name: data.name.clone(),
+    };
+    match data.extensions.get(REQUIRES) {
+        None => Ok(Vec::new()),
+        Some(serde_json::Value::Array(names)) => names
+            .iter()
+            .map(|name| name.as_str().map(str::to_owned).ok_or_else(reject))
+            .collect(),
+        Some(_) => Err(reject()),
+    }
+}
+
+/// Every requirement one operation's parameters state names a parameter of the
+/// same operation that a request can carry.
+///
+/// Checked once every parameter is read, because a requirement may name one the
+/// document lists after it. A name that is not there, or one this crate cannot
+/// send, is a requirement no run could meet, so it is refused here rather than
+/// mounted as a flag that refuses everyone who gives it.
+fn companions(op: &str, params: &[Param]) -> Result<(), LoadError> {
+    for param in params {
+        for requires in param.requires() {
+            let Some(companion) = params.iter().find(|other| other.name() == requires) else {
+                return Err(LoadError::RequiresUnknown {
+                    op: op.to_owned(),
+                    name: param.name().to_owned(),
+                    requires: requires.clone(),
+                });
+            };
+            if let Shape::Unreachable(why) = companion.shape() {
+                return Err(LoadError::RequiresUnreachable {
+                    op: op.to_owned(),
+                    name: param.name().to_owned(),
+                    requires: requires.clone(),
+                    why: why.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// What one parameter is worth on a command line, and the flag it claims when it

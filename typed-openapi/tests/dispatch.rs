@@ -1201,3 +1201,57 @@ fn a_request_sent_through_the_client_itself_fails_with_the_clients_own_error() {
     assert_eq!(failed.reach(), Reach::NeverLeft);
     assert_eq!(only(&client).uri().path(), "/vouchers/5");
 }
+
+/// A flag the document says needs another is refused by the parser when the
+/// other is missing, the way a required flag is — one kind of mistake, one
+/// error shape — and is accepted beside it.
+#[test]
+fn a_flag_that_requires_another_is_refused_by_the_parser_without_it() {
+    let doc = Document::load(
+        "openapi: 3.0.3\n\
+         info: { title: t, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+         \x20 /positions:\n\
+         \x20   get:\n\
+         \x20     operationId: listPositions\n\
+         \x20     parameters:\n\
+         \x20       - { name: 'voucher[id]', in: query, schema: { type: string }, x-cli-requires: ['voucher[objectName]'] }\n\
+         \x20       - { name: 'voucher[objectName]', in: query, schema: { type: string } }\n\
+         \x20     responses: { \"200\": { description: OK } }\n",
+        &[],
+    )
+    .expect("a document");
+
+    let alone = root(&doc)
+        .try_get_matches_from(["toy", "positions", "list", "--voucher-id", "5"])
+        .expect_err("`--voucher-id` without `--voucher-object-name`");
+    assert_eq!(
+        alone.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+    assert!(
+        alone.to_string().contains("--voucher-object-name"),
+        "the refusal does not name the flag that is missing: {alone}"
+    );
+
+    let matches = root(&doc)
+        .try_get_matches_from([
+            "toy",
+            "positions",
+            "list",
+            "--voucher-id",
+            "5",
+            "--voucher-object-name",
+            "Voucher",
+        ])
+        .expect("both flags together");
+    let client = Recorder::new().answering(StatusCode::OK, &json!([]));
+    running(&doc, &matches)
+        .send(&client, doc.base())
+        .expect("a read with both parameters is sent");
+    assert_eq!(
+        only(&client).uri().query(),
+        Some("voucher%5Bid%5D=5&voucher%5BobjectName%5D=Voucher")
+    );
+}

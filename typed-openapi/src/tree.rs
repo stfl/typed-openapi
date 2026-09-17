@@ -102,7 +102,7 @@ pub fn command(op: &Operation) -> Command {
         cmd = cmd.about(summary.to_owned());
     }
     cmd = cmd.long_about(long_about(op));
-    for arg in op.params().iter().filter_map(param_arg) {
+    for arg in op.params().iter().filter_map(|param| param_arg(op, param)) {
         cmd = cmd.arg(arg);
     }
     cmd = body_args(cmd, op.body());
@@ -651,7 +651,7 @@ fn split_part<'r>(flag: &'static str, raw: &'r str) -> Result<(&'r str, &'r str)
 /// The flag one parameter grows — and nothing at all for one this CLI cannot
 /// supply, which the subcommand's long help names instead, where a dead flag
 /// would otherwise have stood.
-fn param_arg(param: &Param) -> Option<Arg> {
+fn param_arg(op: &Operation, param: &Param) -> Option<Arg> {
     let Shape::Flag {
         flag,
         location,
@@ -682,10 +682,16 @@ fn param_arg(param: &Param) -> Option<Arg> {
         },
         |text| Some(text.to_owned()),
     );
+    let companions = companion_flags(op, param);
     let notes = join
         .map(|join| join.note().to_owned())
         .into_iter()
-        .chain(wire(renamed(flag, param.name()), param.name()));
+        .chain(wire(renamed(flag, param.name()), param.name()))
+        .chain(
+            companions
+                .iter()
+                .map(|companion| format!("needs --{companion} beside it")),
+        );
     let mut arg = value_arg(
         flag,
         scalar,
@@ -695,7 +701,30 @@ fn param_arg(param: &Param) -> Option<Arg> {
     if join.is_some() {
         arg = arg.action(ArgAction::Append);
     }
+    // The parser refuses the flag without its companions, the way it refuses a
+    // missing required flag; `Invocation::new` holds the same rule for a
+    // caller that builds `Values` without a command line.
+    for companion in companions {
+        arg = arg.requires(companion.to_owned());
+    }
     Some(arg)
+}
+
+/// The flags of the parameters `param` requires beside it.
+///
+/// Every one has a flag: the reduction refuses a requirement naming a parameter
+/// that is not there or that has none, so a name that finds nothing here is a
+/// model this build did not reduce, and it contributes no flag rather than a
+/// requirement nothing can satisfy.
+fn companion_flags<'o>(op: &'o Operation, param: &Param) -> Vec<&'o str> {
+    param
+        .requires()
+        .iter()
+        .filter_map(|requires| match op.param(requires)?.shape() {
+            Shape::Flag { flag, .. } => Some(flag.as_str()),
+            Shape::Unreachable(_) => None,
+        })
+        .collect()
 }
 
 /// A flag that had to move aside says which wire name it carries.
