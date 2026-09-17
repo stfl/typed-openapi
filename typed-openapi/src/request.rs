@@ -331,7 +331,9 @@ fn encode(raw: &str) -> String {
 /// The request as it goes on the wire, for a dry run.
 ///
 /// A binary body is summarised rather than printed: an agent reading a dry run
-/// needs the headers and the length, not the bytes of a PDF.
+/// needs the headers and the length, not the bytes of a PDF. A multipart body
+/// keeps every part's headers, so the file an upload sends is named with its
+/// type — see `body_text`.
 #[must_use]
 pub fn render(request: &Request<Vec<u8>>) -> String {
     use std::fmt::Write as _;
@@ -354,19 +356,32 @@ pub fn render(request: &Request<Vec<u8>>) -> String {
     }
     if !request.body().is_empty() {
         out.push('\n');
-        match std::str::from_utf8(request.body()) {
-            Ok(text) => {
-                out.push_str(text);
-                if !text.ends_with('\n') {
-                    out.push('\n');
-                }
-            }
-            Err(_) => {
-                let _ = writeln!(out, "<{} bytes>", request.body().len());
-            }
-        }
+        out.push_str(&body_text(request));
     }
     out
+}
+
+/// The body of a dry run, ending in a newline.
+///
+/// Text as it is. A multipart body that is not all text has its parts laid out
+/// with only their non-text content summarised, because the part headers are
+/// what says which file goes and as what. Any other body that is not text is
+/// its length.
+fn body_text(request: &Request<Vec<u8>>) -> String {
+    let body = request.body();
+    if let Ok(text) = std::str::from_utf8(body) {
+        let mut rendered = text.to_owned();
+        if !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        return rendered;
+    }
+    request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|declared| declared.to_str().ok())
+        .and_then(|declared| multipart::summarised(body, declared))
+        .unwrap_or_else(|| format!("<{} bytes>\n", body.len()))
 }
 
 #[cfg(test)]
@@ -382,6 +397,46 @@ mod tests {
         assert_eq!(encode("abc-123_x.y~z"), "abc-123_x.y~z");
         assert_eq!(encode("a b/c?d&e=f"), "a%20b%2Fc%3Fd%26e%3Df");
         assert_eq!(encode("Grüß"), "Gr%C3%BC%C3%9F");
+    }
+
+    /// A multipart body with a document in it is not text, and summarising the
+    /// whole of it would hide the one thing a dry run of an upload has to show:
+    /// which file goes, under which name and which type.
+    #[test]
+    fn a_multipart_body_renders_every_part_header_and_summarises_only_what_is_not_text() {
+        let encoded = crate::multipart::encode(&[
+            crate::values::Part::text("kind", "invoice"),
+            crate::values::Part::file("file", "receipt.pdf", vec![0x25, 0x50, 0xFF, 0xFE]),
+        ]);
+        let request = Request::builder()
+            .method("POST")
+            .uri("http://x/upload")
+            .header(http::header::CONTENT_TYPE, &encoded.content_type)
+            .body(encoded.bytes)
+            .expect("a multipart request");
+
+        let rendered = render(&request);
+        let boundary = encoded
+            .content_type
+            .rsplit_once("boundary=")
+            .expect("the encoder names its boundary")
+            .1;
+
+        assert!(
+            rendered.ends_with(&format!(
+                "\n--{boundary}\r\n\
+                 Content-Disposition: form-data; name=\"kind\"\r\n\
+                 \r\n\
+                 invoice\r\n\
+                 --{boundary}\r\n\
+                 Content-Disposition: form-data; name=\"file\"; filename=\"receipt.pdf\"\r\n\
+                 Content-Type: application/pdf\r\n\
+                 \r\n\
+                 <4 bytes>\r\n\
+                 --{boundary}--\r\n"
+            )),
+            "{rendered}"
+        );
     }
 
     #[test]

@@ -24,8 +24,8 @@ pub fn encode(parts: &[Part]) -> Encoded {
     for part in parts {
         bytes.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         bytes.extend_from_slice(content_disposition(part.name(), part.filename()).as_bytes());
-        if part.filename().is_some() {
-            bytes.extend_from_slice(b"Content-Type: application/octet-stream\r\n");
+        if let Some(media_type) = part.content_type() {
+            bytes.extend_from_slice(format!("Content-Type: {media_type}\r\n").as_bytes());
         }
         bytes.extend_from_slice(b"\r\n");
         bytes.extend_from_slice(part.bytes());
@@ -78,9 +78,65 @@ fn boundary(parts: &[Part]) -> String {
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    position(haystack, needle).is_some()
+}
+
+fn position(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
-        .any(|window| window == needle)
+        .position(|window| window == needle)
+}
+
+/// A multipart body as the text it is laid out in, with the content of every
+/// part that is not text replaced by its length.
+///
+/// A dry run of an upload has to show which file goes, under which part name
+/// and which type, and a body holding a PDF is not text, so the whole of it
+/// would otherwise be one byte count. Every delimiter and header line is
+/// rendered as it crosses the wire, `\r\n` included; only content that is not
+/// UTF-8 becomes `<N bytes>`, so a body that is all text renders byte for byte.
+///
+/// `None` where `bytes` are not laid out the way [`encode`] lays a body out
+/// under the boundary `content_type` names, and the caller falls back to
+/// summarising the body whole.
+pub(crate) fn summarised(bytes: &[u8], content_type: &str) -> Option<String> {
+    use std::fmt::Write as _;
+
+    let (essence, parameters) = content_type.split_once(';')?;
+    if !essence.trim().eq_ignore_ascii_case("multipart/form-data") {
+        return None;
+    }
+    let (_, boundary) = parameters.split_once("boundary=")?;
+    let delimiter = format!("--{}", boundary.trim_matches('"'));
+    let closing = format!("\r\n{delimiter}");
+    let mut out = String::new();
+    let mut rest = bytes.strip_prefix(delimiter.as_bytes())?;
+    loop {
+        if let Some(after) = rest.strip_prefix(b"--\r\n") {
+            out.push_str(&delimiter);
+            out.push_str("--\r\n");
+            return after.is_empty().then_some(out);
+        }
+        let opened = rest.strip_prefix(b"\r\n")?;
+        let end = position(opened, closing.as_bytes())?;
+        let (part, after) = opened.split_at(end);
+        let split = position(part, b"\r\n\r\n")?;
+        let (head, content) = part.split_at(split);
+        let content = content.strip_prefix(b"\r\n\r\n")?;
+
+        out.push_str(&delimiter);
+        out.push_str("\r\n");
+        out.push_str(std::str::from_utf8(head).ok()?);
+        out.push_str("\r\n\r\n");
+        match std::str::from_utf8(content) {
+            Ok(text) => out.push_str(text),
+            Err(_) => {
+                let _ = write!(out, "<{} bytes>", content.len());
+            }
+        }
+        out.push_str("\r\n");
+        rest = after.strip_prefix(closing.as_bytes())?;
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +156,27 @@ mod tests {
             "{text}"
         );
         assert!(text.ends_with("--\r\n"), "{text}");
+    }
+
+    #[test]
+    fn a_file_part_is_sent_under_the_type_its_extension_names() {
+        for (filename, media_type) in [
+            ("receipt.pdf", "application/pdf"),
+            ("RECEIPT.PDF", "application/pdf"),
+            ("scan.png", "image/png"),
+            ("scan.jpg", "image/jpeg"),
+            ("scan.JPEG", "image/jpeg"),
+            ("archive.tar.gz", "application/octet-stream"),
+            ("no-extension", "application/octet-stream"),
+            (".pdf", "application/octet-stream"),
+        ] {
+            let encoded = encode(&[Part::file("file", filename, b"x".to_vec())]);
+            let text = String::from_utf8_lossy(&encoded.bytes).into_owned();
+            assert!(
+                text.contains(&format!("Content-Type: {media_type}\r\n")),
+                "{filename}: {text}"
+            );
+        }
     }
 
     #[test]

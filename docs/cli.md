@@ -183,6 +183,14 @@ written down.
 
 `-` as the path to `--json-body` or `--raw-body` reads stdin.
 
+A `--file` part is sent under the file's own name and under the media type its
+extension names: `application/pdf` for `.pdf`, `image/png` for `.png`,
+`image/jpeg` for `.jpg` and `.jpeg`, whatever the case, and
+`application/octet-stream` for anything else. A dry run of a multipart body
+prints every part's headers as they cross the wire, and replaces only content
+that is not text with its length — `<52341 bytes>` — so which file goes, and as
+what, is read before `--commit`.
+
 ### The shape of a body that has no flags
 
 The flags are where this crate says what a field is called and what it accepts,
