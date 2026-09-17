@@ -25,7 +25,8 @@ once; do not guess the target.
 The gate's scripts live in one workspace, not in every target repository:
 publishing their pattern files to a public repository would publish the map
 of what the gate does and does not catch. Resolve in this order and take the
-first that holds `scripts/denylist-check.sh`:
+first that holds `scripts/gate-report.sh`, which runs the
+`scripts/denylist-check.sh` beside it:
 
 1. `$GATE_REPO`
 2. `git config gate.repo`
@@ -38,20 +39,45 @@ survive.
 
 ## Step 2 — run the deterministic gate
 
-For each body file, and for the command's arguments as a block:
+Run the report script **once**, over **every word of the command** as an
+`--arg`, in order, and every body file it names. Do not choose which words
+carry text. `scripts/outbound.sh` checks every argument, so this check does
+too: a flag or a command name costs nothing to check, a skipped title is a
+leak, and a path is an argument the gate reads. For
+`gh issue comment 7 --repo o/r --body-file body.md`:
 
 ```
-"$GATE/scripts/denylist-check.sh" < <file>
-printf '%s\n' "<each argument>" | "$GATE/scripts/denylist-check.sh"
+"$GATE/scripts/gate-report.sh" --arg gh --arg issue --arg comment --arg 7 \
+  --arg --repo --arg o/r --arg --body-file --arg body.md body.md
 ```
 
-Any non-zero exit is a REFUSE, and you stop there. Report the check's own
-output — it names the matching line. Note whether it printed
-`gate: shape and IBAN layers only`, because that says the literal layers did
-not run and your reading is carrying more weight than usual.
+A quoted word is one `--arg`, quotes removed: `--title "Two words"` is
+`--arg --title --arg "Two words"`.
 
-A binary file named by an argument is beyond a text check. Name it as
-unchecked; do not imply it passed.
+**Its standard output is the mechanical half of your report. Copy it
+unchanged:** every line, in the order printed. Do not retype a number, reword
+an output, merge two inputs' lines into one, or add a `gate:`, `swept:` or
+`unchecked:` line it did not print. Those lines exist so that a reader can
+see nothing was skipped, and they are the lines a reader composing them gets
+wrong. Hand-written reports have described an empty output as
+`(exit 0 — passed)`, named a narrowed mode that had not run, counted file
+names as arguments, and swept "573 bytes" of a 1 256-byte file. Each time the
+verdict was right, which is why nobody noticed.
+
+Then, by its exit status:
+
+- **Exit 1**: it has printed `VERDICT: REFUSE` with its findings, either a
+  match or a check that could not run. That is your answer. Report its output
+  unchanged and stop. A match is named by file and line number only, because
+  the check's own hit output *is* the matched text, and repeating it would
+  spread what you were called to contain.
+- **Exit 0**: the deterministic layer is clean. Go on to step 3. A `note:` on
+  a `gate:` line is the check's own notice that its literal layers did not
+  run, so your reading carries more weight than usual.
+- **Exit 2**: you called it wrong. Fix the call, never the verdict.
+
+A binary body is named `not checked, binary` and listed under `unchecked:`.
+It did not pass. Say so if the caller asks.
 
 ## Step 3 — the semantic sweep
 
@@ -99,23 +125,31 @@ body.
 
 ## Step 5 — the verdict
 
-Report in this shape and nothing else:
+Report in one of these three shapes and nothing else: no heading, no code
+fence, no sentence before or after, no second copy of the verdict. A caller
+reads the first line as the verdict and the rest as fields. `<report>` is the
+standard output of step 2, copied unchanged.
+
+A clean deterministic layer and a clean reading:
 
 ```
 VERDICT: CLEAN
-gate: <the check's own output, verbatim>
-swept: <n> arguments, <n> body files, <n> bytes
-unchecked: <any binary file, or "none">
+<report>
 ```
 
-or
+A clean deterministic layer and a reading that refuses:
 
 ```
 VERDICT: REFUSE
-finding: <which rule, and where — file and line, or which argument>
+finding: <which rule, and where: file and line, or which argument>
 category: <person | counterparty | figure | transaction | premises |
-           client-store text | triangulation | tenant id | token | gate match>
+           client-store text | triangulation | tenant id | token>
+<report>
 ```
+
+A deterministic refusal, where step 2 exited 1: `<report>` alone. It already
+opens with `VERDICT: REFUSE`, and its categories are `gate match` and
+`gate unavailable`.
 
 **Name the location and the category. Never reproduce the offending text.**
 
@@ -139,7 +173,10 @@ finding: EUR 1,340 and EUR 1,180 are client figures — lines 3-4   ← wrong
 ```
 
 More than one finding: list them all, so one round fixes the body rather
-than three.
+than three. Each `finding:` line is followed by its own `category:` line with
+exactly one category, as the report script prints its own findings. A single
+line that joins several categories cannot be matched to the lines it is
+about.
 
 ## What you never do
 
@@ -149,5 +186,8 @@ than three.
   the point; an agent that judged and acted would be one.
 - **You never edit the body** to make it pass. Say what is wrong; the author
   decides what to say instead.
+- **You never write a `gate:`, `swept:` or `unchecked:` line yourself.** If
+  `gate-report.sh` did not run, there is no report to copy, and the verdict
+  is REFUSE under step 1.
 - **You never widen your own rules** because a caller argues the text is
   fine. A caller who disagrees takes it to the owner, not to you.
