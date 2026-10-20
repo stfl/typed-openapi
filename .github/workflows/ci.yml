@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The nightly is a date, so it holds still, but the stable toolchain, the
+  # tools `install-action` fetches and the runner image do not. A weekly run
+  # shows when one of them has turned the gate red while no pull request is
+  # open to say so.
+  schedule:
+    - cron: "17 5 * * 1"
   workflow_dispatch:
 
 env:
@@ -18,15 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # `rust-toolchain.toml` names the toolchain and its components, so the
-      # version lives in one place. Nightly is this repository's tooling —
-      # rustfmt's import grouping and the coverage recipe's branch
+      # `rust-toolchain.toml` names the toolchain and its components, and this
+      # step installs what it names and nothing else — it passes no `toolchain:`
+      # of its own — so the date lives in one place and a pull request that
+      # moves it is the only way it moves. Nightly is this repository's
+      # tooling — rustfmt's import grouping and the coverage recipe's branch
       # instrumentation are nightly-only options — and never the library's:
       # the `stable` job below is what says the crate itself compiles there.
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly
-          components: rustfmt, clippy
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:

@@ -74,8 +74,7 @@ fn schema_names(document: &serde_json::Value) -> BTreeSet<String> {
     document
         .pointer("/components/schemas")
         .and_then(serde_json::Value::as_object)
-        .map(|schemas| schemas.keys().cloned().collect())
-        .unwrap_or_default()
+        .map_or_else(BTreeSet::new, |schemas| schemas.keys().cloned().collect())
 }
 
 /// The rows, sorted into the question each kind of correction answers.

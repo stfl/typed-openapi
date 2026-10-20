@@ -5,7 +5,7 @@ default:
     just --list
 
 # `rustfmt.toml` sets `unstable_features = true`, so this needs a nightly
-# toolchain; `rust-toolchain.toml` pins one.
+# toolchain; `rust-toolchain.toml` pins a dated one.
 
 # Format the workspace.
 fmt:
