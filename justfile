@@ -16,22 +16,26 @@ fmt:
 # `RUSTDOCFLAGS` is the same promotion for the `[lints.rustdoc]`
 # block. Building the docs is the only thing that runs rustdoc's lints: a
 # broken intra-doc link warns during a doctest run and fails here.
+#
+# `--all-features` compiles and lints what only a named feature builds: the
+# `builder` wrappers and the reqwest adapter of the example. A target the gate
+# builds without linting is one a lint never reaches.
 
 # Verify formatting, compile, then lint code and docs with warnings denied.
 check:
     cargo fmt --all --check
-    cargo check --workspace --all-targets
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo check --workspace --all-targets --all-features
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-# A feature that adds or removes items has to be compiled in every combination
-# a consumer can ask for, because nothing else finds an item that only exists
-# in one of them. These are the combinations: the default, nothing, each
-# feature alone, and everything at once. The `builder` runs go further than a
-# compile: the example's demonstration of it is a pair of doctests that only
-# exist when the feature is on, so this is the only recipe that can run them.
+# A feature that adds or removes items has to be compiled with it and without
+# it, because nothing else finds an item that only exists in one of them. These
+# are the builds: the default, nothing, each feature alone, and all together. No
+# pair of features is built. The `builder` runs go further than a compile: the
+# example's demonstration of it is a pair of doctests that only exist when the
+# feature is on, so this is the only recipe that can run them.
 
-# Compile the library under every feature combination a consumer can select.
+# Compile the library with each feature alone and with all of them together.
 features:
     cargo check -p typed-openapi
     cargo check -p typed-openapi --no-default-features
@@ -146,6 +150,13 @@ gate: check features test blessed package
 # apart: that the generator still writes each artefact, and that what it wrote
 # is what is committed. A file nobody generates any more keeps its bytes and
 # passes the diff.
+#
+# `git diff` does not list a file that is not tracked, so an artefact the
+# generator writes and nobody committed would pass it. `git status` lists it,
+# and it lists a changed file as well, so it is the one question the recipe
+# asks of the artefacts. A file in the generated crate that git does not track
+# and the generator does not write is a second question: the working tree has
+# it and a clean checkout does not, so a build that passes here can fail in CI.
 
 # Regenerate, and fail if anything committed changed.
 blessed:
@@ -170,9 +181,17 @@ blessed:
             exit 1
         }
     done
-    if ! git diff --quiet HEAD -- "${written[@]}"; then
-        echo "bless changed committed output:" >&2
+    differing=$(git status --porcelain --untracked-files=all -- "${written[@]}")
+    if [[ -n $differing ]]; then
+        echo "bless changed or added output that is not committed:" >&2
+        echo "$differing" >&2
         git --no-pager diff --stat HEAD -- "${written[@]}" >&2
+        exit 1
+    fi
+    untracked=$(git ls-files --others --exclude-standard -- examples/toy/api-generated)
+    if [[ -n $untracked ]]; then
+        echo "files in api-generated that git does not track:" >&2
+        echo "$untracked" >&2
         exit 1
     fi
     echo "bless writes and reproduces every committed artefact"
@@ -181,25 +200,56 @@ blessed:
 # metadata and prints the file set — and the build proves the crate stands up
 # outside this workspace.
 #
+# The build is not enough: a crate can compile and still ship tests that do not,
+# because the dev-dependency on itself that turns their features on is dropped
+# from the tarball. So the recipe unpacks the `.crate` file, the very archive
+# crates.io receives, and builds its tests twice. With every feature on they run
+# and pass. With the default features none of them is built, because each test
+# target declares the features it needs: a target that declares none is a
+# compile error here and a green run in the workspace.
+#
+# The unpacked copy lives in a scratch directory outside the repository, because
+# cargo refuses to build a package that sits inside a workspace it is not a
+# member of, and `target/package/<name>-<version>/` does. `--manifest-path`
+# keeps the working directory here, so `rustup` reads `rust-toolchain.toml` for
+# the test run as it does for everything else, and `--target-dir` lets the run
+# reuse the dependencies already compiled. `tar -m` stamps the unpacked files
+# with the time of unpacking: a `.crate` carries one old date on every file,
+# cargo takes a file no newer than its last build for unchanged, and the test
+# binaries a former unpacking left behind, with that unpacking's directory
+# compiled into them, would run in place of the ones this tarball builds.
+#
 # `--allow-dirty` so the recipe answers the same question while work is in
 # progress. It is not a licence to publish a dirty tree: `cargo publish` is
 # run by the release workflow from a tag, never from here.
 #
-# The unpacked crate is scratch and the recipe clears it. `cargo package`
-# leaves the tarball's contents at `target/package/<name>-<version>/`, a whole
-# source tree — `src/`, `tests/` and all — inside a directory everything else
-# reads as build output. A tool that walks `target/` takes that `tests/` for a
-# build profile and looks for the nested target directories a profile of that
-# name carries; `Swatinem/rust-cache` does, and reports the two it cannot find
-# on every run it caches. The verification build's artefacts are in
-# `target/debug` with the rest of the workspace's, so clearing the unpacked
-# copy costs the next run nothing.
+# `cargo package` leaves the tarball and an unpacked copy of it at
+# `<target>/package/`, a whole source tree — `src/`, `tests/` and all — inside a
+# directory everything else reads as build output. A tool that walks the target
+# directory takes that `tests/` for a build profile and looks for the nested
+# target directories a profile of that name carries; `Swatinem/rust-cache` does,
+# and reports the two it cannot find on every run it caches. The verification
+# build's artefacts are in `<target>/debug` with the rest of the workspace's, so
+# clearing the package directory costs the next run nothing. `CARGO_TARGET_DIR`
+# moves that directory, so the recipe clears the one cargo used, and clears it
+# before it packages too: a tarball left by an earlier version would make the
+# unpacking below ambiguous.
 
-# Verify the published crate packages and builds from its own tarball.
+# Verify the published crate packages, builds, and passes its own tests.
 package:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="${CARGO_TARGET_DIR:-target}"
+    packaged="$target/package"
+    scratch=$(mktemp -d)
+    trap 'rm -rf "$scratch" "$packaged"' EXIT
+    rm -rf "$packaged"
     cargo package -p typed-openapi --list --allow-dirty
     cargo package -p typed-openapi --allow-dirty
-    rm -rf target/package
+    tar -xzmf "$packaged"/typed-openapi-*.crate -C "$scratch"
+    manifests=("$scratch"/typed-openapi-*/Cargo.toml)
+    cargo test --all-features --manifest-path "${manifests[0]}" --target-dir "$target"
+    cargo test --no-run --manifest-path "${manifests[0]}" --target-dir "$target"
 
 # Regenerate the example adoption from the vendor document and the Overlay.
 # Everything it writes is committed, so a diff after this recipe is the answer

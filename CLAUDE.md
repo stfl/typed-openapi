@@ -5,11 +5,11 @@ of it, five crates, all `publish = false`, built and tested with the rest so
 that the example cannot rot.
 
 Run `just gate` before saying anything is done. It is `check` (fmt, compile,
-clippy, rustdoc — each with warnings denied), `features` (every feature
-combination a consumer can select, plus the clap-free assertion), `test`
-(nextest and the doctests, which nextest cannot run), `blessed` (the generator
-still reproduces every committed artefact) and `package` (the crate built from
-its own tarball). CI runs the same recipes, not a copy of them.
+clippy, rustdoc — each with warnings denied), `features` (each feature alone
+and all together, plus the clap-free assertion), `test` (nextest and the
+doctests, which nextest cannot run), `blessed` (the generator still reproduces
+every committed artefact) and `package` (the crate built and tested from its
+own tarball). CI runs the same recipes, not a copy of them.
 
 ## Invariants a change must keep true
 
