@@ -93,19 +93,34 @@ generate = [
 builder = ["dep:bon"]
 
 [dependencies]
+# The builder macro on a generated wrapper, re-exported so the versions agree.
 bon = { workspace = true, optional = true }
+# The command tree and the trip back from `ArgMatches` to a sent request.
 clap = { workspace = true, optional = true }
+# Turns the document's names into the Rust names the generator writes.
 heck = { workspace = true, optional = true }
+# The request type of the client seam, `http::Request<Vec<u8>>`.
 http = { workspace = true }
+# The OpenAPI object model a document is read through while it is reduced.
 openapiv3 = { workspace = true, optional = true }
+# The encoding of the reduced model, the blob a shipped binary loads.
 postcard = { workspace = true }
+# Prints the generated syntax tree as formatted Rust source.
 prettyplease = { workspace = true, optional = true }
+# The token streams the generator builds its code in.
 proc-macro2 = { workspace = true, optional = true }
+# Writes the generated wrappers as Rust syntax with the values spliced in.
 quote = { workspace = true, optional = true }
+# Runs a document's `pattern` on the engine typify puts in a generated newtype.
 regress = { workspace = true }
+# Applies the adopter's Overlays to the vendor's document.
 roas-overlay = { workspace = true, optional = true }
+# The schema types typify takes in, built from the document's own schemas.
 schemars = { workspace = true, optional = true }
+# Derives (de)serialisation for the reduced model. Its `Serialize` and
+# `DeserializeOwned` bounds are what a typed call's body and response go through.
 serde = { workspace = true }
+# A body and a document as JSON values, which an Overlay is applied to.
 serde_json = { workspace = true }
 # A body refused by `client::fits` names where it stopped — `positions[1].flag`
 # — which serde's own message does not, and a nested body sent whole through a
@@ -113,9 +128,13 @@ serde_json = { workspace = true }
 # deserialiser serde_json already drives and brings `itoa` with it; tracking
 # the path by hand is that same wrapper written again.
 serde_path_to_error = { workspace = true }
+# Reads the document and each Overlay as YAML, and writes the overlaid one.
 serde_yaml_ng = { workspace = true, optional = true }
+# Parses typify's output into the tree the generator rewrites and prints.
 syn = { workspace = true, optional = true }
+# Derives `Error` and its messages for every error type the crate returns.
 thiserror = { workspace = true }
+# Writes the Rust type for each schema the document names.
 typify = { workspace = true, optional = true }
 
 [dev-dependencies]
