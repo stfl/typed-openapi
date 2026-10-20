@@ -1,0 +1,6 @@
+# `just test` runs the workspace under nextest. By default nextest stops at the
+# first failing test, so a run with several broken tests names one and hides the
+# rest until the next run. A run here reports every failure.
+
+[profile.default]
+fail-fast = false

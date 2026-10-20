@@ -1,0 +1,30 @@
+# No `[licenses]` section, so `cargo deny check` alone fails: with no licence
+# policy configured, cargo-deny allows nothing. `just audit` names the checks it
+# runs, and the licence check is deliberately not one of them. The dependencies
+# are the permissive ones the Rust ecosystem is made of; the licence worth
+# catching is a copyleft one, rare and visible in the review of a new
+# dependency.
+
+# Every feature of every member, the library's `generate`, `document` and
+# `builder` included. A crate that only a feature pulls in is still a crate an
+# adopter compiles, and a check of the default build would not see it.
+[graph]
+all-features = true
+
+# A vulnerability or an unmaintained crate anywhere in the tree fails the check.
+# `ignore` is empty and stays empty: an advisory is repaired by moving off the
+# crate, not by silencing it.
+[advisories]
+unmaintained = "all"
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+
+# crates.io and nothing else: no other registry and no git dependency, in this
+# workspace or in anything it pulls in.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

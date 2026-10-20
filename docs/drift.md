@@ -270,10 +270,10 @@ test wherever a rule matters, not for believing the loosening is caught.
 
 **A vendor revision nobody fetches.** Every bless-time check above runs against
 the vendor document that is committed here. `just blessed` re-runs the bless
-step and fails on a non-empty `git diff`, so the committed artefacts cannot
-drift from the committed document — but nothing fetches a *newer* document.
-Until someone updates `spec/toy.yaml`, the committed document *is* the API as
-far as this workspace is concerned.
+step and fails on a changed or untracked artefact, so the committed artefacts
+cannot drift from the committed document — but nothing fetches a *newer*
+document. Until someone updates `spec/toy.yaml`, the committed document *is* the
+API as far as this workspace is concerned.
 
 The honest summary: drift in something you **use** is loud, drift in something
 you **corrected** is loud, and drift in everything else is a diff someone has to
