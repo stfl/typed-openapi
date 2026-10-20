@@ -5,11 +5,12 @@ of it, five crates, all `publish = false`, built and tested with the rest so
 that the example cannot rot.
 
 Run `just gate` before saying anything is done. It is `check` (fmt, compile,
-clippy, rustdoc — each with warnings denied), `features` (every feature
-combination a consumer can select, plus the clap-free assertion), `test`
-(nextest and the doctests, which nextest cannot run), `blessed` (the generator
-still reproduces every committed artefact) and `package` (the crate built from
-its own tarball). CI runs the same recipes, not a copy of them.
+clippy, rustdoc — each with warnings denied), `features` (each feature alone
+and all together, plus the clap-free assertion), `test` (nextest and the
+doctests, which nextest cannot run), `blessed` (the generator still reproduces
+every committed artefact, and no file in `api-generated` is untracked) and
+`package` (the crate built and tested from its own tarball). CI runs the same
+recipes, not a copy of them.
 
 ## Invariants a change must keep true
 
@@ -311,12 +312,14 @@ looking one thing up, this file is for an agent changing the code.
 
 `rust-toolchain.toml` pins a dated nightly because four of `rustfmt.toml`'s
 options are nightly-only and the coverage recipe wants branch instrumentation.
-The date is the newest on which `just gate` passes. CI's `just gate` job
-installs what the file names and passes no `toolchain:` of its own, so moving
-the date is one edit to one file; Dependabot proposes the next date weekly, and
-a date that turns the gate red is repaired in the pull request that moves it.
-Only `rustup` reads the file: a shell without it runs the `cargo` on its `PATH`,
-so compare `rustc --version` with the date before trusting a green gate.
+Each move takes the newest date on which `just gate` passes. CI's `just gate`
+job installs what the file names and passes no `toolchain:` of its own, so
+moving the date is one edit to one file; Dependabot reads the file too and
+proposes the next date weekly, and a date that turns the gate red is repaired in
+the pull request that moves it. Only rustup's proxies choose the compiler from
+the file: a shell without them runs the `cargo` on its `PATH`. `rustc --version`
+prints the compiler's commit date, which is one day before the channel date the
+file names, so compare it with that date minus one before trusting a green gate.
 
 **The library itself is stable** — CI's `stable` job builds and tests it there,
 and nothing in `typed-openapi/src/` may need a nightly feature.

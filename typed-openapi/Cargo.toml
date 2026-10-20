@@ -21,6 +21,41 @@ authors.workspace = true
 name = "clashing-words"
 required-features = ["document"]
 
+# The dev-dependency on this crate below turns `document` and `generate` on for
+# a run inside the workspace, and `cargo package` drops it. A target that names
+# no feature is a compile error in the tarball, where a target that names its
+# features is skipped when they are off. `just package` runs the tarball both
+# ways. A target that builds a generator `Settings` wants `generate`, every
+# other one reads a document and wants `document`, and the three that mount the
+# command tree want `clap` beside it.
+[[test]]
+name = "dispatch"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "document"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "drift"
+required-features = ["document"]
+
+[[test]]
+name = "generate"
+required-features = ["generate"]
+
+[[test]]
+name = "hostile"
+required-features = ["generate", "clap"]
+
+[[test]]
+name = "required"
+required-features = ["document"]
+
+[[test]]
+name = "summary"
+required-features = ["document"]
+
 [features]
 default = ["clap"]
 

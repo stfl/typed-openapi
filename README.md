@@ -135,8 +135,8 @@ answers a test from a script instead, are in [docs/client.md][client].
 
 `typed-openapi/` is the published crate and the only thing on crates.io;
 everything under `examples/toy/` is one adoption of it, held by the same
-`just gate` CI runs — formatting, clippy, rustdoc, every feature combination,
-the tests, and the crate built from its own tarball.
+`just gate` CI runs — formatting, clippy, rustdoc, each feature alone and all
+together, the tests, and the crate built and tested from its own tarball.
 
 | | |
 |---|---|
