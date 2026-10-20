@@ -32,7 +32,7 @@ clap_complete = { workspace = true }
 http = { workspace = true }
 # The async adapter of the seam, behind `reqwest-client`.
 reqwest = { workspace = true, optional = true }
-# Derives `Serialize` for the values a verb prints as JSON.
+# The `Serialize` bound that a verb's printed value goes through.
 serde = { workspace = true }
 # Prints a response body as pretty JSON.
 serde_json = { workspace = true }

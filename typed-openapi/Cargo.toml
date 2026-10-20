@@ -117,7 +117,8 @@ regress = { workspace = true }
 roas-overlay = { workspace = true, optional = true }
 # The schema types typify takes in, built from the document's own schemas.
 schemars = { workspace = true, optional = true }
-# Derives (de)serialisation for the reduced model and for request bodies.
+# Derives (de)serialisation for the reduced model. Its `Serialize` and
+# `DeserializeOwned` bounds are what a typed call's body and response go through.
 serde = { workspace = true }
 # A body and a document as JSON values, which an Overlay is applied to.
 serde_json = { workspace = true }

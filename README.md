@@ -136,7 +136,8 @@ answers a test from a script instead, are in [docs/client.md][client].
 `typed-openapi/` is the published crate and the only thing on crates.io;
 everything under `examples/toy/` is one adoption of it, held by the same
 `just gate` CI runs — formatting, clippy, rustdoc, each feature alone and all
-together, the tests, and the crate built and tested from its own tarball.
+together, the tests, a bless that reproduces every committed artefact, and the
+crate built and tested from its own tarball.
 
 | | |
 |---|---|
@@ -155,6 +156,8 @@ together, the tests, and the crate built and tested from its own tarball.
 [CONTRIBUTING.md][contrib] says how the project takes changes: for now it takes
 no outside issues and no outside pull requests. To report a vulnerability, read
 [SECURITY.md][security]: a report goes in privately, never in a public issue.
+
+## Licence
 
 Licensed under either of Apache-2.0 or MIT, at your option.
 

@@ -17,7 +17,8 @@ api-generated = { path = "../api-generated" }
 # crate whole beside the generated types: an adopter's own code names `api` and
 # nothing below it.
 money = { path = "../money" }
-# The typed half of the library; `default-features = false` links no clap.
+# No code this crate compiles names it. `CLAUDE.md` has `api` take the library
+# with `default-features = false`, and `just clap-free` checks that no clap results.
 typed-openapi = { path = "../../../typed-openapi", default-features = false }
 
 [dev-dependencies]
@@ -30,7 +31,7 @@ typed-openapi = { path = "../../../typed-openapi", features = ["document"] }
 http = { workspace = true }
 # The documents and bodies the tests read and compare, as JSON values.
 serde_json = { workspace = true }
-# The client the crate-level doctest sends through.
+# The client that the crate-level doctest shows.
 ureq = { workspace = true }
 
 [lints]

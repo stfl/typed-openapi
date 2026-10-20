@@ -16,30 +16,32 @@ These steps are for the project's own sessions.
 ```console
 $ just test    # nextest, then the doctests nextest cannot run
 $ just bless   # regenerate every artefact the example commits
-$ just gate    # everything CI runs
+$ just gate    # every check of CI's `just gate` job
 ```
 
 `just gate` is the one command a change passes before it merges. It runs every
-check CI runs: formatting, clippy and rustdoc with warnings denied, every
-feature combination a consumer can select, the tests and the doctests, a bless
-that has to reproduce every committed artefact, the crate built from its own
-tarball, and the audit of the dependency tree.
+check of CI's `just gate` job: formatting, clippy and rustdoc with warnings
+denied, every feature combination a consumer can select, the tests and the
+doctests, a bless that has to reproduce every committed artefact, the crate
+built from its own tarball, and the audit of the dependency tree.
 
 `just bless` regenerates the example's generated files under
 `examples/toy/api-generated/`. Nobody edits one by hand: a correction goes in an
 Overlay under `examples/toy/spec/`, and `just bless` writes what follows from
 it.
 
-The toolchain is the one `rust-toolchain.toml` names, a dated nightly. The
-options in `rustfmt.toml` need a nightly rustfmt, and so does the coverage
-recipe. The library itself builds and tests on stable Rust, and CI's `stable`
-job holds it to that.
+The toolchain is the one `rust-toolchain.toml` names, a dated nightly. Some
+options in `rustfmt.toml`, such as `group_imports`, need a nightly rustfmt, and
+so does the coverage recipe. The library itself builds and tests on stable Rust.
+CI's `stable` job holds it to that, and it is the one CI check outside
+`just gate`.
 
-Only `rustup` reads `rust-toolchain.toml`: a shell without it runs whichever
-`cargo` is on its `PATH`, so compare `rustc --version` with the date in the file
-before trusting a green gate. The gate needs `just` and `cargo-nextest`
-installed, and `just audit` needs `cargo-deny`; `.github/workflows/ci.yml` pins
-the versions CI installs.
+Only `rustup` reads `rust-toolchain.toml`, so on a host without it, compare
+`rustc --version` with the date in the file before trusting a green gate.
+
+The gate needs `just` and `cargo-nextest` installed, and `just audit` needs
+`cargo-deny`. `.github/workflows/ci.yml` pins the versions of the tools CI
+installs.
 
 ## Dependencies
 
@@ -49,8 +51,8 @@ included.
 
 `just audit` is the gate for a dependency, and `just gate` runs it. It checks
 the dependency tree, every feature on, for advisories, unmaintained crates and
-sources other than crates.io. It reads the advisory database over the network,
-so it fails offline.
+sources other than crates.io, and it warns on two versions of one crate. It
+reads the advisory database over the network, so it fails offline.
 
 ## `unsafe`
 
