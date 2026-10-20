@@ -12,27 +12,175 @@
 //! repairs the vendor's mistakes, sharpens a type, or marks an operation for a
 //! command line is a convention an adoption keeps, not a thing the library
 //! can see.
+//!
+//! # How YAML is read
+//!
+//! Every document and every Overlay is read by one function into a
+//! [`serde_json::Value`]; the Overlay is then built from that value. Reading to
+//! a value first is what separates a text that is not YAML or JSON
+//! ([`OverlayError::Syntax`]) from one that is and has the wrong shape
+//! ([`OverlayError::Shape`]).
+//!
+//! The reader follows YAML 1.2 where its defaults follow 1.1, because a
+//! document's strings are the vendor's: `yes`, `no`, `on`, `off`, `y` and `n`
+//! stay strings, so that an enum value `N` is not `false` and `x-cli-writes:
+//! yes` is not `true`. `<<` is an ordinary key, not a merge. A mapping with the
+//! same key twice is refused with its line and column. A nesting past 128
+//! levels and an alias bomb are refused, and the budget is wide enough for a
+//! 10 MB document. Two YAML 1.1 readings remain: `1_000` is the number 1000, and
+//! `017` is a float.
+
+use std::error::Error;
 
 use thiserror::Error;
 
 /// The Overlay, or the document it is applied to, is not usable.
+///
+/// Each variant carries a [`Cause`]: a message, and the place in the text it
+/// points at where there is one. No type of the YAML reader or of the Overlay
+/// engine is part of this crate's API.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OverlayError {
+    /// The OpenAPI document is not YAML or JSON.
     #[error("the OpenAPI document is not valid YAML or JSON")]
-    Document(#[source] serde_yaml_ng::Error),
+    Document(#[source] Cause),
+    /// The Overlay is not YAML or JSON.
     #[error("the Overlay document is not valid YAML or JSON")]
-    Syntax(#[source] serde_yaml_ng::Error),
+    Syntax(#[source] Cause),
+    /// The Overlay is YAML or JSON and does not have the shape of an Overlay
+    /// 1.1 document: a field is missing, a field has the wrong type, or the
+    /// version is not 1.1.
+    #[error("the Overlay document is valid YAML or JSON but not an Overlay 1.1 document")]
+    Shape(#[source] Cause),
+    /// The Overlay has the shape of an Overlay 1.1 document and breaks a rule
+    /// of the specification.
     #[error("the Overlay is not a valid Overlay 1.1 document")]
-    Invalid(#[source] roas_overlay::validation::Error),
+    Invalid(#[source] Cause),
+    /// An action of the Overlay could not be laid over the document.
     #[error("the Overlay does not apply")]
-    Apply(#[source] roas_overlay::apply::ApplyError),
+    Apply(#[source] Cause),
+}
+
+/// What the YAML reader or the Overlay engine said, in this crate's words.
+///
+/// The message is a whole sentence and already says where it stands. The place
+/// is also here as numbers, for a caller that points at it: the line and column
+/// of a text the reader refused, or the index of the action that failed. Each
+/// is `None` where the thing that refused did not say.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
+pub struct Cause {
+    message: String,
+    line: Option<u64>,
+    column: Option<u64>,
+    action: Option<usize>,
+}
+
+impl Cause {
+    /// A cause with a message and no place.
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            line: None,
+            column: None,
+            action: None,
+        }
+    }
+
+    /// The sentence a person reads, with the place in it where there is one.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// The line of the text where the reader stopped, counted from 1.
+    #[must_use]
+    pub fn line(&self) -> Option<u64> {
+        self.line
+    }
+
+    /// The column of the text where the reader stopped, counted from 1.
+    #[must_use]
+    pub fn column(&self) -> Option<u64> {
+        self.column
+    }
+
+    /// The index in `actions` of the action the Overlay engine refused,
+    /// counted from 0.
+    #[must_use]
+    pub fn action(&self) -> Option<usize> {
+        self.action
+    }
+}
+
+/// The options of every YAML read in this crate, and the one place they are
+/// set.
+///
+/// The reader's defaults read YAML 1.1 booleans, merge `<<` keys and refuse a
+/// document of a few hundred thousand nodes, and none of the three is right for
+/// a vendor's OpenAPI document. The snippet stays off, because a message that
+/// draws the file across several lines does not fit under `caused by:`.
+fn reader() -> serde_saphyr::Options {
+    serde_saphyr::options! {
+        strict_booleans: true,
+        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+        budget: serde_saphyr::budget! {
+            max_depth: 128,
+            max_nodes: 2_500_000,
+            max_events: 10_000_000,
+        },
+        with_snippet: false,
+    }
+}
+
+/// Read YAML or JSON text into a value. Every read of a document or an Overlay
+/// goes through here.
+///
+/// The message is the reader's own wording for a person rather than a
+/// programmer: the other one advises a caller to change an option this crate
+/// sets and its caller cannot.
+fn read(text: &str) -> Result<serde_json::Value, Cause> {
+    serde_saphyr::from_str_with_options(text, reader()).map_err(|error| Cause {
+        line: error.location().map(|at| at.line()),
+        column: error.location().map(|at| at.column()),
+        ..Cause::new(error.render_with_formatter(&serde_saphyr::UserMessageFormatter))
+    })
+}
+
+/// Write the corrected document as YAML, with the emitter's defaults.
+///
+/// The defaults quote every string a YAML 1.1 reader would misread (`"N"`,
+/// `"yes"`, `"1.0"`), so a reader that follows YAML 1.1 reads back the strings
+/// that were written.
+pub(crate) fn emit(document: &serde_json::Value) -> Result<String, Box<dyn Error + Send + Sync>> {
+    Ok(serde_saphyr::to_string(document)?)
 }
 
 /// Read a document — YAML or JSON, as the vendor ships it — into the value a
 /// correction is applied to.
 pub fn parse(document: &str) -> Result<serde_json::Value, OverlayError> {
-    serde_yaml_ng::from_str(document).map_err(OverlayError::Document)
+    read(document).map_err(OverlayError::Document)
+}
+
+/// Build the Overlay from the value its text read into, and say which action
+/// it was building when a field was wrong.
+fn overlay_of(value: serde_json::Value) -> Result<roas_overlay::v1_1::Overlay, Cause> {
+    use serde_path_to_error::Segment;
+
+    serde_path_to_error::deserialize(value).map_err(|error| {
+        let mut path = error.path().iter();
+        let action = match (path.next(), path.next()) {
+            (Some(Segment::Map { key }), Some(Segment::Seq { index })) if key == "actions" => {
+                Some(*index)
+            }
+            _ => None,
+        };
+        Cause {
+            action,
+            ..Cause::new(error.to_string())
+        }
+    })
 }
 
 /// Lay one Overlay over the document as it stands, and hand back the result.
@@ -55,22 +203,28 @@ pub fn apply(mut doc: serde_json::Value, overlay: &str) -> Result<serde_json::Va
     if overlay.trim().is_empty() {
         return Ok(doc);
     }
-    let overlay: roas_overlay::v1_1::Overlay =
-        serde_yaml_ng::from_str(overlay).map_err(OverlayError::Syntax)?;
+    let overlay = read(overlay).map_err(OverlayError::Syntax)?;
+    let overlay = overlay_of(overlay).map_err(OverlayError::Shape)?;
     #[expect(
         clippy::default_trait_access,
         reason = "the option set is an `enumset::EnumSet`, and naming it here \
                   would mean taking `enumset` as a direct dependency for one word"
     )]
-    overlay
-        .validate(Default::default())
-        .map_err(OverlayError::Invalid)?;
+    overlay.validate(Default::default()).map_err(|invalid| {
+        let findings: Vec<String> = invalid.errors.iter().map(ToString::to_string).collect();
+        OverlayError::Invalid(Cause::new(findings.join("; ")))
+    })?;
     overlay
         .apply(
             &mut doc,
             roas_overlay::apply::ApplyOptions::ErrorOnZeroMatch.into(),
         )
-        .map_err(OverlayError::Apply)?;
+        .map_err(|refused| {
+            OverlayError::Apply(Cause {
+                action: Some(refused.action_index),
+                ..Cause::new(refused.to_string())
+            })
+        })?;
     Ok(doc)
 }
 

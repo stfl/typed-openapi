@@ -63,6 +63,10 @@ required-features = ["document"]
 name = "summary"
 required-features = ["document"]
 
+[[test]]
+name = "yaml"
+required-features = ["document"]
+
 [features]
 default = ["clap"]
 
@@ -76,7 +80,7 @@ clap = ["dep:clap"]
 # from `Document::from_blob` leaves it off, and then the YAML parser, the
 # OpenAPI object model and the Overlay engine are not in what it compiles,
 # links or audits.
-document = ["dep:openapiv3", "dep:roas-overlay", "dep:serde_yaml_ng"]
+document = ["dep:openapiv3", "dep:roas-overlay", "dep:serde-saphyr"]
 
 # The generator: the `generate` module a bless step calls to write the typed
 # wrappers, the Rust schema types and the reduced model. It reads a document,
@@ -127,6 +131,8 @@ schemars = { workspace = true, optional = true }
 # Derives (de)serialisation for the reduced model. Its `Serialize` and
 # `DeserializeOwned` bounds are what a typed call's body and response go through.
 serde = { workspace = true }
+# Reads the document and each Overlay as YAML, and writes the overlaid one.
+serde-saphyr = { workspace = true, optional = true }
 # A body and a document as JSON values, which an Overlay is applied to.
 serde_json = { workspace = true }
 # A body refused by `client::fits` names where it stopped — `positions[1].flag`
@@ -135,8 +141,6 @@ serde_json = { workspace = true }
 # deserialiser serde_json already drives and brings `itoa` with it; tracking
 # the path by hand is that same wrapper written again.
 serde_path_to_error = { workspace = true }
-# Reads the document and each Overlay as YAML, and writes the overlaid one.
-serde_yaml_ng = { workspace = true, optional = true }
 # Parses typify's output into the tree the generator rewrites and prints.
 syn = { workspace = true, optional = true }
 # Derives `Error` and its messages for every error type the crate returns.

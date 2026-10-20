@@ -721,7 +721,7 @@ mod tests {
     use super::*;
 
     fn read(document: &str) -> Result<(), PhantomKeys> {
-        check(&serde_yaml_ng::from_str(document).expect("the fixture parses"))
+        check(&crate::overlay::parse(document).expect("the fixture parses"))
     }
 
     /// The location is spelled as an Overlay spells a target, so that what a
@@ -862,7 +862,7 @@ mod emission {
         let text = format!(
             "type: object\nproperties:\n  a: {{ type: string }}\nrequired: [a, b]\n{shape}"
         );
-        serde_yaml_ng::from_str(&text).expect("the shape parses")
+        crate::overlay::parse(&text).expect("the shape parses")
     }
 
     /// What this module makes of that schema, standing where a document puts a

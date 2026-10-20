@@ -177,13 +177,13 @@ impl Names {
         for schema in schemas {
             let id = space
                 .add_type(&reference(schema))
-                .map_err(GenerateError::Typify)?;
+                .map_err(GenerateError::typify)?;
             resolved.push((Origin::Named(schema.to_owned()), id));
         }
         for (site, schema) in inline {
             let id = space
                 .add_type_with_name(&schema, Some(site.suggested()))
-                .map_err(GenerateError::Typify)?;
+                .map_err(GenerateError::typify)?;
             resolved.push((Origin::Inline(site), id));
         }
 
@@ -194,7 +194,7 @@ impl Names {
             inline: BTreeMap::new(),
         };
         for (origin, id) in resolved {
-            let ty = space.get_type(&id).map_err(GenerateError::Typify)?;
+            let ty = space.get_type(&id).map_err(GenerateError::typify)?;
             if let Origin::Named(schema) = &origin
                 && !defined_by_typify(&ty)
             {

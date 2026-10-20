@@ -125,16 +125,16 @@ test:
 
 # `cargo deny` reads the advisory database over the network, and `check` runs
 # between edits: a check that fails on a fetch timeout is a check people stop
-# running. So `audit` is apart from `check` because of the network. It is apart
-# from `gate` only while the tree holds an advisory that no upgrade repairs.
-# `deny.toml` says why the licence check is left out.
+# running. So `audit` is apart from `check` because of the network, and it is
+# in `gate` so that an advisory filed against a crate in the tree turns the
+# gate red in CI. `deny.toml` says why the licence check is left out.
 
 # Check the dependency tree for advisories, bans and unknown sources.
 audit:
     cargo deny check advisories bans sources
 
 # Everything CI runs, in the order CI runs it.
-gate: check features test blessed package
+gate: check features test blessed package audit
 
 # Every artefact under `api-generated` is committed, so the generator has to be
 # able to reproduce them. A diff here is either the vendor's document moving or

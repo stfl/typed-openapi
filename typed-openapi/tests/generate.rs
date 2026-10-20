@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use typed_openapi::Document;
 use typed_openapi::generate::{GenerateError, Settings};
+use typed_openapi::overlay::{self, OverlayError};
 
 const TOY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml");
 const CORRECTIONS: &str = concat!(
@@ -499,6 +500,97 @@ fn a_document_that_is_not_there_is_named() {
         matches!(&error, GenerateError::Read { path, .. } if path.ends_with("nowhere.yaml")),
         "{error}"
     );
+}
+
+/// A layer the reader cannot read is named by its file, and the reader's own
+/// words give the line and the column where it stopped.
+///
+/// The bless step prints the layer, then each cause under it, so a person who
+/// sees an unclosed quote in a long file is told which file and where.
+#[test]
+fn a_layer_that_is_not_yaml_is_named_with_its_line_and_column() {
+    let dir = out("unclosed");
+    let fixture = read(Path::new(CORRECTIONS));
+    let broken = fixture
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 2 {
+                "  title: \"unclosed"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let layer = wrote(&dir, "corrections.yaml", &broken);
+
+    let error = Settings::new(TOY)
+        .overlay(&layer)
+        .overlay(CLI)
+        .write_to(&dir)
+        .expect_err("a layer with an unclosed quote");
+
+    assert!(
+        matches!(&error, GenerateError::Overlay { path, source: OverlayError::Syntax(cause) }
+            if path.ends_with("corrections.yaml")
+                && matches!(cause.line(), Some(3 | 4))
+                && cause.column().is_some()),
+        "{error:?}"
+    );
+    let mut chain = vec![error.to_string()];
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        chain.push(next.to_string());
+        cause = next.source();
+    }
+    let reported = chain.join("\n");
+    assert!(reported.contains("corrections.yaml"), "{reported}");
+    assert!(reported.contains("at line"), "{reported}");
+}
+
+/// Every string a YAML 1.1 reader would misread, as the vendor writes them.
+const LOOKALIKES: &str = r#"
+openapi: 3.0.3
+info:
+  title: Lookalikes
+  version: "1.0"
+  x-strings: ["N", "yes", "on", "1.0", "017", "1_000", "~", "null", "true", "0x1F"]
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    get:
+      operationId: getThings
+      responses:
+        "200": { description: OK }
+"#;
+
+/// The overlaid document is read by every tool an adopter points at it, and
+/// not only by this crate's reader, which keeps `yes` a string. The emitter
+/// therefore writes the lookalikes in quotes, and the written file reads back
+/// to the value that was written.
+#[test]
+fn the_overlaid_document_quotes_what_yaml_1_1_would_misread_and_reads_back_equal() {
+    let dir = out("lookalikes");
+    let document = wrote(&dir, "lookalikes.yaml", LOOKALIKES);
+    let written = Settings::new(&document)
+        .write_to(&dir)
+        .expect("the document generates");
+    let text = read(&written[0]);
+
+    assert_eq!(
+        overlay::parse(&text).expect("the written document is YAML"),
+        overlay::parse(LOOKALIKES).expect("the vendor's document is YAML"),
+        "the overlaid document does not read back to what was written"
+    );
+    for lookalike in [
+        "\"N\"", "\"yes\"", "\"on\"", "\"1.0\"", "\"017\"", "\"null\"",
+    ] {
+        assert!(
+            text.contains(lookalike),
+            "{lookalike} is not quoted in the overlaid document:\n{text}"
+        );
+    }
 }
 
 /// A document whose schema names are not already Rust type names.

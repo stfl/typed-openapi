@@ -403,9 +403,6 @@ Three things are worth knowing:
 - **`generate` implies `document`,** and pulls in typify, an OpenAPI object
   model and a syntax-tree printer. Enable it only in the bless step. A shipping
   binary that enabled it would compile a code generator it can never reach.
-- **`generate` needs a newer compiler than the crate's MSRV.** typify reaches
-  `regress`, which uses let-chains. That costs a shipping binary nothing,
-  because a shipping binary never enables the feature.
 - **The generator emits from what the document describes, named or not.** A
   `$ref` to a named schema keeps that schema's name; a body or response an
   operation states inline is converted under its own `title`, or under a name

@@ -54,11 +54,14 @@ refused before any action runs:
 
 ```
 bless: cannot use spec/corrections.yaml
-  caused by: the Overlay document is not valid YAML or JSON
-  caused by: invalid value: string "1.0.0", expected `1.1.<patch>` semver (Overlay v1.1)
+  caused by: the Overlay document is valid YAML or JSON but not an Overlay 1.1 document
+  caused by: overlay: invalid value: string "1.0.0", expected `1.1.<patch>` semver (Overlay v1.1)
 ```
 
-Overlay files are YAML or JSON, and so are the documents they extend.
+Overlay files are YAML or JSON, and so are the documents they extend. They are
+read as YAML 1.2 reads booleans: `yes`, `no`, `on` and `off` are strings, and
+`true` and `false` are the booleans. A mapping that repeats a key is refused,
+with the line and column of the second one.
 
 ## Action kinds
 
@@ -438,7 +441,7 @@ will produce it — the file is not special to `typed-openapi`. With this crate:
 let vendor = fs::read_to_string("spec/toy.yaml")?;
 let corrections = fs::read_to_string("spec/corrections.yaml")?;
 let corrected = overlay::apply(overlay::parse(&vendor)?, &corrections)?;
-print!("{}", serde_yaml_ng::to_string(&corrected)?);
+println!("{}", serde_json::to_string_pretty(&corrected)?);
 ```
 
 This repository does not commit that output. It is derived data with no reader

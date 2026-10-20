@@ -186,6 +186,24 @@ the defect progenitor's `cli.rs` ships.
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
 
+**Every YAML text is read by one function, and no foreign error is public.**
+`read` in `src/overlay.rs` holds the reader's options, and every document and
+every Overlay goes through it into a `serde_json::Value` before anything else
+looks at it. That order is what tells `Syntax` (not YAML or JSON) from `Shape`
+(YAML of the wrong shape). The options are not the reader's defaults, and a
+default is a different document: on sevdesk-cli's committed overlaid file the
+defaults read the enum value `N` as `false`, and read `x-cli-writes: yes` as
+`true`. So `yes`, `no`, `on`, `off`, `y` and `n` stay strings, `<<` is an
+ordinary key, and the budget is a depth of 128 with node and event limits wide
+enough for 10 MB. The emitter keeps its defaults, which quote what a YAML 1.1
+reader would misread. A public error holds an `overlay::Cause` (a message, and
+the line and column or the action's index where they are known) or a boxed
+`dyn Error + Send + Sync`, so a release of the YAML crate, `roas-overlay` or
+typify is never a break here. The depth limit is a recursion limit: the reader
+descends 128 levels before it refuses the 129th, which takes up to 4 MiB of
+stack in a debug build, and `tests/yaml.rs` runs that test on a thread of its
+own for that reason.
+
 **`pub` means an adopter calls it.** What no caller outside the crate used is
 `pub(crate)`: `schema`, `multipart`, `kebab`, `Grouping`, `Namespace`,
 `Protected` and `Clash` in `src/names.rs`, and `scalar::Numeric`. The private
@@ -193,7 +211,8 @@ line and the typed call disagree about an operation is a bug, not a feature.
 `src/model/reduce.rs` true: it takes `openapiv3` types, so a public `schema`
 would make them public. Nothing in the lint block stops a new `pub` item from
 naming an `openapiv3` type, so review keeps the claim true for it. `overlay`
-stays public because a bless step calls `overlay::parse`, `required::check`
+stays public because a bless step calls `overlay::parse`, and `overlay::Cause`
+with it because every `OverlayError` variant carries one. `required::check`
 stays public with the `PhantomKeys` it returns, and `scalar::Text` stays public
 because an adopter's test names it. A type that a public variant carries is
 public too, which is why `RefError` is re-exported at the root while the rest of

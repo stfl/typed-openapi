@@ -8,8 +8,10 @@ Run `just gate` before saying anything is done. It is `check` (fmt, compile,
 clippy, rustdoc — each with warnings denied), `features` (each feature alone
 and all together, plus the clap-free assertion), `test` (nextest and the
 doctests, which nextest cannot run), `blessed` (the generator still reproduces
-every committed artefact, and no file in `api-generated` is untracked) and
-`package` (the crate built and tested from its own tarball). CI runs the same
+every committed artefact, and no file in `api-generated` is untracked),
+`package` (the crate built and tested from its own tarball) and `audit` (no
+crate in the tree has an advisory against it, and none is ignored; it reads the
+advisory database over the network, so it fails offline). CI runs the same
 recipes, not a copy of them.
 
 ## Directory notes

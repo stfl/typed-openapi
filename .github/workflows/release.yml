@@ -116,8 +116,8 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      # `cargo-deny` is here before `just gate` needs it, so the commit that
-      # adds `audit` to the gate does not have to touch this file.
+      # `just gate` runs `audit`, which needs `cargo-deny`. `ci.yml` installs the
+      # same versions.
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: just@1.58.0,cargo-nextest@0.9.146,cargo-deny@0.20.2

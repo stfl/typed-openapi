@@ -54,6 +54,8 @@ const SOUND: &str = "{ name: n, in: query, schema: { type: integer } }";
 const UNRESOLVABLE: &str = "{ name: n, in: query, schema: { $ref: '#/components/schemas/Nope' } }";
 const UNRUNNABLE: &str = "{ name: n, in: query, schema: { type: string, pattern: '(?P<n>' } }";
 
+/// Text that is not YAML.
+const NOT_YAML: &str = "actions: [\n";
 /// A valid YAML mapping that is not an Overlay 1.1 document.
 const NOT_AN_OVERLAY: &str = "overlay: 1.0.0\n";
 /// An Overlay 1.1 document whose list of actions is empty, which the Overlay
@@ -139,8 +141,11 @@ fn reading() -> Vec<Case> {
             overlay::parse(": [").expect_err("not YAML"),
             |e| matches!(e, OverlayError::Document(_)),
         ),
-        from_input("OverlayError::Syntax", overlay_error(NOT_AN_OVERLAY), |e| {
+        from_input("OverlayError::Syntax", overlay_error(NOT_YAML), |e| {
             matches!(e, OverlayError::Syntax(_))
+        }),
+        from_input("OverlayError::Shape", overlay_error(NOT_AN_OVERLAY), |e| {
+            matches!(e, OverlayError::Shape(_))
         }),
         from_input("OverlayError::Invalid", overlay_error(NO_ACTIONS), |e| {
             matches!(e, OverlayError::Invalid(_))
@@ -282,9 +287,7 @@ fn blessing() -> Vec<Case> {
         ),
         case(
             "GenerateError::Yaml",
-            GenerateError::Yaml(
-                serde_yaml_ng::from_str::<u8>("[").expect_err("an unclosed sequence"),
-            ),
+            GenerateError::Yaml(Box::new(io_error())),
         ),
         case(
             "GenerateError::Unusable",
@@ -316,7 +319,7 @@ fn emitting() -> Vec<Case> {
         ),
         case(
             "GenerateError::Typify",
-            GenerateError::Typify(typify::Error::InvalidTypeId),
+            GenerateError::Typify(Box::new(typify::Error::InvalidTypeId)),
         ),
         case(
             "GenerateError::Operation",

@@ -49,7 +49,7 @@ jobs:
       # never touched it. `release.yml` installs the same versions.
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: just@1.58.0,cargo-nextest@0.9.146
+          tool: just@1.58.0,cargo-nextest@0.9.146,cargo-deny@0.20.2
 
       # `check` is fmt, compile, clippy and rustdoc, each with warnings denied.
       - run: just check
@@ -63,6 +63,10 @@ jobs:
       # `package` builds the crate from its own tarball, which is the only
       # check that it stands up outside this workspace.
       - run: just package
+      # Fails on an advisory against any crate in the tree, every feature on,
+      # and ignores none. The advisory database moves without a commit here, so
+      # the weekly run is what shows an advisory filed against an unchanged tree.
+      - run: just audit
 
   # The published crate compiles and its tests pass on stable Rust. Nothing in
   # the library may need a nightly feature — the nightly the gate runs on is
