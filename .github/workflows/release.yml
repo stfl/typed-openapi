@@ -1,63 +1,272 @@
 name: release
 
-# A tag is the trigger, so publishing is something a maintainer does by tagging
-# a commit that CI has already passed — never a side effect of a merge.
+# A merge to `main` that carries a version nobody has tagged is the one act that
+# publishes: the crate goes to crates.io, then the tag and the GitHub Release
+# follow. There is no tag trigger, so a tag pushed by hand publishes nothing,
+# and a dispatch is a dry run from any branch — it runs every job that reads
+# or checks and none that writes. `workflow_dispatch` has to stay declared in
+# the file on `main`, because GitHub accepts a dispatch of a branch's copy only
+# then.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      dry-run:
-        description: Package and verify without publishing
-        type: boolean
-        default: true
+
+permissions:
+  contents: read
+
+# One release at a time on a ref, and none of them cancelled: a publish that
+# stopped half-way is finished by running it again, never by killing it. The
+# default queue keeps one run waiting and cancels it when a third arrives, which
+# would drop a release that waits behind another run, so `queue: max` keeps up
+# to 100 waiting. The ref is in the name so that a dry run from a branch cannot
+# take the place of a release that waits on `main`.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+  queue: max
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
 jobs:
+  # Everything that decides is here, once. The jobs after it read `mode` and
+  # never look at the event themselves.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.read.outputs.tag }}
+      mode: ${{ steps.read.outputs.mode }}
+      notes: ${{ steps.read.outputs.notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - id: read
+        run: |
+          set -euo pipefail
+
+          version=$(cargo +stable metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "typed-openapi") | .version')
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]] || {
+            echo "::error::the manifest's version '$version' is not a semantic version"
+            exit 1
+          }
+          tag="v$version"
+
+          # A release is a push to `main` of a version that has no tag yet. The
+          # tag is what says the version went out, so a merge that leaves the
+          # version alone finds its tag and rehearses. An unreachable remote
+          # fails the job, because it must never read as "no tag".
+          existing=$(git ls-remote --tags origin "refs/tags/$tag")
+          if [ "$GITHUB_EVENT_NAME" != push ] || [ "$GITHUB_REF" != refs/heads/main ]; then
+            mode=rehearse
+            echo "$GITHUB_EVENT_NAME on $GITHUB_REF is a rehearsal."
+          elif [ -n "$existing" ]; then
+            mode=rehearse
+            echo "$tag exists, so this push has nothing to release."
+          else
+            mode=release
+            echo "$tag does not exist, so this push releases $version."
+          fi
+
+          # The notes are the version's section of the changelog: from its
+          # `## <version>` heading, or `## [<version>]` as Keep a Changelog
+          # writes it, to the next `## ` heading. The heading itself is left
+          # out, because a Release is already titled by its tag.
+          notes=$(awk -v v="$version" '
+            /^## / {
+              if (found) exit
+              heading = substr($0, 4)
+              sub(/^\[/, "", heading)
+              split(heading, word, /[] ]/)
+              found = (word[1] == v)
+              next
+            }
+            found { print }
+          ' CHANGELOG.md | sed '/./,$!d')
+          if [ "$mode" = release ] && [ -z "$notes" ]; then
+            echo "::error::CHANGELOG.md has no section for $version, and a release without notes is not published"
+            exit 1
+          fi
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "mode=$mode"
+            delimiter="notes_$(openssl rand -hex 16)"
+            echo "notes<<$delimiter"
+            printf '%s\n' "$notes"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+  # The same recipe a contributor runs, on the commit that would be released.
+  # It runs on a rehearsal too, so a dry run shows whether the gate would let a
+  # publish start. `rust-toolchain.toml` names the toolchain and nothing here
+  # passes one, as in `ci.yml`.
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # `cargo-deny` is here before `just gate` needs it, so the commit that
+      # adds `audit` to the gate does not have to touch this file.
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: just@1.58.0,cargo-nextest@0.9.146,cargo-deny@0.20.2
+      - run: just gate
+
+  # Everything `publish` does except the upload, outside the environment, so a
+  # dispatch from a branch reaches it and nothing that can write. Its dry run
+  # packages the crate and builds it from the tarball, which `publish` does not
+  # repeat, and `publish` waits for it, so a crate that does not build stops the
+  # release before the first write. It names what a release would make. It sets
+  # no `RUSTFLAGS`: the gate is where warnings are denied.
+  rehearse:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      # `rust-toolchain.toml` pins a nightly, and the library is a stable
+      # crate, so the cargo commands of this job and of `publish` name
+      # `+stable`. The gate's `package` recipe builds on the pinned nightly.
+      - run: cargo +stable publish --dry-run -p typed-openapi
+      - name: what a release would make
+        env:
+          MODE: ${{ needs.version.outputs.mode }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          NOTES: ${{ needs.version.outputs.notes }}
+        run: |
+          echo "Mode: $MODE. Only a push to main that carries an untagged version releases."
+          echo "Tag: $TAG, on $GITHUB_SHA."
+          echo "Release notes:"
+          if [ -n "$NOTES" ]; then
+            printf '%s\n' "$NOTES"
+          else
+            echo "CHANGELOG.md has no section for $VERSION yet."
+          fi
+
+  # The only job that can write to crates.io, and the only one that holds
+  # `id-token`. Trusted Publishing exchanges this job's OIDC identity for a
+  # token that lives as long as the job, so the repository holds no registry
+  # credential. It needs one-time setup on crates.io (Settings > Trusted
+  # Publishing on the crate, naming this repository, this workflow file and
+  # the `crates-io` environment), and the environment allows deployments from
+  # `main` only, which is what keeps any other ref from the binding.
+  #
+  # `success()` is written out so that the line shows what the job waits for:
+  # every job it needs, the gate among them, passed.
   publish:
-    name: publish typed-openapi to crates.io
+    needs: [version, gate, rehearse]
+    if: success() && needs.version.outputs.mode == 'release'
     runs-on: ubuntu-latest
     environment: crates-io
     permissions:
-      # Trusted Publishing: crates.io exchanges this workflow's OIDC identity
-      # for a token that lives for the length of one job, so the repository
-      # holds no long-lived registry credential at all. It needs one-time setup
-      # on crates.io — Settings > Trusted Publishing on the crate, naming this
-      # repository, this workflow file and the `crates-io` environment — and
-      # the crate must already exist there, so the very first version is
-      # published by hand with `cargo publish -p typed-openapi`.
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
-
-      # The tag says which version is being released; the manifest says which
-      # version exists. A release where they disagree is a mistake worth
-      # catching before anything is uploaded, because a crates.io version
-      # cannot be replaced.
-      - name: the tag and the manifest agree
-        if: startsWith(github.ref, 'refs/tags/v')
+      # A version cannot be published twice, so a run after one that published
+      # and failed later has nothing left to do here. Only a 404 says the
+      # version is absent; any other answer fails the job.
+      - id: registry
+        name: crates.io already has the version?
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          manifest=$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "typed-openapi"))')
-          echo "tag=$tag manifest=$manifest"
-          [ "$tag" = "$manifest" ] || { echo "::error::tag v$tag does not match version $manifest"; exit 1; }
-
-      - run: cargo package -p typed-openapi
-
-      - uses: rust-lang/crates-io-auth-action@v1
+          set -euo pipefail
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            --user-agent "stfl/typed-openapi release workflow" \
+            "https://crates.io/api/v1/crates/typed-openapi/$VERSION")
+          case "$status" in
+            200) echo "published=true" >> "$GITHUB_OUTPUT"
+                 echo "crates.io already has typed-openapi $VERSION." ;;
+            404) echo "published=false" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "::error::crates.io answered $status"; exit 1 ;;
+          esac
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: auth
-        if: startsWith(github.ref, 'refs/tags/v')
-
+        if: steps.registry.outputs.published == 'false'
+      # `rehearse` built this commit's package outside the environment, so this
+      # step uploads without a second build. A verifying publish would compile
+      # every dependency, and their build scripts and proc macros would run in
+      # a job that holds the OIDC token and the registry token.
       - name: publish
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.registry.outputs.published == 'false'
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish -p typed-openapi
+        run: cargo +stable publish --no-verify -p typed-openapi
+
+  # The tag and the Release come after the crate, so neither names a version
+  # crates.io lacks. Each step looks before it writes: what exists at this
+  # commit is done, and a tag at another commit fails the job. That is what lets
+  # the failed job run again, with "Re-run failed jobs". "Re-run all jobs" runs
+  # `version` again, which finds the tag a first run made and answers
+  # `rehearse`, so no Release follows.
+  announce:
+    needs: [version, publish]
+    if: success() && needs.version.outputs.mode == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # This job holds the write token and runs no action: it needs no checkout,
+    # because the notes arrive from `version` and the tag is read off the
+    # repository's URL.
+    steps:
+      - name: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # An annotated tag lists twice, and its `^{}` line is the commit.
+          existing=$(git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            "refs/tags/$TAG" "refs/tags/$TAG^{}" | awk '{ sha = $1 } END { print sha }')
+          if [ -z "$existing" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" > /dev/null
+            echo "Tagged $TAG at $GITHUB_SHA."
+          elif [ "$existing" = "$GITHUB_SHA" ]; then
+            echo "$TAG is already at $GITHUB_SHA."
+          else
+            echo "::error::$TAG is at $existing, not at $GITHUB_SHA"
+            exit 1
+          fi
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          NOTES: ${{ needs.version.outputs.notes }}
+        run: |
+          set -euo pipefail
+          # `gh release view` fails for a missing release and for a failed
+          # request alike, and only the first is a reason to make one.
+          if gh release view "$TAG" > /dev/null 2> "$RUNNER_TEMP/view.err"; then
+            echo "The Release for $TAG exists."
+          elif grep -q 'release not found' "$RUNNER_TEMP/view.err"; then
+            printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+            gh release create "$TAG" --verify-tag --title "$TAG" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            cat "$RUNNER_TEMP/view.err" >&2
+            exit 1
+          fi

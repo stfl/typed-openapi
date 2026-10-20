@@ -173,7 +173,7 @@ blessed:
 #
 # `--allow-dirty` so the recipe answers the same question while work is in
 # progress. It is not a licence to publish a dirty tree: `cargo publish` is
-# run by the release workflow from a tag, never from here.
+# run by the release workflow on a merge to `main`, never from here.
 #
 # The unpacked crate is scratch and the recipe clears it. `cargo package`
 # leaves the tarball's contents at `target/package/<name>-<version>/`, a whole

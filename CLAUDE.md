@@ -323,7 +323,36 @@ and nothing in `typed-openapi/src/` may need a nightly feature.
 
 ## Publishing
 
-A tag `v<version>` on a commit CI has passed triggers `.github/workflows/release.yml`,
-which checks the tag against the manifest and publishes through crates.io
-Trusted Publishing. The first version has to be published by hand before Trusted
-Publishing can be configured for the crate.
+A merge to `main` that carries a version nobody has tagged is the one act that
+releases, and `.github/workflows/release.yml` does all of it. Its `version` job
+reads the manifest and answers `release` or `rehearse`; no later job looks at
+the event itself. `publish` waits for `gate` and `rehearse`, holds `id-token`
+and publishes through crates.io Trusted Publishing; `rehearse` has built the
+package outside the environment, so `publish` uploads with `--no-verify` and
+compiles no dependency beside the two tokens. `announce` then makes the tag and
+the GitHub Release, whose body is the version's section of `CHANGELOG.md`. A
+release without that section fails in `version`, before anything is written.
+
+There is no tag trigger, so a tag pushed by hand publishes nothing, and a
+dispatch from any branch is a dry run: every job that reads runs, none that
+writes does. Each writing step looks before it writes, so a release that
+stopped half-way finishes when its failed jobs are run again with "Re-run
+failed jobs". "Re-run all jobs" is no substitute: after a run that made the tag
+and failed at the Release, `version` finds the tag and answers `rehearse`.
+`workflow_dispatch` stays declared in the file on `main`, because GitHub
+accepts a dispatch of a branch's copy only then. The group of `release.yml`
+sets `queue: max`, because the default queue cancels a waiting release when a
+third run joins it.
+
+`rehearse` and `publish` run `cargo +stable`, because `rust-toolchain.toml` pins
+a nightly and the library is a stable crate, and they set no `RUSTFLAGS`,
+because the gate is where warnings are denied. The gate's `package` recipe
+builds the tarball on the pinned nightly, and the `rust stable` job of `ci.yml`
+is what says the library compiles on stable. Both workflows read with
+`contents: read` at the top and a job widens only what it needs. Every `uses:`
+is pinned by commit SHA with its version in a comment, and Dependabot proposes
+the next SHA. The tools `install-action` fetches are pinned by version in both
+files, and move by hand.
+
+The first version has to be published by hand before Trusted Publishing can be
+configured for the crate.
