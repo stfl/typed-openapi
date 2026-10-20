@@ -5,8 +5,9 @@ on:
     branches: [main]
   pull_request:
   # The nightly is a date and the tools are pinned, so they hold still, but the
-  # stable toolchain and the runner image do not. A weekly run shows when one of
-  # them has turned the gate red while no pull request is open to say so.
+  # stable toolchain and the runner image do not. A weekly run shows when the
+  # stable toolchain has turned the `rust stable` job red, or the runner image
+  # either job, while no pull request is open to say so.
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:

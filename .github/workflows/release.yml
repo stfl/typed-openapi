@@ -17,11 +17,14 @@ permissions:
 
 # One release at a time on a ref, and none of them cancelled: a publish that
 # stopped half-way is finished by running it again, never by killing it. The
-# ref is in the name so that a dry run from a branch cannot take the place of
-# a release that waits on `main`.
+# default queue keeps one run waiting and cancels it when a third arrives, which
+# would drop a release that waits behind another run, so `queue: max` keeps up
+# to 100 waiting. The ref is in the name so that a dry run from a branch cannot
+# take the place of a release that waits on `main`.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 env:
   CARGO_TERM_COLOR: always
@@ -121,10 +124,11 @@ jobs:
       - run: just gate
 
   # Everything `publish` does except the upload, outside the environment, so a
-  # dispatch from a branch reaches it and nothing that can write. It names what
-  # a release would make, and `publish` waits for it, so a crate that does not
-  # package stops the release before the first write. It sets no `RUSTFLAGS`:
-  # the gate is where warnings are denied.
+  # dispatch from a branch reaches it and nothing that can write. Its dry run
+  # packages the crate and builds it from the tarball, which `publish` does not
+  # repeat, and `publish` waits for it, so a crate that does not build stops the
+  # release before the first write. It names what a release would make. It sets
+  # no `RUSTFLAGS`: the gate is where warnings are denied.
   rehearse:
     needs: version
     runs-on: ubuntu-latest
@@ -136,7 +140,8 @@ jobs:
         with:
           toolchain: stable
       # `rust-toolchain.toml` pins a nightly, and the library is a stable
-      # crate, so every cargo command that packages names `+stable`.
+      # crate, so the cargo commands of this job and of `publish` name
+      # `+stable`. The gate's `package` recipe builds on the pinned nightly.
       - run: cargo +stable publish --dry-run -p typed-openapi
       - name: what a release would make
         env:
@@ -154,7 +159,7 @@ jobs:
             echo "CHANGELOG.md has no section for $VERSION yet."
           fi
 
-  # The only job that can reach crates.io, and the only one that holds
+  # The only job that can write to crates.io, and the only one that holds
   # `id-token`. Trusted Publishing exchanges this job's OIDC identity for a
   # token that lives as long as the job, so the repository holds no registry
   # credential. It needs one-time setup on crates.io (Settings > Trusted
@@ -200,15 +205,22 @@ jobs:
       - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: auth
         if: steps.registry.outputs.published == 'false'
+      # `rehearse` built this commit's package outside the environment, so this
+      # step uploads without a second build. A verifying publish would compile
+      # every dependency, and their build scripts and proc macros would run in
+      # a job that holds the OIDC token and the registry token.
       - name: publish
         if: steps.registry.outputs.published == 'false'
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo +stable publish -p typed-openapi
+        run: cargo +stable publish --no-verify -p typed-openapi
 
   # The tag and the Release come after the crate, so neither names a version
-  # crates.io lacks. Each step looks before it writes and treats what it finds
-  # as done, which is what lets the failed job run again.
+  # crates.io lacks. Each step looks before it writes: what exists at this
+  # commit is done, and a tag at another commit fails the job. That is what lets
+  # the failed job run again, with "Re-run failed jobs". "Re-run all jobs" runs
+  # `version` again, which finds the tag a first run made and answers
+  # `rehearse`, so no Release follows.
   announce:
     needs: [version, publish]
     if: success() && needs.version.outputs.mode == 'release'
