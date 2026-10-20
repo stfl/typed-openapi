@@ -230,10 +230,10 @@ impl<T: Numeric> Bounds<T> {
     fn check(&self, value: T, raw: &str) -> Result<(), ScalarError> {
         let refuse = |rule: String| ScalarError::rule(raw, format!("is not {rule}"));
         if let Some(low) = self.low {
-            low.floor(value).map_err(&refuse)?;
+            low.floor(value).map_err(refuse)?;
         }
         if let Some(high) = self.high {
-            high.ceiling(value).map_err(&refuse)?;
+            high.ceiling(value).map_err(refuse)?;
         }
         if let Some(step) = self.multiple_of
             && !value.divisible_by(step)

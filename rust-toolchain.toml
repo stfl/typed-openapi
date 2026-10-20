@@ -9,6 +9,13 @@
 # which is why `just fmt` wants this toolchain. The coverage recipe's
 # `--branch` rests on `-Z coverage-options=branch` and is nightly for the same
 # kind of reason.
+#
+# The channel is a date, not `nightly`, so the compiler holds still until a
+# pull request moves it. An undated `nightly` takes the newest clippy on every
+# run, and a lint added overnight fails the gate on a change that never touched
+# the code it names. The date is the newest on which `just gate` passes.
+# Dependabot's `rust-toolchain` entry proposes the next one weekly, and CI
+# installs whatever this file names, with no `toolchain:` of its own.
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-10-20"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]

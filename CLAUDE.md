@@ -309,10 +309,17 @@ looking one thing up, this file is for an agent changing the code.
 
 ## Toolchain
 
-`rust-toolchain.toml` pins nightly because four of `rustfmt.toml`'s options are
-nightly-only and the coverage recipe wants branch instrumentation. **The library
-itself is stable** — CI's `stable` job builds and tests it there, and nothing in
-`typed-openapi/src/` may need a nightly feature.
+`rust-toolchain.toml` pins a dated nightly because four of `rustfmt.toml`'s
+options are nightly-only and the coverage recipe wants branch instrumentation.
+The date is the newest on which `just gate` passes. CI's `just gate` job
+installs what the file names and passes no `toolchain:` of its own, so moving
+the date is one edit to one file; Dependabot proposes the next date weekly, and
+a date that turns the gate red is repaired in the pull request that moves it.
+Only `rustup` reads the file: a shell without it runs the `cargo` on its `PATH`,
+so compare `rustc --version` with the date before trusting a green gate.
+
+**The library itself is stable** — CI's `stable` job builds and tests it there,
+and nothing in `typed-openapi/src/` may need a nightly feature.
 
 ## Publishing
 
