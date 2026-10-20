@@ -14,6 +14,8 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+# The note for an agent that edits `src/` is not what a crate's reader gets.
+exclude = ["src/CLAUDE.md"]
 
 # The two words a command line spends on consent, and what a document that
 # wants one of them is told. It reads a document, so it wants that feature.

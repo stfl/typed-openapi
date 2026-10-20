@@ -18,8 +18,9 @@ api-generated = { path = "../api-generated" }
 # nothing below it.
 money = { path = "../money" }
 # Nothing needs this entry: the tests and the doctest take the library through
-# the dev-dependency below. `CLAUDE.md` has `api` take the library with
-# `default-features = false`, and `just clap-free` checks that no clap results.
+# the dev-dependency below. `examples/toy/CLAUDE.md` has `api` take the library
+# with `default-features = false`, and `just clap-free` checks that no clap
+# results.
 typed-openapi = { path = "../../../typed-openapi", default-features = false }
 
 [dev-dependencies]
