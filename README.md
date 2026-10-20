@@ -20,6 +20,18 @@ content-type: application/json
 dry run: nothing was sent. Add --commit to send it.
 ```
 
+## Install
+
+```console
+$ cargo add typed-openapi
+```
+
+That adds the library with its default `clap` feature; the table under
+*Features* lists the rest.
+
+Before 1.0 any release can break the API. [`CHANGELOG.md`][changelog] names each
+break and the repair it asks for.
+
 ## Two consumers, one document
 
 **The Rust caller** gets owned types and one method per operation, with a
@@ -138,6 +150,12 @@ the tests, and the crate built from its own tarball.
 | [docs/drift.md][drift] | every way a vendor revision is caught, and where |
 | [`examples/toy`][ex] | one adoption end to end, built and tested by CI |
 
+## Contributing and security
+
+[CONTRIBUTING.md][contrib] says how the project takes changes: for now it takes
+no outside issues and no outside pull requests. To report a vulnerability, read
+[SECURITY.md][security]: a report goes in privately, never in a public issue.
+
 Licensed under either of Apache-2.0 or MIT, at your option.
 
 [overlay]: https://spec.openapis.org/overlay/v1.1.0.html
@@ -151,3 +169,6 @@ Licensed under either of Apache-2.0 or MIT, at your option.
 [bu]: https://github.com/stfl/typed-openapi/blob/main/docs/builders.md
 [client]: https://github.com/stfl/typed-openapi/blob/main/docs/client.md
 [ex]: https://github.com/stfl/typed-openapi/tree/main/examples/toy
+[changelog]: https://github.com/stfl/typed-openapi/blob/main/CHANGELOG.md
+[contrib]: https://github.com/stfl/typed-openapi/blob/main/CONTRIBUTING.md
+[security]: https://github.com/stfl/typed-openapi/blob/main/SECURITY.md

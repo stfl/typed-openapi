@@ -19,14 +19,19 @@ description = "Everything the bless step writes: the corrected document, the red
 builder = ["typed-openapi/builder"]
 
 [dependencies]
+# What the generated wrappers call: the request builder, the client seam and the
+# regex engine behind a newtype's `FromStr`. No clap.
 typed-openapi = { path = "../../../typed-openapi", default-features = false }
 # The crate the generated source names. `xtask` hands `money::Money` to
 # `Settings::replace`, which writes that path into `src/types.rs` verbatim, so
 # the crate owning the type has to be reachable from here — which is why it
 # sits below this one rather than in `api` above it.
 money = { path = "../money" }
+# The `Uri` the handle takes as its base address.
 http = { workspace = true }
+# Derives (de)serialisation for the generated types.
 serde = { workspace = true }
+# The JSON value `check_body` holds to the type an operation's wrapper takes.
 serde_json = { workspace = true }
 
 [lints]

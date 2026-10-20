@@ -20,15 +20,25 @@ reqwest-client = ["dep:reqwest"]
 builder = ["api/builder"]
 
 [dependencies]
+# The typed half of the adoption: the document, the model and every wrapper.
 api = { path = "../api" }
+# The root command the generated tree is mounted under, and the verbs by hand.
 clap = { workspace = true }
+# The command tree, and the gate that decides whether a request is sent.
 typed-openapi = { path = "../../../typed-openapi" }
+# The shell completion scripts, static and dynamic.
 clap_complete = { workspace = true }
+# The request and response the client adapters carry across the seam.
 http = { workspace = true }
+# The async adapter of the seam, behind `reqwest-client`.
 reqwest = { workspace = true, optional = true }
+# Derives `Serialize` for the values a verb prints as JSON.
 serde = { workspace = true }
+# Prints a response body as pretty JSON.
 serde_json = { workspace = true }
+# Derives `Error` for what one invocation can fail with.
 thiserror = { workspace = true }
+# The sync client the binary ships with, behind `ureq-client`.
 ureq = { workspace = true, optional = true }
 
 [lints]

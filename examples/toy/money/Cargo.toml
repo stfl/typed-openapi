@@ -16,10 +16,13 @@ description = "A fixed-point decimal amount: the one type in this adoption an Op
 # total; what a replaced type is made of is the adopter's business and never the
 # library's, and `just bigint-free` is the check that keeps it that way.
 num-bigint = { workspace = true }
+# Reads an amount from its JSON string and writes it back as one.
 serde = { workspace = true }
+# Derives `Error` for a string that is not an amount.
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# The JSON values the tests round-trip an amount through.
 serde_json = { workspace = true }
 
 [lints]
