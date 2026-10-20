@@ -36,8 +36,9 @@ so does the coverage recipe. The library itself builds and tests on stable Rust.
 CI's `stable` job holds it to that, and it is the one CI check outside
 `just gate`.
 
-Only `rustup` reads `rust-toolchain.toml`, so on a host without it, compare
-`rustc --version` with the date in the file before trusting a green gate.
+Only `rustup` reads `rust-toolchain.toml`, so on a host without it, check the
+compiler before trusting a green gate. `rustc --version` prints the commit date
+of the compiler, which is one day before the date in the file.
 
 The gate needs `just` and `cargo-nextest` installed, and `just audit` needs
 `cargo-deny`. `.github/workflows/ci.yml` pins the versions of the tools CI
