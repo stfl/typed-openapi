@@ -61,7 +61,7 @@ pub enum RefError {
 const MAX_DEPTH: usize = 8;
 
 /// Follow `#/components/<section>/<name>` hops until an item appears.
-pub fn resolve<'c, T>(
+pub(crate) fn resolve<'c, T>(
     value: &'c ReferenceOr<T>,
     section: impl Fn(&str) -> Option<&'c ReferenceOr<T>>,
     name: &str,
@@ -111,7 +111,7 @@ fn follow<'c, T>(
     }
 }
 
-pub fn resolve_schema<'c>(
+pub(crate) fn resolve_schema<'c>(
     schema: &'c ReferenceOr<Schema>,
     components: &'c Components,
 ) -> Result<&'c Schema, RefError> {
@@ -165,7 +165,7 @@ fn stated<'c>(
 }
 
 /// `Some(scalar)` when this schema fits on one flag, `None` when it does not.
-pub fn scalar_of(
+pub(crate) fn scalar_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
 ) -> Result<Option<Scalar>, RefError> {
@@ -189,7 +189,7 @@ pub fn scalar_of(
 /// schema's is about every field that shares the rule. A field that says
 /// nothing of its own takes the named schema's, which is better than nothing
 /// and is all a bare `$ref` can leave behind.
-pub fn description_of(
+pub(crate) fn description_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
 ) -> Result<Option<String>, RefError> {
@@ -218,7 +218,7 @@ pub fn description_of(
 /// it is for is an adopter asking which of an operation's values are of a kind
 /// the document names — a question only the document can settle and only the
 /// adopter can answer.
-pub fn format_of(
+pub(crate) fn format_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
 ) -> Result<Option<String>, RefError> {
@@ -284,7 +284,7 @@ fn example_of<'c>(
 /// Rendered once, while the document is reduced, and carried as the text it
 /// renders to. A shipped binary prints it and reads nothing — the rule both
 /// command names already follow.
-pub fn template(
+pub(crate) fn template(
     schema: &ReferenceOr<Schema>,
     components: &Components,
 ) -> Result<Option<String>, RefError> {
@@ -481,7 +481,7 @@ fn limit<T>(value: Option<T>, exclusive: bool) -> Option<Limit<T>> {
 /// of types this crate knows: `application/x-www-form-urlencoded`,
 /// `application/vnd.api+json` and every vendor type anyone coins pass it.
 #[must_use]
-pub fn is_media_type(media_type: &str) -> bool {
+pub(crate) fn is_media_type(media_type: &str) -> bool {
     essence(media_type)
         .split_once('/')
         .is_some_and(|(ty, subtype)| is_token(ty) && is_token(subtype))
@@ -500,13 +500,13 @@ fn is_token(word: &str) -> bool {
 /// `application/json`, `application/merge-patch+json`, and anything with
 /// parameters after the essence.
 #[must_use]
-pub fn is_json(media_type: &str) -> bool {
+pub(crate) fn is_json(media_type: &str) -> bool {
     essence(media_type) == "application/json" || essence(media_type).ends_with("+json")
 }
 
 /// A media type this crate can assemble from `--file` and `--field` parts.
 #[must_use]
-pub fn is_multipart(media_type: &str) -> bool {
+pub(crate) fn is_multipart(media_type: &str) -> bool {
     essence(media_type) == "multipart/form-data"
 }
 

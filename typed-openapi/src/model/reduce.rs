@@ -96,14 +96,15 @@ const BODY: &str = "requestBody";
 /// from [`Document::from_blob`] cannot produce one, does not compile one, and
 /// does not have to know the list exists.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LoadError {
     #[error(transparent)]
     Overlay(#[from] crate::overlay::OverlayError),
-    #[error("the overlaid document is not an OpenAPI 3 document: {0}")]
+    #[error("the overlaid document is not an OpenAPI 3 document")]
     Shape(#[source] serde_json::Error),
     #[error("no `servers` entry to send requests to")]
     NoServer,
-    #[error("`servers[0].url` ({url}) is not a URL: {source}")]
+    #[error("`servers[0].url` ({url}) is not a URL")]
     ServerUrl {
         url: String,
         #[source]
@@ -205,7 +206,7 @@ pub enum LoadError {
     /// *by name*: a document of a thousand operations is not searchable by the
     /// reference alone, and an adopter meeting one is being asked to go and
     /// correct it in an Overlay.
-    #[error("{op}: `{name}`: {source}")]
+    #[error("{op}: `{name}` has a `$ref` that cannot be followed")]
     Unresolvable {
         op: String,
         name: String,
@@ -239,7 +240,7 @@ pub enum LoadError {
     /// A rule the document states that cannot be run — a `pattern` no regex
     /// engine here reads. Refused while the document is reduced, because a rule
     /// that cannot run is one every value would otherwise pass.
-    #[error("{op}: `{name}`: {source}")]
+    #[error("{op}: `{name}` states a rule that cannot run")]
     Unrunnable {
         op: String,
         name: String,

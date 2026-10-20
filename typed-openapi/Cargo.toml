@@ -27,9 +27,10 @@ required-features = ["document"]
 # a run inside the workspace, and `cargo package` drops it. A target that names
 # no feature is a compile error in the tarball, where a target that names its
 # features is skipped when they are off. `just package` runs the tarball both
-# ways. A target that builds a generator `Settings` wants `generate`, every
-# other one reads a document and wants `document`, and the three that mount the
-# command tree want `clap` beside it.
+# ways. A target that builds a generator `Settings` or names a generator error
+# wants `generate`, every other one reads a document and wants `document`, and
+# each that mounts the command tree or names one of its types wants `clap`
+# beside it.
 [[test]]
 name = "dispatch"
 required-features = ["document", "clap"]
@@ -41,6 +42,10 @@ required-features = ["document", "clap"]
 [[test]]
 name = "drift"
 required-features = ["document"]
+
+[[test]]
+name = "errors"
+required-features = ["generate", "clap"]
 
 [[test]]
 name = "generate"

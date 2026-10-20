@@ -267,12 +267,14 @@ the caller's to choose.
 ### `GenerateError`
 
 One `thiserror` enum, non-exhaustive. A bless step reports and exits, so nothing
-in it is meant to be branched on — it names the thing to go and fix. The cases
-worth knowing about in advance:
+in it is meant to be branched on — it names the thing to go and fix. Each
+variant describes its own layer and leaves the cause to `source()`, so a bless
+step prints the chain, as the `xtask` below does. The cases worth knowing about
+in advance:
 
 | Case | Means |
 |---|---|
-| `Overlay` | a document did not read, or a correction did not apply — the message opens with the file. See [drift.md](drift.md) |
+| `Overlay` | a document did not read, or a correction did not apply — the message names the file. See [drift.md](drift.md) |
 | `Unusable` | the corrected document does not describe a usable CLI |
 | `Unsupported` | the document declares something the generator has no Rust spelling for |
 | `RustfmtMissing` | `rustfmt` is not on `PATH` |
@@ -298,6 +300,7 @@ typed-openapi = { version = "0.1", features = ["generate"] }
 and one file:
 
 ```rust
+use std::error::Error as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -322,6 +325,11 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("bless: {error}");
+            let mut cause = error.source();
+            while let Some(next) = cause {
+                eprintln!("  caused by: {next}");
+                cause = next.source();
+            }
             ExitCode::FAILURE
         }
     }

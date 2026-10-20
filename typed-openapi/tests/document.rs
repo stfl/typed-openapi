@@ -14,11 +14,15 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
+use std::error::Error;
+
 use typed_openapi::model::Body;
+use typed_openapi::request::ValueError;
+use typed_openapi::scalar::ScalarError;
 use typed_openapi::tree::Asked;
 use typed_openapi::{
-    Carrier, Document, Effect, Field, Invocation, Loading, Operation, Param, Scalar, Shape,
-    Unsupported, Values, render, tree,
+    Carrier, Document, Effect, Field, Invocation, LoadError, Loading, Operation, Param, Scalar,
+    Shape, Unsupported, Values, render, tree,
 };
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
@@ -27,6 +31,15 @@ const CLI: &str = include_str!("fixtures/cli.yaml");
 
 /// The layers, in the order a bless step applies them.
 const OVERLAYS: &[&str] = &[CORRECTIONS, CLI];
+
+/// The message of the cause under `error`. An error describes its own layer, so
+/// the value a user typed and the rule it broke are one level down.
+fn cause(error: &dyn Error) -> String {
+    error
+        .source()
+        .expect("the layer has a cause under it")
+        .to_string()
+}
 
 fn document() -> Document {
     Document::load(TOY, OVERLAYS).expect("the vendor's document plus the adopter's Overlay")
@@ -688,9 +701,14 @@ fn a_path_value_cannot_smuggle_a_segment_into_the_url() {
     let refused = Invocation::new(op, Values::new().param("id", "1/../../etc"))
         .expect_err("`id` is `type: integer` in the document");
     assert!(
-        refused.to_string().contains("is not an integer"),
-        "{refused}"
+        matches!(
+            &refused,
+            ValueError::BadValue { name, source: ScalarError::Kind { wanted: "an integer", .. }, .. }
+                if name == "id"
+        ),
+        "{refused:?}"
     );
+    assert_eq!(cause(&refused), "`1/../../etc` is not an integer");
 
     // The same value under a parameter the document types as a string.
     let doc = Document::load(
@@ -751,36 +769,32 @@ fn every_rule_a_parameter_states_is_checked_because_nothing_else_can_check_it() 
 
     let doc = Document::load(&synthetic(PARAMETERS), &[]).expect("a document");
     let op = doc.get("listVouchers").unwrap();
+    // The refusal names the parameter in its own layer and the rule in its
+    // cause, so the variant says whose rule it was and the cause says what the
+    // value broke.
     let refused = |name: &str, value: &str| {
-        Invocation::new(op, Values::new().param(name, value))
-            .expect_err("the document refuses it")
-            .to_string()
+        let error = Invocation::new(op, Values::new().param(name, value))
+            .expect_err("the document refuses it");
+        assert!(
+            matches!(&error, ValueError::BadValue { op: operation, name: parameter, .. }
+                if operation == "listVouchers" && parameter == name),
+            "{error:?}"
+        );
+        cause(&error)
     };
 
     assert_eq!(
         refused("since", "2026-9"),
-        "listVouchers: `since`: `2026-9` does not match ^[0-9]{4}-[0-9]{2}$"
+        "`2026-9` does not match ^[0-9]{4}-[0-9]{2}$"
     );
-    assert_eq!(
-        refused("code", "EU"),
-        "listVouchers: `code`: `EU` is shorter than 3 characters"
-    );
+    assert_eq!(refused("code", "EU"), "`EU` is shorter than 3 characters");
     assert_eq!(
         refused("code", "EURO"),
-        "listVouchers: `code`: `EURO` is longer than 3 characters"
+        "`EURO` is longer than 3 characters"
     );
-    assert_eq!(
-        refused("limit", "0"),
-        "listVouchers: `limit`: `0` is not at least 1"
-    );
-    assert_eq!(
-        refused("limit", "105"),
-        "listVouchers: `limit`: `105` is not at most 100"
-    );
-    assert_eq!(
-        refused("limit", "7"),
-        "listVouchers: `limit`: `7` is not a multiple of 5"
-    );
+    assert_eq!(refused("limit", "0"), "`0` is not at least 1");
+    assert_eq!(refused("limit", "105"), "`105` is not at most 100");
+    assert_eq!(refused("limit", "7"), "`7` is not a multiple of 5");
     assert!(
         Invocation::new(
             op,
@@ -898,9 +912,18 @@ fn a_pattern_no_engine_can_read_is_refused_while_the_document_is_reduced() {
         &[],
     )
     .expect_err("`[unterminated` is not a regular expression");
+    assert!(
+        matches!(&error, LoadError::Unrunnable { op, name, source: ScalarError::Pattern { .. } }
+            if op == "listVouchers" && name == "since"),
+        "{error:?}"
+    );
     assert_eq!(
         error.to_string(),
-        "listVouchers: `since`: `[unterminated` is not a regular expression: Unbalanced bracket"
+        "listVouchers: `since` states a rule that cannot run"
+    );
+    assert_eq!(
+        cause(&error),
+        "`[unterminated` is not a regular expression: Unbalanced bracket"
     );
 }
 

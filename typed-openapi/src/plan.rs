@@ -131,9 +131,10 @@ fn opened(op: &Operation, answers: &Answers) -> bool {
 
 /// Why values that parsed did not turn into a request.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PlanError {
     #[error(transparent)]
     Value(#[from] ValueError),
-    #[error("cannot build the request: {0}")]
+    #[error("cannot build the request")]
     Request(#[from] http::Error),
 }

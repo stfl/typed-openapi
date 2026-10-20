@@ -225,9 +225,12 @@ impl Text {
     }
 }
 
-impl<T: Numeric> Bounds<T> {
+impl<T> Bounds<T> {
     /// Hold one value to every rule the document states about it.
-    fn check(&self, value: T, raw: &str) -> Result<(), ScalarError> {
+    fn check(&self, value: T, raw: &str) -> Result<(), ScalarError>
+    where
+        T: Numeric,
+    {
         let refuse = |rule: String| ScalarError::rule(raw, format!("is not {rule}"));
         if let Some(low) = self.low {
             low.floor(value).map_err(refuse)?;
@@ -243,7 +246,10 @@ impl<T: Numeric> Bounds<T> {
         Ok(())
     }
 
-    fn notes(&self) -> Vec<String> {
+    fn notes(&self) -> Vec<String>
+    where
+        T: Numeric,
+    {
         let mut notes = Vec::new();
         if let Some(low) = self.low {
             notes.push(low.note("at least", "more than"));
@@ -258,11 +264,14 @@ impl<T: Numeric> Bounds<T> {
     }
 }
 
-impl<T: Numeric> Limit<T> {
+impl<T> Limit<T> {
     /// This limit as a lower bound. The `Err` is how the rule reads, and it is
     /// how `--help` reads it too — one rendering, so a refusal cannot describe
     /// a different rule from the one the help line advertised.
-    fn floor(self, value: T) -> Result<(), String> {
+    fn floor(self, value: T) -> Result<(), String>
+    where
+        T: Numeric,
+    {
         let admits = match self {
             Self::Inclusive(limit) => value >= limit,
             Self::Exclusive(limit) => value > limit,
@@ -275,7 +284,10 @@ impl<T: Numeric> Limit<T> {
     }
 
     /// This limit as an upper bound.
-    fn ceiling(self, value: T) -> Result<(), String> {
+    fn ceiling(self, value: T) -> Result<(), String>
+    where
+        T: Numeric,
+    {
         let admits = match self {
             Self::Inclusive(limit) => value <= limit,
             Self::Exclusive(limit) => value < limit,
@@ -287,7 +299,10 @@ impl<T: Numeric> Limit<T> {
         }
     }
 
-    fn note(self, inclusive: &str, exclusive: &str) -> String {
+    fn note(self, inclusive: &str, exclusive: &str) -> String
+    where
+        T: Numeric,
+    {
         match self {
             Self::Inclusive(limit) => format!("{inclusive} {limit}"),
             Self::Exclusive(limit) => format!("{exclusive} {limit}"),
@@ -317,10 +332,10 @@ fn bounded<T: Numeric>(bounds: &Bounds<T>, raw: &str) -> Result<serde_json::Valu
 ///
 /// A trait rather than two copies of [`Bounds`] and its rules: the comparisons
 /// are the same sentence in both, and only reading a value out of an argument
-/// and dividing by one differ. It is public because [`Bounds`] is, and there is
-/// no third kind to implement it for — `i64` and `f64` are what OpenAPI's
-/// `integer` and `number` are.
-pub trait Numeric: Copy + PartialOrd + fmt::Display {
+/// and dividing by one differ. It is crate-private: `i64` and `f64` are what
+/// OpenAPI's `integer` and `number` are, so there is no third kind for a caller
+/// to implement it for.
+pub(crate) trait Numeric: Copy + PartialOrd + fmt::Display {
     /// What a refusal calls this kind.
     const KIND: &'static str;
 

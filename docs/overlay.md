@@ -53,7 +53,9 @@ The `overlay` field has to match `1.1.x`. A document declaring `1.0.0` is
 refused before any action runs:
 
 ```
-the Overlay document is not valid YAML or JSON: invalid value: string "1.0.0", expected `1.1.<patch>` semver (Overlay v1.1)
+bless: cannot use spec/corrections.yaml
+  caused by: the Overlay document is not valid YAML or JSON
+  caused by: invalid value: string "1.0.0", expected `1.1.<patch>` semver (Overlay v1.1)
 ```
 
 Overlay files are YAML or JSON, and so are the documents they extend.
@@ -176,7 +178,9 @@ pointing an amount's rule at a schema that is no longer a string. The filter
 form fails instead, and names itself:
 
 ```
-spec/corrections.yaml: the Overlay does not apply: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
+bless: cannot use spec/corrections.yaml
+  caused by: the Overlay does not apply
+  caused by: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
 ```
 
 The same trick works on a path item. Targeting `.get` rather than the path

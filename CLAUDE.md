@@ -29,8 +29,10 @@ holds for. A rule that two directories keep stays in this file.
 **A feature adds and removes whole items; it never changes one.** No type may
 gain a variant or a field with a feature. This is why `LoadError` is separate
 from `DocumentError` and why `Plan` lives in `plan` rather than in the
-clap-gated `tree`. A caller who matches an error exhaustively must write the
-same match in every build.
+clap-gated `tree`. A caller's match on an error is the same in every build, `_`
+arm included. The error enums are `#[non_exhaustive]` except `ScalarError`,
+`RefError` and `ConfirmationError`, so a new refusal in any other is a new
+variant and not a break.
 
 **The crate depends on no HTTP client, in any feature combination.** The seam is
 `SyncClient` / `AsyncClient` over `http::Request<Vec<u8>>`. Adapters live in
@@ -63,6 +65,13 @@ Doc comments are prose that says *why*, in present tense, describing the system
 as it is. Never "now", "no longer", "previously", "instead of" — a reader
 arriving today never saw the earlier version. The diff belongs in the commit
 message.
+
+**An error says its own layer once.** An `#[error]` string describes the layer
+that owns it and never prints a source it also marks `#[source]` or `#[from]`.
+Whoever reports the error walks `source()`, as the toy's `main` and `xtask` do,
+so the cause is printed once, on its own line. `typed-openapi/tests/errors.rs`
+walks one chain through every variant that carries a source: a new refusal that
+has one adds its case there.
 
 Route a document by who reads it: `typed-openapi/README.md` is the primer for
 someone deciding whether to use the crate, `docs/*.md` is reference for someone

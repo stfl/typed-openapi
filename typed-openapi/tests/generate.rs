@@ -15,6 +15,7 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
+use std::error::Error as _;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -670,11 +671,22 @@ fn an_operation_that_cannot_be_spelled_names_itself() {
     let failure = Settings::new(wrote(&dir, "document.yaml", &document))
         .write_to(&dir)
         .expect_err("`2listVouchers` has no spelling as a Rust identifier");
+    assert!(
+        matches!(&failure, GenerateError::Operation { op, .. } if op == "2listVouchers"),
+        "{failure:?}"
+    );
     assert_eq!(
         failure.to_string(),
-        "2listVouchers: the operationId has no spelling as a Rust identifier",
+        "the wrapper for 2listVouchers cannot be generated",
         "the failure has to name the operation: a generated file is six thousand \
          lines and a `syn` position is not something an adopter can open"
+    );
+    assert_eq!(
+        failure
+            .source()
+            .expect("the operation's failure has a cause")
+            .to_string(),
+        "the operationId has no spelling as a Rust identifier"
     );
 }
 
@@ -687,9 +699,20 @@ fn a_parameter_that_cannot_be_spelled_names_itself_and_its_operation() {
     let failure = Settings::new(wrote(&dir, "document.yaml", &document))
         .write_to(&dir)
         .expect_err("`2` has no spelling as a Rust identifier");
+    assert!(
+        matches!(&failure, GenerateError::Operation { op, .. } if op == "listVouchers"),
+        "{failure:?}"
+    );
     assert_eq!(
         failure.to_string(),
-        "listVouchers: parameter `2` has no spelling as a Rust identifier",
+        "the wrapper for listVouchers cannot be generated"
+    );
+    assert_eq!(
+        failure
+            .source()
+            .expect("the operation's failure has a cause")
+            .to_string(),
+        "parameter `2` has no spelling as a Rust identifier",
     );
 }
 

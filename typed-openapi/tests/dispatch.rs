@@ -15,6 +15,8 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
+use std::error::Error as _;
+
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use http::{Method, StatusCode};
 use serde_json::json;
@@ -123,7 +125,14 @@ fn a_client_that_fails_is_reported_as_the_transport_and_the_request_still_went_o
         .expect_err("the script fails this route");
 
     assert!(matches!(error, DispatchError::Transport(_)), "{error:?}");
-    assert_eq!(error.to_string(), "transport: read timed out");
+    assert_eq!(error.to_string(), "the transport failed");
+    assert_eq!(
+        error
+            .source()
+            .expect("the transport's own error is the cause")
+            .to_string(),
+        "read timed out"
+    );
     assert_eq!(only(&client).uri().path(), "/vouchers/5");
     assert_eq!(client.unused(), 0, "the script was used up");
 }

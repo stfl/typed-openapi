@@ -10,6 +10,7 @@
 //! `api-generated/` is reproducible from a published crate rather than from
 //! this workspace.
 
+use std::error::Error as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -50,6 +51,13 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("bless: {error}");
+            // An error describes its own layer, so the first line names the
+            // file and the causes under it name the action and the byte.
+            let mut cause = error.source();
+            while let Some(next) = cause {
+                eprintln!("  caused by: {next}");
+                cause = next.source();
+            }
             ExitCode::FAILURE
         }
     }
