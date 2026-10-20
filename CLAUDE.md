@@ -323,7 +323,28 @@ and nothing in `typed-openapi/src/` may need a nightly feature.
 
 ## Publishing
 
-A tag `v<version>` on a commit CI has passed triggers `.github/workflows/release.yml`,
-which checks the tag against the manifest and publishes through crates.io
-Trusted Publishing. The first version has to be published by hand before Trusted
-Publishing can be configured for the crate.
+A merge to `main` that carries a version nobody has tagged is the one act that
+releases, and `.github/workflows/release.yml` does all of it. Its `version` job
+reads the manifest and answers `release` or `rehearse`; no later job looks at
+the event itself. `publish` waits for `gate` and `rehearse`, holds `id-token`
+and publishes through crates.io Trusted Publishing; `announce` then makes the
+tag and the GitHub Release, whose body is the version's section of
+`CHANGELOG.md`. A release without that section fails in `version`, before
+anything is written.
+
+There is no tag trigger, so a tag pushed by hand publishes nothing, and a
+dispatch from any branch is a dry run: every job that reads runs, none that
+writes does. Each writing step looks before it writes, so a release that
+stopped half-way finishes when the failed job runs again. `workflow_dispatch`
+stays declared in the file on `main`, because GitHub accepts a dispatch of a
+branch's copy only then.
+
+`cargo +stable` for every command that packages or publishes, because
+`rust-toolchain.toml` pins a nightly, and no `RUSTFLAGS` there, because the gate
+is where warnings are denied. Both workflows read with `contents: read` at the
+top and a job widens only what it needs. Every `uses:` is pinned by commit SHA
+with its version in a comment, and Dependabot proposes the next SHA. The tools
+`install-action` fetches are pinned by version in both files, and move by hand.
+
+The first version has to be published by hand before Trusted Publishing can be
+configured for the crate.

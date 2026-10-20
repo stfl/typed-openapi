@@ -4,13 +4,24 @@ on:
   push:
     branches: [main]
   pull_request:
-  # The nightly is a date, so it holds still, but the stable toolchain, the
-  # tools `install-action` fetches and the runner image do not. A weekly run
-  # shows when one of them has turned the gate red while no pull request is
-  # open to say so.
+  # The nightly is a date and the tools are pinned, so they hold still, but the
+  # stable toolchain and the runner image do not. A weekly run shows when one of
+  # them has turned the gate red while no pull request is open to say so.
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
+
+# A job widens this only where it needs to. Nothing here writes to the
+# repository, so none does.
+permissions:
+  contents: read
+
+# A newer commit on a pull request makes its older run moot. Every other run (a
+# push to `main`, the weekly schedule, a dispatch) has a group of its own, so
+# none of them is cancelled or replaced.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,7 +34,7 @@ jobs:
     name: just gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # `rust-toolchain.toml` names the toolchain and its components, and this
       # step installs what it names and nothing else — it passes no `toolchain:`
       # of its own — so the date lives in one place and a pull request that
@@ -32,10 +43,12 @@ jobs:
       # instrumentation are nightly-only options — and never the library's:
       # the `stable` job below is what says the crate itself compiles there.
       - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Pinned, because a tool that moves can turn the gate red on a change that
+      # never touched it. `release.yml` installs the same versions.
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: just,nextest
+          tool: just@1.58.0,cargo-nextest@0.9.146
 
       # `check` is fmt, compile, clippy and rustdoc, each with warnings denied.
       - run: just check
@@ -58,8 +71,10 @@ jobs:
     name: rust stable
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo +stable build -p typed-openapi --all-features
       - run: cargo +stable test -p typed-openapi --all-features
