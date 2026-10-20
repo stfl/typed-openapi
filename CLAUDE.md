@@ -30,7 +30,8 @@ holds for. A rule that two directories keep stays in this file.
 gain a variant or a field with a feature. This is why `LoadError` is separate
 from `DocumentError` and why `Plan` lives in `plan` rather than in the
 clap-gated `tree`. A caller's match on an error is the same in every build, `_`
-arm included: the error enums are `#[non_exhaustive]`, so a new refusal is a new
+arm included. The error enums are `#[non_exhaustive]` except `ScalarError`,
+`RefError` and `ConfirmationError`, so a new refusal in any other is a new
 variant and not a break.
 
 **The crate depends on no HTTP client, in any feature combination.** The seam is

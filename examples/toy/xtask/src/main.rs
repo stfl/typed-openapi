@@ -51,8 +51,8 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("bless: {error}");
-            // An error describes its own layer, so the file, the action and the
-            // byte that stopped the bless are the causes under it.
+            // An error describes its own layer, so the first line names the
+            // file and the causes under it name the action and the byte.
             let mut cause = error.source();
             while let Some(next) = cause {
                 eprintln!("  caused by: {next}");

@@ -26,6 +26,11 @@ use typed_openapi::{
 };
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
+const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
+const CLI: &str = include_str!("fixtures/cli.yaml");
+
+/// The layers, in the order a bless step applies them.
+const OVERLAYS: &[&str] = &[CORRECTIONS, CLI];
 
 /// The message of the cause under `error`. An error describes its own layer, so
 /// the value a user typed and the rule it broke are one level down.
@@ -35,11 +40,6 @@ fn cause(error: &dyn Error) -> String {
         .expect("the layer has a cause under it")
         .to_string()
 }
-const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
-const CLI: &str = include_str!("fixtures/cli.yaml");
-
-/// The layers, in the order a bless step applies them.
-const OVERLAYS: &[&str] = &[CORRECTIONS, CLI];
 
 fn document() -> Document {
     Document::load(TOY, OVERLAYS).expect("the vendor's document plus the adopter's Overlay")

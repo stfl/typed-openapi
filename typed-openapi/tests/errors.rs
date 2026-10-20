@@ -7,7 +7,9 @@
 //! layer that owns it and the chain prints the rest.
 //!
 //! Each case here is one chain, built from the input that produces it where one
-//! is cheap and from the variant itself where the cause is a foreign error.
+//! is cheap and from the variant itself where the cause is a foreign error. A
+//! case built from an input is also held to the variant it is named for, so an
+//! input that starts to give another variant fails under its name.
 //! Every variant that carries a source has a case, so a string that starts to
 //! print its source again is named by the variant that did it.
 
@@ -23,7 +25,7 @@ use std::path::PathBuf;
 
 use typed_openapi::client::{BodyError, Error as ClientError};
 use typed_openapi::generate::GenerateError;
-use typed_openapi::overlay;
+use typed_openapi::overlay::{self, OverlayError};
 use typed_openapi::plan::PlanError;
 use typed_openapi::request::ValueError;
 use typed_openapi::scalar::ScalarError;
@@ -52,10 +54,12 @@ const SOUND: &str = "{ name: n, in: query, schema: { type: integer } }";
 const UNRESOLVABLE: &str = "{ name: n, in: query, schema: { $ref: '#/components/schemas/Nope' } }";
 const UNRUNNABLE: &str = "{ name: n, in: query, schema: { type: string, pattern: '(?P<n>' } }";
 
-/// An Overlay that is a valid YAML mapping and not an Overlay 1.1 document, and
-/// one that is, with an action that matches nothing.
+/// A valid YAML mapping that is not an Overlay 1.1 document.
 const NOT_AN_OVERLAY: &str = "overlay: 1.0.0\n";
+/// An Overlay 1.1 document whose list of actions is empty, which the Overlay
+/// specification refuses.
 const NO_ACTIONS: &str = "overlay: 1.1.0\ninfo: { title: t, version: \"1\" }\nactions: []\n";
+/// An Overlay 1.1 document with an action whose target matches nothing.
 const MATCHES_NOTHING: &str = "overlay: 1.1.0\n\
      info: { title: t, version: \"1\" }\n\
      actions:\n\
@@ -91,43 +95,84 @@ fn bad_value() -> ValueError {
         .expect_err("`s3cr3t-value` is not an integer")
 }
 
-type Case = (&'static str, Box<dyn Error>);
-
-fn case(name: &'static str, error: impl Error + 'static) -> Case {
-    (name, Box::new(error))
+/// One chain to check, under the name of the variant at its head.
+struct Case {
+    name: &'static str,
+    error: Box<dyn Error>,
+    /// Whether `error` is the variant `name` says it is.
+    is_named: bool,
 }
 
-fn overlay_error(overlay: &str) -> overlay::OverlayError {
+/// A case whose variant is written out, so it cannot be another one.
+fn case(name: &'static str, error: impl Error + 'static) -> Case {
+    Case {
+        name,
+        error: Box::new(error),
+        is_named: true,
+    }
+}
+
+/// A case that running the library on an input produced. `is` holds the result
+/// to the variant `name` says, so an input that starts to give another variant
+/// fails under this name instead of passing under it.
+fn from_input<E: Error + 'static>(
+    name: &'static str,
+    error: E,
+    is: impl FnOnce(&E) -> bool,
+) -> Case {
+    Case {
+        name,
+        is_named: is(&error),
+        error: Box::new(error),
+    }
+}
+
+fn overlay_error(overlay: &str) -> OverlayError {
     overlay::apply(serde_json::json!({}), overlay).expect_err("the Overlay is refused")
 }
 
 /// Reading a document and its Overlays.
 fn reading() -> Vec<Case> {
     vec![
-        case(
+        from_input(
             "OverlayError::Document",
             overlay::parse(": [").expect_err("not YAML"),
+            |e| matches!(e, OverlayError::Document(_)),
         ),
-        case("OverlayError::Syntax", overlay_error(NOT_AN_OVERLAY)),
-        case("OverlayError::Invalid", overlay_error(NO_ACTIONS)),
-        case("OverlayError::Apply", overlay_error(MATCHES_NOTHING)),
-        case("DocumentError::Blob", blob_error()),
-        case(
+        from_input("OverlayError::Syntax", overlay_error(NOT_AN_OVERLAY), |e| {
+            matches!(e, OverlayError::Syntax(_))
+        }),
+        from_input("OverlayError::Invalid", overlay_error(NO_ACTIONS), |e| {
+            matches!(e, OverlayError::Invalid(_))
+        }),
+        from_input("OverlayError::Apply", overlay_error(MATCHES_NOTHING), |e| {
+            matches!(e, OverlayError::Apply(_))
+        }),
+        from_input("DocumentError::Blob", blob_error(), |e| {
+            matches!(e, DocumentError::Blob(_))
+        }),
+        from_input(
             "LoadError::Overlay",
             load("openapi: 3.0.3", &[MATCHES_NOTHING]),
+            |e| matches!(e, LoadError::Overlay(_)),
         ),
-        case("LoadError::Shape", load("{}", &[])),
-        case(
+        from_input("LoadError::Shape", load("{}", &[]), |e| {
+            matches!(e, LoadError::Shape(_))
+        }),
+        from_input(
             "LoadError::ServerUrl",
             load(&document("not a url", SOUND), &[]),
+            |e| matches!(e, LoadError::ServerUrl { .. }),
         ),
-        case(
+        from_input(
             "LoadError::Unresolvable",
             load(&document(URL, UNRESOLVABLE), &[]),
+            |e| matches!(e, LoadError::Unresolvable { .. }),
         ),
-        case(
+        from_input(
             "LoadError::Unrunnable",
             load(&document(URL, UNRUNNABLE), &[]),
+            |e| matches!(e, LoadError::Unrunnable { .. }),
         ),
     ]
 }
@@ -135,7 +180,9 @@ fn reading() -> Vec<Case> {
 /// Turning values and arguments into a request.
 fn requesting() -> Vec<Case> {
     vec![
-        case("ValueError::BadValue", bad_value()),
+        from_input("ValueError::BadValue", bad_value(), |e| {
+            matches!(e, ValueError::BadValue { .. })
+        }),
         case("PlanError::Request", PlanError::Request(http_error())),
         case("PlanError::Value", PlanError::Value(bad_value())),
         case(
@@ -321,14 +368,27 @@ fn repeated(name: &str, error: &(dyn Error + 'static)) -> Vec<String> {
         .collect()
 }
 
-/// Every case at once, so a failing run names each variant that repeats its
-/// source and not only the first.
-fn assert_say_their_own_layer_once(cases: impl IntoIterator<Item = Case>) {
-    let repeated: Vec<String> = cases
+/// What is wrong with `case`: an error that is not the variant it is named for,
+/// then each layer of its chain that prints the layer under it.
+fn problems(case: &Case) -> Vec<String> {
+    let Case {
+        name,
+        error,
+        is_named,
+    } = case;
+    let not_named =
+        (!is_named).then(|| format!("{name}: the input gives {error:?}, which is another variant"));
+    not_named
         .into_iter()
-        .flat_map(|(name, error)| repeated(name, error.as_ref()))
-        .collect();
-    assert!(repeated.is_empty(), "{repeated:#?}");
+        .chain(repeated(name, error.as_ref()))
+        .collect()
+}
+
+/// Every case at once, so a failing run names each variant that is wrong and
+/// not only the first.
+fn assert_say_their_own_layer_once(cases: impl IntoIterator<Item = Case>) {
+    let problems: Vec<String> = cases.into_iter().flat_map(|case| problems(&case)).collect();
+    assert!(problems.is_empty(), "{problems:#?}");
 }
 
 #[test]
