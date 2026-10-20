@@ -17,16 +17,16 @@ fmt:
 # block. Building the docs is the only thing that runs rustdoc's lints: a
 # broken intra-doc link warns during a doctest run and fails here.
 #
-# `--all-features` compiles and lints what only a named feature builds: the
-# `builder` wrappers and the reqwest adapter of the example. A target the gate
-# builds without linting is one a lint never reaches.
+# `--all-features` compiles, lints and documents what only a named feature
+# builds: the `builder` wrappers and the reqwest adapter of the example. A
+# target the gate builds without linting is one a lint never reaches.
 
 # Verify formatting, compile, then lint code and docs with warnings denied.
 check:
     cargo fmt --all --check
     cargo check --workspace --all-targets --all-features
     cargo clippy --workspace --all-targets --all-features -- -D warnings
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 
 # A feature that adds or removes items has to be compiled with it and without
 # it, because nothing else finds an item that only exists in one of them. These
@@ -125,9 +125,9 @@ test:
 
 # `cargo deny` reads the advisory database over the network, and `check` runs
 # between edits: a check that fails on a fetch timeout is a check people stop
-# running. So this stands on its own, for a release and for a lockfile that
-# moved. `deny.toml` says why the licence check is left out. `gate` does not run
-# it while the tree holds an advisory that no upgrade repairs.
+# running. So `audit` is apart from `check` because of the network. It is apart
+# from `gate` only while the tree holds an advisory that no upgrade repairs.
+# `deny.toml` says why the licence check is left out.
 
 # Check the dependency tree for advisories, bans and unknown sources.
 audit:
@@ -158,7 +158,8 @@ gate: check features test blessed package
 # and the generator does not write is a second question: the working tree has
 # it and a clean checkout does not, so a build that passes here can fail in CI.
 
-# Regenerate, and fail if anything committed changed.
+# Regenerate, and fail if an artefact differs from the commit, is not committed,
+# or if a file in the generated crate is untracked.
 blessed:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -213,11 +214,12 @@ blessed:
 # member of, and `target/package/<name>-<version>/` does. `--manifest-path`
 # keeps the working directory here, so `rustup` reads `rust-toolchain.toml` for
 # the test run as it does for everything else, and `--target-dir` lets the run
-# reuse the dependencies already compiled. `tar -m` stamps the unpacked files
-# with the time of unpacking: a `.crate` carries one old date on every file,
-# cargo takes a file no newer than its last build for unchanged, and the test
-# binaries a former unpacking left behind, with that unpacking's directory
-# compiled into them, would run in place of the ones this tarball builds.
+# reuse the dependencies already compiled in that directory. `tar -m` stamps the
+# unpacked files with the time of unpacking: a `.crate` carries one old date on
+# every file, cargo takes a file no newer than its last build for unchanged, and
+# the test binaries a former unpacking left behind, with that unpacking's
+# directory compiled into them, would run in place of the ones this tarball
+# builds.
 #
 # `--allow-dirty` so the recipe answers the same question while work is in
 # progress. It is not a licence to publish a dirty tree: `cargo publish` is
@@ -230,10 +232,12 @@ blessed:
 # target directories a profile of that name carries; `Swatinem/rust-cache` does,
 # and reports the two it cannot find on every run it caches. The verification
 # build's artefacts are in `<target>/debug` with the rest of the workspace's, so
-# clearing the package directory costs the next run nothing. `CARGO_TARGET_DIR`
-# moves that directory, so the recipe clears the one cargo used, and clears it
-# before it packages too: a tarball left by an earlier version would make the
-# unpacking below ambiguous.
+# clearing the package directory costs the next run nothing. The target
+# directory can come from `CARGO_TARGET_DIR`, from `CARGO_BUILD_TARGET_DIR` or
+# from cargo's configuration, and the recipe reads only the first. So it names
+# the directory itself, `--target-dir` on `cargo package`, and reads the tarball
+# from and clears the one it named. It clears it before it packages too: a
+# tarball left by an earlier version would make the unpacking below ambiguous.
 
 # Verify the published crate packages, builds, and passes its own tests.
 package:
@@ -245,7 +249,7 @@ package:
     trap 'rm -rf "$scratch" "$packaged"' EXIT
     rm -rf "$packaged"
     cargo package -p typed-openapi --list --allow-dirty
-    cargo package -p typed-openapi --allow-dirty
+    cargo package -p typed-openapi --allow-dirty --target-dir "$target"
     tar -xzmf "$packaged"/typed-openapi-*.crate -C "$scratch"
     manifests=("$scratch"/typed-openapi-*/Cargo.toml)
     cargo test --all-features --manifest-path "${manifests[0]}" --target-dir "$target"
