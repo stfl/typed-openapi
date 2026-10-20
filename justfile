@@ -119,6 +119,16 @@ test:
     cargo nextest run --workspace
     cargo test --workspace --doc
 
+# `cargo deny` reads the advisory database over the network, and `check` runs
+# between edits: a check that fails on a fetch timeout is a check people stop
+# running. So this stands on its own, for a release and for a lockfile that
+# moved. `deny.toml` says why the licence check is left out. `gate` does not run
+# it while the tree holds an advisory that no upgrade repairs.
+
+# Check the dependency tree for advisories, bans and unknown sources.
+audit:
+    cargo deny check advisories bans sources
+
 # Everything CI runs, in the order CI runs it.
 gate: check features test blessed package
 
