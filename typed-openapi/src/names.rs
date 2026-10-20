@@ -84,7 +84,7 @@ impl fmt::Display for CommandName {
 /// shipped binary reads them off its blob and never runs this rule at all.
 #[cfg(feature = "document")]
 #[derive(Debug, Clone, Copy)]
-pub struct Grouping {
+pub(crate) struct Grouping {
     depth: usize,
 }
 
@@ -97,7 +97,7 @@ impl Grouping {
     /// them, or before a path parameter, which names a value rather than a
     /// resource.
     #[must_use]
-    pub fn of(paths: &[&str]) -> Self {
+    pub(crate) fn of(paths: &[&str]) -> Self {
         let mut depth = 0;
         while descends(paths, depth) {
             depth += 1;
@@ -106,7 +106,7 @@ impl Grouping {
     }
 
     /// The group `path` belongs to.
-    pub fn group(&self, path: &str) -> Result<CommandName, NameError> {
+    pub(crate) fn group(self, path: &str) -> Result<CommandName, NameError> {
         CommandName::new(
             "path segment",
             segments(path).nth(self.depth).unwrap_or(path),
@@ -116,7 +116,7 @@ impl Grouping {
     /// What one operation is called under its group: the last literal segment
     /// below the group, or — where the path has none left to spend — whatever
     /// its method makes of it.
-    pub fn leaf(&self, path: &str, method: &Method) -> Result<CommandName, NameError> {
+    pub(crate) fn leaf(self, path: &str, method: &Method) -> Result<CommandName, NameError> {
         match segments(path)
             .skip(self.depth + 1)
             .filter(|segment| !templated(segment))
@@ -185,7 +185,7 @@ fn verb(method: &Method, addressed: bool) -> &'static str {
 /// a flag reports that once the document it came from is gone.
 #[cfg(feature = "document")]
 #[derive(Debug)]
-pub struct Namespace {
+pub(crate) struct Namespace {
     /// Every flag this subcommand has spent, guarded words included.
     taken: Vec<String>,
     /// The words a document name may not take over, and why each is guarded.
@@ -200,7 +200,7 @@ pub struct Namespace {
 /// [`Clash`] says which word so the refusal can name the way out.
 #[cfg(feature = "document")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Protected {
+pub(crate) enum Protected {
     /// The confirmation. Its spelling is the adopter's, so the way out is to
     /// choose another one.
     Commit,
@@ -213,7 +213,7 @@ pub enum Protected {
 /// saying yes.
 #[cfg(feature = "document")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Clash {
+pub(crate) struct Clash {
     /// The word both of them wanted.
     pub word: String,
     /// Which kind of yes it is, and so which way out the refusal offers.
@@ -233,7 +233,7 @@ impl Namespace {
     /// request nobody meant, so the document is refused instead and the adopter
     /// picks which of the two names moves.
     #[must_use]
-    pub fn guarding<'r>(
+    pub(crate) fn guarding<'r>(
         guarded: impl IntoIterator<Item = (&'r str, Protected)>,
         reserved: impl IntoIterator<Item = &'r str>,
     ) -> Self {
@@ -255,7 +255,7 @@ impl Namespace {
     ///
     /// A `preferred` that is one of the guarded words is refused rather than
     /// prefixed — see [`Namespace::guarding`].
-    pub fn claim(&mut self, preferred: &str, prefix: &str) -> Result<String, Clash> {
+    pub(crate) fn claim(&mut self, preferred: &str, prefix: &str) -> Result<String, Clash> {
         if let Some((word, kind)) = self.guarded.iter().find(|(word, _)| word == preferred) {
             return Err(Clash {
                 word: word.clone(),
@@ -312,7 +312,7 @@ pub(crate) fn spelled(origin: &'static str, raw: &str) -> Result<String, NameErr
 /// `createVoucher` and `internal_ref` both become flag-shaped: lowercase words
 /// joined by `-`. Characters outside `[A-Za-z0-9]` are separators.
 #[must_use]
-pub fn kebab(name: &str) -> String {
+pub(crate) fn kebab(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 4);
     let mut chars = name.chars().peekable();
     let mut prev_lower_or_digit = false;

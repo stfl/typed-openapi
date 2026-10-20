@@ -63,15 +63,16 @@
 //! transitively.
 //!
 //! Composition is a graph rather than a chain, which is why what terminates the
-//! walk is a set of the references already followed and not the hop count
-//! [`crate::schema::resolve`] carries. A counter suits a chain, where each hop
-//! replaces the last. On a graph it either stops short of a legal document that
-//! composes deeply — and stopping short means missing names, which means
-//! refusing a correct document — or, counted per branch, never meets the cycle
-//! that returns through a different branch. A set of the references already
-//! followed terminates on the cycle itself and truncates nothing. Following one
-//! reference once is also all a union needs: the names behind it are already in
-//! the answer by the time a second branch asks for them.
+//! walk is a set of the references already followed and not a hop count, the
+//! argument `schema::resolve` makes about its own walk too. A counter suits a
+//! chain, where each hop replaces the last. On a graph it either stops short of
+//! a legal document that composes deeply — and stopping short means missing
+//! names, which means refusing a correct document — or, counted per branch,
+//! never meets the cycle that returns through a different branch. A set of the
+//! references already followed terminates on the cycle itself and truncates
+//! nothing. Following one reference once is also all a union needs: the names
+//! behind it are already in the answer by the time a second branch asks for
+//! them.
 //!
 //! A `required` *inside* a composition is judged against the whole composition.
 //! `allOf: [{ required: [total] }]` beside a `properties` that declares `total`

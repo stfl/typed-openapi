@@ -46,11 +46,14 @@ of the example adoption's nine actions — two in
 [`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml), three in
 [`spec/cli.yaml`](../examples/toy/spec/cli.yaml) — are written as targets that
 state what the vendor currently says, so a revision that changes the thing being
-corrected fails the bless rather than being silently overwritten. The message opens with the layer, because with corrections split
-by purpose that is the first thing to know:
+corrected fails the bless rather than being silently overwritten. The first line
+names the layer, because with corrections split by purpose that is the first
+thing to know, and each line under it is a cause:
 
 ```
-spec/corrections.yaml: the Overlay does not apply: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
+bless: cannot use spec/corrections.yaml
+  caused by: the Overlay does not apply
+  caused by: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
 ```
 
 The form and its cost are in [docs/overlay.md](overlay.md#the-tripwire-form);

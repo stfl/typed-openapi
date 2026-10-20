@@ -37,16 +37,17 @@ impl<'de> serde::Deserialize<'de> for NoContent {
 
 /// Anything that stops a call short of a typed answer.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
-    #[error("the document does not load: {0}")]
+    #[error("the document does not load")]
     Document(#[from] DocumentError),
     #[error(transparent)]
     Drift(#[from] DriftError),
     #[error(transparent)]
     Values(#[from] ValueError),
-    #[error("cannot build the request: {0}")]
+    #[error("cannot build the request")]
     Request(#[from] http::Error),
-    #[error("cannot serialise the request body: {0}")]
+    #[error("cannot serialise the request body")]
     Encode(#[source] serde_json::Error),
     /// The client refused the request or never got an answer, carrying the
     /// error the client itself returned.
@@ -58,11 +59,11 @@ pub enum Error {
     /// `C::Error`, and [`Call::request`] hands back the bytes for a caller who
     /// would rather send them through the client's own `send` and box nothing.
     /// `docs/client.md` shows both.
-    #[error("transport: {0}")]
+    #[error("the transport failed")]
     Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("{status}: {body}")]
     Status { status: StatusCode, body: String },
-    #[error("the response is not the shape the document promises: {source}")]
+    #[error("the response is not the shape the document promises")]
     Decode {
         #[source]
         source: serde_json::Error,

@@ -50,14 +50,15 @@ use crate::values::{Part, Payload, Values};
 
 /// Something about the arguments the document cannot repair.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ArgError {
-    #[error("cannot read {}: {source}", path.display())]
+    #[error("cannot read {}", path.display())]
     ReadBody {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("{} does not hold JSON: {source}", path.display())]
+    #[error("{} does not hold JSON", path.display())]
     ParseBody {
         path: PathBuf,
         #[source]
@@ -371,6 +372,7 @@ pub enum Outcome {
 /// a variant of its own, so this enum does not grow a type parameter for the
 /// client and an adopter's error type can absorb it whole.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DispatchError {
     #[error("no command given")]
     NoCommand,
@@ -404,7 +406,7 @@ pub enum DispatchError {
     /// = E>` fixes `E` for every client behind it. A caller who wants no box at
     /// all builds the request with [`Plan`] and sends it through the client's
     /// own `send`. `docs/client.md` shows both.
-    #[error("transport: {0}")]
+    #[error("the transport failed")]
     Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 

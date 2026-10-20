@@ -20,6 +20,7 @@ use crate::values::{Payload, Values};
 
 /// Values the document rejects for this operation.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ValueError {
     #[error("{op}: `{name}` is required")]
     MissingParam { op: String, name: String },
@@ -41,7 +42,7 @@ pub enum ValueError {
         name: String,
         given: usize,
     },
-    #[error("{op}: `{name}`: {source}")]
+    #[error("{op}: `{name}` was given a value the document refuses")]
     BadValue {
         op: String,
         name: String,

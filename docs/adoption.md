@@ -96,8 +96,8 @@ refusal at the flag for a value you were never going to type. What it costs
 arrives on a read:
 
 ```
-the response is not the shape the document promises: unknown variant `paid`,
-expected `draft` or `open`
+the response is not the shape the document promises
+  caused by: unknown variant `paid`, expected `draft` or `open`
 ```
 
 That is an ordinary listing against an ordinary tenant, failing on a voucher

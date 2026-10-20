@@ -73,7 +73,8 @@ A `pattern` the engine cannot read refuses the document while it is reduced,
 rather than refusing every value at a user's flag:
 
 ```
-listVouchers: `since`: `[unterminated` is not a regular expression: Unbalanced bracket
+listVouchers: `since` states a rule that cannot run
+  caused by: `[unterminated` is not a regular expression: Unbalanced bracket
 ```
 
 ## Where each rule runs

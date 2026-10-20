@@ -555,15 +555,17 @@ is worth copying.
 
 [`main.rs`](../examples/toy/cli/src/main.rs) prints an error's own message and
 then walks the `source` chain, because the cause is where the detail is and an
-agent reading stderr cannot ask for it afterwards:
+agent reading stderr cannot ask for it afterwards. Every error in `typed-openapi`
+describes its own layer and leaves the cause to `source()`, so an error printed
+alone drops the detail and a chain prints each line once:
 
 ```console
 $ toy raw contacts create --json-body notes.txt
-toy: notes.txt does not hold JSON: expected ident at line 1 column 2
+toy: notes.txt does not hold JSON
   caused by: expected ident at line 1 column 2
 
 $ toy raw vouchers get --id 5
-toy: transport: io: Connection refused (os error 111)
+toy: the transport failed
   caused by: io: Connection refused (os error 111)
 ```
 

@@ -17,14 +17,15 @@ use thiserror::Error;
 
 /// The Overlay, or the document it is applied to, is not usable.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum OverlayError {
-    #[error("the OpenAPI document is not valid YAML or JSON: {0}")]
+    #[error("the OpenAPI document is not valid YAML or JSON")]
     Document(#[source] serde_yaml_ng::Error),
-    #[error("the Overlay document is not valid YAML or JSON: {0}")]
+    #[error("the Overlay document is not valid YAML or JSON")]
     Syntax(#[source] serde_yaml_ng::Error),
-    #[error("the Overlay is not a valid Overlay 1.1 document: {0}")]
+    #[error("the Overlay is not a valid Overlay 1.1 document")]
     Invalid(#[source] roas_overlay::validation::Error),
-    #[error("the Overlay does not apply: {0}")]
+    #[error("the Overlay does not apply")]
     Apply(#[source] roas_overlay::apply::ApplyError),
 }
 

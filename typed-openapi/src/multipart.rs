@@ -9,7 +9,7 @@ use crate::values::Part;
 
 /// The bytes and the `Content-Type` header value they must be sent under.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Encoded {
+pub(crate) struct Encoded {
     pub content_type: String,
     pub bytes: Vec<u8>,
 }
@@ -18,7 +18,7 @@ const STEM: &str = "----typed-openapi-boundary";
 
 /// Encode `parts` under a boundary that appears in none of them.
 #[must_use]
-pub fn encode(parts: &[Part]) -> Encoded {
+pub(crate) fn encode(parts: &[Part]) -> Encoded {
     let boundary = boundary(parts);
     let mut bytes = Vec::new();
     for part in parts {

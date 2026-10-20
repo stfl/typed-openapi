@@ -44,10 +44,9 @@
 //! # What a feature may do
 //!
 //! Every feature adds and removes whole items and never changes one. No type
-//! on this page gains a variant or a field with one, so a caller who matches
-//! an error of this crate exhaustively writes the same match in every build,
-//! and what the docs say about a type they can see is true of every build that
-//! has it.
+//! on this page gains a variant or a field with one, so a caller's match on an
+//! error of this crate is the same in every build, `_` arm included, and what
+//! the docs say about a type they can see is true of every build that has it.
 //!
 //! `clap` is on by default because most adopters want the command tree; a
 //! crate that only wants typed calls turns it off and links no argument
@@ -63,14 +62,14 @@ pub mod overlay;
 #[cfg(feature = "document")]
 pub mod required;
 #[cfg(feature = "document")]
-pub mod schema;
+mod schema;
 
 #[cfg(feature = "generate")]
 pub mod generate;
 
 pub mod client;
 pub mod model;
-pub mod multipart;
+mod multipart;
 pub mod names;
 pub mod plan;
 pub mod request;
@@ -94,7 +93,7 @@ pub use model::{
 };
 #[cfg(feature = "document")]
 pub use model::{ConfirmationError, LoadError, Loading};
-pub use names::{CommandName, kebab};
+pub use names::CommandName;
 pub use plan::{Answers, Plan, PlanError};
 /// `regress`, for generated code to name the regex engine through.
 ///
@@ -106,6 +105,8 @@ pub use plan::{Answers, Plan, PlanError};
 pub use regress;
 pub use request::{Invocation, ValueError, render};
 pub use scalar::Scalar;
+#[cfg(feature = "document")]
+pub use schema::RefError;
 pub use summary::{Summary, Unreachable};
 pub use transport::{
     AsyncClient, HttpRequest, HttpResponse, Reach, Recorder, RecorderError, SyncClient,

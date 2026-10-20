@@ -104,8 +104,9 @@ is *not* caught is listed in [docs/drift.md][drift] beside what is.
 | `generate` | no | the code generator a bless step calls. Implies `document` |
 | `builder` | no | a named-argument builder **beside** each generated wrapper |
 
-Each feature adds and removes whole items and never changes one, so a match
-exhaustive in one build is exhaustive in all.
+Each feature adds and removes whole items and never changes one, so a match on
+one of the crate's errors is the same in every build, `_` arm included. The error
+enums are `#[non_exhaustive]`: a new refusal is a new variant.
 
 **No HTTP client, in any combination.** The seam is a two-method trait over
 `http::Request<Vec<u8>>`, and an adapter is about ten lines. The default feature

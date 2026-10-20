@@ -186,6 +186,18 @@ the defect progenitor's `cli.rs` ships.
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
 
+**`pub` means an adopter calls it.** The reduction's machinery — `schema`,
+`multipart`, `Grouping` and `Namespace` in `src/names.rs`, `scalar::Numeric` —
+is `pub(crate)`. That is what makes "nothing from `openapiv3` escapes" in
+`src/model/reduce.rs` a fact the compiler holds: `schema` takes `openapiv3`
+types, so a public `schema` would make them public. `overlay` stays public
+because a bless step calls `overlay::parse`, `required::check` stays public with
+the `PhantomKeys` it returns, and `scalar::Text` stays public because an
+adopter's test names it. A type that a public variant carries is public too,
+which is why `RefError` is re-exported at the root while the rest of `schema` is
+not. `unreachable_pub` is a warning the gate denies, so a `pub` item the crate
+does not export fails it.
+
 **A count about the document is derived from it, never written down.**
 `Document::summary` in `src/summary.rs` answers every count an adoption is
 tempted to keep by hand — operations, groups, reads and writes, what stands

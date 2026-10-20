@@ -34,7 +34,7 @@ pub enum Error {
     Dispatch(#[from] DispatchError),
     #[error(transparent)]
     Body(#[from] api::BodyError),
-    #[error("cannot build the request: {0}")]
+    #[error("cannot build the request")]
     Request(#[from] http::Error),
     #[error("no operation named `{0}` in the document")]
     Unknown(String),

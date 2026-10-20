@@ -3,8 +3,8 @@
 //! What is here is the reduction itself: a list of [`Operation`]s, the values
 //! each one carries, and the two names a user types to reach it. Every type on
 //! this page is in every build, because the blob a shipped binary reads is
-//! these types and nothing else — so a caller who matches one exhaustively
-//! writes the same match whatever the feature set.
+//! these types and nothing else — so a caller who matches one writes the same
+//! match whatever the feature set.
 //!
 //! Where they come from is `reduce`, which the `document` feature brings and a
 //! shipped binary leaves out. Reducing a document is bless-time work, not
@@ -397,14 +397,15 @@ pub enum Body {
 /// This is the whole of what [`Document::from_blob`] and [`Document::to_blob`]
 /// can say, and therefore the whole of what a shipped binary can fail with —
 /// the one door it has onto a document is the blob. The type has the same
-/// shape in every build: a caller who matches it exhaustively writes the same
-/// match whether or not the `document` feature is on, and reading its rustdoc
-/// under either feature set tells them the same thing. Reducing a document is
+/// shape in every build: a caller's match on it is the same, `_` arm included,
+/// whether or not the `document` feature is on, and reading its rustdoc under
+/// either feature set tells them the same thing. Reducing a document is
 /// a different job with a different failure list, and `LoadError` — which the
 /// `document` feature brings with the reader — is where that list lives.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DocumentError {
-    #[error("the reduced model the bless step writes is not valid: {0}")]
+    #[error("the reduced model the bless step writes is not valid")]
     Blob(#[from] postcard::Error),
 }
 

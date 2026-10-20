@@ -820,13 +820,13 @@ fn rustfmt(path: &Path) -> Result<(), GenerateError> {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GenerateError {
-    #[error("reading {path}: {source}")]
+    #[error("cannot read {path}")]
     Read {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-    #[error("writing {path}: {source}")]
+    #[error("cannot write {path}")]
     Write {
         path: PathBuf,
         #[source]
@@ -835,25 +835,25 @@ pub enum GenerateError {
     /// A document or a layer over it that does not read, or does not apply.
     /// `path` is the file to go and open: with corrections split across
     /// layers, which one stopped the bless is the first thing to know.
-    #[error("{path}: {source}")]
+    #[error("cannot use {path}")]
     Overlay {
         path: PathBuf,
         #[source]
         source: OverlayError,
     },
-    #[error("the overlaid document is not representable as YAML: {0}")]
+    #[error("the overlaid document is not representable as YAML")]
     Yaml(#[source] serde_yaml_ng::Error),
-    #[error("the overlaid document does not describe a usable CLI: {0}")]
+    #[error("the overlaid document does not describe a usable CLI")]
     Unusable(#[source] LoadError),
-    #[error("the overlaid document is not an OpenAPI 3 document: {0}")]
+    #[error("the overlaid document is not an OpenAPI 3 document")]
     NotOpenApi(#[source] serde_json::Error),
-    #[error("schema `{name}` is not representable as JSON: {source}")]
+    #[error("schema `{name}` is not representable as JSON")]
     Schema {
         name: String,
         #[source]
         source: serde_json::Error,
     },
-    #[error("typify cannot build Rust types from the document's schemas: {0}")]
+    #[error("typify cannot build Rust types from the document's schemas")]
     Typify(#[source] typify::Error),
     /// A wrapper would have to name the type of a schema the document's
     /// `components.schemas` never declared. Emitting an identifier for it
@@ -896,25 +896,25 @@ pub enum GenerateError {
     /// operation it came from. Everything else this crate refuses says which
     /// operation it is about, and a generated file is too large to bisect by
     /// hand for one that does not.
-    #[error("{op}: {source}")]
+    #[error("the wrapper for {op} cannot be generated")]
     Operation {
         op: String,
         #[source]
         source: Box<GenerateError>,
     },
-    #[error("the generated {file} is not valid Rust: {source}")]
+    #[error("the generated {file} is not valid Rust")]
     NotRust {
         file: &'static str,
         #[source]
         source: syn::Error,
     },
-    #[error("the reduced model does not survive a round trip: {0}")]
+    #[error("the reduced model does not survive a round trip")]
     Blob(#[source] DocumentError),
     #[error("the reduced model is not the document's reduction after a round trip")]
     RoundTrip,
     #[error("rustfmt is not on PATH, and a bless step formats every Rust file it writes")]
     RustfmtMissing,
-    #[error("running rustfmt on {path}: {source}")]
+    #[error("cannot run rustfmt on {path}")]
     RustfmtSpawn {
         path: PathBuf,
         #[source]

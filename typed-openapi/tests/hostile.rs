@@ -31,13 +31,24 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
+use std::error::Error;
 use std::path::{Path, PathBuf};
 
-use typed_openapi::generate::Settings;
+use typed_openapi::generate::{GenerateError, Settings};
 use typed_openapi::model::Body;
+use typed_openapi::scalar::ScalarError;
 use typed_openapi::{
     Carrier, CommandName, Document, LoadError, Operation, Scalar, Shape, Unsupported,
 };
+
+/// The message of the cause under `error`. An error describes its own layer, so
+/// the thing that could not be read is named one level down.
+fn cause(error: &dyn Error) -> String {
+    error
+        .source()
+        .expect("the layer has a cause under it")
+        .to_string()
+}
 
 /// The control document, read the way an adopter reads it.
 const HOSTILE: &str = include_str!("fixtures/hostile.yaml");
@@ -993,10 +1004,18 @@ paths:
 "#;
 
     let refused = Document::load(UNRUNNABLE, &[]).expect_err("the engine cannot read the pattern");
+    assert!(
+        matches!(&refused, LoadError::Unrunnable { op, name, source: ScalarError::Pattern { .. } }
+            if op == "listFirings" && name == "cone"),
+        "{refused:?}"
+    );
     assert_eq!(
         refused.to_string(),
-        "listFirings: `cone`: `(?P<cone>0[1-9])` is not a regular expression: \
-         Invalid group modifier"
+        "listFirings: `cone` states a rule that cannot run"
+    );
+    assert_eq!(
+        cause(&refused),
+        "`(?P<cone>0[1-9])` is not a regular expression: Invalid group modifier"
     );
 }
 
@@ -1038,10 +1057,18 @@ paths:
 
     let refused =
         Document::load(UNRUNNABLE_BODY, &[]).expect_err("the engine cannot read the pattern");
+    assert!(
+        matches!(&refused, LoadError::Unrunnable { op, name, source: ScalarError::Pattern { .. } }
+            if op == "startFiring" && name == "cone"),
+        "{refused:?}"
+    );
     assert_eq!(
         refused.to_string(),
-        "startFiring: `cone`: `(?P<cone>0[1-9])` is not a regular expression: \
-         Invalid group modifier"
+        "startFiring: `cone` states a rule that cannot run"
+    );
+    assert_eq!(
+        cause(&refused),
+        "`(?P<cone>0[1-9])` is not a regular expression: Invalid group modifier"
     );
 }
 
@@ -1074,13 +1101,18 @@ components:
 "##;
 
     let refused = Document::load(OUROBOROS, &[]).expect_err("the composition never bottoms out");
+    assert!(
+        matches!(&refused, LoadError::Unresolvable { op, name, .. }
+            if op == "listFirings" && name == "saggar"),
+        "and it is the refusal about a reference, not some other one: {refused:?}"
+    );
     assert_eq!(
         refused.to_string(),
-        "listFirings: `saggar`: `#/components/schemas/Saggar` is a reference cycle"
+        "listFirings: `saggar` has a `$ref` that cannot be followed"
     );
-    assert!(
-        matches!(refused, LoadError::Unresolvable { .. }),
-        "and it is the refusal about a reference, not some other one: {refused:?}"
+    assert_eq!(
+        cause(&refused),
+        "`#/components/schemas/Saggar` is a reference cycle"
     );
 }
 
@@ -1142,9 +1174,18 @@ components:
 
     let refused =
         Document::load(&chained(8, RETURNS), &[]).expect_err("the chain returns to its start");
+    assert!(
+        matches!(&refused, LoadError::Unresolvable { op, name, .. }
+            if op == "listFirings" && name == "cone"),
+        "{refused:?}"
+    );
     assert_eq!(
         refused.to_string(),
-        "listFirings: `cone`: `#/components/schemas/Hop0` is a reference cycle"
+        "listFirings: `cone` has a `$ref` that cannot be followed"
+    );
+    assert_eq!(
+        cause(&refused),
+        "`#/components/schemas/Hop0` is a reference cycle"
     );
 }
 
@@ -1181,9 +1222,17 @@ paths:
     let refused = Settings::new(wrote(&dir, "document.yaml", DIGITS))
         .write_to(&dir)
         .expect_err("`3rdFiring` starts an identifier nowhere");
+    assert!(
+        matches!(&refused, GenerateError::Operation { op, .. } if op == "3rdFiring"),
+        "{refused:?}"
+    );
     assert_eq!(
         refused.to_string(),
-        "3rdFiring: the operationId has no spelling as a Rust identifier"
+        "the wrapper for 3rdFiring cannot be generated"
+    );
+    assert_eq!(
+        cause(&refused),
+        "the operationId has no spelling as a Rust identifier"
     );
 }
 
