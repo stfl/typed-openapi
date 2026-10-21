@@ -12,12 +12,12 @@ quoting one is quoting a measurement rather than a memory.
 
 | what | how many |
 |---|---|
-| operations | 12 |
+| operations | 13 |
 | groups they are mounted under | 5 |
 | reads, sent on sight | 2 |
-| writes, held behind `--commit` | 10 |
+| writes, held behind `--commit` | 11 |
 | operations the document asks no body of | 5 |
-| bodies that go out whole, with no flag per property | 3 |
+| bodies that go out whole, with no flag per property | 4 |
 | parameters carried without a flag | 0 |
 
 ## Groups

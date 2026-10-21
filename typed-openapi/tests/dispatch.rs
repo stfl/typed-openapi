@@ -20,7 +20,7 @@ use std::error::Error as _;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use http::{Method, StatusCode};
 use serde_json::json;
-use typed_openapi::tree::{self, Asked, DispatchError, Outcome, Selection};
+use typed_openapi::tree::{self, ArgError, Asked, DispatchError, Outcome, Selection};
 use typed_openapi::{
     Answers, COMMIT, COMMIT_ID, Document, HttpRequest, JSON_BODY, JSON_BODY_TEMPLATE, Plan, Reach,
     Recorder, RecorderError, SyncClient, Values, render,
@@ -792,7 +792,10 @@ fn operations_are_mounted_under_the_resource_their_path_names() {
                     "archive".to_owned(),
                 ]
             ),
-            ("contacts".to_owned(), vec!["create".to_owned()]),
+            (
+                "contacts".to_owned(),
+                vec!["create".to_owned(), "labels".to_owned()]
+            ),
             ("documents".to_owned(), vec!["create".to_owned()]),
             ("documents-multipart".to_owned(), vec!["create".to_owned()]),
             ("ledger".to_owned(), vec!["entries".to_owned()]),
@@ -1262,5 +1265,99 @@ fn a_flag_that_requires_another_is_refused_by_the_parser_without_it() {
     assert_eq!(
         only(&client).uri().query(),
         Some("voucher%5Bid%5D=5&voucher%5BobjectName%5D=Voucher")
+    );
+}
+
+/// A file under the system's temporary directory, named for this test binary's
+/// process so that two runs do not meet in one file.
+fn scratch(name: &str, text: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "typed-openapi-dispatch-{}-{name}",
+        std::process::id()
+    ));
+    std::fs::write(&path, text).expect("writing the fixture");
+    path
+}
+
+/// `--json-body` is the base and a field flag is an edit of it. A list or a
+/// scalar has no property to edit, so a flag beside one used to be dropped and
+/// the body went out unchanged, under an exit code of 0 (F-30).
+#[test]
+fn a_field_flag_beside_a_body_that_is_not_an_object_is_refused() {
+    let doc = document();
+    for (name, text, found) in [
+        (
+            "arr5.json",
+            r#"["EUR",null,null,"draft","1.00"]"#,
+            "an array",
+        ),
+        ("scalar.json", r#""EUR""#, "a string"),
+        ("null.json", "null", "null"),
+    ] {
+        let path = scratch(name, text);
+        let matches = parse(
+            &doc,
+            &[
+                "toy",
+                "vouchers",
+                "create",
+                "--json-body",
+                path.to_str().expect("a UTF-8 path"),
+                "--currency",
+                "USD",
+                "--total",
+                "99.99",
+                "--status",
+                "paid",
+            ],
+        );
+
+        let Err(refused) = tree::select(&doc, &matches) else {
+            panic!("{name}: the flags had nothing to edit and were dropped");
+        };
+
+        let DispatchError::Arg(ArgError::FlagBesideNonObject {
+            flag,
+            path: refused_path,
+            found: seen,
+        }) = &refused
+        else {
+            panic!("{name}: a flag with no object to edit is an argument error: {refused:?}");
+        };
+        // The first flag the operator gave, in the order the document lists the
+        // properties, so the message is the same on every run.
+        assert_eq!(flag, "total", "{name}");
+        assert_eq!(refused_path, &path, "{name}");
+        assert_eq!(*seen, found, "{name}");
+        let shown = refused.to_string();
+        assert!(shown.contains("`--total`"), "{name}: {shown}");
+        assert!(shown.contains(found), "{name}: {shown}");
+    }
+}
+
+/// The same list with no flag beside it is the seam's to judge: the library
+/// cannot name the type that tells whether a list is a body.
+#[test]
+fn a_body_that_is_not_an_object_passes_through_when_no_flag_edits_it() {
+    let doc = document();
+    let path = scratch("arr-alone.json", r#"["EUR",null,null,"draft","1.00"]"#);
+    let matches = parse(
+        &doc,
+        &[
+            "toy",
+            "vouchers",
+            "create",
+            "--json-body",
+            path.to_str().expect("a UTF-8 path"),
+        ],
+    );
+
+    let selection = running(&doc, &matches);
+
+    assert_eq!(
+        selection.values().payload(),
+        Some(&typed_openapi::Payload::Json(json!([
+            "EUR", null, null, "draft", "1.00"
+        ])))
     );
 }

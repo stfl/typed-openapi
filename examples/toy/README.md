@@ -79,11 +79,11 @@ with `x-cli-writes` — and the gate treats it like any `POST`.
 beside the reduced model: what the bless step counted, counted off the model
 rather than off anybody's memory of it.
 
-This adoption reduces to **12 operations** in **5 groups**: **2 reads** sent on
-sight and **10 writes** held behind `--commit`. Two of those writes are more than
+This adoption reduces to **13 operations** in **5 groups**: **2 reads** sent on
+sight and **11 writes** held behind `--commit`. Two of those writes are more than
 one question, so the document names **2 gates** — `--enshrine` and `--email`,
 with **1 operation** behind each. **5 operations** are asked for no body at all,
-**3 bodies** go out whole because a command line cannot take a nested object, a
+**4 bodies** go out whole because a command line cannot take a nested object, a
 PDF or a multipart upload apart, and **0 parameters** are carried without a flag.
 
 Every number in that paragraph is asserted against the summary by

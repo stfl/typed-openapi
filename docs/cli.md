@@ -356,11 +356,14 @@ content-type: application/json
 {"total":"99.99","currency":"EUR","status":"draft","internal_ref":"AB-7"}
 ```
 
-Two limits. A `--json-body` file whose top-level value is not an object passes
-through unchanged and the per-field flags are ignored. And because
-`--json-body` satisfies clap for every required field, a file that is *missing*
-one gets past the parser. In both cases whether anything then objects is the
-seam above: `toy raw` refuses them and prints why, `root` builds the request.
+Two limits. A `--json-body` file whose top-level value is not an object has no
+property for a flag to edit, so a flag beside one is an `ArgError`
+(`FlagBesideNonObject`) that names the flag and the file. With no flag beside it,
+the file passes through unchanged. And because `--json-body` satisfies clap for
+every required field, a file that is *missing* one gets past the parser. In both
+cases whether anything then objects is the seam above: `toy raw` refuses them
+and prints why, `root` builds the request. A property that no schema declares is
+the seam's refusal too: [what `fits` refuses](validation.md#what-fits-refuses).
 
 ### Renaming
 

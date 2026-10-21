@@ -34,6 +34,34 @@ pub struct Contact {
     pub id: ::std::option::Option<i64>,
     pub name: ::std::string::String,
 }
+///Free-form labels on a contact, each a string.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(transparent)]
+pub struct ContactLabels(
+    pub ::std::collections::HashMap<::std::string::String, ::std::string::String>,
+);
+impl ::std::ops::Deref for ContactLabels {
+    type Target = ::std::collections::HashMap<::std::string::String, ::std::string::String>;
+    fn deref(&self) -> &::std::collections::HashMap<::std::string::String, ::std::string::String> {
+        &self.0
+    }
+}
+impl ::std::convert::From<ContactLabels>
+    for ::std::collections::HashMap<::std::string::String, ::std::string::String>
+{
+    fn from(value: ContactLabels) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<::std::collections::HashMap<::std::string::String, ::std::string::String>>
+    for ContactLabels
+{
+    fn from(
+        value: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
+    ) -> Self {
+        Self(value)
+    }
+}
 ///`CreateLedgerEntryBody`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
 pub struct CreateLedgerEntryBody {

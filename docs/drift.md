@@ -223,7 +223,7 @@ and `README.md` quotes those counts, so the test builds each sentence out of
 `Document::summary` and looks for it in the page a reader arrives at:
 
 ```
-the README does not say `**12 operations**`; the reduction moved and the paragraph did not
+the README does not say `**13 operations**`; the reduction moved and the paragraph did not
 ```
 
 It also holds the committed page to the committed blob, so a page committed

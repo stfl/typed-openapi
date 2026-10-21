@@ -12,6 +12,7 @@ use cli::app;
 use cli::output::Output;
 use http::StatusCode;
 use typed_openapi::Recorder;
+use typed_openapi::tree::{ArgError, DispatchError};
 
 /// The write the report quotes. Every field the document marks required is
 /// required on the command line too, so an incomplete PUT is refused here
@@ -326,6 +327,244 @@ fn a_json_body_that_does_not_fit_the_document_is_refused_with_nothing_sent() {
         Some("missing field `address`".to_owned())
     );
     assert!(client.take().is_empty(), "nothing reached the transport");
+}
+
+/// The bodies the requirements name for an undeclared property, byte for byte.
+const CONTACT: &str = r#"{ "name": "Acme Ltd", "address": { "street": "1 Example Way", "city": "Vienna" }, "undeclaredField": "this property is in no schema" }"#;
+const NESTED: &str = r#"{ "name": "Acme Ltd", "address": { "street": "1 Example Way", "city": "Vienna", "extra": "x" } }"#;
+const GOOD: &str =
+    r#"{ "name": "Acme Ltd", "address": { "street": "1 Example Way", "city": "Vienna" } }"#;
+const LABELS: &str = r#"{ "vip": "yes", "region": "east" }"#;
+
+/// `args` with `--json-body` pointing at a file that holds `text`, run to its
+/// end. The error is what an operator's terminal shows as `toy: …`, with the
+/// cause under it, the way `main` prints it.
+fn refused(client: &Recorder, args: &[&str], text: &str) -> (app::Error, String) {
+    let dir = tempdir();
+    let path = dir.join("body.json");
+    std::fs::write(&path, text).expect("writing the fixture");
+    let path = path.to_str().expect("a UTF-8 path");
+    let api = api();
+    let matches =
+        app::root(&api).get_matches_from(args.iter().copied().chain(["--json-body", path]));
+    let error = app::run(api, client, &matches).expect_err("the body is refused");
+    let causes = std::iter::successors(std::error::Error::source(&error), |cause| cause.source())
+        .map(|cause| format!("  caused by: {cause}"));
+    let shown = std::iter::once(format!("toy: {error}"))
+        .chain(causes)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (error, shown)
+}
+
+/// AC-7.1: a property no schema declares stops the request in a dry run.
+#[test]
+fn a_property_no_schema_declares_stops_the_dry_run() {
+    let client = Recorder::new();
+
+    let (error, stderr) = refused(&client, &["toy", "raw", "contacts", "create"], CONTACT);
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Body(api::BodyError::Undeclared { op, path })
+                if op == "createContact" && path == "undeclaredField"
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("createContact"), "{stderr}");
+    assert!(stderr.contains("undeclaredField"), "{stderr}");
+    assert!(
+        !stderr.contains("this property is in no schema"),
+        "the refusal never prints the value: {stderr}"
+    );
+    assert!(client.take().is_empty(), "nothing reached the transport");
+}
+
+/// AC-7.2: the same refusal in a confirmed run, with nothing on the wire.
+#[test]
+fn a_property_no_schema_declares_stops_a_confirmed_run_too() {
+    let client = Recorder::new();
+
+    let (error, stderr) = refused(
+        &client,
+        &["toy", "raw", "contacts", "create", "--commit"],
+        CONTACT,
+    );
+
+    assert!(
+        matches!(&error, app::Error::Body(api::BodyError::Undeclared { .. })),
+        "{error:?}"
+    );
+    assert!(stderr.contains("undeclaredField"), "{stderr}");
+    assert!(
+        client.take().is_empty(),
+        "a request that the check refuses is never handed to the transport"
+    );
+}
+
+/// AC-7.3: a property one level down is named by its path.
+#[test]
+fn a_nested_property_no_schema_declares_is_named_by_its_path() {
+    let client = Recorder::new();
+
+    let (error, stderr) = refused(&client, &["toy", "raw", "contacts", "create"], NESTED);
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Body(api::BodyError::Undeclared { path, .. }) if path == "address.extra"
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("`address.extra`"), "{stderr}");
+    assert!(client.take().is_empty());
+}
+
+/// AC-7.4: a body that declares everything it carries is sent as it is.
+#[test]
+fn a_body_with_only_declared_properties_is_printed_as_given() {
+    let dir = tempdir();
+    let path = dir.join("good.json");
+    std::fs::write(&path, GOOD).expect("writing the fixture");
+    let client = Recorder::new();
+
+    let out = run(
+        &client,
+        &[
+            "toy",
+            "raw",
+            "contacts",
+            "create",
+            "--json-body",
+            path.to_str().expect("a UTF-8 path"),
+        ],
+    );
+
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stdout.contains("POST /contacts"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            r#"{"name":"Acme Ltd","address":{"street":"1 Example Way","city":"Vienna"}}"#
+        ),
+        "{}",
+        out.stdout
+    );
+}
+
+/// AC-7.5: `additionalProperties` admits the labels, which no struct declares.
+#[test]
+fn a_property_an_open_schema_admits_is_sent_as_before() {
+    let dir = tempdir();
+    let path = dir.join("labels.json");
+    std::fs::write(&path, LABELS).expect("writing the fixture");
+    let path = path.to_str().expect("a UTF-8 path");
+    let line = [
+        "toy",
+        "raw",
+        "contacts",
+        "labels",
+        "--id",
+        "1",
+        "--json-body",
+        path,
+    ];
+
+    let dry = run(&Recorder::new(), &line);
+    assert!(dry.success, "{}", dry.stderr);
+    assert!(
+        dry.stdout.contains("PUT /contacts/1/labels"),
+        "{}",
+        dry.stdout
+    );
+    assert!(dry.stdout.contains("vip"), "{}", dry.stdout);
+    assert!(dry.stdout.contains("region"), "{}", dry.stdout);
+
+    let client = Recorder::new().answering(
+        StatusCode::OK,
+        &serde_json::json!({"vip": "yes", "region": "east"}),
+    );
+    let committed: Vec<&str> = line.iter().copied().chain(["--commit"]).collect();
+    let wet = run(&client, &committed);
+    assert!(wet.success, "{}", wet.stderr);
+    assert_eq!(client.take().len(), 1, "an open body goes out once");
+}
+
+/// The open schema takes strings, and only strings: it is a map of them.
+#[test]
+fn an_open_schema_still_holds_its_values_to_their_type() {
+    let client = Recorder::new();
+
+    let (error, stderr) = refused(
+        &client,
+        &["toy", "raw", "contacts", "labels", "--id", "1"],
+        r#"{ "vip": 1 }"#,
+    );
+
+    assert!(
+        matches!(&error, app::Error::Body(api::BodyError::Mismatch { .. })),
+        "{error:?}"
+    );
+    assert!(stderr.contains("setContactLabels"), "{stderr}");
+    assert!(client.take().is_empty());
+}
+
+/// F-29, from the input of its probe: five values in the order the generated
+/// `Voucher` declares its fields. Serde reads a struct from a list by place, so
+/// this was a voucher.
+#[test]
+fn a_list_in_the_place_of_an_object_stops_the_request() {
+    let client = Recorder::new();
+
+    let (error, stderr) = refused(
+        &client,
+        &["toy", "raw", "vouchers", "create", "--commit"],
+        r#"["EUR",null,null,"draft","1.00"]"#,
+    );
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Body(api::BodyError::NotAnObject { op, found })
+                if op == "createVoucher" && *found == "an array"
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("createVoucher"), "{stderr}");
+    assert!(client.take().is_empty());
+}
+
+/// F-30, from the input of its probe: field flags beside a list.
+#[test]
+fn a_field_flag_beside_a_list_is_refused_and_not_dropped() {
+    let client = Recorder::new();
+
+    let (error, stderr) = refused(
+        &client,
+        &[
+            "toy",
+            "raw",
+            "vouchers",
+            "create",
+            "--currency",
+            "USD",
+            "--total",
+            "99.99",
+            "--status",
+            "paid",
+        ],
+        r#"["EUR",null,null,"draft","1.00"]"#,
+    );
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Dispatch(DispatchError::Arg(ArgError::FlagBesideNonObject { .. }))
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("`--total`"), "{stderr}");
+    assert!(client.take().is_empty());
 }
 
 #[test]
