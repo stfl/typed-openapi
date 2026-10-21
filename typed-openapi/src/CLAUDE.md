@@ -255,9 +255,13 @@ it a refusal. `missing_docs` takes its level from the item that holds it, so an
 it. A variant says when the crate raises it. A field says what the value is or
 where it comes from: the `operationId`, the flag as the operator typed it, the
 path into the body. It never says the `#[error]` message again, because the
-message prints it already. The adapter rule, that an adapter must not turn a status code into an
-error, is on `SyncClient` and `AsyncClient` themselves, because an adopter
-writes an adapter from that page.
+message prints it already. A doc that says what a foreign cause's message holds
+says only what a probe of every failure shows. Reading a `serde_json::Value`
+into a type names a value and a type for some failures, and for others only a
+missing key or an unmatched `untagged` enum. That read, `postcard` and `syn`
+over tokens carry no position. The adapter rule, that an adapter must not turn a
+status code into an error, is on `SyncClient` and `AsyncClient` themselves,
+because an adopter writes an adapter from that page.
 
 **A feature shows as a label, and no item writes it.** `src/lib.rs` turns
 `--cfg docsrs` into `feature(doc_cfg)`, and rustdoc then labels every item

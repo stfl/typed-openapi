@@ -102,7 +102,7 @@ pub enum LoadError {
     #[error(transparent)]
     Overlay(#[from] crate::overlay::OverlayError),
     /// The overlaid document is not an OpenAPI 3 document. The cause is
-    /// `serde_json`'s message about the value it found and the type it wanted.
+    /// `serde_json`'s message.
     #[error("the overlaid document is not an OpenAPI 3 document")]
     Shape(#[source] serde_json::Error),
     /// The document lists no server, so a request has nowhere to go.

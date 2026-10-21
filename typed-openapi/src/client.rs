@@ -155,9 +155,9 @@ impl Client {
 ///
 /// This is what a `--json-body` file gets checked against. `path` is where in
 /// the body the deserialiser stopped (`positions[1].flag`, or `.` for the body
-/// itself), and the source is serde's own message about the value it found
-/// there. The two are apart because serde's message names a value and the type
-/// it wanted, and never which element of which list held it.
+/// itself), and the source is serde's own message about the failure there. The
+/// two are apart because serde's message never says which element of which list
+/// held the value.
 #[derive(Debug, Error)]
 #[error("{op}: the request body does not fit the schema the document declares at `{path}`")]
 pub struct BodyError {
@@ -166,7 +166,7 @@ pub struct BodyError {
     /// Where in the body the deserialiser stopped: `positions[1].flag`, or `.`
     /// for the body itself.
     pub path: String,
-    /// `serde_json`'s message about the value found at `path`.
+    /// `serde_json`'s message about the failure at `path`.
     #[source]
     pub source: serde_json::Error,
 }
@@ -270,8 +270,8 @@ mod tests {
     use super::fits;
 
     /// A body with a list of objects in it, which is the shape whose refusal
-    /// is hardest to place by eye: serde's own message names the value and the
-    /// type it wanted, and not which element of which list held it.
+    /// is hardest to place by eye: serde's own message does not say which
+    /// element of which list held the value.
     #[derive(Debug, Deserialize)]
     struct Save {
         #[expect(dead_code, reason = "read only by the deserialiser under test")]

@@ -864,13 +864,11 @@ pub enum GenerateError {
     #[error("the overlaid document is not representable as YAML")]
     Yaml(#[source] Box<dyn Error + Send + Sync>),
     /// The corrected document could not be reduced to a command tree. The
-    /// cause is the refusal of [`Document::load_with`], which names the
-    /// operation where the refusal is about one.
+    /// cause is the refusal of [`Document::load_with`].
     #[error("the overlaid document does not describe a usable CLI")]
     Unusable(#[source] LoadError),
     /// The corrected document is not an OpenAPI 3 document, so the generator
-    /// has no object model of it. The cause is `serde_json`'s message about the
-    /// value it found and the type it wanted.
+    /// has no object model of it. The cause is `serde_json`'s message.
     #[error("the overlaid document is not an OpenAPI 3 document")]
     NotOpenApi(#[source] serde_json::Error),
     /// A schema that cannot be written as the JSON typify takes in.
