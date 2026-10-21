@@ -19,6 +19,8 @@ mod blob;
 #[cfg(feature = "document")]
 mod reduce;
 
+use std::collections::HashMap;
+
 use http::{Method, Uri};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -84,12 +86,13 @@ pub(crate) const TRANSPORT: [&str; 5] = [
 /// take.
 const HELP: &str = "help";
 
-/// Whether every subcommand declares a flag of this name already: the flags
+/// Whether a word is one that no flag of a subcommand may take: the five flags
 /// that carry a body, and `--help`.
 ///
-/// None of them can move, so the confirmation is what gives way when it wants
-/// one. The reduction refuses such a word and a decoded blob is refused for
-/// holding one, and both ask here.
+/// clap declares `--help` on every subcommand, and the tree declares each body
+/// flag on the subcommands whose body takes it. None of them can move, so the
+/// confirmation is what gives way when it wants one. The reduction refuses such
+/// a word and a decoded blob is refused for holding one, and both ask here.
 pub(crate) fn spends(word: &str) -> bool {
     TRANSPORT.contains(&word) || word == HELP
 }
@@ -115,19 +118,29 @@ pub(crate) fn gate_on_read(effect: Effect, gates: &[Gate]) -> Option<&Gate> {
     }
 }
 
-/// The first two operations that sit under one `<group> <command>`, in the order
-/// of the document.
+/// The first operation that has a later twin under its `<group> <command>`, and
+/// its first twin, in the order of the document.
 ///
 /// The load refuses a document that has two, because one would shadow the other.
-/// A decoded blob is refused for holding two, and both ask here.
+/// A decoded blob is refused for holding two, and both ask here. A shipped binary
+/// asks at every start-up, and the number of operations is the document's, so one
+/// pass answers.
+///
+/// The first operation with a twin is the first of its name, and its first twin
+/// is the second of that name. So the pass remembers where each name first
+/// stood, and the pair is the one whose first operation stood earliest among the
+/// names that came up a second time.
 pub(crate) fn first_collision(ops: &[Operation]) -> Option<(&Operation, &Operation)> {
-    ops.iter().enumerate().find_map(|(index, op)| {
-        let later = ops
-            .get(index + 1..)?
-            .iter()
-            .find(|later| later.group == op.group && later.command == op.command)?;
-        Some((op, later))
-    })
+    let mut first_of = HashMap::with_capacity(ops.len());
+    let mut earliest: Option<(usize, usize)> = None;
+    for (index, op) in ops.iter().enumerate() {
+        let first = *first_of.entry((&op.group, &op.command)).or_insert(index);
+        if first != index && earliest.is_none_or(|(held, _)| first < held) {
+            earliest = Some((first, index));
+        }
+    }
+    let (first, second) = earliest?;
+    Some((ops.get(first)?, ops.get(second)?))
 }
 
 /// Every operation the document describes, in document order, plus the server
@@ -509,11 +522,12 @@ pub enum Body {
 /// depend on what follows the stamp. [`Blob`] and [`Trailing`] are a blob that
 /// does not decode as the model and nothing else. The rest are a blob that
 /// decodes and holds something a load would not have written, and a rule that
-/// compares two flags needs the whole model, so they are asked after the
-/// decode, in the order of the document and not of this page. Each of them
-/// names the operation that holds it, [`DuplicateCommand`] names both of two,
-/// and [`Confirmation`] names the word the document confirms with, which
-/// belongs to no operation.
+/// compares two flags or two operations needs the whole model, so they are
+/// asked after the decode. They are asked operation by operation in the order
+/// of the document, and the names two operations share after every operation,
+/// not in the order of this page. Each of them names the operation that holds
+/// it, [`DuplicateCommand`] names both of two, and [`Confirmation`] names the
+/// word the document confirms with, which belongs to no operation.
 ///
 /// [`from_blob`]: Document::from_blob
 /// [`Unstamped`]: DocumentError::Unstamped
@@ -576,10 +590,10 @@ pub enum DocumentError {
         word: String,
     },
     /// The confirmation word an operation declares is one a load refuses. It is
-    /// the flag clap sees: where it is `help`, or a flag that the subcommand
-    /// declares already, a debug build of the binary panics when it builds the
-    /// command tree, and a release build lets one declaration take the place of
-    /// the other.
+    /// the flag clap sees: where it is `help`, a flag that the subcommand
+    /// declares already, or a word with a leading `-`, a debug build of the
+    /// binary panics when it builds the command tree, and a release build lets
+    /// one declaration take the place of the other.
     #[error(
         "{op}: the confirmation word `{word}` is not one a load accepts; \
          run the bless step again"
@@ -592,6 +606,8 @@ pub enum DocumentError {
     },
     /// A flag of an operation, on a parameter or on a body property, is not
     /// spelled as a load spells one: not kebab-case, not `[a-z0-9-]`, or empty.
+    /// A flag with a leading `-` makes a debug build of the binary panic when it
+    /// builds the command tree.
     #[error("{op}: the flag `{flag}` is not one a load spells; run the bless step again")]
     Flag {
         /// The `operationId` of the operation that declares the flag.
@@ -629,7 +645,10 @@ pub enum DocumentError {
         flag: String,
     },
     /// A read names a gate. A read is sent on sight, so there is nothing for a
-    /// gate to hold back, and a load refuses the document that says both.
+    /// gate to hold back, and a load refuses the document that says both. A
+    /// `GET` that the document makes a write and gates is held as a write, so a
+    /// blob that holds it as a read is one that no load wrote, and the gate it
+    /// still names is what gives it away.
     #[error(
         "{op}: a read stands behind no gate, and this one names `{gate}`; \
          run the bless step again"
@@ -648,7 +667,8 @@ pub enum DocumentError {
     ///
     /// The blob does not hold the document's `x-cli-writes`, so the check finds
     /// a method that writes held as a read and cannot find a `GET` that the
-    /// document marks as a write and the blob holds as a read.
+    /// document marks as a write and the blob holds as a read. Where such a
+    /// `GET` names a gate, [`DocumentError::GatedRead`] finds it.
     #[error(
         "{op}: `{method}` writes, and the model blob holds the operation as a read, \
          which is sent on sight; run the bless step again"
@@ -796,24 +816,28 @@ impl Document {
     ///
     /// What decodes is then checked again, because a shipped binary starts from
     /// the blob and nothing has read the document. The check repeats these rules
-    /// of a load: the confirmation word; for each operation, its flags, which
-    /// are spelled as a load spells them, none that clap declares itself and
-    /// each declared once, its gates, which stand on a write only, the effect its
-    /// method allows, each `requires`, and a group or a command that is not
-    /// `help`; and one `<group> <command>` for each operation. It repeats no
-    /// rule whose input the blob does not hold, such as a `$ref`, and none whose
-    /// break costs only the run that meets it: a `pattern` that no engine runs
-    /// refuses every value of its flag when the flag is parsed.
+    /// of a load: the confirmation word of the document, and for each operation
+    /// its group and command, which are not called `help`; the effect its method
+    /// allows; its confirmation word; its gates, which stand on a write only; its
+    /// flags, each spelled as a load spells it, none of them `help` or one of the
+    /// five that carry a body, and each declared once; and each `requires`. It
+    /// also repeats that no two operations share a `<group> <command>`. It leaves
+    /// out the rules whose input the blob does not hold, such as a `$ref`, and
+    /// three that a blob can break: a required parameter that has no flag, a body
+    /// whose `Content-Type` is no media type, and a `pattern` that no engine here
+    /// reads.
     ///
-    /// The error names the operation, and for the document's own confirmation
-    /// word it names the word. The two command names and the spelling of each
-    /// gate are checked as they decode.
+    /// Each operation is asked in the order of the document, and the names two
+    /// operations share after every operation. The error names the operation, or
+    /// both of two operations that share a name, and for the document's own
+    /// confirmation word it names the word. The two command names and the
+    /// spelling of each gate are checked as they decode.
     ///
     /// Only `from_blob` applies these rules. `postcard` drops the message of an
     /// error a `Deserialize` raises, so a check inside one could not name the
-    /// operation, and a rule that compares two flags cannot sit in a single
-    /// field. A `Document` read through `Deserialize` in another format is not
-    /// held to them.
+    /// operation, and a rule that compares two flags or two operations cannot sit
+    /// in a single field. A `Document` read through `Deserialize` in another
+    /// format is not held to them.
     pub fn from_blob(blob: &[u8]) -> Result<Self, DocumentError> {
         let unstamped = || DocumentError::Unstamped {
             reads: Self::MODEL_LAYOUT,

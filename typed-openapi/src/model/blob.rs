@@ -68,34 +68,27 @@ pub(super) fn read(blob: &[u8]) -> Option<(Stamp, &[u8])> {
 }
 
 /// Whether `word` can be the confirmation: the rule `Loading::commit` applies,
-/// which is that a person can type it as a flag and no subcommand declares it
-/// already.
+/// which is that a person can type it as a flag and it is not a word that every
+/// subcommand spends.
 fn confirms(word: &str) -> bool {
     is_spelled(word) && !spends(word)
 }
 
 impl Document {
-    /// Hold a decoded reduction to the rules of a load that it can break.
+    /// Hold a decoded reduction to the rules of a load that a blob can break.
     ///
     /// A load writes the model and checks it while it does, and a blob arrives
-    /// with those rules not applied. The rules applied again are the
-    /// confirmation word, the names and the flags of each operation and the
-    /// gates that stand on it, the effect a method allows, each `requires`, and
-    /// the names two operations share. A failure names the operation, or both of
-    /// two, except for the document's own confirmation word, which belongs to
-    /// none.
+    /// with those rules not applied. The rules applied again are the document's
+    /// confirmation word and, for each operation, its names, the effect its
+    /// method allows, its confirmation word, its gates, its flags and each
+    /// `requires`; then the names two operations share. An operation is asked
+    /// whole before the next one, and the names after all of them. A failure
+    /// names the operation, or both of two, except for the document's own
+    /// confirmation word, which belongs to none.
     ///
-    /// A rule joins them when a value in the blob can break it and the break
-    /// does one of two things: the binary panics, in clap when it builds the
-    /// command tree in a debug build (in a release build one declaration
-    /// silently takes the place of another), or a request that the gate holds
-    /// back is sent on sight. A rule whose break costs only the run that meets it
-    /// stays out: a `pattern` that no engine runs refuses every value of its flag
-    /// when the flag is parsed, and a start-up that compiled every pattern would
-    /// pay for that on every run. The spelling of a flag and each `requires` are
-    /// repeated too, though a blob that breaks either builds a command line: a
-    /// flag nobody can type and a `requires` nothing meets are a model that no
-    /// load wrote, and the one message names the operation.
+    /// Each rule is asked by the function the load asks, so the check refuses
+    /// every break of it. `src/CLAUDE.md` says which rules of the load are left
+    /// out and why a rule joins the others.
     pub(super) fn check(&self) -> Result<(), DocumentError> {
         if !confirms(&self.commit) {
             return Err(DocumentError::Confirmation {
@@ -148,7 +141,7 @@ impl Operation {
     /// A method that writes is not held as a read, which is sent on sight and
     /// declares no confirmation. The converse is no fault: the document's
     /// `x-cli-writes` makes a `GET` a write, and the blob does not say whether
-    /// it did.
+    /// it did. `check_gates` finds the one such `GET` that names a gate.
     fn check_effect(&self) -> Result<(), DocumentError> {
         match (self.effect, Effect::of_method(&self.method)) {
             (Effect::Read, Effect::Write) => Err(DocumentError::WriteAsRead {

@@ -257,7 +257,12 @@ fn a_blob_cut_at_any_length_is_refused_and_never_panics() {
 /// and confirmation words as plain strings, so this is a reduction that no load
 /// wrote and nothing has checked.
 fn forged(edit: impl FnOnce(&mut Value)) -> Document {
-    let mut value = serde_json::to_value(document()).expect("the reduction is a value");
+    forged_from(&document(), edit)
+}
+
+/// `doc` as JSON, edited by `edit` and read back as a `Document`.
+fn forged_from(doc: &Document, edit: impl FnOnce(&mut Value)) -> Document {
+    let mut value = serde_json::to_value(doc).expect("the reduction is a value");
     edit(&mut value);
     serde_json::from_value(value).expect("the edit keeps the shape of a reduction")
 }
@@ -301,8 +306,16 @@ fn an_edit_that_breaks_no_rule_is_read_back_as_it_was_written() {
 }
 
 /// `help` is a flag clap declares itself, `json-body` is one every subcommand
-/// declares, and the rest are not words a load writes as a flag.
-const REFUSED_WORDS: [&str; 5] = ["help", "json-body", "", "!! not a flag !!", "Commit"];
+/// spends, `-yes` begins with a dash, which a debug build of clap refuses in a
+/// long flag, and the rest are not words a load writes as a flag.
+const REFUSED_WORDS: [&str; 6] = [
+    "help",
+    "json-body",
+    "-yes",
+    "",
+    "!! not a flag !!",
+    "Commit",
+];
 
 #[test]
 fn a_confirmation_word_a_load_refuses_is_refused_on_the_document() {
@@ -350,8 +363,17 @@ fn a_confirmation_word_a_load_accepts_is_read_back() {
 }
 
 /// A flag is a name a person types, so a decoded flag is held to the spelling
-/// every flag a load writes has: kebab-cased, `[a-z0-9-]`, and not empty.
-const UNSPELLED: [&str; 5] = ["", "!! not a flag !!", "Id", "has space", "double--dash"];
+/// every flag a load writes has: kebab-cased, `[a-z0-9-]`, and not empty. A flag
+/// with a leading dash is one of them: a debug build of clap panics on it.
+const UNSPELLED: [&str; 7] = [
+    "",
+    "!! not a flag !!",
+    "Id",
+    "has space",
+    "double--dash",
+    "-id",
+    "--id",
+];
 
 #[test]
 fn a_flag_a_load_could_not_spell_is_refused_on_a_parameter() {
@@ -413,11 +435,12 @@ fn set_gates(value: &mut Value, op: &str, gates: &[&str]) {
 }
 
 /// Whether clap refuses to build the command line of `doc`, with every group
-/// under one command as a binary mounts them. A flag declared twice, a name clap
-/// declares itself and two operations under one name stop a debug build of a
-/// binary at start-up with a panic, and `debug_assert` is where a test sees it.
-/// The command of one operation alone shows none of the last two: they are
-/// between operations.
+/// under one command as a binary mounts them. A flag declared twice, a flag with
+/// a leading dash, a name clap declares itself and two operations under one name
+/// stop a debug build of a binary at start-up with a panic, and `debug_assert`
+/// is where a test sees it. The command of one operation alone shows none of the
+/// last two: a group or a command called `help` meets the `help` subcommand clap
+/// declares on the tree, and a collision is between two operations.
 fn clap_panics(doc: &Document) -> bool {
     panic::catch_unwind(AssertUnwindSafe(|| {
         Command::new("toy")
@@ -435,56 +458,75 @@ struct Twice {
     edit: Edit,
 }
 
+impl Twice {
+    fn new(what: &'static str, op: &'static str, flag: &'static str, edit: Edit) -> Self {
+        Self {
+            what,
+            op,
+            flag,
+            edit,
+        }
+    }
+}
+
 /// A flag is declared by a parameter, a body property, a gate, and, on a write,
 /// the confirmation. A load keeps each declaration apart from the others, and
-/// clap panics on two of one name.
-fn twice() -> [Twice; 7] {
+/// clap panics on two of one name. Every pair of kinds is here: a body property
+/// meets each of the other three, and so do the rest among themselves.
+fn twice() -> [Twice; 10] {
     [
-        Twice {
-            what: "two parameters",
-            op: "listVouchers",
-            flag: "limit",
-            edit: |value| set_parameter_flag(value, "listVouchers", "status", "limit"),
-        },
-        Twice {
-            what: "two body properties",
-            op: "createVoucher",
-            flag: "same",
-            edit: |value| {
-                set_field_flag(value, "createVoucher", 0, "same");
-                set_field_flag(value, "createVoucher", 1, "same");
-            },
-        },
-        Twice {
-            what: "a parameter and the confirmation",
-            op: "enshrineVoucher",
-            flag: "commit",
-            edit: |value| set_parameter_flag(value, "enshrineVoucher", "id", "commit"),
-        },
-        Twice {
-            what: "the confirmation of the operation and a parameter",
-            op: "updateVoucher",
-            flag: "id",
-            edit: |value| operation(value, "updateVoucher")["commit"] = json!("id"),
-        },
-        Twice {
-            what: "a gate and a parameter",
-            op: "enshrineVoucher",
-            flag: "id",
-            edit: |value| set_gates(value, "enshrineVoucher", &["id"]),
-        },
-        Twice {
-            what: "a gate and the confirmation",
-            op: "enshrineVoucher",
-            flag: "commit",
-            edit: |value| set_gates(value, "enshrineVoucher", &["commit"]),
-        },
-        Twice {
-            what: "one gate named twice",
-            op: "enshrineVoucher",
-            flag: "enshrine",
-            edit: |value| set_gates(value, "enshrineVoucher", &["enshrine", "enshrine"]),
-        },
+        Twice::new("two parameters", "listVouchers", "limit", |value| {
+            set_parameter_flag(value, "listVouchers", "status", "limit");
+        }),
+        Twice::new("two body properties", "createVoucher", "same", |value| {
+            set_field_flag(value, "createVoucher", 0, "same");
+            set_field_flag(value, "createVoucher", 1, "same");
+        }),
+        Twice::new(
+            "a parameter and the confirmation",
+            "enshrineVoucher",
+            "commit",
+            |value| set_parameter_flag(value, "enshrineVoucher", "id", "commit"),
+        ),
+        Twice::new(
+            "the confirmation of the operation and a parameter",
+            "updateVoucher",
+            "id",
+            |value| operation(value, "updateVoucher")["commit"] = json!("id"),
+        ),
+        Twice::new("a gate and a parameter", "enshrineVoucher", "id", |value| {
+            set_gates(value, "enshrineVoucher", &["id"]);
+        }),
+        Twice::new(
+            "a gate and the confirmation",
+            "enshrineVoucher",
+            "commit",
+            |value| set_gates(value, "enshrineVoucher", &["commit"]),
+        ),
+        Twice::new(
+            "one gate named twice",
+            "enshrineVoucher",
+            "enshrine",
+            |value| set_gates(value, "enshrineVoucher", &["enshrine", "enshrine"]),
+        ),
+        Twice::new(
+            "a body property and a parameter",
+            "sendVoucherByEmail",
+            "id",
+            |value| set_field_flag(value, "sendVoucherByEmail", 0, "id"),
+        ),
+        Twice::new(
+            "a body property and a gate",
+            "sendVoucherByEmail",
+            "email",
+            |value| set_field_flag(value, "sendVoucherByEmail", 0, "email"),
+        ),
+        Twice::new(
+            "a body property and the confirmation",
+            "sendVoucherByEmail",
+            "commit",
+            |value| set_field_flag(value, "sendVoucherByEmail", 0, "commit"),
+        ),
     ]
 }
 
@@ -607,6 +649,46 @@ fn two_operations_under_one_name_are_refused_and_both_are_named() {
     }
 }
 
+/// The pair a collision names is the first operation that has a later twin and
+/// its first twin, whichever names the rest of the document repeats. Three
+/// operations under one name give the first two. Of two names that interleave,
+/// the one whose first operation comes first is reported, though the other
+/// closes earlier.
+#[test]
+fn the_pair_a_collision_names_is_the_first_operation_with_a_later_twin_and_its_first_twin() {
+    let cases: [(&str, &str, &str, Edit); 2] = [
+        (
+            "three under one name",
+            "listVouchers",
+            "getVoucher",
+            |value| {
+                move_to(value, "getVoucher", "vouchers", "list");
+                move_to(value, "renderVoucher", "vouchers", "list");
+            },
+        ),
+        (
+            "a pair that closes before the first of another",
+            "listVouchers",
+            "renderVoucher",
+            |value| {
+                move_to(value, "renderVoucher", "vouchers", "list");
+                move_to(value, "updateVoucher", "vouchers", "get");
+            },
+        ),
+    ];
+    for (what, first, second, edit) in cases {
+        let error = refusal(&blob_edited(edit));
+        assert!(
+            matches!(
+                &error,
+                DocumentError::DuplicateCommand { first: one, second: two, .. }
+                    if one == first && two == second
+            ),
+            "{what}: {error:?}"
+        );
+    }
+}
+
 /// clap declares a `help` subcommand on the tree and on every group, and nothing
 /// moves it, so a group or a command called `help` is two subcommands of one
 /// name.
@@ -685,10 +767,10 @@ fn a_write_held_as_a_read_would_be_sent_without_a_confirmation() {
     assert!(Document::from_blob(&blob_edited(edit)).is_err());
 }
 
-/// The four safe methods are reads a load writes, so they decode held as reads,
-/// and a `GET` the document marks as a write decodes held as one: the blob does
-/// not hold the marker, and the check cannot find a `GET` held as a read that
-/// the document made a write.
+/// The four safe methods are reads a load writes, so they decode held as reads.
+/// A `GET` that the document marks as a write decodes held as a write, and the
+/// blob does not hold the marker: the check cannot find an ungated `GET` that the
+/// document made a write and the blob holds as a read.
 #[test]
 fn a_method_that_reads_decodes_held_as_a_read_and_a_get_may_write() {
     for method in ["GET", "HEAD", "OPTIONS", "TRACE"] {
@@ -697,10 +779,58 @@ fn a_method_that_reads_decodes_held_as_a_read_and_a_get_may_write() {
         let op = doc.get("getVoucher").expect("the operation is there");
         assert_eq!(op.method().as_str(), method);
     }
-    let render = document();
-    let render = render.get("renderVoucher").expect("the fixture marks it");
+    let blob = blob_edited(|_| {});
+    let doc = Document::from_blob(&blob).expect("a load writes this reduction");
+    let render = doc.get("renderVoucher").expect("the fixture marks it");
     assert_eq!(render.method().as_str(), "GET");
     assert_eq!(render.effect(), Effect::Write, "a GET the document marks");
+}
+
+/// A `GET` that the document makes a write and names a gate on is held as a
+/// write behind that gate. Held as a read it is sent on sight, and its method is
+/// safe, so `WriteAsRead` cannot see it: the gate it still names is the only
+/// thing in the blob that gives it away.
+#[test]
+fn a_gated_get_held_as_a_read_is_sent_on_sight_and_refused_by_its_gate() {
+    let overlay = CLI.replacen(
+        "      x-cli-writes: true\n",
+        "      x-cli-writes: true\n      x-cli-gates: [render]\n",
+        1,
+    );
+    assert_ne!(overlay, CLI, "the fixture marks the rendering GET");
+    let gated = Document::load(TOY, &[CORRECTIONS, &overlay]).expect("the edited Overlay loads");
+    let render = gated
+        .get("renderVoucher")
+        .expect("the fixture describes it");
+    assert_eq!(render.method().as_str(), "GET");
+    assert_eq!(render.effect(), Effect::Write);
+    assert_eq!(render.gates().len(), 1, "and it names one gate");
+    Document::from_blob(&gated.to_blob().expect("the reduction encodes"))
+        .expect("a load wrote it, so the check passes it");
+
+    let held_as_a_read =
+        |value: &mut Value| operation(value, "renderVoucher")["effect"] = json!("Read");
+    let forged = forged_from(&gated, held_as_a_read);
+    let op = forged.get("renderVoucher").expect("it is still there");
+    let invocation = Invocation::new(op, Values::new().param("id", 5)).expect("values");
+    let request = invocation.request(forged.base()).expect("a request");
+    assert!(
+        matches!(Plan::decide(op, &Answers::new(), request), Plan::Send(_)),
+        "with no check, it goes out on sight"
+    );
+
+    let error = refusal(&forged.to_blob().expect("the forgery encodes"));
+    assert!(
+        matches!(
+            &error,
+            DocumentError::GatedRead { op, gate } if op == "renderVoucher" && gate == "render"
+        ),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    for part in ["renderVoucher", "render", "bless step again"] {
+        assert!(message.contains(part), "{message:?} lacks {part:?}");
+    }
 }
 
 /// A read is sent on sight, so a gate has nothing to hold back, and a load
@@ -736,6 +866,7 @@ fn a_parameter_called_like_the_confirmation_on_a_read_is_read_back() {
 /// build: the forgeries that clap panics on unchecked are all refused.
 #[test]
 fn a_blob_that_would_stop_clap_is_refused_before_it_gets_there() {
+    type Dashed = (&'static str, Edit);
     for case in twice() {
         assert!(clap_panics(&forged(case.edit)), "{}", case.what);
         assert!(
@@ -755,13 +886,55 @@ fn a_blob_that_would_stop_clap_is_refused_before_it_gets_there() {
     let edit = |value: &mut Value| operation(value, "updateVoucher")["commit"] = json!("help");
     assert!(clap_panics(&forged(edit)), "a confirmation `help`");
     assert!(Document::from_blob(&blob_edited(edit)).is_err());
+    // A long flag that begins with a dash is one clap refuses to declare, on a
+    // parameter, on a body property and as the confirmation word of a write.
+    let dashed: [Dashed; 4] = [
+        ("a parameter flag `-limit`", |value| {
+            set_parameter_flag(value, "listVouchers", "limit", "-limit");
+        }),
+        ("a parameter flag `--limit`", |value| {
+            set_parameter_flag(value, "listVouchers", "limit", "--limit");
+        }),
+        ("a body property flag `-x`", |value| {
+            set_field_flag(value, "createLedgerEntry", 0, "-x");
+        }),
+        ("a confirmation word `-yes`", |value| {
+            operation(value, "updateVoucher")["commit"] = json!("-yes");
+        }),
+    ];
+    for (what, edit) in dashed {
+        assert!(clap_panics(&forged(edit)), "{what}");
+        assert!(Document::from_blob(&blob_edited(edit)).is_err(), "{what}");
+    }
 }
 
-/// What a debug build meets is not every refusal. These forgeries build a
-/// command line without a panic, and are refused all the same: a word that
-/// nobody can type, a gate on a read, a requirement on a parameter that is not
-/// there, a spent word that this subcommand does not declare, a confirmation
-/// that a read does not declare, and a write that is held as a read.
+/// What a debug build meets is not every refusal. Each forgery here builds a
+/// command line without a panic and is refused all the same, because the rule it
+/// breaks is a rule the check repeats whole, and the check repeats a rule for one
+/// of two reasons: some break of the rule is inside the line (the binary panics,
+/// or a request that the gate holds back is sent on sight), or F-70 names it.
+///
+/// - The document's word, unspelled: the confirmation word, which F-70 names. No
+///   break of the document's own word is inside the line.
+/// - An unspelled confirmation on a write, and `help` as the confirmation of a
+///   read: the same rule for an operation. A break of it is inside the line, a
+///   word that clap declares already or begins with a dash on a write
+///   (`a_blob_that_would_stop_clap_is_refused_before_it_gets_there`).
+/// - An unspelled parameter flag: the spelling of a flag. A break of it is
+///   inside the line, a flag with a leading dash (the same test).
+/// - A gate on a read: a gate stands on a write only. A break of it is inside the
+///   line, a `GET` that the document made a write, held as a read with its gate
+///   (`a_gated_get_held_as_a_read_is_sent_on_sight_and_refused_by_its_gate`).
+/// - A spent gate on a body that does not declare it, and on a body of other
+///   fields: no flag that every subcommand spends. A break of it is inside the
+///   line, where the subcommand declares the word too, as `createVoucher` does
+///   `help` and `json-body`
+///   (`a_blob_that_would_stop_clap_is_refused_before_it_gets_there`).
+/// - A requirement on a parameter that is not there, and one on a parameter
+///   without a flag: each `requires`, which F-70 names. No break of it is inside
+///   the line.
+/// - A write held as a read: the effect. A break of it is inside the line, a
+///   write sent on sight (`a_write_held_as_a_read_would_be_sent_without_a_confirmation`).
 #[test]
 fn a_forgery_clap_builds_is_refused_all_the_same() {
     type Forgery = (&'static str, Edit);
@@ -804,10 +977,12 @@ fn a_forgery_clap_builds_is_refused_all_the_same() {
     }
 }
 
-/// The other side of the line. A load refuses each of these, a value in the blob
-/// can break each, and the check leaves each out, because the break costs only
-/// the run that meets it: clap builds the command tree, nothing a gate holds
-/// back is sent, and the run that meets the value is refused or fails.
+/// The other side of the line. A value in the blob can break each of these
+/// rules, or sit beside it, and the check leaves each rule out, because no break
+/// of it is inside the line: clap builds the command tree, nothing a gate holds
+/// back is sent, and only the run that meets the value fails. For the last two
+/// the rule refuses an absent server or an absent `operationId`, which a blob
+/// cannot hold, and the values here are ones that a load accepts too.
 #[test]
 fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {
     let read = |edit: Edit| {

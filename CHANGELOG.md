@@ -32,17 +32,18 @@ the crate follows [Semantic Versioning][semver].
   refuses a confirmation word that `Loading::commit` refuses. In each operation
   it refuses a flag that is not spelled as a load spells it, a flag that every
   subcommand spends (`help` and the five flags that carry a body), two
-  declarations that take one flag (two parameters, two body properties, a gate
-  and a parameter or a body property, a gate named twice, or the confirmation
-  word of a write and any of them), a gate on a read, a method that writes held
-  as a read, a group or a command called `help`, and a `requires` that names a
-  parameter the operation does not declare or one that has no flag. It refuses
-  two operations under one `<group> <command>`. A blob like that used to decode.
-  In a debug build of the binary, clap panicked at start-up on a flag declared
-  twice, on `help` or a body flag that the subcommand declares already, on two
-  operations under one name and on a group or command called `help`; in a
-  release build one declaration took the place of the other. A write held as a
-  read was sent without `--commit`. The other refusals stopped no build.
+  declarations that take one flag (any two of a parameter, a body property, a
+  gate and, on a write, the confirmation word, and a gate named twice), a gate
+  on a read, a method that writes held as a read, a group or a command called
+  `help`, and a `requires` that names a parameter the operation does not declare
+  or one that has no flag. It refuses two operations under one
+  `<group> <command>`. A blob like that used to decode. In a debug build of the
+  binary, clap panicked at start-up on a flag declared twice, on a flag or a
+  confirmation word that begins with `-`, on `help` or a body flag that the
+  subcommand declares already, on two operations under one name and on a group
+  or command called `help`; in a release build one declaration took the place of
+  the other. A write held as a read, a `GET` that names a gate among them, was
+  sent without `--commit`. The other refusals stopped no build.
   Eleven variants carry these refusals: `DocumentError::{Confirmation,
   OperationConfirmation, Flag, FlagSpent, FlagTwice, GatedRead, WriteAsRead,
   NameSpent, DuplicateCommand, RequiresUnknown, RequiresUnreachable}`. Nine name
