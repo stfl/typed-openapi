@@ -276,6 +276,9 @@
         },
         "adj": {
           "$ref": "#/definitions/Adjacent"
+        },
+        "deep": {
+          "$ref": "#/definitions/ExternalDeep"
         }
       }
     },
@@ -452,6 +455,103 @@
           "properties": {
             "z": {
               "$ref": "#/definitions/Point"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HasB": {
+      "type": "object",
+      "properties": {
+        "b": {
+          "$ref": "#/definitions/Inner"
+        }
+      }
+    },
+    "HasK": {
+      "type": "object",
+      "properties": {
+        "k": {
+          "type": "object",
+          "properties": {
+            "y": {
+              "type": "integer"
+            },
+            "z": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    "ExternalDeep": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "a"
+          ],
+          "properties": {
+            "a": {
+              "type": "object",
+              "properties": {
+                "a": {
+                  "$ref": "#/definitions/HasB"
+                },
+                "b": {
+                  "$ref": "#/definitions/HasK"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "z"
+          ],
+          "properties": {
+            "z": {
+              "type": "object",
+              "properties": {
+                "c": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ScalarOrInner": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/Inner"
+        }
+      ]
+    },
+    "NoneOrB": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "b"
+          ],
+          "properties": {
+            "b": {
+              "type": "integer"
             }
           },
           "additionalProperties": false

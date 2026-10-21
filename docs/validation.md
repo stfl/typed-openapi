@@ -142,8 +142,9 @@ They are asked in this order:
 1. The body itself: a list or a scalar where the type reads an object is
    `NotAnObject` at `.`. A struct, a map and an adjacently tagged union read an
    object. For an untagged, internally tagged or externally tagged union a scalar
-   body is a `Mismatch`, and so is a list that no member reads. A list that a
-   member reads by position is `NotAnObject` at `.`, found in step 4.
+   body that no member reads is a `Mismatch`, and so is a list that no member
+   reads. A list that a member reads by position is `NotAnObject` at `.`, found in
+   step 4.
 2. Whether the values have the right types, and no property is missing:
    `Mismatch`. A scalar below the top where the type takes an object is one of
    these, because serde cannot read an object from it.
@@ -169,9 +170,10 @@ tagged union the key of the member is a step of the path
 (`place.address.extra`). A list at the top, where the type reads an object, is
 `NotAnObject` whatever its length. Everywhere else a list that the type cannot
 read is a `Mismatch`, like any other value of the wrong type. So is a scalar
-below the top where the type takes an object, and a scalar as the body for an
-untagged, internally tagged or externally tagged union: those ask for no shape,
-so the body itself is not asked first.
+below the top where the type takes an object, and a scalar as the body that no
+member of an untagged, internally tagged or externally tagged union reads: those
+ask for no shape, so the body itself is not asked first, and a union with a scalar
+member reads a scalar.
 
 **There is no way to allow an undeclared property on a call.** No flag, no
 setting and no cargo feature does it. A server may drop a property it does not
@@ -216,19 +218,23 @@ body that fills two members fits. In that struct a value of the wrong type for a
 member is `Undeclared` and not a `Mismatch`: serde reads a member that fails as
 absent, so the key is one the type did not write back.
 
-**One kind of property is not seen.** A type leaves a `null`, an empty list and
-an empty map out of what it writes when the property is optional, which is what
-typify's `skip_serializing_if` does. So a property that nothing declares and
-whose value is one of those three is found only where the type skips it while it
-reads: the body itself and every object except those inside an untagged union,
-an internally tagged union, an adjacently tagged union whose content comes before
-its tag, and a `flatten`ed struct, which serde reads from a buffer that nothing
-is skipped from. Inside those it passes. An externally tagged union is read
-directly, so the property is refused there, and the key of its member is in the
-path. An adjacently tagged union is read directly while its tag comes first, so
-the same property is refused there when the body writes `{"kind": "a", "data":
-{"x": 1, "extra": null}}` and passes when it writes the `data` before the
-`kind`. A property with any other value is found everywhere.
+**One kind of property is seen only where the type reads its object directly.**
+A type leaves a `null`, an empty list and an empty map out of what it writes when
+the property is optional, which is what typify's `skip_serializing_if` does. So a
+property that nothing declares and whose value is one of those three is found only
+where the type skips it while it reads. The refusal names the place the read was
+at, and an externally tagged union puts the key of its member in it.
+
+Serde reads some objects from a buffer, and nothing is skipped from a buffer: an
+untagged union, an internally tagged union, a `flatten`ed struct, and the content
+of an adjacently tagged union when it comes before the tag. A property of that
+kind passes inside one of them. It passes at the top as well when the type of the
+body itself is an untagged union, an internally tagged union or a `flatten`ed
+struct, because every property of the body is then read from a buffer. Everywhere
+else it is refused: in a struct, in an externally tagged union, and in an
+adjacently tagged union whose tag comes first. `{"kind": "a", "data": {"x": 1,
+"extra": null}}` is refused, and `{"data": {"x": 1, "extra": null}, "kind": "a"}`
+passes. A property with any other value is found everywhere.
 
 **A type you own is written back too.** `fits` needs the type to implement
 `Serialize`, and the type has to write the shape it reads: an object as an object

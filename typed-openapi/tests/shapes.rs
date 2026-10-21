@@ -418,6 +418,69 @@ fn an_undeclared_property_that_holds_nothing_is_seen_outside_a_buffer_only() {
     ]);
 }
 
+/// The body itself is a buffer when its type is an untagged union, an
+/// internally tagged union or a `flatten`ed struct, and then a property that
+/// holds nothing passes there too. A struct, and an adjacently tagged union
+/// whose properties are its tag and its content, read their own keys directly.
+#[test]
+fn an_undeclared_property_that_holds_nothing_in_the_body_itself_is_seen_unless_the_body_is_a_buffer()
+ {
+    for empty in [Value::Null, json!([]), json!({})] {
+        all::<types::Untagged>(vec![(
+            "an untagged union",
+            street_and("zzz", empty.clone()),
+            fits_ok(),
+        )]);
+        all::<types::Pet>(vec![(
+            "an internally tagged union",
+            json!({"kind": "dog", "name": "Rex", "zzz": empty}),
+            fits_ok(),
+        )]);
+        all::<types::Flat>(vec![(
+            "a struct of flattened options",
+            json!({"a": "x", "zzz": empty}),
+            fits_ok(),
+        )]);
+        all::<types::Contact>(vec![(
+            "a struct",
+            with("zzz", empty.clone()),
+            undeclared("zzz"),
+        )]);
+        all::<types::Adjacent>(vec![
+            (
+                "an adjacently tagged union, the tag first",
+                json!({"kind": "a", "data": {"x": 1}, "zzz": empty}),
+                undeclared("zzz"),
+            ),
+            (
+                "an adjacently tagged union, the content first",
+                json!({"data": {"x": 1}, "kind": "a", "zzz": empty}),
+                undeclared("zzz"),
+            ),
+        ]);
+    }
+}
+
+/// A union with a scalar member reads a scalar, and a scalar that none of its
+/// members reads is a value of the wrong type.
+#[test]
+fn a_scalar_body_is_a_mismatch_only_where_no_member_of_the_union_reads_it() {
+    all::<types::ScalarOrInner>(vec![
+        ("a string, which a member reads", json!("x"), fits_ok()),
+        (
+            "an object, which a member reads",
+            json!({"x": 1}),
+            fits_ok(),
+        ),
+        ("a number, which none reads", json!(5), mismatch(".")),
+    ]);
+    all::<types::NoneOrB>(vec![
+        ("the unit member", json!("none"), fits_ok()),
+        ("a member", json!({"b": 1}), fits_ok()),
+        ("a string that is no member", json!("x"), mismatch(".")),
+    ]);
+}
+
 /// A key of the body that spells like the member holding it is still the
 /// property, and not the member.
 #[test]
@@ -434,8 +497,9 @@ fn a_property_spelled_like_the_member_that_holds_it_is_named_whole() {
 
 /// The key of an externally tagged member can be the name of the first property
 /// of its content, and then the body holds the same key twice in a row. The path
-/// is the same whatever the skipped property holds: `serde_ignored` sees one that
-/// holds nothing and the walk of the body sees the rest.
+/// is the same whatever the skipped property holds, because it is the place
+/// where the type skipped the property and the walk of the body finds the same
+/// one.
 #[test]
 fn a_member_key_that_its_content_repeats_is_in_the_path_whatever_the_value() {
     for property in [Value::Null, json!([]), json!({}), json!("x")] {
@@ -462,6 +526,60 @@ fn a_member_key_that_its_content_repeats_is_in_the_path_whatever_the_value() {
             body,
             undeclared("a.a.extra"),
         )]);
+    }
+}
+
+/// The member's own declared `b` is spelled like the property that nothing
+/// declares, and the member's `b` holds nothing as well. The path is where the
+/// type skipped the property, and not the first place in the body that is
+/// spelled so.
+#[test]
+fn a_declared_property_that_holds_nothing_is_not_mistaken_for_the_undeclared_one() {
+    for property in [Value::Null, json!([]), json!({})] {
+        let body = json!({"a": {"a": {"x": 1, "b": property}, "b": null}});
+        all::<types::Contact>(vec![
+            (
+                "a struct variant",
+                with("rep", body.clone()),
+                undeclared("rep.a.a.b"),
+            ),
+            (
+                "a newtype variant",
+                with("repn", body.clone()),
+                undeclared("repn.a.a.b"),
+            ),
+        ]);
+        all::<types::ExternalRepeat>(vec![(
+            "the body, a struct variant",
+            body.clone(),
+            undeclared("a.a.b"),
+        )]);
+        all::<types::ExternalRepeatNewtype>(vec![(
+            "the body, a newtype variant",
+            body,
+            undeclared("a.a.b"),
+        )]);
+    }
+}
+
+/// Two readings of the body reach the same number of steps in two places, and
+/// only the type knows which one it took: the member `a` holds an `a` that holds
+/// a `b`, and a `b` that holds a `k`.
+#[test]
+fn the_place_is_the_one_the_type_read_when_two_readings_of_the_body_end_alike() {
+    for property in [Value::Null, json!([]), json!({}), json!("x")] {
+        let body = json!({
+            "a": {
+                "a": {"b": {"x": 1, "extra": property}},
+                "b": {"k": {"y": 1, "z": 2}},
+            }
+        });
+        all::<types::Contact>(vec![(
+            "a property",
+            with("deep", body.clone()),
+            undeclared("deep.a.a.b.extra"),
+        )]);
+        all::<types::ExternalDeep>(vec![("the body", body, undeclared("a.a.b.extra"))]);
     }
 }
 
@@ -509,10 +627,12 @@ fn an_adjacently_tagged_union_is_held_to_the_member_its_tag_names() {
 
 /// What the body itself is, asked of the type before it is read. Serde reads a
 /// struct, a map and an adjacently tagged enum with `deserialize_struct` or
-/// `deserialize_map`, so for those a scalar and a list are `NotAnObject`. The
-/// other unions are read from a buffer or by `deserialize_any`, which asks for
-/// no shape: a scalar is a value of the wrong type, and a list is refused only
-/// when a member reads it by position.
+/// `deserialize_map`, so for those a scalar and a list are `NotAnObject`. An
+/// untagged and an internally tagged union are read from a buffer by
+/// `deserialize_any`, and an externally tagged one by `deserialize_enum`. None of
+/// them asks for a shape: a scalar that no member reads is a value of the wrong
+/// type, and a list is `NotAnObject` only when a member reads it by position
+/// and a value of the wrong type when none does.
 #[test]
 fn a_scalar_or_a_list_as_the_body_is_refused_for_what_the_type_reads() {
     for scalar in [json!("x"), json!(5), json!(true), Value::Null] {

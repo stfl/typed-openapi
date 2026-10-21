@@ -10,9 +10,7 @@
 //! encoder.
 
 use std::cell::Cell;
-use std::collections::HashSet;
 use std::fmt;
-use std::iter::once;
 use std::marker::PhantomData;
 
 use http::{StatusCode, Uri};
@@ -21,6 +19,7 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use crate::model::{Document, DocumentError, DriftError, Operation};
+use crate::read::{Read, Step, read};
 use crate::request::{Invocation, ValueError};
 use crate::transport::{AsyncClient, HttpRequest, HttpResponse, SyncClient};
 use crate::values::Values;
@@ -205,10 +204,10 @@ pub enum BodyError {
     /// list in the place of one at any depth. Serde fills a struct from a list by
     /// place, so a list of the right length would otherwise fit. A type reads an
     /// object when it is a struct, a map or an adjacently tagged union. For an
-    /// untagged, internally tagged or externally tagged union a scalar body is a
-    /// [`BodyError::Mismatch`], and a list body is this only when a member reads
-    /// it by place. A scalar below the top is a `Mismatch` too, because serde
-    /// cannot read an object from it.
+    /// untagged, internally tagged or externally tagged union a scalar body that
+    /// no member reads is a [`BodyError::Mismatch`], and a list body is this only
+    /// when a member reads it by place. A scalar below the top is a `Mismatch`
+    /// too, because serde cannot read an object from it.
     #[error(
         "{op}: the request body has {found} at `{path}`, where the schema the document declares \
          takes an object"
@@ -251,12 +250,13 @@ pub enum BodyError {
 /// 2. A value of the wrong type, or a missing property, is
 ///    [`BodyError::Mismatch`]. That includes a scalar below the top where `T`
 ///    takes an object, which serde cannot read. It includes a scalar as the body
-///    for an untagged, internally tagged or externally tagged union, which asks
-///    for no shape, and a list that no member of such a union reads.
+///    that no member of an untagged, internally tagged or externally tagged union
+///    reads (such a union asks for no shape), and a list that no member reads.
 /// 3. A `T` that cannot be written back is [`BodyError::Unwritable`].
-/// 4. The first place in the order of the body that holds either a property that
-///    `T` did not write back ([`BodyError::Undeclared`]) or a list that serde
-///    read by place ([`BodyError::NotAnObject`]). Serde fills a struct from a
+/// 4. The body beside what `T` wrote back. The first place in the order of the
+///    body that holds either a property that `T` did not write back
+///    ([`BodyError::Undeclared`]) or a list that serde read by place
+///    ([`BodyError::NotAnObject`]) is the one named. Serde fills a struct from a
 ///    list, so a list of the right length would otherwise fit, at any depth. A
 ///    server may ignore a property without a word and the operator would then
 ///    believe it took effect.
@@ -285,9 +285,14 @@ pub enum BodyError {
 /// One property passes the walk: a type leaves a `null`, an empty list and an
 /// empty map out of what it writes, as typify's `skip_serializing_if` does for an
 /// optional property. A property of that kind that nothing declares is seen only
-/// where the type skips it while it reads. That is the body itself and every
-/// object outside the buffers above, an externally tagged union among them, and
-/// an adjacently tagged union whose tag comes first. Inside a buffer it passes.
+/// where the type skips it while it reads, and the read notes the place with the
+/// key of each externally tagged member on the way. Serde skips nothing from a
+/// buffer, so the property passes in an object that the type reads from one: an
+/// untagged union, an internally tagged union, a `flatten`ed struct and the
+/// content of an adjacently tagged union that comes before its tag. When the
+/// body itself is such an object, it passes at the top as well. Everywhere else
+/// it is [`BodyError::Undeclared`]: in a struct, in an externally tagged union
+/// and in an adjacently tagged union whose tag comes first.
 pub fn fits<T: DeserializeOwned + Serialize>(
     op: &str,
     body: &serde_json::Value,
@@ -299,39 +304,33 @@ pub fn fits<T: DeserializeOwned + Serialize>(
         }
         .of(op));
     }
-    let mut skipped = None;
-    let mut note = |path: serde_ignored::Path<'_>| {
-        skipped.get_or_insert_with(|| ignored(&path));
-    };
-    let read: T =
-        serde_path_to_error::deserialize(serde_ignored::Deserializer::new(body, &mut note))
-            .map_err(|refused| BodyError::Mismatch {
-                op: op.to_owned(),
-                path: refused.path().to_string(),
-                source: refused.into_inner(),
-            })?;
-    let written = serde_json::to_value(&read).map_err(|source| BodyError::Unwritable {
+    let Read { value, skipped } = read::<T>(body).map_err(|refused| BodyError::Mismatch {
+        op: op.to_owned(),
+        path: refused.path().to_string(),
+        source: refused.into_inner(),
+    })?;
+    let written = serde_json::to_value(&value).map_err(|source| BodyError::Unwritable {
         op: op.to_owned(),
         source,
     })?;
     let refusal = beside(body, &written, &mut Vec::new())
-        .or_else(|| skipped.map(|way| Refusal::Undeclared(located(&way, body))))
+        .or_else(|| skipped.map(Refusal::Undeclared))
         .map(|refusal| refusal.of(op));
     refusal.map_or(Ok(()), Err)
 }
 
 /// What a body holds that its type does not take.
-enum Refusal {
+enum Refusal<'a> {
     /// A property: its place.
-    Undeclared(Vec<Step>),
+    Undeclared(Vec<Step<'a>>),
     /// A list or a scalar where the type writes an object.
     NotAnObject {
-        place: Vec<Step>,
+        place: Vec<Step<'a>>,
         found: &'static str,
     },
 }
 
-impl Refusal {
+impl Refusal<'_> {
     fn of(self, op: &str) -> BodyError {
         let op = op.to_owned();
         match self {
@@ -348,26 +347,9 @@ impl Refusal {
     }
 }
 
-/// One step into a body: a property of an object, or an element of a list.
-#[derive(Clone)]
-enum Step {
-    Key(String),
-    Index(usize),
-}
-
-impl Step {
-    /// What this step leads to inside `value`, if `value` has it.
-    fn inside<'a>(&self, value: &'a serde_json::Value) -> Option<&'a serde_json::Value> {
-        match self {
-            Self::Key(key) => value.get(key.as_str()),
-            Self::Index(index) => value.get(*index),
-        }
-    }
-}
-
 /// A place in a body in the `jq` spelling, which is `.` for the body itself.
 /// This is the one function that spells one.
-fn spelled(place: &[Step]) -> String {
+fn spelled(place: &[Step<'_>]) -> String {
     if place.is_empty() {
         return ".".to_owned();
     }
@@ -375,7 +357,7 @@ fn spelled(place: &[Step]) -> String {
         .iter()
         .enumerate()
         .map(|(position, step)| match step {
-            Step::Key(key) if position == 0 => key.clone(),
+            Step::Key(key) if position == 0 => (*key).to_owned(),
             Step::Key(key) => format!(".{key}"),
             Step::Index(index) => format!("[{index}]"),
         })
@@ -390,15 +372,15 @@ fn spelled(place: &[Step]) -> String {
 /// written object lacks was not read, unless its value is one that the type
 /// leaves out when it writes: typify drops a `null`, an empty list and an empty
 /// map from an optional property.
-fn beside(
-    body: &serde_json::Value,
+fn beside<'a>(
+    body: &'a serde_json::Value,
     written: &serde_json::Value,
-    at: &mut Vec<Step>,
-) -> Option<Refusal> {
+    at: &mut Vec<Step<'a>>,
+) -> Option<Refusal<'a>> {
     use serde_json::Value;
     match (body, written) {
         (Value::Object(body), Value::Object(written)) => body.iter().find_map(|(key, value)| {
-            under(at, Step::Key(key.clone()), |at| match written.get(key) {
+            under(at, Step::Key(key), |at| match written.get(key) {
                 Some(written) => beside(value, written, at),
                 None if left_out_when_empty(value) => None,
                 None => Some(Refusal::Undeclared(at.clone())),
@@ -420,7 +402,11 @@ fn beside(
 }
 
 /// Run `walk` one step deeper than `at`, and leave `at` as it was.
-fn under<R>(at: &mut Vec<Step>, step: Step, walk: impl FnOnce(&mut Vec<Step>) -> R) -> R {
+fn under<'a, R>(
+    at: &mut Vec<Step<'a>>,
+    step: Step<'a>,
+    walk: impl FnOnce(&mut Vec<Step<'a>>) -> R,
+) -> R {
     at.push(step);
     let found = walk(at);
     at.pop();
@@ -446,86 +432,6 @@ pub(crate) fn kind(value: &serde_json::Value) -> &'static str {
         Value::Array(_) => "an array",
         Value::Object(_) => "an object",
     }
-}
-
-/// The steps `serde_ignored` took to a property that the type skipped. A wrapper
-/// that serde adds around a value (`Some`, a newtype struct) is no step in the
-/// body, and neither is a variant: `serde_ignored` names the key of no variant,
-/// not even for a newtype variant, whose path holds only its parent. [`located`]
-/// puts the key of each variant back.
-fn ignored(path: &serde_ignored::Path<'_>) -> Vec<Step> {
-    use serde_ignored::Path;
-    let (parent, step) = match path {
-        Path::Root => return Vec::new(),
-        Path::Seq { parent, index } => (parent, Step::Index(*index)),
-        Path::Map { parent, key } => (parent, Step::Key(key.clone())),
-        Path::Some { parent }
-        | Path::NewtypeStruct { parent }
-        | Path::NewtypeVariant { parent } => return ignored(parent),
-    };
-    let mut way = ignored(parent);
-    way.push(step);
-    way
-}
-
-/// Where in `body` a property is that the type skipped while it read, given the
-/// steps `serde_ignored` took to it.
-///
-/// The key of an externally tagged variant is the one key of its object, and it
-/// is a step of the body that `way` lacks. So a step either leads into the object
-/// at hand, or the object is a variant and the step leads into its content. A
-/// body can spell the two alike, a member `a` whose content has a property `a`,
-/// so the place is the reading in which every step leads somewhere. The reading
-/// with no variant key is tried first. The property that was skipped holds
-/// nothing, because only such a property reaches here, so a key that holds
-/// something where the way ends is a variant's. A way that no reading takes is
-/// named as it came.
-fn located(way: &[Step], body: &serde_json::Value) -> Vec<Step> {
-    reading(way, body, 0, &mut HashSet::new()).unwrap_or_else(|| way.to_vec())
-}
-
-/// The place that `way` leads to inside `here`, which is `depth` levels down the
-/// body, with the key of each variant on the way put in.
-///
-/// `dead` holds the readings that went nowhere, by the steps left and the depth.
-/// The same pair is reached by every split of the levels above it into variants
-/// and properties, and it leads to the same value in each, so a body that is one
-/// key deep over and over is searched once and not once for each split.
-fn reading(
-    way: &[Step],
-    here: &serde_json::Value,
-    depth: usize,
-    dead: &mut HashSet<(usize, usize)>,
-) -> Option<Vec<Step>> {
-    let Some((step, rest)) = way.split_first() else {
-        return left_out_when_empty(here).then(Vec::new);
-    };
-    let reached = (way.len(), depth);
-    if dead.contains(&reached) {
-        return None;
-    }
-    let found = step
-        .inside(here)
-        .and_then(|next| reading(rest, next, depth + 1, dead))
-        .map(|tail| once(step.clone()).chain(tail).collect())
-        .or_else(|| {
-            let (tag, content) = variant(here)?;
-            let tail = reading(way, content, depth + 1, dead)?;
-            Some(once(Step::Key(tag.clone())).chain(tail).collect())
-        });
-    if found.is_none() {
-        dead.insert(reached);
-    }
-    found
-}
-
-/// The key and the content of an externally tagged variant, which is the one key
-/// of its object.
-fn variant(here: &serde_json::Value) -> Option<(&String, &serde_json::Value)> {
-    let serde_json::Value::Object(object) = here else {
-        return None;
-    };
-    object.iter().next().filter(|_| object.len() == 1)
 }
 
 /// Does `T` read an object?
@@ -677,7 +583,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
-    use super::{BodyError, Step, fits, located, spelled};
+    use super::{BodyError, fits};
 
     /// A body with a list of objects in it, which is the shape whose refusal
     /// is hardest to place by eye: serde's own message does not say which
@@ -996,7 +902,7 @@ mod tests {
         assert!(fits::<Customer>("createCustomer", &body).is_ok());
     }
 
-    /// The type skips the property while it reads, and `serde_ignored` says so
+    /// The type skips the property while it reads, and the read notes the place
     /// even though the value is one the walk of the body lets pass.
     #[test]
     fn an_undeclared_property_that_holds_nothing_is_refused_where_the_type_skips_it() {
@@ -1093,8 +999,9 @@ mod tests {
         place: Placed,
     }
 
-    /// `serde_ignored` names the key of no variant, so a property that holds
-    /// nothing, which only `serde_ignored` sees, has it put back.
+    /// The key of a variant is a step of the body. The read takes it from the
+    /// enum the type asks for, so a property that holds nothing, which only the
+    /// read sees, has it in its path.
     #[test]
     fn the_key_of_an_externally_tagged_variant_is_in_the_path_of_an_empty_property() {
         for empty in [Value::Null, json!([]), json!({})] {
@@ -1116,8 +1023,8 @@ mod tests {
         }
     }
 
-    /// A variant is told from a property by what the way ends in: the property
-    /// that was skipped holds nothing, and a variant holds its content.
+    /// The type tells a variant from a property, and the body can spell both
+    /// alike: the property that was skipped is spelled like the variant.
     #[test]
     fn a_variant_key_spelled_like_the_property_that_was_skipped_is_told_apart() {
         let body = json!({"place": {"point": {"x": 1, "point": null}}});
@@ -1145,8 +1052,8 @@ mod tests {
     }
 
     /// The key of the variant and the name of its first field are the same word,
-    /// and the body holds it twice. The way `serde_ignored` takes names it once,
-    /// and the path has both whatever the skipped property holds.
+    /// and the body holds it twice. The path has both whatever the skipped
+    /// property holds.
     #[test]
     fn a_member_key_that_its_content_repeats_is_in_the_path_whatever_the_value() {
         for property in [Value::Null, json!([]), json!({}), json!("x")] {
@@ -1162,22 +1069,48 @@ mod tests {
         }
     }
 
-    /// A variant is the one key of its object, so an object with more keys that
-    /// cannot take the step is not one, even when its first key holds the step.
-    /// The step is named as it came.
-    #[test]
-    fn a_step_that_no_variant_stands_before_is_named_as_it_came() {
-        let body = json!({"a": {"x": null}, "b": 2});
-
-        let place = located(&[Step::Key("x".to_owned())], &body);
-
-        assert_eq!(spelled(&place), "x");
+    /// What typify writes for a `oneOf` whose member holds a property spelled like
+    /// a property of the object inside it: a struct variant with a field `a` and a
+    /// field `b`, and the object of `a` has no `b`.
+    #[derive(Deserialize, Serialize)]
+    enum Member {
+        #[serde(rename = "a")]
+        A {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            a: Option<Counted>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            b: Option<i64>,
+        },
     }
 
-    /// A one-key object whose key is the step is the property, and not a variant,
-    /// when the steps after it can be taken inside it.
+    #[derive(Deserialize, Serialize)]
+    struct Counted {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<i64>,
+    }
+
+    /// The member declares `b` and holds nothing in it, and the object inside the
+    /// member holds an undeclared `b` that holds nothing too. Both are spelled the
+    /// same and a body can be read either way, so only the type says which one it
+    /// skipped.
     #[test]
-    fn a_one_key_object_is_a_property_when_the_way_goes_on_inside_it() {
+    fn a_declared_property_spelled_like_the_skipped_one_does_not_take_its_place() {
+        for property in [Value::Null, json!([]), json!({})] {
+            let body = json!({"a": {"a": {"x": 1, "b": property}, "b": null}});
+
+            let refused = fits::<Member>("send", &body).unwrap_err();
+
+            assert!(
+                matches!(&refused, BodyError::Undeclared { path, .. } if path == "a.a.b"),
+                "{property}: {refused:?}"
+            );
+        }
+    }
+
+    /// An object of one key is a property of a struct and not a variant, because
+    /// the type reads it so.
+    #[test]
+    fn a_one_key_object_is_a_property_when_the_type_reads_it_as_one() {
         #[derive(Deserialize, Serialize)]
         struct Lone {
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -1192,23 +1125,6 @@ mod tests {
             matches!(&refused, BodyError::Undeclared { path, .. } if path == "address.extra"),
             "{refused:?}"
         );
-    }
-
-    /// A body that is one key deep, over and over, can be read as variants and
-    /// properties in more ways than a run could try. A way that no reading takes
-    /// is given up in time for the size of the body and not for the number of
-    /// ways to split it; without that this test does not end.
-    #[test]
-    fn a_way_that_no_reading_takes_is_given_up_without_trying_every_split() {
-        let mut body = json!({"z": null});
-        for _ in 0..40 {
-            body = json!({"a": body});
-        }
-        let way: Vec<Step> = std::iter::repeat_n(Step::Key("a".to_owned()), 45).collect();
-
-        let place = located(&way, &body);
-
-        assert_eq!(spelled(&place), spelled(&way));
     }
 
     /// What typify writes for a `oneOf`, or an `anyOf` it judges exclusive, whose

@@ -149,11 +149,6 @@ schemars = { workspace = true, optional = true }
 serde = { workspace = true }
 # Reads the document and each Overlay as YAML, and writes the overlaid one.
 serde-saphyr = { workspace = true, optional = true }
-# Reports each property of a body that the target type read past, which is how
-# `client::fits` finds one that no schema declares: a derived `Deserialize`
-# skips an unknown key without a word, and `deny_unknown_fields` would refuse
-# the vendor's responses as well, which the same types decode.
-serde_ignored = { workspace = true }
 # A body and a document as JSON values, which an Overlay is applied to.
 serde_json = { workspace = true }
 # A body refused by `client::fits` names where it stopped — `positions[1].flag`

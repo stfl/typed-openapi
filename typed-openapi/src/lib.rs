@@ -75,6 +75,7 @@ pub mod model;
 mod multipart;
 pub mod names;
 pub mod plan;
+mod read;
 pub mod request;
 pub mod scalar;
 pub mod summary;
