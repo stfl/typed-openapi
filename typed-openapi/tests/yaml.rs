@@ -11,14 +11,25 @@
 //! the alias bomb has a billion leaves. Each test also states how long the
 //! refusal may take. The reader refuses 129 levels in milliseconds, and it
 //! refuses the bomb at the 2 500 001st node, which takes about a second in a
-//! release build and about nine in a debug build. The limit is generous and
-//! still far below what expanding the bomb would cost: a reader that lost its
-//! limit would not finish at all.
+//! release build and about nine in a debug build, on a development host and on a
+//! CI runner alike; the slowest CI run took sixteen. The limit leaves a factor of
+//! more than three on that run and is still far below what expanding the bomb
+//! would cost: a reader that lost its limit would not finish at all.
 //!
 //! The budget limits the value that a read builds, and every other cap is set
-//! behind that limit. Four tests read a document that the reader's default
-//! refuses and the budget holds: one anchor used a million times, an anchored
-//! list of a million items, 60 000 anchors, and a run of comments.
+//! behind that limit, except the two on what nested anchors keep. These tests
+//! read a document that the reader's default refuses and the budget holds:
+//! `one_anchor_used_a_hundred_times_is_read`,
+//! `one_anchor_used_a_million_times_is_read`,
+//! `an_anchored_list_of_a_million_items_is_read`,
+//! `sixty_thousand_anchors_are_read` and
+//! `comments_between_a_key_and_its_value_are_not_read`. These hold the limit and
+//! the two caps with one document under the cap and one over it, each far from
+//! the cap itself, so they hold that the cap is there and of that order and not
+//! its exact value:
+//! `scalar_text_is_limited_with_every_alias_expanded`,
+//! `anchors_nested_inside_each_other_limit_the_events_they_keep` and
+//! `anchors_nested_inside_each_other_limit_the_text_they_keep`.
 
 #![expect(
     clippy::expect_used,
@@ -32,10 +43,14 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use typed_openapi::overlay::{self, Cause, OverlayError, Place};
 
-/// How long a refusal of a hostile input may take. A debug build refuses the
-/// alias bomb in about nine seconds and a release build in about one, using
-/// about 600 MB; expanding it is minutes and gigabytes.
-const REFUSAL_WITHIN: Duration = Duration::from_secs(30);
+/// How long a refusal of a hostile input may take. The bound tells a refusal
+/// from an expansion and does not measure speed, so it is at least three times
+/// the slowest time that a CI runner gives, to keep a slow runner from turning
+/// the gate red, and far below what the read would cost without its limit. A
+/// debug build refuses the alias bomb in about nine seconds on a CI runner and in
+/// sixteen in the slowest run, and a release build in about one, using about
+/// 600 MB; expanding it would take minutes and gigabytes at the same rate.
+const REFUSAL_WITHIN: Duration = Duration::from_secs(60);
 
 /// The stack of the thread that calls the reader in the depth test. Descending
 /// 128 levels takes about 450 KiB in a release build and about 3 MiB in a debug
@@ -59,8 +74,8 @@ const READABLE_LEAVES: u64 = 100_000;
 /// the value, so the document is far under the budget's 2 500 000 nodes.
 const ALIASES_OF_ONE_ANCHOR: usize = 1_000_001;
 
-/// Items under one anchor: one more than the reader's default allows an anchor
-/// to keep.
+/// Items under one anchor: more than the reader's default allows an anchor to
+/// keep.
 const ANCHORED_ITEMS: usize = 1_000_001;
 
 /// Anchors in the document that is read: more than the reader's default of
@@ -70,6 +85,13 @@ const ANCHORS: usize = 60_000;
 /// Comment lines between a key and the mapping nested under it: more than the
 /// 32 the reader's default keeps.
 const COMMENT_LINES: usize = 40;
+
+/// One mebibyte, the unit of the text limits.
+const MIB: usize = 1024 * 1024;
+
+/// Anchors nested inside each other in the tests of the two caps on what anchors
+/// keep. The depth stays under the limit of 128.
+const NESTED_ANCHORS: usize = 100;
 
 /// A minimal Overlay, with `actions` as given, so that a case names only the
 /// part that is wrong.
@@ -281,6 +303,68 @@ fn sixty_thousand_anchors_are_read() {
     let read = overlay::parse(&text).expect("many anchors are not a hostile document");
 
     assert_eq!(read.as_object().map(serde_json::Map::len), Some(anchors));
+}
+
+/// `depth` anchors nested inside each other around `inner`, as flow sequences:
+/// `&a0 [&a1 [inner]]` for a depth of 2.
+fn nested_anchors(depth: usize, inner: &str) -> String {
+    let mut text = String::new();
+    for level in 0..depth {
+        write!(text, "&a{level} [").expect("a string takes a write");
+    }
+    text.push_str(inner);
+    text.push_str(&"]".repeat(depth));
+    text
+}
+
+/// A string of a mebibyte, anchored once and used by `aliases` aliases, is
+/// `aliases + 1` mebibytes of scalar text with every alias expanded. The budget
+/// allows 64 MiB of it, so 50 aliases (51 MiB) are read and 100 (101 MiB) are
+/// refused. The document is a mebibyte long either way.
+#[test]
+fn scalar_text_is_limited_with_every_alias_expanded() {
+    let shared = |aliases: usize| {
+        format!(
+            "shared: &s {}\nused:\n{}",
+            "x".repeat(MIB),
+            "- *s\n".repeat(aliases)
+        )
+    };
+
+    let read = overlay::parse(&shared(50)).expect("51 MiB of text is inside the limit");
+    assert_eq!(read["used"].as_array().map(Vec::len), Some(50));
+
+    document_error(&shared(100));
+}
+
+/// An anchor keeps a copy of every event inside it, and anchors nested inside
+/// each other keep one copy each, so a value that is far inside the node limit
+/// reaches the cap on the events that anchors keep, which is 10 000 000. A
+/// hundred anchors around 50 000 items keep about 5 000 000 events and are read,
+/// and around 150 000 items keep about 15 000 000 and are refused.
+#[test]
+fn anchors_nested_inside_each_other_limit_the_events_they_keep() {
+    let around = |items: usize| nested_anchors(NESTED_ANCHORS, &vec!["1"; items].join(","));
+
+    overlay::parse(&around(50_000)).expect("5 000 000 kept events are inside the cap");
+
+    document_error(&around(150_000));
+}
+
+/// The same for the text that anchors keep, which is 64 MiB. A scalar is kept
+/// only where the reader owns it, and an escape makes it so. A hundred anchors
+/// around a scalar of 400 KiB keep about 39 MiB and are read, and around one of
+/// a mebibyte keep about 100 MiB and are refused.
+#[test]
+fn anchors_nested_inside_each_other_limit_the_text_they_keep() {
+    let around = |bytes: usize| {
+        let scalar = format!("\"\\n{}\"", "x".repeat(bytes));
+        nested_anchors(NESTED_ANCHORS, &scalar)
+    };
+
+    overlay::parse(&around(400 * 1024)).expect("39 MiB of kept text is inside the cap");
+
+    document_error(&around(MIB));
 }
 
 /// A comment is no part of the value. The reader's own default keeps the

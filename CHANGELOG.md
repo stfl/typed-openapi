@@ -39,10 +39,11 @@ the crate follows [Semantic Versioning][semver].
   - A value past the reader's budget is refused: more than 2 500 000 nodes or
     64 MiB of scalar text, each counted with every alias expanded. So are
     anchors nested inside each other that keep more than 10 000 000 events or
-    64 MiB between them. The old reader read three documents that the new one
-    refuses: 3 000 000 scalars (a JSON array of 3 000 000 single digits is
-    6 MB), an anchor of 10 000 items used by 1 000 aliases (10 000 000 leaves),
-    and a 1 MB string used by 100 aliases. It refused an alias document of
+    64 MiB between them. The old reader read documents that the new one
+    refuses, among them 3 000 000 scalars (a JSON array of 3 000 000 single
+    digits is 6 MB), an anchor of 10 000 items used by 1 000 aliases
+    (10 000 000 leaves), a 1 MB string used by 100 aliases, and five anchors
+    nested around 2 000 000 items (28 MB). It refused an alias document of
     100 000 leaves, which the new reader reads. There is no repair: the limits
     are fixed, and the read comes before the first Overlay, so no Overlay can
     shrink a document that reaches one.
