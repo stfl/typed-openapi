@@ -20,8 +20,10 @@ use crate::values::{Payload, Values};
 
 /// Values the document rejects for this operation.
 ///
-/// Every variant names the operation by its `operationId` in `op`, and the
-/// parameter it is about by the name the document gives it in `name`.
+/// Every variant names the operation by its `operationId` in `op`. The six that
+/// are about a parameter also carry it in `name`: the name the document gives
+/// it, or, in [`ValueError::UnknownParam`], the name the caller gave, which the
+/// document does not declare. The three about the body carry no `name`.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ValueError {

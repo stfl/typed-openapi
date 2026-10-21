@@ -1,7 +1,5 @@
 //! Reading an OpenAPI document into the model it reduces to.
 //!
-//! *Requires the `document` feature.*
-//!
 //! [`Document::load`] takes the two files an adopter ships — the vendor's
 //! OpenAPI document and their Overlay of corrections — and hands back a list
 //! of [`Operation`]s with every `$ref` already resolved. Nothing from
@@ -91,19 +89,20 @@ const BODY: &str = "requestBody";
 
 /// Reducing an OpenAPI document to [`Operation`]s failed.
 ///
-/// *Requires the `document` feature.* Every variant names a way that reading a
-/// document goes wrong, so the whole type is bless-time: a binary that starts
-/// from [`Document::from_blob`] cannot produce one, does not compile one, and
-/// does not have to know the list exists.
+/// Every variant names a way that reading a document goes wrong, so the whole
+/// type is bless-time: a binary that starts from [`Document::from_blob`] cannot
+/// produce one, does not compile one, and does not have to know the list
+/// exists.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum LoadError {
-    /// An Overlay could not be read or applied. The cause names the layer's
-    /// line or action.
+    /// The vendor's document or an Overlay could not be read, or an Overlay
+    /// could not be applied. The message says which, and the cause holds the
+    /// line of the text or the index of the action where there is one.
     #[error(transparent)]
     Overlay(#[from] crate::overlay::OverlayError),
-    /// The overlaid document is not an OpenAPI 3 document. The cause names the
-    /// key where the reading stopped.
+    /// The overlaid document is not an OpenAPI 3 document. The cause is
+    /// `serde_json`'s message about the value it found and the type it wanted.
     #[error("the overlaid document is not an OpenAPI 3 document")]
     Shape(#[source] serde_json::Error),
     /// The document lists no server, so a request has nowhere to go.
@@ -442,8 +441,6 @@ impl Document {
     /// Parse the vendor's document, lay the adopter's Overlays over it in
     /// order, and resolve the result into operations.
     ///
-    /// *Requires the `document` feature.*
-    ///
     /// Every argument is a file's contents, YAML or JSON. `overlays` is a list
     /// because corrections come in layers — each one corrects the document the
     /// ones before it produced, so the order they are given in is the order
@@ -474,8 +471,6 @@ impl Document {
     }
 
     /// The same, with the CLI's own words chosen rather than defaulted.
-    ///
-    /// *Requires the `document` feature.*
     ///
     /// The one word this door adds is the confirmation. It is settable because
     /// it is this crate's and not the vendor's: a document whose own schema

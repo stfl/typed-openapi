@@ -1,7 +1,5 @@
 //! Following `$ref`s, and deciding what one schema is worth on a command line.
 //!
-//! *Requires the `document` feature.*
-//!
 //! This is the whole of what this crate understands about JSON Schema: a schema
 //! either fits on one flag — it is a [`Scalar`] — or it does not, and then the
 //! body goes through a file. Nothing richer is modelled, because nothing richer

@@ -44,10 +44,11 @@ pub enum Error {
     #[error("the document does not load")]
     Document(#[from] DocumentError),
     /// The generated inventory and the document it is paired with disagree.
-    /// The cause names the first row where they do.
+    /// The message names the first row where they do.
     #[error(transparent)]
     Drift(#[from] DriftError),
-    /// The values do not satisfy the operation. The cause names the parameter.
+    /// The values do not satisfy the operation. The message names the
+    /// parameter, or says the body is the problem.
     #[error(transparent)]
     Values(#[from] ValueError),
     /// The values satisfied the operation and the `http` crate refused the
@@ -153,18 +154,17 @@ impl Client {
 /// describes for it.
 ///
 /// This is what a `--json-body` file gets checked against. `path` is where in
-/// the body the deserialiser stopped, written the way `jq` writes one —
-/// `positions[1].flag`, and `.` for the body itself — and the source is
-/// serde's own message about the value it found there. The two are apart
-/// because serde's message names a value and the type it wanted, and never
-/// which element of which list held it.
+/// the body the deserialiser stopped (`positions[1].flag`, or `.` for the body
+/// itself), and the source is serde's own message about the value it found
+/// there. The two are apart because serde's message names a value and the type
+/// it wanted, and never which element of which list held it.
 #[derive(Debug, Error)]
 #[error("{op}: the request body does not fit the schema the document declares at `{path}`")]
 pub struct BodyError {
     /// The `operationId` of the operation whose body was checked.
     pub op: String,
-    /// Where in the body the deserialiser stopped, in `jq`'s spelling:
-    /// `positions[1].flag`, or `.` for the body itself.
+    /// Where in the body the deserialiser stopped: `positions[1].flag`, or `.`
+    /// for the body itself.
     pub path: String,
     /// `serde_json`'s message about the value found at `path`.
     #[source]

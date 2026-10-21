@@ -20,8 +20,9 @@ fmt:
 # `--cfg docsrs` is what docs.rs passes (`[package.metadata.docs.rs]`), and
 # `typed-openapi/src/lib.rs` turns it into `feature(doc_cfg)`, which prints the
 # "Available on crate feature" label on every item a feature adds. The one doc
-# build carries it, so that the path docs.rs takes is in the gate: a nightly
-# that renames or drops the feature fails here and not on docs.rs.
+# build carries it, so that the path docs.rs takes is in the gate. docs.rs builds
+# a release with its own nightly, which is newer than the pinned date, so a
+# nightly that renames or drops the feature fails here once the pin reaches it.
 #
 # `--all-features` compiles, lints and documents what only a named feature
 # builds: the `builder` wrappers and the reqwest adapter of the example. A

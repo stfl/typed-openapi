@@ -838,8 +838,9 @@ pub enum GenerateError {
     /// A generated file, or a directory it goes in, could not be written.
     #[error("cannot write {path}")]
     Write {
-        /// The file or directory under the directory given to
-        /// [`Settings::write_to`].
+        /// The file the generator was writing, or the directory above it that
+        /// it was making: under the directory given to [`Settings::write_to`],
+        /// or where [`Settings::summary_page`] points.
         path: PathBuf,
         /// The error the operating system returned.
         #[source]
@@ -863,11 +864,13 @@ pub enum GenerateError {
     #[error("the overlaid document is not representable as YAML")]
     Yaml(#[source] Box<dyn Error + Send + Sync>),
     /// The corrected document could not be reduced to a command tree. The
-    /// cause names the operation and the thing it could not read.
+    /// cause is the refusal of [`Document::load_with`], which names the
+    /// operation where the refusal is about one.
     #[error("the overlaid document does not describe a usable CLI")]
     Unusable(#[source] LoadError),
     /// The corrected document is not an OpenAPI 3 document, so the generator
-    /// has no object model of it. The cause says which key broke the reading.
+    /// has no object model of it. The cause is `serde_json`'s message about the
+    /// value it found and the type it wanted.
     #[error("the overlaid document is not an OpenAPI 3 document")]
     NotOpenApi(#[source] serde_json::Error),
     /// A schema that cannot be written as the JSON typify takes in.
@@ -946,7 +949,7 @@ pub enum GenerateError {
         source: Box<GenerateError>,
     },
     /// Tokens the generator wrote do not parse as Rust. This is a defect of the
-    /// generator, and the cause says where the parser stopped.
+    /// generator.
     #[error("the generated {file} is not valid Rust")]
     NotRust {
         /// The name of the generated file the tokens were bound for.

@@ -73,8 +73,6 @@ impl fmt::Display for CommandName {
 
 /// Where each of a document's operations sits in the command tree.
 ///
-/// *Requires the `document` feature.*
-///
 /// The group is a path segment, and which one is a fact about the whole
 /// document: the first, unless every operation shares it — a document served
 /// entirely under `/v1` must not collapse into one group named `v1`. So the
@@ -176,8 +174,6 @@ fn verb(method: &Method, addressed: bool) -> &'static str {
 }
 
 /// The flag names one subcommand has already spent.
-///
-/// *Requires the `document` feature.*
 ///
 /// `PUT /vouchers/{id}` takes an `id` in the path and an `id` in the body; clap
 /// panics on a duplicate name, so the second claimant is prefixed rather than

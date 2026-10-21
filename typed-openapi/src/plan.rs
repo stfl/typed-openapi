@@ -133,7 +133,8 @@ fn opened(op: &Operation, answers: &Answers) -> bool {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum PlanError {
-    /// The values do not satisfy the operation. The cause names the parameter.
+    /// The values do not satisfy the operation. The message names the
+    /// parameter, or says the body is the problem.
     #[error(transparent)]
     Value(#[from] ValueError),
     /// The values satisfied the operation and the `http` crate refused the

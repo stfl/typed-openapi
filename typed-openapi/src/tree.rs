@@ -406,7 +406,8 @@ pub enum DispatchError {
         /// it.
         command: String,
     },
-    /// An argument the document cannot repair. The cause names the flag.
+    /// An argument the document cannot repair. The message names the flag, or
+    /// the path the flag pointed at.
     #[error(transparent)]
     Arg(#[from] ArgError),
     /// The arguments were read and the request could not be built from them.

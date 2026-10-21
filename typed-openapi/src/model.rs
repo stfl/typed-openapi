@@ -429,7 +429,7 @@ pub enum Body {
 #[non_exhaustive]
 pub enum DocumentError {
     /// `postcard` could not read the bytes as a reduction, or could not write
-    /// one. The cause says where it stopped.
+    /// one.
     #[error("the reduced model the bless step writes is not valid")]
     Blob(#[from] postcard::Error),
 }
