@@ -9,9 +9,16 @@
 //!
 //! The two protections state their numbers: the depth limit is 128 levels, and
 //! the alias bomb has a billion leaves. Each test also states how long the
-//! refusal may take, which is generous (a refusal takes milliseconds in a
-//! release build) and still far below what expanding the bomb would cost: a
-//! reader that lost its limit would not finish at all.
+//! refusal may take. The reader refuses 129 levels in milliseconds, and it
+//! refuses the bomb at the 2 500 001st node, which takes about a second in a
+//! release build and about nine in a debug build. The limit is generous and
+//! still far below what expanding the bomb would cost: a reader that lost its
+//! limit would not finish at all.
+//!
+//! The budget limits the value that a read builds, and every other cap is set
+//! behind that limit. Four tests read a document that the reader's default
+//! refuses and the budget holds: one anchor used a million times, an anchored
+//! list of a million items, 60 000 anchors, and a run of comments.
 
 #![expect(
     clippy::expect_used,
@@ -26,7 +33,8 @@ use serde_json::{Value, json};
 use typed_openapi::overlay::{self, Cause, OverlayError, Place};
 
 /// How long a refusal of a hostile input may take. A debug build refuses the
-/// alias bomb in about three seconds; expanding it is minutes and gigabytes.
+/// alias bomb in about nine seconds and a release build in about one, using
+/// about 600 MB; expanding it is minutes and gigabytes.
 const REFUSAL_WITHIN: Duration = Duration::from_secs(30);
 
 /// The stack of the thread that calls the reader in the depth test. Descending
@@ -46,6 +54,22 @@ const BOMB_LEAVES: u64 = 1_000_000_000;
 /// Leaves in the alias document that is read: the bomb's shape at a size the
 /// reader's budget holds.
 const READABLE_LEAVES: u64 = 100_000;
+
+/// Aliases of one anchor in the document that is read. Each alias is a node of
+/// the value, so the document is far under the budget's 2 500 000 nodes.
+const ALIASES_OF_ONE_ANCHOR: usize = 1_000_001;
+
+/// Items under one anchor: one more than the reader's default allows an anchor
+/// to keep.
+const ANCHORED_ITEMS: usize = 1_000_001;
+
+/// Anchors in the document that is read: more than the reader's default of
+/// 50 000.
+const ANCHORS: usize = 60_000;
+
+/// Comment lines between a key and the mapping nested under it: more than the
+/// 32 the reader's default keeps.
+const COMMENT_LINES: usize = 40;
 
 /// A minimal Overlay, with `actions` as given, so that a case names only the
 /// part that is wrong.
@@ -204,7 +228,7 @@ fn a_document_of_more_nodes_than_the_readers_default_budget_is_read() {
 
 /// `count` aliases of one anchor, each a list item under `used`.
 fn one_anchor_used(count: usize) -> String {
-    format!("shared: &shared ok\nused:\n{}", "- *shared\n".repeat(count))
+    format!("shared: &a ok\nused:\n{}", "- *a\n".repeat(count))
 }
 
 /// A response that is defined once and used by a hundred operations is a
@@ -217,16 +241,59 @@ fn one_anchor_used_a_hundred_times_is_read() {
     assert_eq!(read["used"].as_array().map(Vec::len), Some(100));
 }
 
-/// The reader's own default refuses more than 50 000 aliases. A 10 MB document
-/// has room for many more, and what an alias costs is held by the cap on the
-/// events that aliases copy.
+/// A value that occurs a million times in a document is one anchor and a million
+/// aliases. The value has a million nodes, which is inside the budget of a
+/// 10 MB document, and the reader's own defaults refuse it twice: they stop at
+/// 50 000 aliases, and at a million events copied from anchors.
 #[test]
-fn a_document_of_sixty_thousand_aliases_is_read() {
-    let aliases = 60_000;
+fn one_anchor_used_a_million_times_is_read() {
+    let used = ALIASES_OF_ONE_ANCHOR;
 
-    let read = overlay::parse(&one_anchor_used(aliases)).expect("a large document, not a bomb");
+    let read = overlay::parse(&one_anchor_used(used)).expect("a large document, not a bomb");
 
-    assert_eq!(read["used"].as_array().map(Vec::len), Some(aliases));
+    assert_eq!(read["used"].as_array().map(Vec::len), Some(used));
+}
+
+/// An anchor keeps a copy of every event inside it, whether or not an alias
+/// uses it, and the reader's own default stops at a million of them. A list of
+/// a million and one items under an anchor is a 4 MB document.
+#[test]
+fn an_anchored_list_of_a_million_items_is_read() {
+    let items = ANCHORED_ITEMS;
+    let text = format!("items: &items\n{}", "- 1\n".repeat(items));
+
+    let read = overlay::parse(&text).expect("a large list is not a hostile one");
+
+    assert_eq!(read["items"].as_array().map(Vec::len), Some(items));
+}
+
+/// The reader's own default stops at 50 000 anchors. Each anchor stands on a
+/// node, so a document inside the budget's 2 500 000 nodes may have as many
+/// anchors.
+#[test]
+fn sixty_thousand_anchors_are_read() {
+    let anchors = ANCHORS;
+    let mut text = String::new();
+    for anchor in 0..anchors {
+        writeln!(text, "k{anchor}: &a{anchor} v").expect("a string takes a write");
+    }
+
+    let read = overlay::parse(&text).expect("many anchors are not a hostile document");
+
+    assert_eq!(read.as_object().map(serde_json::Map::len), Some(anchors));
+}
+
+/// A comment is no part of the value. The reader's own default keeps the
+/// comments it reads, and refuses a run of more than 32 between a key and the
+/// value that nests under it.
+#[test]
+fn comments_between_a_key_and_its_value_are_not_read() {
+    let comments = "# a comment\n".repeat(COMMENT_LINES);
+    let text = format!("k:\n{comments}  v: 1\n");
+
+    let read = overlay::parse(&text).expect("comments are not a hostile document");
+
+    assert_eq!(read, json!({ "k": { "v": 1 } }));
 }
 
 /// Two readings of YAML 1.1 that the reader cannot switch off. The test pins

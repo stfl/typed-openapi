@@ -36,14 +36,16 @@ the crate follows [Semantic Versioning][semver].
     Repair: quote the value or remove it.
   - The messages for a text that is not YAML are the new reader's words, and
     each names its line and column.
-  - A document past the reader's budget is refused: more than 2 500 000 nodes
-    or aliases, 10 000 000 events or 50 000 anchors, or more than 1 000 000
-    events copied from anchors by aliases. An anchor may have as many aliases
-    as those limits allow. The old reader read 3 000 000 scalars, 60 000
-    anchors, and an anchor of 10 000 items used by 1 000 aliases (10 000 000
-    leaves), and it refused an alias document of 100 000 leaves, which the new
-    reader reads. A document of ordinary content under 10 MB stays below the
-    limits, and they are fixed. Repair: split a document that reaches one.
+  - A value past the reader's budget is refused: more than 2 500 000 nodes or
+    64 MiB of scalar text, each counted with every alias expanded. So are
+    anchors nested inside each other that keep more than 10 000 000 events or
+    64 MiB between them. The old reader read three documents that the new one
+    refuses: 3 000 000 scalars (a JSON array of 3 000 000 single digits is
+    6 MB), an anchor of 10 000 items used by 1 000 aliases (10 000 000 leaves),
+    and a 1 MB string used by 100 aliases. It refused an alias document of
+    100 000 leaves, which the new reader reads. There is no repair: the limits
+    are fixed, and the read comes before the first Overlay, so no Overlay can
+    shrink a document that reaches one.
 
   The `document` feature names `serde-saphyr` where it named `serde_yaml_ng`.
   Repair: a test of yours that read YAML with `serde_yaml_ng` names its own

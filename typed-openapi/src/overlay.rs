@@ -32,10 +32,10 @@
 //! stay strings, so that an enum value `N` is not `false` and `x-cli-writes:
 //! yes` is not `true`. `<<` is an ordinary key, not a merge. A mapping with the
 //! same key twice is refused with its line and column. A nesting past 128
-//! levels and an alias bomb are refused, and the budget is wide enough for a
-//! 10 MB document, in which one anchor may have tens of thousands of aliases.
-//! Two YAML 1.1 readings remain: `1_000` is the number 1000, and `017` is a
-//! float.
+//! levels is refused, and so is a value of more than 2 500 000 nodes or 64 MiB
+//! of scalar text, counted with every alias expanded. That is the size of a
+//! 10 MB document, and an alias bomb is far past it. Comments are not read. Two
+//! YAML 1.1 readings remain: `1_000` is the number 1000, and `017` is a float.
 
 use thiserror::Error;
 
@@ -119,15 +119,26 @@ pub enum Place {
 /// The options of every YAML read in this crate, and the one place they are
 /// set.
 ///
-/// The reader's defaults read YAML 1.1 booleans, merge `<<` keys, refuse a
-/// document of a few hundred thousand nodes, and refuse one that has more than
-/// ten aliases for each anchor (from a hundred aliases on) or more than 50 000
-/// aliases. None of the four is right for a vendor's OpenAPI document: a
-/// response defined once and used by a hundred operations is the document
-/// working as intended. An alias bomb is held by the cap on the events that
-/// aliases copy, a million at the reader's default, and that cap counts work
-/// where a count of aliases does not. The snippet stays off, because a message
-/// that draws the file across several lines does not fit under `caused by:`.
+/// The reader's defaults read YAML 1.1 booleans, merge `<<` keys, keep
+/// comments, and hold a budget that suits a configuration file. None of the
+/// four suits a vendor's OpenAPI document.
+///
+/// The budget limits the value that a read builds: 2 500 000 nodes and 64 MiB
+/// of scalar text, counted with every alias expanded, at a depth of 128. That is
+/// the size of a 10 MB document. Every other cap is set where a document inside
+/// those limits cannot reach it, so that the budget refuses no other size of
+/// document. A response defined once and used by a hundred operations is the
+/// document working as intended, and a value that occurs a million times is a
+/// large document and not a hostile one. The reader counts what an alias
+/// replays in the node limit, so that limit refuses an alias bomb as it refuses
+/// a text with too many nodes. Only anchors nested inside each other reach the
+/// caps on the events and the bytes that anchors keep, and those caps limit the
+/// memory of the copies.
+///
+/// A value holds no comment, and the reader refuses a run of more than 32 of
+/// them between a key and its nested value, so comments are not read. The
+/// snippet stays off, because a message that draws the file across several
+/// lines does not fit under `caused by:`.
 fn reader() -> serde_saphyr::Options {
     serde_saphyr::options! {
         strict_booleans: true,
@@ -137,8 +148,14 @@ fn reader() -> serde_saphyr::Options {
             max_nodes: 2_500_000,
             max_events: 10_000_000,
             max_aliases: 2_500_000,
+            max_anchors: 2_500_000,
+            max_recorded_anchor_events: 10_000_000,
             enforce_alias_anchor_ratio: false,
         },
+        alias_limits: serde_saphyr::alias_limits! {
+            max_total_replayed_events: 10_000_000,
+        },
+        emit_comments: false,
         with_snippet: false,
     }
 }
