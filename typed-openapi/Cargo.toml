@@ -30,7 +30,12 @@ required-features = ["document"]
 # ways. A target that builds a generator `Settings` or names a generator error
 # wants `generate`, every other one reads a document and wants `document`, and
 # each that mounts the command tree or names one of its types wants `clap`
-# beside it.
+# beside it. `layout` is the one that wants none: it traces the types of the
+# model, which every build has, and reads no document.
+[[test]]
+name = "blob"
+required-features = ["document", "clap"]
+
 [[test]]
 name = "dispatch"
 required-features = ["document", "clap"]
@@ -54,6 +59,10 @@ required-features = ["generate"]
 [[test]]
 name = "hostile"
 required-features = ["generate", "clap"]
+
+[[test]]
+name = "layout"
+required-features = []
 
 [[test]]
 name = "required"
@@ -155,6 +164,9 @@ typify = { workspace = true, optional = true }
 # inheriting it: a dev-dependency's features reach `cargo test` and
 # `cargo clippy --all-targets` and stop there.
 typed-openapi = { path = ".", features = ["document", "generate"] }
+# Traces the serde layout of `Document` and every type inside it, which
+# `tests/layout.rs` compares with the committed description.
+serde-reflection = { workspace = true }
 
 # docs.rs builds with every feature on and `--cfg docsrs`, which `lib.rs` turns
 # into `feature(doc_cfg)`: that is what prints "Available on crate feature ...

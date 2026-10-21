@@ -57,6 +57,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "w
 roas-overlay = "0.3"
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
+serde-reflection = { version = "0.6", default-features = false }
 serde-saphyr = "2.0"
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_path_to_error = "0.1"

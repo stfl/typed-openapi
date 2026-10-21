@@ -99,6 +99,12 @@ and nothing in `typed-openapi/src/` may need a nightly feature.
 
 ## Publishing
 
+A version bump is followed by `just bless`. The stamp of the model blob holds
+the version of typed-openapi, so `examples/toy/api-generated/src/model.postcard`
+changes with each version, and `blessed` fails on a bump that did not write it
+again. The version is in `[workspace.package]` of the root `Cargo.toml`, a file
+that no directory note covers.
+
 A merge to `main` that carries a version nobody has tagged is the one act that
 releases, and `.github/workflows/release.yml` does all of it. Its `version` job
 reads the manifest and answers `release` or `rehearse`; no later job looks at

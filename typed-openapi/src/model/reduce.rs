@@ -28,8 +28,8 @@ use openapiv3::{
 use thiserror::Error;
 
 use super::{
-    Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, Gate, JSON_BODY,
-    JSON_BODY_TEMPLATE, Join, Location, Operation, Param, RAW_BODY, Shape, Unsupported,
+    Body, COMMIT, Document, Effect, Field, Gate, Join, Location, Operation, Param, Shape,
+    TRANSPORT, Unmet, Unsupported, first_collision, gate_on_read, spends, unmet,
 };
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
 use crate::scalar::Scalar;
@@ -58,27 +58,6 @@ const GATES: &str = "x-cli-gates";
 /// cannot say that two parameters only mean something together, so the marker
 /// sits on the parameter that needs the other.
 const REQUIRES: &str = "x-cli-requires";
-
-/// The five flags that carry a request's body, spent by every subcommand
-/// before the document has a say.
-///
-/// A parameter or a body field that wants one of these moves aside for it, and
-/// a gate that names one is refused. Nothing here is a person saying yes, which
-/// is why these yield where a gate and the confirmation do not: a
-/// `--body-json-body` is ugly and harmless, where a confirmation nobody typed
-/// is neither.
-///
-/// Spending a word here changes the reduced model of any document that declares
-/// a field spelled the same way, which is the point: the field moves aside at
-/// bless time, where a reviewer sees it, rather than shadowing a flag the CLI
-/// needs.
-const TRANSPORT: [&str; 5] = [
-    JSON_BODY,
-    JSON_BODY_TEMPLATE,
-    RAW_BODY,
-    FILE_PART,
-    FIELD_PART,
-];
 
 /// What a refusal calls the request body.
 ///
@@ -366,11 +345,6 @@ pub enum LoadError {
     },
 }
 
-/// `--help`, which clap declares on every subcommand whether or not anyone
-/// asked. Nothing here can move it, so it is a name the confirmation may not
-/// take.
-const HELP: &str = "help";
-
 /// Why a word cannot be the confirmation.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ConfirmationError {
@@ -429,7 +403,7 @@ impl Loading {
     /// `gates_of`, and for the same reason.
     pub fn commit(mut self, word: &str) -> Result<Self, ConfirmationError> {
         let word = spelled("confirmation", word)?;
-        if TRANSPORT.contains(&word.as_str()) || word == HELP {
+        if spends(&word) {
             return Err(ConfirmationError::Taken { word });
         }
         self.commit = word;
@@ -539,7 +513,7 @@ impl Document {
                 ops.push(Operation::build(path, method, op, params, whole)?);
             }
         }
-        if let Some(collision) = first_collision(&ops) {
+        if let Some(collision) = collision(&ops) {
             return Err(collision);
         }
         Ok(Self {
@@ -712,12 +686,12 @@ fn gates_of(
         }
         gates.push(gate);
     }
-    match (effect, gates.first()) {
-        (Effect::Read, Some(gate)) => Err(LoadError::GatedRead {
+    match gate_on_read(effect, &gates) {
+        Some(gate) => Err(LoadError::GatedRead {
             op: id.to_owned(),
             gate: gate.clone(),
         }),
-        _ => Ok(gates),
+        None => Ok(gates),
     }
 }
 
@@ -750,18 +724,12 @@ fn listed<'o>(
 /// Two operations under one `<group> <command>` would silently shadow each
 /// other, so the document is refused instead — never resolved by renaming one
 /// of them, which would move a name nobody asked to move.
-fn first_collision(ops: &[Operation]) -> Option<LoadError> {
-    ops.iter().enumerate().find_map(|(index, op)| {
-        let later = ops
-            .get(index + 1..)?
-            .iter()
-            .find(|later| later.group == op.group && later.command == op.command)?;
-        Some(LoadError::DuplicateCommand {
-            group: op.group.clone(),
-            command: op.command.clone(),
-            first: op.id.clone(),
-            second: later.id.clone(),
-        })
+fn collision(ops: &[Operation]) -> Option<LoadError> {
+    first_collision(ops).map(|(first, second)| LoadError::DuplicateCommand {
+        group: first.group.clone(),
+        command: first.command.clone(),
+        first: first.id.clone(),
+        second: second.id.clone(),
     })
 }
 
@@ -785,10 +753,7 @@ fn effect_of(method: &Method, op: &openapiv3::Operation) -> Effect {
     if op.extensions.get(WRITES) == Some(&serde_json::Value::Bool(true)) {
         return Effect::Write;
     }
-    match *method {
-        Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE => Effect::Read,
-        _ => Effect::Write,
-    }
+    Effect::of_method(method)
 }
 
 impl Param {
@@ -844,26 +809,24 @@ fn requires_of(op: &str, data: &ParameterData) -> Result<Vec<String>, LoadError>
 /// send, is a requirement no run could meet, so it is refused here rather than
 /// mounted as a flag that refuses everyone who gives it.
 fn companions(op: &str, params: &[Param]) -> Result<(), LoadError> {
-    for param in params {
-        for requires in param.requires() {
-            let Some(companion) = params.iter().find(|other| other.name() == requires) else {
-                return Err(LoadError::RequiresUnknown {
-                    op: op.to_owned(),
-                    name: param.name().to_owned(),
-                    requires: requires.clone(),
-                });
-            };
-            if let Shape::Unreachable(why) = companion.shape() {
-                return Err(LoadError::RequiresUnreachable {
-                    op: op.to_owned(),
-                    name: param.name().to_owned(),
-                    requires: requires.clone(),
-                    why: why.clone(),
-                });
-            }
-        }
+    match unmet(params) {
+        None => Ok(()),
+        Some(Unmet::Unknown { name, requires }) => Err(LoadError::RequiresUnknown {
+            op: op.to_owned(),
+            name: name.to_owned(),
+            requires: requires.to_owned(),
+        }),
+        Some(Unmet::Unreachable {
+            name,
+            requires,
+            why,
+        }) => Err(LoadError::RequiresUnreachable {
+            op: op.to_owned(),
+            name: name.to_owned(),
+            requires: requires.to_owned(),
+            why: why.clone(),
+        }),
     }
-    Ok(())
 }
 
 /// What one parameter is worth on a command line, and the flag it claims when it

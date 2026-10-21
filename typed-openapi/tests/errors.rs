@@ -82,8 +82,13 @@ fn io_error() -> io::Error {
     io::Error::other("read timed out")
 }
 
+/// A blob of this build's layout that ends before its encoding does, which is
+/// the `postcard` failure behind `DocumentError::Blob`.
 fn blob_error() -> DocumentError {
-    Document::from_blob(&[0xFF]).expect_err("a stray byte is not a reduction")
+    let doc = Document::load(&document(URL, SOUND), &[]).expect("a document");
+    let mut blob = doc.to_blob().expect("the reduction encodes");
+    blob.pop();
+    Document::from_blob(&blob).expect_err("a blob with a byte missing is damaged")
 }
 
 fn load(document: &str, overlays: &[&str]) -> LoadError {
@@ -156,6 +161,12 @@ fn reading() -> Vec<Case> {
         from_input("DocumentError::Blob", blob_error(), |e| {
             matches!(e, DocumentError::Blob(_))
         }),
+        // No reduction a load writes fails to encode, so this cause is built
+        // by hand: the variant that holds it is what the case is about.
+        case(
+            "DocumentError::Encode",
+            DocumentError::Encode(postcard::Error::SerializeBufferFull),
+        ),
         from_input(
             "LoadError::Overlay",
             load("openapi: 3.0.3", &[MATCHES_NOTHING]),

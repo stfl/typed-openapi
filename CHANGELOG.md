@@ -11,6 +11,46 @@ the crate follows [Semantic Versioning][semver].
 
 ### Added
 
+- **A stamp on the model blob, and `Document::MODEL_LAYOUT`.** `to_blob` writes
+  a header before the encoding: a magic of 8 bytes, the layout number as a
+  `u32`, and the version of typed-openapi that wrote it. `MODEL_LAYOUT` is the
+  layout this build reads, 1 in this release, and it moves with any change to
+  what the blob holds. `from_blob` reads the header first, so a blob from
+  another build fails with a message that says what to do and never decodes into
+  a wrong model. All of its errors say to run the bless step again:
+  - `DocumentError::Unstamped { reads }`: the bytes carry no stamp, so they are
+    an empty file, a blob of typed-openapi 0.0.2 or older, or no model blob. It
+    names the layout this build reads.
+  - `DocumentError::Stale { layout, version, reads }`: the stamp names another
+    layout. It names that layout, the version that wrote the blob and the layout
+    this build reads.
+  - `DocumentError::Blob` and `DocumentError::Trailing { bytes }`: the stamp is
+    this build's and the blob is damaged. In `Blob` the bytes after the stamp do
+    not decode, and its message is worded anew (see *Changed*). In `Trailing` the
+    bytes decode and more bytes follow the encoding, and the message counts them.
+- **A decoded blob is checked again for what a load checks.** `from_blob`
+  refuses a confirmation word that `Loading::commit` refuses. In each operation
+  it refuses a flag that is not spelled as a load spells it, a flag that every
+  subcommand spends (`help` and the five flags that carry a body), two
+  declarations that take one flag (any two of a parameter, a body property, a
+  gate and, on a write, the confirmation word, and a gate named twice), a gate
+  on a read, a method that writes held as a read, a group or a command called
+  `help`, and a `requires` that names a parameter the operation does not declare
+  or one that has no flag. It refuses two operations under one
+  `<group> <command>`. A blob like that used to decode. In a debug build of the
+  binary, clap panicked at start-up on a flag declared twice, on a flag or a
+  confirmation word that begins with `-`, on `help` or a body flag that the
+  subcommand declares already, on two operations under one name and on a group
+  or command called `help`; in a release build one declaration took the place of
+  the other. A write held as a read, a `GET` that names a gate among them, was
+  sent without `--commit`. The other refusals stopped no build.
+  Eleven variants carry these refusals: `DocumentError::{Confirmation,
+  OperationConfirmation, Flag, FlagSpent, FlagTwice, GatedRead, WriteAsRead,
+  NameSpent, DuplicateCommand, RequiresUnknown, RequiresUnreachable}`. Nine name
+  the operation, `DuplicateCommand` names both of two, and `Confirmation` names
+  the document's confirmation word. Repair: run the bless step again. A blob that
+  a load wrote never meets them. Only `from_blob` applies these rules; a
+  `Document` read through `Deserialize` in another format is not held to them.
 - **`OverlayError::Shape`.** An Overlay that is YAML or JSON and has the wrong
   shape (no `actions`, an action with no `target`, a version other than 1.1) is
   `Shape`. It was `Syntax`, whose message said the text "is not valid YAML or
@@ -23,6 +63,23 @@ the crate follows [Semantic Versioning][semver].
 
 ### Changed
 
+- **Every adopter blesses again after the upgrade.** A blob written by 0.0.2
+  has no stamp, so `Document::from_blob` returns `DocumentError::Unstamped` and
+  the generated `Api::new()` fails with it. Repair: run your bless step and
+  commit `src/model.postcard`. The stamp holds the version of typed-openapi, so
+  the blob changes with each release even when the layout does not; a check that
+  blesses again and compares asks for a commit after each upgrade.
+- **`DocumentError::Blob` is worded anew, and `DocumentError::Encode` is the
+  failure to write one.** At 0.0.2 `Blob` read `the reduced model the bless step
+  writes is not valid: <cause>`. It reads `the model blob is damaged; run the
+  bless step again`, and the `postcard` error is its `source()`. `to_blob` used
+  to return `Blob` when `postcard` could not write the model; it returns
+  `Encode`, whose message is `the model could not be written as a blob`.
+  `DocumentError` no longer implements `From<postcard::Error>`, so a `?` on a
+  `postcard` error does not turn into `Blob`. Repair: match `Encode` where a
+  bless step handled `Blob` from `to_blob`, and write
+  `map_err(DocumentError::Blob)` where your own code read a blob with `postcard`
+  and wanted `Blob`.
 - **The YAML reader is serde-saphyr 2.0 in place of `serde_yaml_ng`.** Every
   document and every Overlay reads into the same value as before, and `yes`,
   `no`, `on`, `off`, `y` and `n` stay strings, as does `<<` as a key. Five
@@ -71,7 +128,7 @@ the crate follows [Semantic Versioning][semver].
   each cause once. Repair: walk `source()` wherever an error is reported, and
   read the cause in a test with `error.source()`; printing `{error}` alone no
   longer shows it. Most messages lose only the `: <cause>` they ended with:
-  `OverlayError`, `PlanError::Request`, `DocumentError::Blob`, `ArgError`,
+  `OverlayError`, `PlanError::Request`, `ArgError`,
   `client::Error::{Document, Request, Encode, Decode}`,
   `LoadError::{Shape, ServerUrl}` and `GenerateError::{Yaml, Unusable,
   NotOpenApi, Schema, Typify, NotRust, Blob}`. These are worded anew:

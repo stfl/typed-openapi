@@ -1,0 +1,413 @@
+{
+  "model_layout": 1,
+  "traces": {
+    "Bounds<f64>": {
+      "Bounds": {
+        "STRUCT": [
+          {
+            "low": {
+              "OPTION": {
+                "TYPENAME": "Limit"
+              }
+            }
+          },
+          {
+            "high": {
+              "OPTION": {
+                "TYPENAME": "Limit"
+              }
+            }
+          },
+          {
+            "multiple_of": {
+              "OPTION": "F64"
+            }
+          }
+        ]
+      },
+      "Limit": {
+        "ENUM": {
+          "0": {
+            "Inclusive": {
+              "NEWTYPE": "F64"
+            }
+          },
+          "1": {
+            "Exclusive": {
+              "NEWTYPE": "F64"
+            }
+          }
+        }
+      }
+    },
+    "Document": {
+      "Body": {
+        "ENUM": {
+          "0": {
+            "None": "UNIT"
+          },
+          "1": {
+            "JsonFields": {
+              "NEWTYPE": {
+                "SEQ": {
+                  "TYPENAME": "Field"
+                }
+              }
+            }
+          },
+          "2": {
+            "JsonWhole": {
+              "STRUCT": [
+                {
+                  "required": "BOOL"
+                },
+                {
+                  "template": {
+                    "OPTION": "STR"
+                  }
+                }
+              ]
+            }
+          },
+          "3": {
+            "Multipart": {
+              "STRUCT": [
+                {
+                  "names": {
+                    "SEQ": "STR"
+                  }
+                },
+                {
+                  "required": "BOOL"
+                }
+              ]
+            }
+          },
+          "4": {
+            "Opaque": {
+              "STRUCT": [
+                {
+                  "media_type": "STR"
+                },
+                {
+                  "required": "BOOL"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Bounds": {
+        "STRUCT": [
+          {
+            "low": {
+              "OPTION": {
+                "TYPENAME": "Limit"
+              }
+            }
+          },
+          {
+            "high": {
+              "OPTION": {
+                "TYPENAME": "Limit"
+              }
+            }
+          },
+          {
+            "multiple_of": {
+              "OPTION": "I64"
+            }
+          }
+        ]
+      },
+      "Document": {
+        "STRUCT": [
+          {
+            "base": "STR"
+          },
+          {
+            "commit": "STR"
+          },
+          {
+            "ops": {
+              "SEQ": {
+                "TYPENAME": "Operation"
+              }
+            }
+          }
+        ]
+      },
+      "Effect": {
+        "ENUM": {
+          "0": {
+            "Read": "UNIT"
+          },
+          "1": {
+            "Write": "UNIT"
+          }
+        }
+      },
+      "Field": {
+        "STRUCT": [
+          {
+            "name": "STR"
+          },
+          {
+            "flag": "STR"
+          },
+          {
+            "required": "BOOL"
+          },
+          {
+            "scalar": {
+              "TYPENAME": "Scalar"
+            }
+          },
+          {
+            "format": {
+              "OPTION": "STR"
+            }
+          },
+          {
+            "description": {
+              "OPTION": "STR"
+            }
+          }
+        ]
+      },
+      "Join": {
+        "ENUM": {
+          "0": {
+            "Pairs": "UNIT"
+          },
+          "1": {
+            "Commas": "UNIT"
+          }
+        }
+      },
+      "Limit": {
+        "ENUM": {
+          "0": {
+            "Inclusive": {
+              "NEWTYPE": "I64"
+            }
+          },
+          "1": {
+            "Exclusive": {
+              "NEWTYPE": "I64"
+            }
+          }
+        }
+      },
+      "Location": {
+        "ENUM": {
+          "0": {
+            "Path": "UNIT"
+          },
+          "1": {
+            "Query": "UNIT"
+          },
+          "2": {
+            "Header": "UNIT"
+          }
+        }
+      },
+      "Operation": {
+        "STRUCT": [
+          {
+            "id": "STR"
+          },
+          {
+            "group": "STR"
+          },
+          {
+            "command": "STR"
+          },
+          {
+            "commit": "STR"
+          },
+          {
+            "method": "STR"
+          },
+          {
+            "path": "STR"
+          },
+          {
+            "summary": {
+              "OPTION": "STR"
+            }
+          },
+          {
+            "description": {
+              "OPTION": "STR"
+            }
+          },
+          {
+            "params": {
+              "SEQ": {
+                "TYPENAME": "Param"
+              }
+            }
+          },
+          {
+            "body": {
+              "TYPENAME": "Body"
+            }
+          },
+          {
+            "effect": {
+              "TYPENAME": "Effect"
+            }
+          },
+          {
+            "gates": {
+              "SEQ": "STR"
+            }
+          }
+        ]
+      },
+      "Param": {
+        "STRUCT": [
+          {
+            "name": "STR"
+          },
+          {
+            "required": "BOOL"
+          },
+          {
+            "shape": {
+              "TYPENAME": "Shape"
+            }
+          },
+          {
+            "description": {
+              "OPTION": "STR"
+            }
+          },
+          {
+            "requires": {
+              "SEQ": "STR"
+            }
+          }
+        ]
+      },
+      "Scalar": {
+        "ENUM": {
+          "0": {
+            "Text": {
+              "NEWTYPE": {
+                "TYPENAME": "Text"
+              }
+            }
+          },
+          "1": {
+            "Integer": {
+              "NEWTYPE": {
+                "TYPENAME": "Bounds"
+              }
+            }
+          },
+          "2": {
+            "Number": {
+              "NEWTYPE": {
+                "TYPENAME": "Bounds"
+              }
+            }
+          },
+          "3": {
+            "Boolean": "UNIT"
+          },
+          "4": {
+            "Choice": {
+              "NEWTYPE": {
+                "SEQ": "STR"
+              }
+            }
+          }
+        }
+      },
+      "Shape": {
+        "ENUM": {
+          "0": {
+            "Flag": {
+              "STRUCT": [
+                {
+                  "flag": "STR"
+                },
+                {
+                  "location": {
+                    "TYPENAME": "Location"
+                  }
+                },
+                {
+                  "scalar": {
+                    "TYPENAME": "Scalar"
+                  }
+                },
+                {
+                  "join": {
+                    "OPTION": {
+                      "TYPENAME": "Join"
+                    }
+                  }
+                },
+                {
+                  "format": {
+                    "OPTION": "STR"
+                  }
+                }
+              ]
+            }
+          },
+          "1": {
+            "Unreachable": {
+              "NEWTYPE": {
+                "TYPENAME": "Unsupported"
+              }
+            }
+          }
+        }
+      },
+      "Text": {
+        "STRUCT": [
+          {
+            "pattern": {
+              "OPTION": "STR"
+            }
+          },
+          {
+            "min_length": {
+              "OPTION": "U64"
+            }
+          },
+          {
+            "max_length": {
+              "OPTION": "U64"
+            }
+          }
+        ]
+      },
+      "Unsupported": {
+        "ENUM": {
+          "0": {
+            "Cookie": "UNIT"
+          },
+          "1": {
+            "Encoded": "UNIT"
+          },
+          "2": {
+            "Structured": "UNIT"
+          },
+          "3": {
+            "Style": {
+              "NEWTYPE": "STR"
+            }
+          },
+          "4": {
+            "Unspellable": "UNIT"
+          }
+        }
+      }
+    }
+  }
+}
