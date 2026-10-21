@@ -52,20 +52,36 @@ use crate::values::{Part, Payload, Values};
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ArgError {
+    /// A file a flag names could not be read, or standard input could not be
+    /// when the flag names `-`.
     #[error("cannot read {}", path.display())]
     ReadBody {
+        /// The path as the operator typed it after the flag: `--json-body`,
+        /// `--raw-body` or the `@path` of a `--file` part. `-` is standard
+        /// input.
         path: PathBuf,
+        /// The error the operating system returned.
         #[source]
         source: std::io::Error,
     },
+    /// The file named by `--json-body` was read and is not JSON.
     #[error("{} does not hold JSON", path.display())]
     ParseBody {
+        /// The path as the operator typed it after `--json-body`.
         path: PathBuf,
+        /// `serde_json`'s reading of the bytes, with the line and column where
+        /// it stopped.
         #[source]
         source: serde_json::Error,
     },
+    /// A `--field` or `--file` value that has no part name before its first `=`.
     #[error("`--{flag} {raw}` is not `NAME=VALUE`")]
-    PartSyntax { flag: &'static str, raw: String },
+    PartSyntax {
+        /// The flag the value came with, without the leading `--`.
+        flag: &'static str,
+        /// The value as the operator typed it.
+        raw: String,
+    },
 }
 
 /// One subcommand per group, in document order, holding the operations under
@@ -374,12 +390,26 @@ pub enum Outcome {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DispatchError {
+    /// The matches name no group, or a group and no command under it.
+    /// [`commands`] makes every group require its subcommand, so clap refuses a
+    /// line that stops at a group; this is what `select` answers when it is
+    /// handed matches that stop short anyway.
     #[error("no command given")]
     NoCommand,
+    /// The matches name a group and a command that no operation of the document
+    /// is mounted under.
     #[error("no operation named `{group} {command}` in the document")]
-    Unknown { group: String, command: String },
+    Unknown {
+        /// The group subcommand clap matched, as the operator typed it.
+        group: String,
+        /// The command subcommand clap matched under it, as the operator typed
+        /// it.
+        command: String,
+    },
+    /// An argument the document cannot repair. The cause names the flag.
     #[error(transparent)]
     Arg(#[from] ArgError),
+    /// The arguments were read and the request could not be built from them.
     #[error(transparent)]
     Plan(#[from] PlanError),
     /// The client refused the request or never got an answer, carrying the

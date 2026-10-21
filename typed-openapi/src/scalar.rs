@@ -80,22 +80,45 @@ pub enum Limit<T> {
 pub enum ScalarError {
     /// Not the kind of value the document asks for at all.
     #[error("`{raw}` is not {wanted}")]
-    Kind { raw: String, wanted: &'static str },
+    Kind {
+        /// The argument as the operator typed it.
+        raw: String,
+        /// The kind of value the schema asks for, worded to finish the
+        /// sentence: `an integer`, `a number`, or `` `true` or `false` ``.
+        wanted: &'static str,
+    },
     /// Outside the document's `enum` — the one refusal that can say what to
     /// type instead, which is why it carries the list rather than a sentence.
     #[error("`{raw}` is not one of {}", .allowed.join(", "))]
-    Choice { raw: String, allowed: Vec<String> },
+    Choice {
+        /// The argument as the operator typed it.
+        raw: String,
+        /// The values the document's `enum` lists, in its order, spelled as
+        /// the operator types them.
+        allowed: Vec<String>,
+    },
     /// The right kind of value, refused by a rule the document states. `rule`
     /// finishes the sentence and carries the document's own number, which is
     /// the only part a user can act on; nothing branches on which keyword it
     /// came from.
     #[error("`{raw}` {rule}")]
-    Rule { raw: String, rule: String },
+    Rule {
+        /// The argument as the operator typed it.
+        raw: String,
+        /// The rest of the sentence: what the value broke, with the document's
+        /// own number in it.
+        rule: String,
+    },
     /// A `pattern` the engine cannot read. Every value is refused, because a
     /// rule nobody can run is not a rule everything passed — and a document
     /// stating one is refused outright while it is reduced.
     #[error("`{pattern}` is not a regular expression: {message}")]
-    Pattern { pattern: String, message: String },
+    Pattern {
+        /// The `pattern` as the document spells it.
+        pattern: String,
+        /// The reason the regular-expression engine gave.
+        message: String,
+    },
 }
 
 impl ScalarError {

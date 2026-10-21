@@ -17,6 +17,12 @@ fmt:
 # block. Building the docs is the only thing that runs rustdoc's lints: a
 # broken intra-doc link warns during a doctest run and fails here.
 #
+# `--cfg docsrs` is what docs.rs passes (`[package.metadata.docs.rs]`), and
+# `typed-openapi/src/lib.rs` turns it into `feature(doc_cfg)`, which prints the
+# "Available on crate feature" label on every item a feature adds. The one doc
+# build carries it, so that the path docs.rs takes is in the gate: a nightly
+# that renames or drops the feature fails here and not on docs.rs.
+#
 # `--all-features` compiles, lints and documents what only a named feature
 # builds: the `builder` wrappers and the reqwest adapter of the example. A
 # target the gate builds without linting is one a lint never reaches.
@@ -26,7 +32,7 @@ check:
     cargo fmt --all --check
     cargo check --workspace --all-targets --all-features
     cargo clippy --workspace --all-targets --all-features -- -D warnings
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+    RUSTDOCFLAGS="--cfg docsrs -D warnings" cargo doc --workspace --no-deps --all-features
 
 # A feature that adds or removes items has to be compiled with it and without
 # it, because nothing else finds an item that only exists in one of them. These

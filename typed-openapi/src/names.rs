@@ -44,6 +44,7 @@ impl CommandName {
         spelled(origin, raw).map(Self)
     }
 
+    /// The name as the user types it.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

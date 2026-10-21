@@ -98,38 +98,78 @@ const BODY: &str = "requestBody";
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum LoadError {
+    /// An Overlay could not be read or applied. The cause names the layer's
+    /// line or action.
     #[error(transparent)]
     Overlay(#[from] crate::overlay::OverlayError),
+    /// The overlaid document is not an OpenAPI 3 document. The cause names the
+    /// key where the reading stopped.
     #[error("the overlaid document is not an OpenAPI 3 document")]
     Shape(#[source] serde_json::Error),
+    /// The document lists no server, so a request has nowhere to go.
     #[error("no `servers` entry to send requests to")]
     NoServer,
+    /// The first server's URL is not a URL.
     #[error("`servers[0].url` ({url}) is not a URL")]
     ServerUrl {
+        /// `servers[0].url` as the document spells it.
         url: String,
+        /// The `http` crate's reason.
         #[source]
         source: http::uri::InvalidUri,
     },
+    /// An operation without an `operationId`, which is the name every later
+    /// refusal and every generated wrapper uses for it.
     #[error("{method} {path} has no operationId")]
-    NoOperationId { method: String, path: String },
+    NoOperationId {
+        /// The method of the operation, lowercase, as the path item spells it.
+        method: String,
+        /// The path template that holds the operation.
+        path: String,
+    },
+    /// A name the document offers for a group, a command or a gate that cannot
+    /// be spelled as a flag.
     #[error(transparent)]
     Name(#[from] NameError),
+    /// An `x-cli-command` or an `x-cli-group` that is not a string.
     #[error("{op}: `{key}` is not a string")]
-    Override { op: String, key: &'static str },
+    Override {
+        /// The `operationId` of the operation that carries the marker.
+        op: String,
+        /// The marker, `x-cli-command` or `x-cli-group`.
+        key: &'static str,
+    },
+    /// Two operations that reduce to one `<group> <command>`.
     #[error(
         "`{first}` and `{second}` are both `{group} {command}` on the command line; \
          give one of them an `x-cli-command`"
     )]
     DuplicateCommand {
+        /// The group both operations are mounted under.
         group: CommandName,
+        /// The command both operations are mounted under.
         command: CommandName,
+        /// The `operationId` of the operation that comes first in the document.
         first: String,
+        /// The `operationId` of the later one.
         second: String,
     },
+    /// An `x-cli-gates` that is not a list of strings.
     #[error("{op}: `{key}` is not a list of names")]
-    GateList { op: String, key: &'static str },
+    GateList {
+        /// The `operationId` of the operation that carries the marker.
+        op: String,
+        /// The marker, `x-cli-gates`.
+        key: &'static str,
+    },
+    /// A gate spelled like a flag that every subcommand spends on the body.
     #[error("{op}: the gate `{gate}` is one of the flags every subcommand already spends")]
-    ReservedGate { op: String, gate: Gate },
+    ReservedGate {
+        /// The `operationId` of the operation that names the gate.
+        op: String,
+        /// The gate as `x-cli-gates` spells it, after the spelling rule.
+        gate: Gate,
+    },
     /// A gate spelled like the confirmation. Both are words a person types to
     /// let something happen, and one flag cannot be two of them: answering the
     /// gate would answer the confirmation, which is the one thing a gate is
@@ -140,9 +180,20 @@ pub enum LoadError {
         "{op}: the gate `{gate}` is the word this CLI confirms with; \
          rename the gate in `x-cli-gates`, or confirm with another word"
     )]
-    GateIsTheConfirmation { op: String, gate: Gate },
+    GateIsTheConfirmation {
+        /// The `operationId` of the operation that names the gate.
+        op: String,
+        /// The gate as `x-cli-gates` spells it, after the spelling rule.
+        gate: Gate,
+    },
+    /// One operation lists the same gate twice.
     #[error("{op}: the gate `{gate}` is named twice")]
-    DuplicateGate { op: String, gate: Gate },
+    DuplicateGate {
+        /// The `operationId` of the operation that names the gate.
+        op: String,
+        /// The gate as `x-cli-gates` spells it, after the spelling rule.
+        gate: Gate,
+    },
     /// A document name that wanted the word a gate already spends. Refused
     /// rather than renamed: a flag carrying data must never be able to answer
     /// a gate, and a gate quietly moved aside is a hazard nobody typed.
@@ -155,9 +206,13 @@ pub enum LoadError {
          rename the gate in `x-cli-gates`, to `gate-{gate}` or another word"
     )]
     GateTakenByName {
+        /// The `operationId` of the operation that has both.
         op: String,
+        /// What the document name is: `parameter` or `property`.
         what: &'static str,
+        /// The document's name for it, as the document spells it.
         name: String,
+        /// The gate's flag, without the leading `--`.
         gate: String,
     },
     /// The same, for the confirmation. Its spelling is the adopter's own —
@@ -169,9 +224,13 @@ pub enum LoadError {
          where a bless step generates"
     )]
     CommitTakenByName {
+        /// The `operationId` of the operation that has both.
         op: String,
+        /// What the document name is: `parameter` or `property`.
         what: &'static str,
+        /// The document's name for it, as the document spells it.
         name: String,
+        /// The confirmation's flag, without the leading `--`.
         commit: String,
     },
     /// A read that names a gate is a document saying two things at once: a read
@@ -182,7 +241,12 @@ pub enum LoadError {
         "{op}: a read stands behind no gate, and this one names `{gate}`; \
          mark the operation `x-cli-writes: true` or drop the gate"
     )]
-    GatedRead { op: String, gate: Gate },
+    GatedRead {
+        /// The `operationId` of the read.
+        op: String,
+        /// The gate as `x-cli-gates` spells it, after the spelling rule.
+        gate: Gate,
+    },
     /// A `required` naming a key nothing describes, which is a mistake in the
     /// document — and the document reduced here is the vendor's with the
     /// adopter's Overlays applied, the one that has to be right. Refused rather
@@ -208,8 +272,12 @@ pub enum LoadError {
     /// correct it in an Overlay.
     #[error("{op}: `{name}` has a `$ref` that cannot be followed")]
     Unresolvable {
+        /// The `operationId` of the operation that holds the value.
         op: String,
+        /// The value the schema belongs to: a parameter's name, a body
+        /// property's name, or `requestBody` for the body as a whole.
         name: String,
+        /// The reference that could not be followed.
         #[source]
         source: RefError,
     },
@@ -224,8 +292,11 @@ pub enum LoadError {
          correct the parameter in an Overlay, or drop its `required`"
     )]
     Parameter {
+        /// The `operationId` of the operation that declares the parameter.
         op: String,
+        /// The parameter's name, as the document spells it.
         name: String,
+        /// Why this crate has no flag for it.
         why: Unsupported,
     },
     /// A `requestBody` whose `content` key names no media type — `form-data`
@@ -236,14 +307,23 @@ pub enum LoadError {
         "{op}: `{media_type}` is not a media type; \
          an Overlay is where a document's content type is corrected"
     )]
-    MediaType { op: String, media_type: String },
+    MediaType {
+        /// The `operationId` of the operation that declares the body.
+        op: String,
+        /// The `content` key as the document spells it.
+        media_type: String,
+    },
     /// A rule the document states that cannot be run — a `pattern` no regex
     /// engine here reads. Refused while the document is reduced, because a rule
     /// that cannot run is one every value would otherwise pass.
     #[error("{op}: `{name}` states a rule that cannot run")]
     Unrunnable {
+        /// The `operationId` of the operation that states the rule.
         op: String,
+        /// The parameter or body property the rule is stated about, as the
+        /// document spells it.
         name: String,
+        /// The rule that cannot run, with the engine's reason.
         #[source]
         source: crate::scalar::ScalarError,
     },
@@ -251,23 +331,38 @@ pub enum LoadError {
     /// rather than passed over, for the reason a gate list is: one name written
     /// where a list goes would otherwise be no requirement at all.
     #[error("{op}: `{REQUIRES}` on `{name}` is not a list of parameter names")]
-    RequiresList { op: String, name: String },
+    RequiresList {
+        /// The `operationId` of the operation that declares the parameter.
+        op: String,
+        /// The parameter that carries the `x-cli-requires`, as the document
+        /// spells it.
+        name: String,
+    },
     /// A parameter that requires a name the operation declares no parameter
     /// under. Every run giving it would be refused, and the spelling that was
     /// meant is the adopter's to correct.
     #[error("{op}: `{name}` requires `{requires}`, which is not a parameter of this operation")]
     RequiresUnknown {
+        /// The `operationId` of the operation that declares the parameter.
         op: String,
+        /// The parameter that carries the `x-cli-requires`, as the document
+        /// spells it.
         name: String,
+        /// The name `x-cli-requires` lists that no parameter has.
         requires: String,
     },
     /// A parameter that requires one this crate cannot put in a request, so no
     /// request giving the first could ever be built.
     #[error("{op}: `{name}` requires `{requires}`, and `{requires}` is {why}")]
     RequiresUnreachable {
+        /// The `operationId` of the operation that declares the parameter.
         op: String,
+        /// The parameter that carries the `x-cli-requires`, as the document
+        /// spells it.
         name: String,
+        /// The listed parameter that has no flag.
         requires: String,
+        /// Why this crate has no flag for it.
         why: Unsupported,
     },
 }

@@ -42,10 +42,18 @@ use crate::scalar::{Bounds, Limit, Scalar, Text};
 pub enum RefError {
     /// A reference naming nothing this document holds.
     #[error("`{reference}` does not resolve")]
-    Missing { reference: String },
+    Missing {
+        /// The `$ref` as the document spells it, such as
+        /// `#/components/schemas/Voucher`.
+        reference: String,
+    },
     /// A reference reached a second time while following one chain.
     #[error("`{reference}` is a reference cycle")]
-    Cycle { reference: String },
+    Cycle {
+        /// The `$ref` that was reached a second time, spelled as the document
+        /// spells it.
+        reference: String,
+    },
 }
 
 /// How deep a body template spells the document out.

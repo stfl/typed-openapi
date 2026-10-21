@@ -183,8 +183,11 @@ impl<'op> Carrier<'op> {
 /// Where a parameter goes in the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Location {
+    /// A `{name}` placeholder in the path template.
     Path,
+    /// A field of the query string.
     Query,
+    /// A request header.
     Header,
 }
 
@@ -217,9 +220,15 @@ pub enum Shape {
     /// accepts. `join` is `None` for a parameter that takes one value, and
     /// `Some` for a list — a flag that may be given again.
     Flag {
+        /// The long flag as the user types it, without the leading `--`.
         flag: String,
+        /// The part of the request the value is written into.
         location: Location,
+        /// The rules the document states about one value, which the flag's
+        /// parser enforces and its help line renders.
         scalar: Scalar,
+        /// How the repeats of the flag reach the request, and `None` for a
+        /// parameter that takes one value.
         join: Option<Join>,
         /// The `format` the document declares about this value, in its own
         /// spelling, and `None` where it declares none. It sits beside the
@@ -376,7 +385,10 @@ pub enum Body {
     /// while the document was reduced. `None` where the document describes no
     /// shape to render, and then the subcommand grows no flag to ask for one.
     JsonWhole {
+        /// Whether the document requires the body.
         required: bool,
+        /// The JSON skeleton of the body, rendered while the document was
+        /// reduced, and `None` where the document describes no shape to render.
         template: Option<String>,
     },
     /// `multipart/form-data`: assembled from `--file name=@path` and
@@ -384,12 +396,23 @@ pub enum Body {
     /// help line; the CLI accepts any part name, because a document that
     /// declares none (or misdeclares them) is common and refusing would help
     /// nobody.
-    Multipart { names: Vec<String>, required: bool },
+    Multipart {
+        /// The part names the document declares, in its order.
+        names: Vec<String>,
+        /// Whether the document requires the body.
+        required: bool,
+    },
     /// A media type this CLI does not assemble. `--raw-body FILE` sends the
     /// bytes verbatim under this `Content-Type` — and a media type is what it
     /// is, because a `content` key that is not one is refused while the
     /// document is reduced rather than carried here.
-    Opaque { media_type: String, required: bool },
+    Opaque {
+        /// The `Content-Type` the bytes go out under, as the document spells
+        /// the media type.
+        media_type: String,
+        /// Whether the document requires the body.
+        required: bool,
+    },
 }
 
 /// The bytes a bless step wrote are not a reduction this crate can read.
@@ -405,6 +428,8 @@ pub enum Body {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DocumentError {
+    /// `postcard` could not read the bytes as a reduction, or could not write
+    /// one. The cause says where it stopped.
     #[error("the reduced model the bless step writes is not valid")]
     Blob(#[from] postcard::Error),
 }
@@ -421,8 +446,14 @@ pub enum DocumentError {
     found.as_deref().map_or_else(|| "there is no such operation".to_owned(), |id| format!("`{id}`"))
 )]
 pub struct DriftError {
+    /// The index of the first row where the inventory and the document differ,
+    /// counted from zero.
     pub position: usize,
+    /// The `operationId` the inventory names at `position`, or `nothing after
+    /// it` where the document has an operation past the inventory's last row.
     pub expected: String,
+    /// The `operationId` the document has at `position`, or `None` where the
+    /// document ends before the inventory does.
     pub found: Option<String>,
 }
 
@@ -466,6 +497,7 @@ impl Document {
         &self.commit
     }
 
+    /// Every operation, in document order.
     pub fn iter(&self) -> std::slice::Iter<'_, Operation> {
         self.ops.iter()
     }
@@ -577,6 +609,8 @@ impl Operation {
         &self.command
     }
 
+    /// The HTTP method, which with the `x-cli-writes` marker decides the
+    /// operation's [`Effect`].
     #[must_use]
     pub fn method(&self) -> &Method {
         &self.method
@@ -588,26 +622,34 @@ impl Operation {
         &self.path
     }
 
+    /// The document's one-line `summary` of the operation, if it has one.
     #[must_use]
     pub fn summary(&self) -> Option<&str> {
         self.summary.as_deref()
     }
 
+    /// The document's longer `description` of the operation, if it has one.
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
 
+    /// Every parameter the document declares for the operation, the path
+    /// item's first and then the operation's own, the ones with no flag
+    /// included.
     #[must_use]
     pub fn params(&self) -> &[Param] {
         &self.params
     }
 
+    /// The request body the document asks for, and the flags it grows.
     #[must_use]
     pub fn body(&self) -> &Body {
         &self.body
     }
 
+    /// Whether the operation runs on sight or waits for the confirmation. It
+    /// comes from the method and the `x-cli-writes` marker, never from a name.
     #[must_use]
     pub fn effect(&self) -> Effect {
         self.effect
@@ -711,6 +753,7 @@ impl Param {
         }
     }
 
+    /// Whether the document requires the parameter.
     #[must_use]
     pub fn required(&self) -> bool {
         self.required
@@ -731,6 +774,7 @@ impl Param {
         &self.requires
     }
 
+    /// The document's `description` of the parameter, if it has one.
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
@@ -738,11 +782,13 @@ impl Param {
 }
 
 impl Field {
+    /// The property's name in the body, as the document spells it.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// The long flag as the user types it, without the leading `--`.
     #[must_use]
     pub fn flag(&self) -> &str {
         &self.flag
@@ -755,11 +801,14 @@ impl Field {
         renamed(&self.flag, &self.name)
     }
 
+    /// Whether the body's schema requires the property.
     #[must_use]
     pub fn required(&self) -> bool {
         self.required
     }
 
+    /// The rules the document states about one value of the property, which
+    /// the flag's parser enforces.
     #[must_use]
     pub fn scalar(&self) -> &Scalar {
         &self.scalar
@@ -776,6 +825,8 @@ impl Field {
         self.format.as_deref()
     }
 
+    /// What the property says about itself, or what the schema it points at
+    /// says, if either does.
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()

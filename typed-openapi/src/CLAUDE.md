@@ -248,6 +248,26 @@ test names it. A type that a public variant carries is public too, which is why
 `unreachable_pub` is a warning the gate denies, so a `pub` item the crate does
 not export fails it.
 
+**Every public item is documented, and no `allow` goes on an error.**
+`#![warn(missing_docs)]` is in `src/lib.rs`, and the gate's `-D warnings` makes
+it a refusal. `missing_docs` takes its level from the item that holds it, so an
+`allow` of that lint on an error enum also exempts every variant and field in
+it, and the error types are where most of the undocumented items are. A variant
+says when the crate raises it. A field says what the value is or where it comes
+from: the `operationId`, the flag as the operator typed it, the path into the
+body. It never says the `#[error]` message again, because the message prints it
+already. The adapter rule, that an adapter must not turn a status code into an
+error, is on `SyncClient` and `AsyncClient` themselves, because an adopter
+writes an adapter from that page.
+
+**A feature shows as a label, and no item writes it.** `src/lib.rs` turns
+`--cfg docsrs` into `feature(doc_cfg)`, and rustdoc then labels every item
+behind a `#[cfg(feature = ...)]` with "Available on crate feature ... only".
+docs.rs passes the cfg through `[package.metadata.docs.rs]`, and `just check`
+builds the docs with it, so the path docs.rs takes is in the gate. An item that
+a feature adds carries its `cfg` and no `#[doc(cfg(...))]`; the module
+declaration in `src/lib.rs` carries the `cfg` for the items inside it.
+
 **A count about the document is derived from it, never written down.**
 `Document::summary` in `src/summary.rs` answers every count an adoption is
 tempted to keep by hand — operations, groups, reads and writes, what stands

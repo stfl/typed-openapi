@@ -19,49 +19,93 @@ use crate::scalar::ScalarError;
 use crate::values::{Payload, Values};
 
 /// Values the document rejects for this operation.
+///
+/// Every variant names the operation by its `operationId` in `op`, and the
+/// parameter it is about by the name the document gives it in `name`.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ValueError {
+    /// The operation declares the parameter required and no value came.
     #[error("{op}: `{name}` is required")]
-    MissingParam { op: String, name: String },
+    MissingParam {
+        /// The `operationId` of the operation the values were checked against.
+        op: String,
+        /// The required parameter, as the document spells it on the wire.
+        name: String,
+    },
+    /// A value arrived for a name the operation does not declare.
     #[error("{op}: there is no `{name}` parameter")]
-    UnknownParam { op: String, name: String },
+    UnknownParam {
+        /// The `operationId` of the operation the values were checked against.
+        op: String,
+        /// The name the caller gave, which the operation does not declare.
+        name: String,
+    },
     /// A value for a parameter no flag and no wrapper argument can carry.
     /// Dropping it silently would send a request the caller did not ask for.
     #[error("{op}: `{name}` is {why}, so there is nowhere in the request to put a value for it")]
     UnsupportedParam {
+        /// The `operationId` of the operation the values were checked against.
         op: String,
+        /// The parameter, as the document spells it on the wire.
         name: String,
+        /// The reduction's reason this crate has no place for the parameter.
         why: Unsupported,
     },
     /// Several values for a parameter the document declares one value for. The
     /// list the caller meant is not a list the document describes.
     #[error("{op}: `{name}` takes one value, and was given {given}")]
     RepeatedParam {
+        /// The `operationId` of the operation the values were checked against.
         op: String,
+        /// The parameter, as the document spells it on the wire.
         name: String,
+        /// How many values the caller gave for it.
         given: usize,
     },
+    /// A value that the parameter's schema refuses. The cause says which rule.
     #[error("{op}: `{name}` was given a value the document refuses")]
     BadValue {
+        /// The `operationId` of the operation the values were checked against.
         op: String,
+        /// The parameter, as the document spells it on the wire.
         name: String,
+        /// The rule of the parameter's schema that the value broke.
         #[source]
         source: ScalarError,
     },
     /// A parameter given without one the document says has to come with it.
     #[error("{op}: `{name}` is given, and `{requires}` has to be given with it")]
     MissingCompanion {
+        /// The `operationId` of the operation the values were checked against.
         op: String,
+        /// The parameter that was given, as the document spells it on the wire.
         name: String,
+        /// The parameter that has to come with it and is absent, spelled the
+        /// same way.
         requires: String,
     },
+    /// The operation requires a request body and the caller brought none.
     #[error("{op}: a request body is required")]
-    MissingBody { op: String },
+    MissingBody {
+        /// The `operationId` of the operation the values were checked against.
+        op: String,
+    },
+    /// A body arrived for an operation the document gives none.
     #[error("{op}: takes no request body")]
-    UnexpectedBody { op: String },
+    UnexpectedBody {
+        /// The `operationId` of the operation the values were checked against.
+        op: String,
+    },
+    /// A body of another kind than the operation's document declares.
     #[error("{op}: expects a {expected} body")]
-    WrongBodyKind { op: String, expected: String },
+    WrongBodyKind {
+        /// The `operationId` of the operation the values were checked against.
+        op: String,
+        /// What the operation's body is: `JSON`, `multipart/form-data`, or the media
+        /// type the document declares for an opaque body.
+        expected: String,
+    },
 }
 
 /// An operation with values that satisfy it.
@@ -133,6 +177,7 @@ impl<'a> Invocation<'a> {
         Ok(Self { op, values })
     }
 
+    /// The operation the values were checked against.
     #[must_use]
     pub fn operation(&self) -> &'a Operation {
         self.op

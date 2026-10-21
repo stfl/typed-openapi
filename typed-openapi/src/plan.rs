@@ -133,8 +133,12 @@ fn opened(op: &Operation, answers: &Answers) -> bool {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum PlanError {
+    /// The values do not satisfy the operation. The cause names the parameter.
     #[error(transparent)]
     Value(#[from] ValueError),
+    /// The values satisfied the operation and the `http` crate refused the
+    /// request they render to: a base URI, a header name or a header value it
+    /// cannot carry.
     #[error("cannot build the request")]
     Request(#[from] http::Error),
 }
