@@ -11,14 +11,16 @@
 //! the alias bomb has a billion leaves. Each test also states how long the
 //! refusal may take. The reader refuses 129 levels in milliseconds, and it
 //! refuses the bomb at the 2 500 001st node, which takes about a second in a
-//! release build and about nine in a debug build, on a development host and on a
-//! CI runner alike; the slowest CI run took sixteen. The limit leaves a factor of
-//! more than three on that run and is still far below what expanding the bomb
-//! would cost: a reader that lost its limit would not finish at all.
+//! release build. A debug build takes about nine seconds on a development host
+//! and between eight and twenty on a CI runner; the slowest CI run took twenty.
+//! The bound is three times that run and is still far below what expanding the
+//! bomb would cost: a reader that lost its limit would not finish at all.
 //!
 //! The budget limits the value that a read builds, and every other cap is set
 //! behind that limit, except the two on what nested anchors keep. These tests
 //! read a document that the reader's default refuses and the budget holds:
+//! `a_nesting_of_128_levels_is_read_and_one_of_129_is_refused_within_seconds`,
+//! `a_document_of_more_nodes_than_the_readers_default_budget_is_read`,
 //! `one_anchor_used_a_hundred_times_is_read`,
 //! `one_anchor_used_a_million_times_is_read`,
 //! `an_anchored_list_of_a_million_items_is_read`,
@@ -47,9 +49,10 @@ use typed_openapi::overlay::{self, Cause, OverlayError, Place};
 /// from an expansion and does not measure speed, so it is at least three times
 /// the slowest time that a CI runner gives, to keep a slow runner from turning
 /// the gate red, and far below what the read would cost without its limit. A
-/// debug build refuses the alias bomb in about nine seconds on a CI runner and in
-/// sixteen in the slowest run, and a release build in about one, using about
-/// 600 MB; expanding it would take minutes and gigabytes at the same rate.
+/// debug build refuses the alias bomb in about nine seconds on a development host
+/// and in eight to twenty on a CI runner, and a release build in about one,
+/// using about 600 MB; expanding it would take minutes and gigabytes at the same
+/// rate.
 const REFUSAL_WITHIN: Duration = Duration::from_secs(60);
 
 /// The stack of the thread that calls the reader in the depth test. Descending
