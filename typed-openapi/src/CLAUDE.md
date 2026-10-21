@@ -190,16 +190,20 @@ line and the typed call disagree about an operation is a bug, not a feature.
 `read` in `src/overlay.rs` is the function every document and every Overlay goes
 through, into a `serde_json::Value`, before anything else looks at it. That
 order is what tells `Syntax` (not readable as YAML or JSON) from `Shape` (YAML
-of the wrong shape). The reader's options are in `reader`, which `read` calls,
-and they are not the reader's defaults: a default is a different document. On
-sevdesk-cli's committed overlaid file the defaults read the enum value `N` as
-`false`, and they read a vendor's `x-cli-writes: yes` as `true`. So `yes`, `no`,
-`on`, `off`, `y` and `n` stay strings, `<<` is an ordinary key, and the budget
-is a depth of 128 with node and event limits wide enough for 10 MB. The emitter
-keeps its defaults, which quote what a YAML 1.1 reader would misread. A public
-error holds an `overlay::Cause` (a message, and an `overlay::Place`: the line and
-column of the text, or the action's index) or a boxed `dyn Error + Send + Sync`,
-so a release of the YAML crate, `roas-overlay` or typify is never a break here.
+of the wrong shape). The reader's options are in `reader`, which `read_here`
+calls, and `read` calls `read_here`. The options are not the reader's defaults:
+a default is a different document. On sevdesk-cli's committed overlaid file the
+defaults read the enum value `N` as `false`. They read a vendor's
+`x-cli-writes: yes` as `true`. So `yes`, `no`, `on`, `off`, `y` and `n` stay
+strings, `<<` is an ordinary key, and the budget is a depth of 128 with node,
+alias and event limits wide enough for 10 MB. The budget does not check aliases
+against anchors: a response defined once and used by a hundred operations is one
+anchor and a hundred aliases, and the reader's default refuses it. What holds an
+alias bomb is the cap on the events that aliases copy. The emitter keeps its
+defaults, which quote what a YAML 1.1 reader would misread. A public error holds
+an `overlay::Cause` (a message, and an `overlay::Place`: the line and column of
+the text, or the action's index) or a boxed `dyn Error + Send + Sync`, so a
+release of the YAML crate, `roas-overlay` or typify is never a break here.
 
 The depth limit is a recursion limit, and the library holds it on any thread. The
 reader descends 128 levels before it refuses the 129th, which takes up to 3 MiB

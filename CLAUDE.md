@@ -6,7 +6,8 @@ that the example cannot rot.
 
 Run `just gate` before saying anything is done. It is `check` (fmt, compile,
 clippy, rustdoc — each with warnings denied), `features` (each feature alone
-and all together, each with warnings denied, plus the clap-free assertion),
+and all together, each with warnings denied, plus the bon-free, clap-free and
+bigint-free assertions),
 `test` (nextest and the doctests, which nextest cannot run), `blessed` (the
 generator still reproduces every committed artefact, and no file in
 `api-generated` is untracked), `package` (the crate built and tested from its

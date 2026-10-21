@@ -22,10 +22,10 @@
 //! ([`OverlayError::Shape`]).
 //!
 //! The read runs on a thread of its own, with a stack this crate sizes. The
-//! reader is recursive and spends stack on each level of nesting, so a text at
-//! the depth limit needs more stack than a test thread or a Windows main thread
-//! has, and a read on the caller's thread would stop the process with a stack
-//! overflow where it should return an error.
+//! reader is recursive and spends stack on each level of nesting, so in a debug
+//! build a text at the depth limit needs more stack than a test thread or a
+//! Windows main thread has, and a read on the caller's thread would stop the
+//! process with a stack overflow where it should return an error.
 //!
 //! The reader follows YAML 1.2 where its defaults follow 1.1, because a
 //! document's strings are the vendor's: `yes`, `no`, `on`, `off`, `y` and `n`
@@ -33,8 +33,9 @@
 //! yes` is not `true`. `<<` is an ordinary key, not a merge. A mapping with the
 //! same key twice is refused with its line and column. A nesting past 128
 //! levels and an alias bomb are refused, and the budget is wide enough for a
-//! 10 MB document. Two YAML 1.1 readings remain: `1_000` is the number 1000, and
-//! `017` is a float.
+//! 10 MB document, in which one anchor may have tens of thousands of aliases.
+//! Two YAML 1.1 readings remain: `1_000` is the number 1000, and `017` is a
+//! float.
 
 use thiserror::Error;
 
@@ -118,10 +119,15 @@ pub enum Place {
 /// The options of every YAML read in this crate, and the one place they are
 /// set.
 ///
-/// The reader's defaults read YAML 1.1 booleans, merge `<<` keys and refuse a
-/// document of a few hundred thousand nodes, and none of the three is right for
-/// a vendor's OpenAPI document. The snippet stays off, because a message that
-/// draws the file across several lines does not fit under `caused by:`.
+/// The reader's defaults read YAML 1.1 booleans, merge `<<` keys, refuse a
+/// document of a few hundred thousand nodes, and refuse one that has more than
+/// ten aliases for each anchor (from a hundred aliases on) or more than 50 000
+/// aliases. None of the four is right for a vendor's OpenAPI document: a
+/// response defined once and used by a hundred operations is the document
+/// working as intended. An alias bomb is held by the cap on the events that
+/// aliases copy, a million at the reader's default, and that cap counts work
+/// where a count of aliases does not. The snippet stays off, because a message
+/// that draws the file across several lines does not fit under `caused by:`.
 fn reader() -> serde_saphyr::Options {
     serde_saphyr::options! {
         strict_booleans: true,
@@ -130,6 +136,8 @@ fn reader() -> serde_saphyr::Options {
             max_depth: 128,
             max_nodes: 2_500_000,
             max_events: 10_000_000,
+            max_aliases: 2_500_000,
+            enforce_alias_anchor_ratio: false,
         },
         with_snippet: false,
     }
@@ -139,7 +147,7 @@ fn reader() -> serde_saphyr::Options {
 ///
 /// The reader descends 128 levels before it refuses the 129th, and a debug build
 /// spends about 3 MiB of stack to do it. The constant is more than twice that,
-/// so a read needs none of its caller's stack. A thread's stack is reserved
+/// so the descent does not use the caller's stack. A thread's stack is reserved
 /// address space, and the system commits a page of it only when the reader
 /// first uses it, so a text of a real document's depth costs what it uses.
 const READER_STACK: usize = 8 * 1024 * 1024;
@@ -148,11 +156,12 @@ const READER_STACK: usize = 8 * 1024 * 1024;
 /// goes through here.
 ///
 /// The read runs on a thread whose stack is [`READER_STACK`], so a nesting at
-/// the limit is read, and one past it is refused, on a caller's thread of any
-/// size. A panic in the reader comes back on the caller's thread, where the
-/// caller would see it without the thread. A read does not fail because of a
-/// thread: where the system refuses one, as on a target with no threads, the
-/// read happens on the caller's.
+/// the limit is read, and one past it is refused, without the descent using the
+/// caller's stack. The caller's thread still runs the scope and the join, and
+/// drops the value. A panic in the reader comes back on the caller's thread,
+/// where the caller would see it without the thread. A read does not fail
+/// because of a thread: where the system refuses one, as on a target with no
+/// threads, the read happens on the caller's.
 fn read(text: &str) -> Result<serde_json::Value, Cause> {
     std::thread::scope(|scope| {
         let spawned = std::thread::Builder::new()

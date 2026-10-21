@@ -36,10 +36,12 @@ the crate follows [Semantic Versioning][semver].
     Repair: quote the value or remove it.
   - The messages for a text that is not YAML are the new reader's words, and
     each names its line and column.
-  - A document past the reader's budget is refused: more than 2 500 000 nodes,
-    10 000 000 events or 50 000 anchors, or more than 1 000 000 events copied
-    from anchors by aliases. The old reader read 3 000 000 scalars and 60 000
-    anchors, and refused an alias document of 100 000 leaves, which the new
+  - A document past the reader's budget is refused: more than 2 500 000 nodes
+    or aliases, 10 000 000 events or 50 000 anchors, or more than 1 000 000
+    events copied from anchors by aliases. An anchor may have as many aliases
+    as those limits allow. The old reader read 3 000 000 scalars, 60 000
+    anchors, and an anchor of 10 000 items used by 1 000 aliases (10 000 000
+    leaves), and it refused an alias document of 100 000 leaves, which the new
     reader reads. A document of ordinary content under 10 MB stays below the
     limits, and they are fixed. Repair: split a document that reaches one.
 

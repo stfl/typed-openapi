@@ -202,9 +202,36 @@ fn a_document_of_more_nodes_than_the_readers_default_budget_is_read() {
     assert_eq!(read.as_array().map(Vec::len), Some(nodes));
 }
 
+/// `count` aliases of one anchor, each a list item under `used`.
+fn one_anchor_used(count: usize) -> String {
+    format!("shared: &shared ok\nused:\n{}", "- *shared\n".repeat(count))
+}
+
+/// A response that is defined once and used by a hundred operations is a
+/// document working as intended, with one anchor and a hundred aliases. The
+/// reader's own default refuses that, as a guess at a bomb.
+#[test]
+fn one_anchor_used_a_hundred_times_is_read() {
+    let read = overlay::parse(&one_anchor_used(100)).expect("a shared definition is not a bomb");
+
+    assert_eq!(read["used"].as_array().map(Vec::len), Some(100));
+}
+
+/// The reader's own default refuses more than 50 000 aliases. A 10 MB document
+/// has room for many more, and what an alias costs is held by the cap on the
+/// events that aliases copy.
+#[test]
+fn a_document_of_sixty_thousand_aliases_is_read() {
+    let aliases = 60_000;
+
+    let read = overlay::parse(&one_anchor_used(aliases)).expect("a large document, not a bomb");
+
+    assert_eq!(read["used"].as_array().map(Vec::len), Some(aliases));
+}
+
 /// Two readings of YAML 1.1 that the reader cannot switch off. The test pins
 /// them as they are and does not endorse them: the day one changes, the test
-/// goes red, and the CHANGELOG line that names it needs its edit too.
+/// goes red, and the change needs a CHANGELOG line.
 #[test]
 fn two_yaml_1_1_numbers_are_still_read_as_numbers() {
     let read = overlay::parse("separated: 1_000\noctal: 017\n").expect("a document");
@@ -233,8 +260,9 @@ fn text_that_is_not_yaml_is_a_syntax_error_with_its_place() {
     );
 }
 
-/// Valid YAML that is not an Overlay is a shape error, and is not called
-/// "not valid YAML or JSON".
+/// Valid YAML that is not an Overlay is a shape error. Its message says the text
+/// is valid and has the wrong shape, where a `Syntax` error says the text
+/// "cannot be read as YAML or JSON".
 #[test]
 fn an_overlay_of_the_wrong_shape_is_a_shape_error() {
     let no_actions = "overlay: 1.1.0\ninfo: { title: t, version: \"1\" }\n";
