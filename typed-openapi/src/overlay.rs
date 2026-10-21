@@ -17,9 +17,15 @@
 //!
 //! Every document and every Overlay is read by one function into a
 //! [`serde_json::Value`]; the Overlay is then built from that value. Reading to
-//! a value first is what separates a text that is not YAML or JSON
-//! ([`OverlayError::Syntax`]) from one that is and has the wrong shape
+//! a value first is what separates a text that cannot be read as YAML or JSON
+//! ([`OverlayError::Syntax`]) from one that can and has the wrong shape
 //! ([`OverlayError::Shape`]).
+//!
+//! The read runs on a thread of its own, with a stack this crate sizes. The
+//! reader is recursive and spends stack on each level of nesting, so a text at
+//! the depth limit needs more stack than a test thread or a Windows main thread
+//! has, and a read on the caller's thread would stop the process with a stack
+//! overflow where it should return an error.
 //!
 //! The reader follows YAML 1.2 where its defaults follow 1.1, because a
 //! document's strings are the vendor's: `yes`, `no`, `on`, `off`, `y` and `n`
@@ -30,23 +36,23 @@
 //! 10 MB document. Two YAML 1.1 readings remain: `1_000` is the number 1000, and
 //! `017` is a float.
 
-use std::error::Error;
-
 use thiserror::Error;
 
 /// The Overlay, or the document it is applied to, is not usable.
 ///
-/// Each variant carries a [`Cause`]: a message, and the place in the text it
-/// points at where there is one. No type of the YAML reader or of the Overlay
+/// Each variant carries a [`Cause`]: a message, and the [`Place`] it points at
+/// where there is one. No type of the YAML reader or of the Overlay
 /// engine is part of this crate's API.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OverlayError {
-    /// The OpenAPI document is not YAML or JSON.
-    #[error("the OpenAPI document is not valid YAML or JSON")]
+    /// The OpenAPI document cannot be read as YAML or JSON: the text is not
+    /// valid, or it is past a limit of the reader.
+    #[error("the OpenAPI document cannot be read as YAML or JSON")]
     Document(#[source] Cause),
-    /// The Overlay is not YAML or JSON.
-    #[error("the Overlay document is not valid YAML or JSON")]
+    /// The Overlay cannot be read as YAML or JSON: the text is not valid, or it
+    /// is past a limit of the reader.
+    #[error("the Overlay document cannot be read as YAML or JSON")]
     Syntax(#[source] Cause),
     /// The Overlay is YAML or JSON and does not have the shape of an Overlay
     /// 1.1 document: a field is missing, a field has the wrong type, or the
@@ -62,30 +68,22 @@ pub enum OverlayError {
     Apply(#[source] Cause),
 }
 
-/// What the YAML reader or the Overlay engine said, in this crate's words.
+/// What the YAML reader or the Overlay engine said, as a message and a place.
 ///
-/// The message is a whole sentence and already says where it stands. The place
-/// is also here as numbers, for a caller that points at it: the line and column
-/// of a text the reader refused, or the index of the action that failed. Each
+/// It is a type of this crate, so no type of the reader or of the engine is
+/// part of the API. The message is a whole sentence and already says where it
+/// stands. The place is also here as data, for a caller that points at it, and
 /// is `None` where the thing that refused did not say.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{message}")]
 pub struct Cause {
     message: String,
-    line: Option<u64>,
-    column: Option<u64>,
-    action: Option<usize>,
+    place: Option<Place>,
 }
 
 impl Cause {
-    /// A cause with a message and no place.
-    fn new(message: String) -> Self {
-        Self {
-            message,
-            line: None,
-            column: None,
-            action: None,
-        }
+    fn new(message: String, place: Option<Place>) -> Self {
+        Self { message, place }
     }
 
     /// The sentence a person reads, with the place in it where there is one.
@@ -94,24 +92,27 @@ impl Cause {
         &self.message
     }
 
-    /// The line of the text where the reader stopped, counted from 1.
+    /// Where the thing that refused stopped, where it said.
     #[must_use]
-    pub fn line(&self) -> Option<u64> {
-        self.line
+    pub fn place(&self) -> Option<Place> {
+        self.place
     }
+}
 
-    /// The column of the text where the reader stopped, counted from 1.
-    #[must_use]
-    pub fn column(&self) -> Option<u64> {
-        self.column
-    }
-
-    /// The index in `actions` of the action the Overlay engine refused,
-    /// counted from 0.
-    #[must_use]
-    pub fn action(&self) -> Option<usize> {
-        self.action
-    }
+/// Where in the input a refusal points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Place {
+    /// A position in the text the reader refused, with the line and the column
+    /// counted from 1.
+    Text {
+        /// The line of the text where the reader stopped.
+        line: u64,
+        /// The column of that line where the reader stopped.
+        column: u64,
+    },
+    /// An action of the Overlay, by its index in `actions` counted from 0.
+    Action(usize),
 }
 
 /// The options of every YAML read in this crate, and the one place they are
@@ -134,27 +135,56 @@ fn reader() -> serde_saphyr::Options {
     }
 }
 
+/// The stack of the thread that reads, in bytes.
+///
+/// The reader descends 128 levels before it refuses the 129th, and a debug build
+/// spends about 3 MiB of stack to do it. The constant is more than twice that,
+/// so a read needs none of its caller's stack. A thread's stack is reserved
+/// address space, and the system commits a page of it only when the reader
+/// first uses it, so a text of a real document's depth costs what it uses.
+const READER_STACK: usize = 8 * 1024 * 1024;
+
 /// Read YAML or JSON text into a value. Every read of a document or an Overlay
 /// goes through here.
+///
+/// The read runs on a thread whose stack is [`READER_STACK`], so a nesting at
+/// the limit is read, and one past it is refused, on a caller's thread of any
+/// size. A panic in the reader comes back on the caller's thread, where the
+/// caller would see it without the thread. A read does not fail because of a
+/// thread: where the system refuses one, as on a target with no threads, the
+/// read happens on the caller's.
+fn read(text: &str) -> Result<serde_json::Value, Cause> {
+    std::thread::scope(|scope| {
+        let spawned = std::thread::Builder::new()
+            .name("typed-openapi-yaml".to_owned())
+            .stack_size(READER_STACK)
+            .spawn_scoped(scope, || read_here(text));
+        match spawned {
+            Ok(reading) => reading
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            Err(_) => read_here(text),
+        }
+    })
+}
+
+/// The read itself, on whatever thread calls it. The [`Cause`] is built here,
+/// so no type of the reader leaves the thread.
 ///
 /// The message is the reader's own wording for a person rather than a
 /// programmer: the other one advises a caller to change an option this crate
 /// sets and its caller cannot.
-fn read(text: &str) -> Result<serde_json::Value, Cause> {
-    serde_saphyr::from_str_with_options(text, reader()).map_err(|error| Cause {
-        line: error.location().map(|at| at.line()),
-        column: error.location().map(|at| at.column()),
-        ..Cause::new(error.render_with_formatter(&serde_saphyr::UserMessageFormatter))
+fn read_here(text: &str) -> Result<serde_json::Value, Cause> {
+    serde_saphyr::from_str_with_options(text, reader()).map_err(|error| {
+        let place = error.location().map(|at| Place::Text {
+            line: at.line(),
+            column: at.column(),
+        });
+        Cause::new(
+            error.render_with_formatter(&serde_saphyr::UserMessageFormatter),
+            place,
+        )
     })
-}
-
-/// Write the corrected document as YAML, with the emitter's defaults.
-///
-/// The defaults quote every string a YAML 1.1 reader would misread (`"N"`,
-/// `"yes"`, `"1.0"`), so a reader that follows YAML 1.1 reads back the strings
-/// that were written.
-pub(crate) fn emit(document: &serde_json::Value) -> Result<String, Box<dyn Error + Send + Sync>> {
-    Ok(serde_saphyr::to_string(document)?)
 }
 
 /// Read a document — YAML or JSON, as the vendor ships it — into the value a
@@ -176,11 +206,26 @@ fn overlay_of(value: serde_json::Value) -> Result<roas_overlay::v1_1::Overlay, C
             }
             _ => None,
         };
-        Cause {
-            action,
-            ..Cause::new(error.to_string())
-        }
+        Cause::new(error.to_string(), action.map(Place::Action))
     })
+}
+
+/// The index in `actions` that every finding of a validation names, if they
+/// name one action and the same one. The engine writes a finding's path as
+/// `#.actions[3].target`.
+fn action_of_all(findings: &[roas_overlay::validation::ValidationError]) -> Option<usize> {
+    let action = |path: &str| {
+        path.strip_prefix("#.actions[")?
+            .split_once(']')?
+            .0
+            .parse()
+            .ok()
+    };
+    let first = action(&findings.first()?.path)?;
+    findings
+        .iter()
+        .all(|finding| action(&finding.path) == Some(first))
+        .then_some(first)
 }
 
 /// Lay one Overlay over the document as it stands, and hand back the result.
@@ -212,7 +257,8 @@ pub fn apply(mut doc: serde_json::Value, overlay: &str) -> Result<serde_json::Va
     )]
     overlay.validate(Default::default()).map_err(|invalid| {
         let findings: Vec<String> = invalid.errors.iter().map(ToString::to_string).collect();
-        OverlayError::Invalid(Cause::new(findings.join("; ")))
+        let place = action_of_all(&invalid.errors).map(Place::Action);
+        OverlayError::Invalid(Cause::new(findings.join("; "), place))
     })?;
     overlay
         .apply(
@@ -220,10 +266,10 @@ pub fn apply(mut doc: serde_json::Value, overlay: &str) -> Result<serde_json::Va
             roas_overlay::apply::ApplyOptions::ErrorOnZeroMatch.into(),
         )
         .map_err(|refused| {
-            OverlayError::Apply(Cause {
-                action: Some(refused.action_index),
-                ..Cause::new(refused.to_string())
-            })
+            OverlayError::Apply(Cause::new(
+                refused.to_string(),
+                Some(Place::Action(refused.action_index)),
+            ))
         })?;
     Ok(doc)
 }

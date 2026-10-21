@@ -7,9 +7,8 @@
 //! repeats, and an input built to exhaust the machine is refused quickly rather
 //! than answered.
 //!
-//! The two protections state their numbers. A depth of 128 is the nesting this
-//! crate has always read, and an alias bomb of a billion leaves is the input
-//! that took the old reader 14 ms to refuse. Each test also states how long the
+//! The two protections state their numbers: the depth limit is 128 levels, and
+//! the alias bomb has a billion leaves. Each test also states how long the
 //! refusal may take, which is generous (a refusal takes milliseconds in a
 //! release build) and still far below what expanding the bomb would cost: a
 //! reader that lost its limit would not finish at all.
@@ -24,25 +23,29 @@ use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use typed_openapi::overlay::{self, OverlayError};
+use typed_openapi::overlay::{self, Cause, OverlayError, Place};
 
 /// How long a refusal of a hostile input may take. A debug build refuses the
 /// alias bomb in about three seconds; expanding it is minutes and gigabytes.
 const REFUSAL_WITHIN: Duration = Duration::from_secs(30);
 
-/// The stack the depth test gives the reader. A debug build spends about 16 KiB
-/// of stack on each level it descends, four times what the reader spends in a
-/// release build, so the 2 MiB of a test thread does not hold 128 levels. The
-/// refusal of the 129th needs the same room, because the reader descends 128
-/// levels before it stops: a document nested past the limit takes the process
-/// down, not just the read, on a thread whose stack is smaller.
-const STACK_FOR_128_LEVELS: usize = 16 * 1024 * 1024;
+/// The stack of the thread that calls the reader in the depth test. Descending
+/// 128 levels takes about 450 KiB in a release build and about 3 MiB in a debug
+/// build, and the reader descends all 128 before it refuses the 129th. The
+/// caller's stack is smaller than both, so the test passes only when the read
+/// does not run on the caller's stack, and a read that does takes the whole
+/// process down.
+const CALLER_STACK: usize = 256 * 1024;
 
 /// The deepest nesting the reader accepts.
 const MAX_DEPTH: usize = 128;
 
-/// Leaves in the alias bomb: nine levels of ten aliases each.
+/// Leaves in the alias bomb.
 const BOMB_LEAVES: u64 = 1_000_000_000;
+
+/// Leaves in the alias document that is read: the bomb's shape at a size the
+/// reader's budget holds.
+const READABLE_LEAVES: u64 = 100_000;
 
 /// A minimal Overlay, with `actions` as given, so that a case names only the
 /// part that is wrong.
@@ -61,22 +64,27 @@ fn nested(containers: usize) -> String {
     text
 }
 
-/// A document whose last anchor stands for `BOMB_LEAVES` leaves: ten scalars,
-/// then eight anchors of ten aliases of the one before.
-fn alias_bomb() -> String {
+/// A document whose last anchor stands for `leaves` leaves, a power of ten: ten
+/// scalars, then anchors of ten aliases of the one before.
+fn alias_bomb(leaves: u64) -> String {
     let mut text = String::from("l0: &l0 [x, x, x, x, x, x, x, x, x, x]\n");
-    for level in 1..9 {
+    for level in 1..leaves.ilog10() {
         let aliases = vec![format!("*l{}", level - 1); 10].join(", ");
         writeln!(text, "l{level}: &l{level} [{aliases}]").expect("a string takes a write");
     }
     text
 }
 
-fn document_error(text: &str) -> overlay::Cause {
+fn document_error(text: &str) -> Cause {
     match overlay::parse(text) {
         Err(OverlayError::Document(cause)) => cause,
         other => panic!("expected the reader to refuse the document, got {other:?}"),
     }
+}
+
+/// Whether the cause points at `line` of the text the reader refused.
+fn is_at_line(cause: &Cause, line: u64) -> bool {
+    matches!(cause.place(), Some(Place::Text { line: at, .. }) if at == line)
 }
 
 #[test]
@@ -109,7 +117,7 @@ fn a_merge_key_is_an_ordinary_key() {
 fn a_mapping_that_repeats_a_key_is_refused_where_it_repeats() {
     let cause = document_error("a: 1\nb: 2\na: 3\n");
 
-    assert_eq!((cause.line(), cause.column()), (Some(3), Some(1)));
+    assert_eq!(cause.place(), Some(Place::Text { line: 3, column: 1 }));
     assert!(
         cause.message().contains("duplicate") && cause.message().contains("line 3"),
         "{cause}"
@@ -128,32 +136,33 @@ fn an_overlay_that_repeats_a_key_is_refused_as_not_yaml() {
         overlay::apply(json!({}), "overlay: 1.1.0\noverlay: 1.1.0\n").expect_err("a repeated key");
 
     assert!(
-        matches!(&error, OverlayError::Syntax(cause) if cause.line() == Some(2)),
+        matches!(&error, OverlayError::Syntax(cause) if is_at_line(cause, 2)),
         "{error:?}"
     );
 }
 
 /// The container at depth 128 is read and the one at 129 is not, so the limit
-/// is the one this crate has always had and not the reader's own default of 64.
+/// is 128 and not the reader's own default of 64. The caller's thread is too
+/// small for either descent, so the reader runs on a stack of its own.
 #[test]
 fn a_nesting_of_128_levels_is_read_and_one_of_129_is_refused_within_seconds() {
     let (read, cause, took) = std::thread::Builder::new()
-        .stack_size(STACK_FOR_128_LEVELS)
+        .stack_size(CALLER_STACK)
         .spawn(|| {
             let read = overlay::parse(&nested(MAX_DEPTH));
             let started = Instant::now();
             let cause = document_error(&nested(MAX_DEPTH + 1));
             (read, cause, started.elapsed())
         })
-        .expect("a thread with room for the descent")
+        .expect("a thread for the caller")
         .join()
-        .expect("the reader refuses a deep document and does not panic on it");
+        .expect("the reader refuses a deep document and does not stop its caller");
 
     assert!(
         read.is_ok(),
         "128 levels is the deepest nesting that is read: {read:?}"
     );
-    assert_eq!(cause.line(), Some(129), "{cause}");
+    assert!(is_at_line(&cause, 129), "{cause}");
     assert!(
         took < REFUSAL_WITHIN,
         "129 levels took {took:?} to refuse, limit {REFUSAL_WITHIN:?}"
@@ -162,18 +171,23 @@ fn a_nesting_of_128_levels_is_read_and_one_of_129_is_refused_within_seconds() {
 
 #[test]
 fn an_alias_bomb_of_a_billion_leaves_is_refused_within_seconds() {
-    let text = alias_bomb();
-    assert_eq!(10_u64.pow(9), BOMB_LEAVES, "nine levels of ten");
-
     let started = Instant::now();
-    let cause = document_error(&text);
+    let cause = document_error(&alias_bomb(BOMB_LEAVES));
     let took = started.elapsed();
 
-    assert!(cause.line().is_some(), "{cause}");
     assert!(
         took < REFUSAL_WITHIN,
-        "{BOMB_LEAVES} leaves took {took:?} to refuse, limit {REFUSAL_WITHIN:?}"
+        "{BOMB_LEAVES} leaves took {took:?} to refuse, limit {REFUSAL_WITHIN:?}: {cause}"
     );
+}
+
+/// The control of the test above: the same generator, at a size the budget
+/// holds, is read. A fixture that is wrong everywhere would fail here too.
+#[test]
+fn an_alias_document_of_a_hundred_thousand_leaves_is_read() {
+    let read = overlay::parse(&alias_bomb(READABLE_LEAVES)).expect("a small alias document");
+
+    assert_eq!(read["l4"].as_array().map(Vec::len), Some(10));
 }
 
 /// The budget is the reader's own to set, and its default of 250 000 nodes
@@ -188,10 +202,9 @@ fn a_document_of_more_nodes_than_the_readers_default_budget_is_read() {
     assert_eq!(read.as_array().map(Vec::len), Some(nodes));
 }
 
-/// Two readings of YAML 1.1 that the reader cannot switch off. They are pinned
-/// as they are, not endorsed: the day one is repaired, the test that names it
-/// goes red and whoever repaired it reads what the old behaviour was. The
-/// CHANGELOG names both.
+/// Two readings of YAML 1.1 that the reader cannot switch off. The test pins
+/// them as they are and does not endorse them: the day one changes, the test
+/// goes red, and the CHANGELOG line that names it needs its edit too.
 #[test]
 fn two_yaml_1_1_numbers_are_still_read_as_numbers() {
     let read = overlay::parse("separated: 1_000\noctal: 017\n").expect("a document");
@@ -200,13 +213,13 @@ fn two_yaml_1_1_numbers_are_still_read_as_numbers() {
     assert_eq!(read["octal"], json!(17.0));
 }
 
-/// A document that held `.inf` or `.nan` loaded before, as `null`. It is
-/// refused now, with the place, rather than read as a value it was not.
+/// `.inf` and `.nan` are refused, with the place, because JSON has no value for
+/// them and the document is read into a JSON value.
 #[test]
 fn a_non_finite_number_is_refused_where_it_stands() {
     let cause = document_error("fine: 1\nworse: .inf\n");
 
-    assert_eq!(cause.line(), Some(2));
+    assert!(is_at_line(&cause, 2), "{cause}");
 }
 
 #[test]
@@ -215,7 +228,7 @@ fn text_that_is_not_yaml_is_a_syntax_error_with_its_place() {
 
     assert!(
         matches!(&error, OverlayError::Syntax(cause)
-            if cause.line().is_some() && cause.column().is_some()),
+            if matches!(cause.place(), Some(Place::Text { .. }))),
         "{error:?}"
     );
 }
@@ -256,7 +269,7 @@ fn a_shape_error_names_the_action_it_stopped_in() {
 
     assert!(
         matches!(&error, OverlayError::Shape(cause)
-            if cause.action() == Some(2) && cause.message().contains("target")),
+            if cause.place() == Some(Place::Action(2)) && cause.message().contains("target")),
         "{error:?}"
     );
 }
@@ -271,7 +284,35 @@ fn an_action_that_matches_nothing_names_its_index() {
         overlay::apply(json!({ "info": {} }), &text).expect_err("the second matches nothing");
 
     assert!(
-        matches!(&error, OverlayError::Apply(cause) if cause.action() == Some(1)),
+        matches!(&error, OverlayError::Apply(cause) if cause.place() == Some(Place::Action(1))),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_finding_names_the_action_it_stands_in() {
+    let text = overlay_with(
+        "actions:\n  - { target: $.a, update: {} }\n  - { target: \"\", update: {} }\n",
+    );
+
+    let error = overlay::apply(json!({}), &text).expect_err("the second target is empty");
+
+    assert!(
+        matches!(&error, OverlayError::Invalid(cause) if cause.place() == Some(Place::Action(1))),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn findings_in_two_actions_name_no_action() {
+    let text = overlay_with(
+        "actions:\n  - { target: \"\", update: {} }\n  - { target: \"\", update: {} }\n",
+    );
+
+    let error = overlay::apply(json!({}), &text).expect_err("both targets are empty");
+
+    assert!(
+        matches!(&error, OverlayError::Invalid(cause) if cause.place().is_none()),
         "{error:?}"
     );
 }

@@ -59,8 +59,8 @@ bless: cannot use spec/corrections.yaml
 ```
 
 Overlay files are YAML or JSON, and so are the documents they extend. They are
-read as YAML 1.2 reads booleans: `yes`, `no`, `on` and `off` are strings, and
-`true` and `false` are the booleans. A mapping that repeats a key is refused,
+read as YAML 1.2 reads booleans: `yes`, `no`, `on`, `off`, `y` and `n` are
+strings, and `true` and `false` are the booleans. A mapping that repeats a key is refused,
 with the line and column of the second one.
 
 ## Action kinds

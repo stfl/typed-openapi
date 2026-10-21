@@ -128,8 +128,8 @@ answers a test from a script instead, are in [docs/client.md][client].
 - **A regex engine in every binary.** Enforcing `pattern` costs one and no
   feature removes it: 810 KB of the example's 4.6 MB stripped binary.
 - **The reduced model is a binary blob**, diffable only by regenerating it.
-- **Stable Rust.** CI builds and tests the crate on current stable, in every
-  feature set, and on nothing older. `rust-version` is 1.89, which the YAML
+- **Stable Rust.** CI builds and tests the crate with all features on, on
+  current stable, and on nothing older. `rust-version` is 1.89, which the YAML
   reader declares. Only this repository's own recipes want nightly.
 
 ## Where to go next

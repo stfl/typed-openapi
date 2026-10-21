@@ -319,7 +319,11 @@ impl Settings {
         for layer in &self.overlays {
             overlaid = overlay::apply(overlaid, &read(layer)?).map_err(fault(layer))?;
         }
-        let yaml = overlay::emit(&overlaid).map_err(GenerateError::Yaml)?;
+        // The emitter keeps its defaults, which quote every string a YAML 1.1
+        // reader would misread (`"N"`, `"yes"`, `"1.0"`), so a reader that
+        // follows 1.1 reads back the strings that were written.
+        let yaml = serde_saphyr::to_string(&overlaid)
+            .map_err(|error| GenerateError::Yaml(Box::new(error)))?;
 
         // Refuse to emit against a document this crate cannot build a CLI from.
         // Everything below trusts that this succeeded.
@@ -927,12 +931,4 @@ pub enum GenerateError {
     },
     #[error("rustfmt rejected the generated {path}")]
     RustfmtFailed { path: PathBuf },
-}
-
-impl GenerateError {
-    /// typify's refusal, boxed so that no type of typify is part of this
-    /// crate's API.
-    pub(crate) fn typify(error: typify::Error) -> Self {
-        Self::Typify(Box::new(error))
-    }
 }

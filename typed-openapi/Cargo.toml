@@ -137,9 +137,10 @@ serde-saphyr = { workspace = true, optional = true }
 serde_json = { workspace = true }
 # A body refused by `client::fits` names where it stopped — `positions[1].flag`
 # — which serde's own message does not, and a nested body sent whole through a
-# file is exactly where a caller cannot find the field by eye. It wraps the
-# deserialiser serde_json already drives and brings `itoa` with it; tracking
-# the path by hand is that same wrapper written again.
+# file is exactly where a caller cannot find the field by eye. An Overlay that
+# has the wrong shape names the action it stopped in the same way, from
+# `actions[2]`. It wraps the deserialiser serde_json already drives and brings
+# `itoa` with it; tracking the path by hand is that same wrapper written again.
 serde_path_to_error = { workspace = true }
 # Parses typify's output into the tree the generator rewrites and prints.
 syn = { workspace = true, optional = true }

@@ -187,22 +187,30 @@ a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
 
 **Every YAML text is read by one function, and no foreign error is public.**
-`read` in `src/overlay.rs` holds the reader's options, and every document and
-every Overlay goes through it into a `serde_json::Value` before anything else
-looks at it. That order is what tells `Syntax` (not YAML or JSON) from `Shape`
-(YAML of the wrong shape). The options are not the reader's defaults, and a
-default is a different document: on sevdesk-cli's committed overlaid file the
-defaults read the enum value `N` as `false`, and read `x-cli-writes: yes` as
-`true`. So `yes`, `no`, `on`, `off`, `y` and `n` stay strings, `<<` is an
-ordinary key, and the budget is a depth of 128 with node and event limits wide
-enough for 10 MB. The emitter keeps its defaults, which quote what a YAML 1.1
-reader would misread. A public error holds an `overlay::Cause` (a message, and
-the line and column or the action's index where they are known) or a boxed
-`dyn Error + Send + Sync`, so a release of the YAML crate, `roas-overlay` or
-typify is never a break here. The depth limit is a recursion limit: the reader
-descends 128 levels before it refuses the 129th, which takes up to 4 MiB of
-stack in a debug build, and `tests/yaml.rs` runs that test on a thread of its
-own for that reason.
+`read` in `src/overlay.rs` is the function every document and every Overlay goes
+through, into a `serde_json::Value`, before anything else looks at it. That
+order is what tells `Syntax` (not readable as YAML or JSON) from `Shape` (YAML
+of the wrong shape). The reader's options are in `reader`, which `read` calls,
+and they are not the reader's defaults: a default is a different document. On
+sevdesk-cli's committed overlaid file the defaults read the enum value `N` as
+`false`, and they read a vendor's `x-cli-writes: yes` as `true`. So `yes`, `no`,
+`on`, `off`, `y` and `n` stay strings, `<<` is an ordinary key, and the budget
+is a depth of 128 with node and event limits wide enough for 10 MB. The emitter
+keeps its defaults, which quote what a YAML 1.1 reader would misread. A public
+error holds an `overlay::Cause` (a message, and an `overlay::Place`: the line and
+column of the text, or the action's index) or a boxed `dyn Error + Send + Sync`,
+so a release of the YAML crate, `roas-overlay` or typify is never a break here.
+
+The depth limit is a recursion limit, and the library holds it on any thread. The
+reader descends 128 levels before it refuses the 129th, which takes up to 3 MiB
+of stack in a debug build, and a test thread has 2 MiB while a Windows main
+thread has 1 MiB. A refusal that aborts the process is no refusal, so `read`
+runs the reader on a scoped thread whose stack the crate sizes (`READER_STACK`),
+and builds the `Cause` there, so no type of the reader crosses the thread. A
+panic comes back on the caller's thread. Where the system refuses the thread,
+`read` reads on the caller's, because a read does not fail for want of one.
+`tests/yaml.rs` calls the reader from a 256 KiB thread, which is why it passes
+only if the descent is off the caller's stack.
 
 **`pub` means an adopter calls it.** What no caller outside the crate used is
 `pub(crate)`: `schema`, `multipart`, `kebab`, `Grouping`, `Namespace`,
@@ -212,12 +220,13 @@ own for that reason.
 would make them public. Nothing in the lint block stops a new `pub` item from
 naming an `openapiv3` type, so review keeps the claim true for it. `overlay`
 stays public because a bless step calls `overlay::parse`, and `overlay::Cause`
-with it because every `OverlayError` variant carries one. `required::check`
-stays public with the `PhantomKeys` it returns, and `scalar::Text` stays public
-because an adopter's test names it. A type that a public variant carries is
-public too, which is why `RefError` is re-exported at the root while the rest of
-`schema` is not. `unreachable_pub` is a warning the gate denies, so a `pub` item
-the crate does not export fails it.
+with it because every `OverlayError` variant carries one, and `overlay::Place`
+because `Cause::place` returns it. `required::check` stays public with the
+`PhantomKeys` it returns, and `scalar::Text` stays public because an adopter's
+test names it. A type that a public variant carries is public too, which is why
+`RefError` is re-exported at the root while the rest of `schema` is not.
+`unreachable_pub` is a warning the gate denies, so a `pub` item the crate does
+not export fails it.
 
 **A count about the document is derived from it, never written down.**
 `Document::summary` in `src/summary.rs` answers every count an adoption is

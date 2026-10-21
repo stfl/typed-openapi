@@ -13,12 +13,13 @@ the crate follows [Semantic Versioning][semver].
 
 - **`OverlayError::Shape`.** An Overlay that is YAML or JSON and has the wrong
   shape (no `actions`, an action with no `target`, a version other than 1.1) is
-  `Shape`. It was `Syntax`, whose message says the text "is not valid YAML or
+  `Shape`. It was `Syntax`, whose message said the text "is not valid YAML or
   JSON". Repair: where you reported `Syntax` for a wrong shape, report `Shape`
   too.
 - **`overlay::Cause`**, the payload of every `OverlayError` variant: the
-  `message()`, and the `line()` and `column()` of the text, or the `action()`
-  index in the Overlay, where the thing that refused said them.
+  `message()`, and the `place()` where the thing that refused said one. An
+  `overlay::Place` is the line and column of the text, or the index of the
+  action in the Overlay.
 
 ### Changed
 
@@ -31,24 +32,25 @@ the crate follows [Semantic Versioning][semver].
     you do not mean.
   - `1_000` reads as the number 1000 and `017` as the float 17. Both were
     strings. Repair: quote the value where it is a string.
-  - `.inf` and `.nan` are refused where they stand. They read as `null`.
+  - `.inf` and `.nan` are refused where they stand. They were `null`.
     Repair: quote the value or remove it.
   - The messages for a text that is not YAML are the new reader's words, and
     each names its line and column.
-  - A document nested to the limit of 128 levels needs up to 4 MiB of stack in
-    a debug build and up to 512 KiB in a release build, where the old reader
-    needed under 1 MiB. On a thread with less, a document nested to the limit
-    or past it stops the process and is not returned as an error. Repair: read
-    documents on the main thread, or on a thread with 4 MiB or more.
+  - A document past the reader's budget is refused: more than 2 500 000 nodes,
+    10 000 000 events or 50 000 anchors, or more than 1 000 000 events copied
+    from anchors by aliases. The old reader read 3 000 000 scalars and 60 000
+    anchors, and refused an alias document of 100 000 leaves, which the new
+    reader reads. A document of ordinary content under 10 MB stays below the
+    limits, and they are fixed. Repair: split a document that reaches one.
 
   The `document` feature names `serde-saphyr` where it named `serde_yaml_ng`.
   Repair: a test of yours that read YAML with `serde_yaml_ng` names its own
   dependency, or calls `overlay::parse`.
 - **No type of the YAML reader, of `roas-overlay` or of typify is in a public
   signature.** Each `OverlayError` variant holds an `overlay::Cause`.
-  `GenerateError::Yaml` and `GenerateError::Typify` hold a `Box<dyn Error + Send
-  + Sync>`, and the cause is still `source()`. Repair: a `match` that bound
-  `serde_yaml_ng::Error`, `roas_overlay::validation::Error`,
+  `GenerateError::Yaml` and `GenerateError::Typify` hold a
+  `Box<dyn Error + Send + Sync>`, and the cause is still `source()`. Repair: a
+  `match` that bound `serde_yaml_ng::Error`, `roas_overlay::validation::Error`,
   `roas_overlay::apply::ApplyError` or `typify::Error` reads the `Cause`, or
   prints `source()`.
 - **A bless step may write the overlaid YAML with different text.** The emitter
@@ -56,7 +58,7 @@ the crate follows [Semantic Versioning][semver].
   `"1.0"`) and folds long strings into `>-` blocks. The value is the same, read
   as JSON. Repair: run the bless step again and commit the result.
 - **`rust-version` is 1.89**, the floor serde-saphyr declares. CI builds and
-  tests the crate on current stable.
+  tests the crate on current stable. Repair: build with Rust 1.89 or newer.
 - **An error describes its own layer and leaves the cause to `source()`.** Every
   `#[error]` string that printed the `#[source]` or `#[from]` field it also
   marks stops where its own layer stops, so a walk down the chain (the toy's

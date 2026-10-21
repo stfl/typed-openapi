@@ -1,6 +1,6 @@
 # This repository's own tooling is nightly. The library is not: it compiles and
 # tests on stable Rust, and CI's `stable` job builds and tests it on the current
-# stable toolchain on every push.
+# stable toolchain on every pull request and every push to `main`.
 #
 # Four of `rustfmt.toml`'s settings are nightly-only options —
 # `group_imports`, `format_code_in_doc_comments`, `format_generated_files` and

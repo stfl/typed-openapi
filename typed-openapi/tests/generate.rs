@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use typed_openapi::Document;
 use typed_openapi::generate::{GenerateError, Settings};
-use typed_openapi::overlay::{self, OverlayError};
+use typed_openapi::overlay::{self, OverlayError, Place};
 
 const TOY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml");
 const CORRECTIONS: &str = concat!(
@@ -502,16 +502,10 @@ fn a_document_that_is_not_there_is_named() {
     );
 }
 
-/// A layer the reader cannot read is named by its file, and the reader's own
-/// words give the line and the column where it stopped.
-///
-/// The bless step prints the layer, then each cause under it, so a person who
-/// sees an unclosed quote in a long file is told which file and where.
-#[test]
-fn a_layer_that_is_not_yaml_is_named_with_its_line_and_column() {
-    let dir = out("unclosed");
-    let fixture = read(Path::new(CORRECTIONS));
-    let broken = fixture
+/// The fixture at `path` with its third line, the `title` of both, replaced by
+/// an unclosed quote. The reader finds the quote unclosed on the next line.
+fn with_an_unclosed_quote(path: &str) -> String {
+    read(Path::new(path))
         .lines()
         .enumerate()
         .map(|(index, line)| {
@@ -522,8 +516,34 @@ fn a_layer_that_is_not_yaml_is_named_with_its_line_and_column() {
             }
         })
         .collect::<Vec<_>>()
-        .join("\n");
-    let layer = wrote(&dir, "corrections.yaml", &broken);
+        .join("\n")
+}
+
+/// What a bless step prints for `error`: its own words, then each cause under
+/// it on a line of its own.
+fn reported(error: &GenerateError) -> String {
+    let mut chain = vec![error.to_string()];
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        chain.push(next.to_string());
+        cause = next.source();
+    }
+    chain.join("\n")
+}
+
+/// A layer the reader cannot read is named by its file, and the reader's own
+/// words give the line and the column where it stopped.
+///
+/// The bless step prints the layer, then each cause under it, so a person who
+/// sees an unclosed quote in a long file is told which file and where.
+#[test]
+fn a_layer_that_is_not_yaml_is_named_with_its_line_and_column() {
+    let dir = out("unclosed");
+    let layer = wrote(
+        &dir,
+        "corrections.yaml",
+        &with_an_unclosed_quote(CORRECTIONS),
+    );
 
     let error = Settings::new(TOY)
         .overlay(&layer)
@@ -534,19 +554,36 @@ fn a_layer_that_is_not_yaml_is_named_with_its_line_and_column() {
     assert!(
         matches!(&error, GenerateError::Overlay { path, source: OverlayError::Syntax(cause) }
             if path.ends_with("corrections.yaml")
-                && matches!(cause.line(), Some(3 | 4))
-                && cause.column().is_some()),
+                && matches!(cause.place(), Some(Place::Text { line: 4, .. }))),
         "{error:?}"
     );
-    let mut chain = vec![error.to_string()];
-    let mut cause = error.source();
-    while let Some(next) = cause {
-        chain.push(next.to_string());
-        cause = next.source();
-    }
-    let reported = chain.join("\n");
+    let reported = reported(&error);
     assert!(reported.contains("corrections.yaml"), "{reported}");
-    assert!(reported.contains("at line"), "{reported}");
+    assert!(reported.contains("at line 4"), "{reported}");
+}
+
+/// The vendor's document that the reader cannot read is named by its file in
+/// the same way, with the line and the column where the reader stopped.
+#[test]
+fn a_document_that_is_not_yaml_is_named_with_its_line_and_column() {
+    let dir = out("unclosed-document");
+    let document = wrote(&dir, "toy.yaml", &with_an_unclosed_quote(TOY));
+
+    let error = Settings::new(&document)
+        .overlay(CORRECTIONS)
+        .overlay(CLI)
+        .write_to(&dir)
+        .expect_err("a document with an unclosed quote");
+
+    assert!(
+        matches!(&error, GenerateError::Overlay { path, source: OverlayError::Document(cause) }
+            if path.ends_with("toy.yaml")
+                && matches!(cause.place(), Some(Place::Text { line: 4, .. }))),
+        "{error:?}"
+    );
+    let reported = reported(&error);
+    assert!(reported.contains("toy.yaml"), "{reported}");
+    assert!(reported.contains("at line 4"), "{reported}");
 }
 
 /// Every string a YAML 1.1 reader would misread, as the vendor writes them.
