@@ -186,6 +186,45 @@ the defect progenitor's `cli.rs` ships.
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
 
+**A request body is held to the generated type in one place, and an
+undeclared property has no way through.** `client::fits` is where a JSON body
+meets the type of its operation. The library cannot name that type, so the
+adopter's seam calls it (`tree::select`, then the generated
+`OperationId::check_body`), and a CLI that only calls `tree::dispatch` has none.
+It asks three things in this order, and each refusal is its own `BodyError`
+variant: is the body an object where the type takes one (`NotAnObject`), do the
+values have the right types (`Mismatch`), and does the type take every property
+(`Undeclared`, found with `serde_ignored` beside `serde_path_to_error`). A new
+refusal is a new variant, since `BodyError` is `#[non_exhaustive]`. None of
+them prints a value of the body, which can be a credential or a client's data,
+and the path is spelled as `serde_path_to_error` spells one (`address.extra`,
+`positions[1].flag`), so `spelled` is kept in step with it.
+
+D4: no flag, setting or cargo feature lets an undeclared property through on a
+call. The repair is an Overlay that declares it, which an adopter blesses and a
+reviewer reads, and a second road round the check (an `--allow-undeclared`) is
+what the rule is there to prevent. The generated types get no
+`#[serde(deny_unknown_fields)]`: the same types decode a vendor's responses, and
+a response may carry more than the document says. The rule lives in `fits`
+because a request is the only side it is about.
+
+`takes_an_object` asks the type what it reads, because the body cannot tell:
+serde derives `visit_seq` beside `visit_map` for a struct, so a list of five
+values reads into a struct of five fields. The type is read from a deserializer
+that holds nothing, and a call to `deserialize_struct` or `deserialize_map` is
+an object; a type that reads itself through `deserialize_any` (a union, a
+`serde_json::Value`) or `deserialize_option` asks for none. The question is put
+to the body and not to the types nested in it.
+
+What `fits` sees is what the type skips while it reads, and typify decides the
+type, so a limit is a measurement of typify: `additionalProperties: true` beside
+properties gets no field (extras are `Undeclared`), `{}` and a typed schema get
+a map, `false` gets `deny_unknown_fields` (serde refuses first, as a
+`Mismatch`), and a union is an `untagged` enum that serde reads from a buffer
+(nothing is skipped, nothing is seen). The unit tests in `src/client.rs` hold
+each limit open, so one that closes is named; `docs/validation.md`, *What `fits`
+refuses*, says them to an adopter. A move of typify re-measures them.
+
 **Every YAML text is read by one function, and no foreign error is public.**
 `read` in `src/overlay.rs` is the function every document and every Overlay goes
 through, into a `serde_json::Value`, before anything else looks at it. That

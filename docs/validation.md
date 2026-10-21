@@ -87,7 +87,7 @@ knowing before you decide how much to put in the document.
 | a path, query or header parameter | `Scalar::parse`, in the flag's value parser and again in `Invocation::new` | the command line, and every typed call |
 | a body field, from a per-field flag | `Scalar::parse`, in the flag's value parser | the command line |
 | a body field, in a generated type | the type's own `FromStr` / `Deserialize` | every typed call, and every response |
-| a whole body from `--json-body FILE` | nothing in this crate | — |
+| a whole body from `--json-body FILE` | `client::fits`, called by the adopter's own seam | the command line, before the request is built |
 
 A parameter never passes through a generated type, so `Scalar` is the only thing
 that can ever check one. A body field has both roads, and they run the same rule
@@ -111,13 +111,65 @@ carries a `pattern` is the repair, and
 [`examples/toy/spec/corrections.yaml`](../examples/toy/spec/corrections.yaml)
 does exactly that for `Voucher.total`.
 
-The other gap is the last row. `check_body` in
-[`src/request.rs`](../typed-openapi/src/request.rs) asks whether a JSON body was
-supplied where JSON is wanted and stops there — holding the *content* of a file
-to a schema needs the generated `struct`, which only the adopter's crate can
-name. [`tree::select`](cli.md#mounting-the-tree) is the seam for it, and
-[`examples/toy/cli/src/raw.rs`](../examples/toy/cli/src/raw.rs) is that check in
-nine lines.
+The last row is the one road that this crate cannot walk by itself.
+`check_body` in [`src/request.rs`](../typed-openapi/src/request.rs) asks whether
+a JSON body was supplied where JSON is wanted and stops there — holding the
+*content* of a file to a schema needs the generated `struct`, which only the
+adopter's crate can name. [`tree::select`](cli.md#mounting-the-tree) is the seam
+for it, and [`examples/toy/cli/src/raw.rs`](../examples/toy/cli/src/raw.rs) is
+that check in nine lines: the generated `OperationId::check_body` hands the body
+and the operation's type to `client::fits`. A CLI that calls `tree::dispatch`
+and nothing more has no such seam and sends the file as it is.
+
+## What `fits` refuses
+
+`client::fits` refuses a body three ways, each its own `client::BodyError`
+variant, and none of them prints a value from the body. The path is in the `jq`
+spelling, and `.` is the body itself.
+
+| the body | variant | a refusal reads |
+|---|---|---|
+| a value of the wrong type, or a missing property | `Mismatch` | `` createVoucher: the request body does not fit the schema the document declares at `status` `` |
+| a property that the type does not take, at any depth | `Undeclared` | `` createContact: the request body carries a property that the schema the document declares does not take, at `address.extra` `` |
+| a list or a scalar where the type takes an object | `NotAnObject` | `createVoucher: the request body is an array, and the schema the document declares for it takes an object` |
+
+They are asked in this order: what the body is, then whether its values have
+the right types, and last which property names the type takes. The `Undeclared`
+refusal names the first property in the order of the body, and an operator sees
+the next one when they have repaired that one.
+
+**There is no way to allow an undeclared property on a call.** No flag, no
+setting and no cargo feature does it. A server may drop a property it does not
+know without a word, and then the operator believes it took effect. The repair
+is an Overlay that declares the property, which an adopter blesses and a
+reviewer reads: [`corrections.yaml`](../examples/toy/spec/corrections.yaml)
+declares `internal_ref` that way, and
+[Plain corrections](overlay.md#1-plain-corrections) shows the action.
+
+A schema that types its further properties is a map to typify, and the map takes
+them. `setContactLabels` in the toy has `ContactLabels`, which is
+`additionalProperties: {type: string}`, so
+`{"vip": "yes", "region": "east"}` is sent as it is, and `{"vip": 1}` is a
+`Mismatch`. The generator adds no `#[serde(deny_unknown_fields)]` to the
+generated types, because the same types decode a vendor's responses and a
+response may carry more than the document says. Only a request is held to the
+rule.
+
+`fits` sees a property that the type skips while it reads the body, so the
+shape of what typify writes decides what it can see:
+
+- **`additionalProperties: true` beside declared properties** gets no field from
+  typify, so its extra properties are `Undeclared`. A schema that states
+  `additionalProperties: {}` gets a map for them. A schema without properties
+  gets a map for either.
+- **`additionalProperties: false`** gets `deny_unknown_fields` from typify, so
+  serde refuses first and the refusal is a `Mismatch` whose cause says
+  `unknown field`.
+- **A union** (`oneOf`, `anyOf`) is an `untagged` enum, which serde reads from a
+  buffer. A property inside one is not seen, and neither is a property in a
+  `flatten`ed struct.
+- **A list for an object** is asked of the body itself. Serde reads a list in
+  the place of an object nested in the body by position, as it always did.
 
 Two things are not read at all: an `enum` on a numeric schema, and every
 keyword that describes a shape no flag carries — `minItems`, `minProperties`

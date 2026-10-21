@@ -60,6 +60,30 @@ the crate follows [Semantic Versioning][semver].
   `message()`, and the `place()` where the thing that refused said one. An
   `overlay::Place` is the line and column of the text, or the index of the
   action in the Overlay.
+- **A body property that no schema declares stops the request.** `client::fits`
+  refuses a body that carries a property which the target type does not take, at
+  any depth, as `BodyError::Undeclared { op, path }`. It runs before a request
+  exists, so a dry run and a confirmed run both stop, and it names the operation
+  and the path in the `jq` spelling (`address.extra`) and never prints the value.
+  The generated `OperationId::check_body` calls it, so a CLI with the seam of
+  `toy raw` refuses the body and sends nothing. A property that a map admits
+  (`additionalProperties: {type: string}`) passes. The generated types do not get
+  `deny_unknown_fields`, because they decode responses too. There is no flag or
+  setting that allows an undeclared property on a call. Repair: an Overlay that
+  declares the property, then the bless step (`docs/overlay.md`, *Plain
+  corrections*). A committed `--json-body` file with vendor extras fails now, and
+  the repair is the same. A schema that says `additionalProperties: true` beside
+  declared properties gets no field for the rest from typify, so its extras fail
+  too; `additionalProperties: {}` gets a map for them. What the check cannot see
+  is in `docs/validation.md`, *What `fits` refuses*. The crate depends on
+  `serde_ignored` for this.
+- **`BodyError::NotAnObject { op, found }`.** `fits` refuses a list or a scalar
+  where the type takes an object. A list of the right length used to pass,
+  because serde fills a struct from a list by position. Repair: send an object.
+- **`ArgError::FlagBesideNonObject { flag, path, found }`.** A per-field flag
+  beside a `--json-body` file whose top level is not an object is refused. It
+  was dropped, and the file went out as it was. Repair: drop the flag, or send an
+  object.
 
 ### Changed
 
@@ -148,6 +172,11 @@ the crate follows [Semantic Versioning][semver].
   `DocumentError`. A `match` on one needs a `_` arm, and a refusal added later
   is a new variant, not a break. A match on an error is the same in every
   feature build, `_` arm included.
+- **`client::BodyError` is an `#[non_exhaustive]` enum.** At 0.0.2 it was a
+  struct with `op`, `path` and `source`. Those fields are the variant
+  `BodyError::Mismatch { op, path, source }`, with the same message, beside
+  `Undeclared` and `NotAnObject`. Repair: match the variant where you read the
+  fields, with a `_` arm for a refusal added later.
 
 ### Removed
 
