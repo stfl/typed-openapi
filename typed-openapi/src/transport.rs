@@ -154,9 +154,20 @@ pub type HttpRequest = Request<Vec<u8>>;
 pub type HttpResponse = Response<Vec<u8>>;
 
 /// Something that can send a request and wait for the answer.
+///
+/// An adapter must not turn a status code into an error. The layer above reads
+/// the status together with the body that came with it, and the body of a `4xx`
+/// is what a caller needs; an `Err` that carried only the status would throw it
+/// away. `Err` is for a request that got no answer at all. `ureq` turns a
+/// status into an error by default and must be built with
+/// `http_status_as_error(false)`.
 pub trait SyncClient {
+    /// What the client reports when no answer came back: a refused connection,
+    /// a timeout, a failed handshake. It never stands for a status code.
     type Error: std::error::Error + Send + Sync + 'static;
 
+    /// Sends `request` and returns the response as the server wrote it, with
+    /// whatever status and body it carried.
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error>;
 }
 
@@ -186,9 +197,17 @@ impl<C: SyncClient + ?Sized> SyncClient for &C {
 
 /// The same, for a caller inside a runtime. `Send` on the future so that a
 /// call can be `tokio::spawn`ed.
+///
+/// The adapter rule of [`SyncClient`] holds here: an adapter must not turn a
+/// status code into an error, because the body that came with a `4xx` is what a
+/// caller needs. `reqwest` does not, and an adapter over it needs no setting.
 pub trait AsyncClient {
+    /// What the client reports when no answer came back: a refused connection,
+    /// a timeout, a failed handshake. It never stands for a status code.
     type Error: std::error::Error + Send + Sync + 'static;
 
+    /// Sends `request` and resolves to the response as the server wrote it,
+    /// with whatever status and body it carried. The future is `Send`.
     fn send(
         &self,
         request: HttpRequest,

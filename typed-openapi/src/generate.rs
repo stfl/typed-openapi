@@ -825,15 +825,24 @@ fn rustfmt(path: &Path) -> Result<(), GenerateError> {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GenerateError {
+    /// The document or an Overlay file could not be read.
     #[error("cannot read {path}")]
     Read {
+        /// The path as the adopter gave it to [`Settings::new`] or
+        /// [`Settings::overlay`].
         path: PathBuf,
+        /// The error the operating system returned.
         #[source]
         source: io::Error,
     },
+    /// A generated file, or a directory it goes in, could not be written.
     #[error("cannot write {path}")]
     Write {
+        /// The file the generator was writing, or the directory above it that
+        /// it was making: under the directory given to [`Settings::write_to`],
+        /// or where [`Settings::summary_page`] points.
         path: PathBuf,
+        /// The error the operating system returned.
         #[source]
         source: io::Error,
     },
@@ -842,7 +851,11 @@ pub enum GenerateError {
     /// layers, which one stopped the bless is the first thing to know.
     #[error("cannot use {path}")]
     Overlay {
+        /// The path as the adopter gave it to [`Settings::new`] or
+        /// [`Settings::overlay`].
         path: PathBuf,
+        /// What stopped the file: its syntax, its shape or an action that
+        /// matched nothing.
         #[source]
         source: OverlayError,
     },
@@ -850,13 +863,21 @@ pub enum GenerateError {
     /// that no type of the emitter is part of this crate's API.
     #[error("the overlaid document is not representable as YAML")]
     Yaml(#[source] Box<dyn Error + Send + Sync>),
+    /// The corrected document could not be reduced to a command tree. The
+    /// cause is the refusal of [`Document::load_with`].
     #[error("the overlaid document does not describe a usable CLI")]
     Unusable(#[source] LoadError),
+    /// The corrected document is not an OpenAPI 3 document, so the generator
+    /// has no object model of it. The cause is `serde_json`'s message.
     #[error("the overlaid document is not an OpenAPI 3 document")]
     NotOpenApi(#[source] serde_json::Error),
+    /// A schema that cannot be written as the JSON typify takes in.
     #[error("schema `{name}` is not representable as JSON")]
     Schema {
+        /// The schema's name in `components.schemas`, or for an inline schema a
+        /// sentence naming the body or response that states it.
         name: String,
+        /// `serde_json`'s reason.
         #[source]
         source: serde_json::Error,
     },
@@ -872,7 +893,10 @@ pub enum GenerateError {
         "`#/components/schemas/{schema}` is referenced but not declared, so no \
          wrapper can name the type it would be"
     )]
-    NoType { schema: String },
+    NoType {
+        /// The name the reference ends in, as the document spells it.
+        schema: String,
+    },
     /// Two of the document's shapes reduce to one Rust type. typify writes a
     /// definition per shape and uniquifies nothing, so emitting them is a file
     /// that defines the same type twice; renaming one here would be a generator
@@ -884,8 +908,11 @@ pub enum GenerateError {
     /// which is which.
     #[error("{first} and {second} are both `{rust}` in Rust; rename one of them in an Overlay")]
     OneType {
+        /// The sentence naming the shape that claimed the Rust name first.
         first: String,
+        /// The sentence naming the shape that claimed it second.
         second: String,
+        /// The Rust name both reduce to, in typify's spelling.
         rust: String,
     },
     /// A schema whose Rust name is one this crate declares a replaced type
@@ -898,7 +925,13 @@ pub enum GenerateError {
          type `Settings::replace` substitutes under, so it generates no type \
          of its own; rename it in an Overlay"
     )]
-    Reserved { schema: String },
+    Reserved {
+        /// The schema's name in `components.schemas`, as the document spells it.
+        schema: String,
+    },
+    /// A document element this generator has no Rust spelling for, or a Rust
+    /// type the adopter named that does not parse. The text names the element
+    /// and says why.
     #[error("{0}")]
     Unsupported(String),
     /// A failure while emitting one operation's wrapper, named by the
@@ -907,28 +940,47 @@ pub enum GenerateError {
     /// hand for one that does not.
     #[error("the wrapper for {op} cannot be generated")]
     Operation {
+        /// The `operationId` of the operation whose wrapper was being emitted.
         op: String,
+        /// The refusal itself.
         #[source]
         source: Box<GenerateError>,
     },
+    /// Tokens the generator wrote do not parse as Rust. This is a defect of the
+    /// generator.
     #[error("the generated {file} is not valid Rust")]
     NotRust {
+        /// The name of the generated file the tokens were bound for.
         file: &'static str,
+        /// The parser's error.
         #[source]
         source: syn::Error,
     },
+    /// The reduced model could not be encoded to the blob, or the blob could
+    /// not be read back.
     #[error("the reduced model does not survive a round trip")]
     Blob(#[source] DocumentError),
+    /// The blob was read back and differs from the reduction it was written
+    /// from, so a binary that loads it would not hold the document the bless
+    /// step reduced.
     #[error("the reduced model is not the document's reduction after a round trip")]
     RoundTrip,
+    /// No `rustfmt` executable was found on `PATH`.
     #[error("rustfmt is not on PATH, and a bless step formats every Rust file it writes")]
     RustfmtMissing,
+    /// `rustfmt` was found and could not be started.
     #[error("cannot run rustfmt on {path}")]
     RustfmtSpawn {
+        /// The generated file `rustfmt` was to format.
         path: PathBuf,
+        /// The error the operating system returned.
         #[source]
         source: io::Error,
     },
+    /// `rustfmt` ran and exited with a failure.
     #[error("rustfmt rejected the generated {path}")]
-    RustfmtFailed { path: PathBuf },
+    RustfmtFailed {
+        /// The generated file `rustfmt` was to format.
+        path: PathBuf,
+    },
 }

@@ -1,7 +1,5 @@
 //! Applying the adopter's corrections to the vendor's document.
 //!
-//! *Requires the `document` feature.*
-//!
 //! [`parse`] reads a document into the value a correction edits, and [`apply`]
 //! lays one Overlay over it. A chain of the two is how a document with several
 //! layers of correction is assembled, and everything downstream sees a single

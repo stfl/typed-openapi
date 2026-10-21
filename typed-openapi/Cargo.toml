@@ -156,8 +156,12 @@ typify = { workspace = true, optional = true }
 # `cargo clippy --all-targets` and stop there.
 typed-openapi = { path = ".", features = ["document", "generate"] }
 
+# docs.rs builds with every feature on and `--cfg docsrs`, which `lib.rs` turns
+# into `feature(doc_cfg)`: that is what prints "Available on crate feature ...
+# only" on each item a feature adds.
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true

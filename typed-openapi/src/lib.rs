@@ -54,6 +54,9 @@
 //! binary that enabled either would compile a YAML parser, an OpenAPI object
 //! model and a code generator it can never reach.
 
+#![warn(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 #[cfg(feature = "clap")]
 pub mod tree;
 

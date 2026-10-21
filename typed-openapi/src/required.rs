@@ -1,7 +1,5 @@
 //! Refusing a document that requires a key nothing declares.
 //!
-//! *Requires the `document` feature.*
-//!
 //! A *phantom* key is a name in a schema's `required` list that neither that
 //! schema nor anything it composes with declares. It is a mistake, and the
 //! document reduced here is the vendor's with the adopter's corrections applied

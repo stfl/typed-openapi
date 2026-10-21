@@ -39,14 +39,25 @@ impl<'de> serde::Deserialize<'de> for NoContent {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// The reduction a client is built from cannot be read. Generated code
+    /// raises it when it reads the blob it ships.
     #[error("the document does not load")]
     Document(#[from] DocumentError),
+    /// The generated inventory and the document it is paired with disagree.
+    /// The message names the first row where they do.
     #[error(transparent)]
     Drift(#[from] DriftError),
+    /// The values do not satisfy the operation. The message names the
+    /// parameter, or says the body is the problem.
     #[error(transparent)]
     Values(#[from] ValueError),
+    /// The values satisfied the operation and the `http` crate refused the
+    /// request they render to: a base URI, a header name or a header value it
+    /// cannot carry.
     #[error("cannot build the request")]
     Request(#[from] http::Error),
+    /// A typed argument that does not serialise to JSON, so there is no body to
+    /// send. The cause is `serde_json`'s reading of the value.
     #[error("cannot serialise the request body")]
     Encode(#[source] serde_json::Error),
     /// The client refused the request or never got an answer, carrying the
@@ -61,12 +72,24 @@ pub enum Error {
     /// `docs/client.md` shows both.
     #[error("the transport failed")]
     Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The server answered with a status that is not a success. Nothing is
+    /// deserialised out of such a response, whatever its body holds.
     #[error("{status}: {body}")]
-    Status { status: StatusCode, body: String },
+    Status {
+        /// The status the server answered.
+        status: StatusCode,
+        /// The response body as text, with bytes that are not UTF-8 replaced.
+        body: String,
+    },
+    /// A success response whose body is not the type the document promises for
+    /// it.
     #[error("the response is not the shape the document promises")]
     Decode {
+        /// `serde_json`'s reading of the body, with the line and column where
+        /// it stopped.
         #[source]
         source: serde_json::Error,
+        /// The response body as text, with bytes that are not UTF-8 replaced.
         raw: String,
     },
 }
@@ -99,6 +122,8 @@ impl Client {
         self
     }
 
+    /// The server requests go to: the document's first one, unless
+    /// [`Client::with_base`] named another.
     #[must_use]
     pub fn base(&self) -> &Uri {
         &self.base
@@ -129,16 +154,19 @@ impl Client {
 /// describes for it.
 ///
 /// This is what a `--json-body` file gets checked against. `path` is where in
-/// the body the deserialiser stopped, written the way `jq` writes one —
-/// `positions[1].flag`, and `.` for the body itself — and the source is
-/// serde's own message about the value it found there. The two are apart
-/// because serde's message names a value and the type it wanted, and never
-/// which element of which list held it.
+/// the body the deserialiser stopped (`positions[1].flag`, or `.` for the body
+/// itself), and the source is serde's own message about the failure there. The
+/// two are apart because serde's message never says which element of which list
+/// held the value.
 #[derive(Debug, Error)]
 #[error("{op}: the request body does not fit the schema the document declares at `{path}`")]
 pub struct BodyError {
+    /// The `operationId` of the operation whose body was checked.
     pub op: String,
+    /// Where in the body the deserialiser stopped: `positions[1].flag`, or `.`
+    /// for the body itself.
     pub path: String,
+    /// `serde_json`'s message about the failure at `path`.
     #[source]
     pub source: serde_json::Error,
 }
@@ -242,8 +270,8 @@ mod tests {
     use super::fits;
 
     /// A body with a list of objects in it, which is the shape whose refusal
-    /// is hardest to place by eye: serde's own message names the value and the
-    /// type it wanted, and not which element of which list held it.
+    /// is hardest to place by eye: serde's own message does not say which
+    /// element of which list held the value.
     #[derive(Debug, Deserialize)]
     struct Save {
         #[expect(dead_code, reason = "read only by the deserialiser under test")]

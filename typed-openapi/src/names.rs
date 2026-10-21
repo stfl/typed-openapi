@@ -44,6 +44,7 @@ impl CommandName {
         spelled(origin, raw).map(Self)
     }
 
+    /// The name as the user types it.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -71,8 +72,6 @@ impl fmt::Display for CommandName {
 }
 
 /// Where each of a document's operations sits in the command tree.
-///
-/// *Requires the `document` feature.*
 ///
 /// The group is a path segment, and which one is a fact about the whole
 /// document: the first, unless every operation shares it — a document served
@@ -175,8 +174,6 @@ fn verb(method: &Method, addressed: bool) -> &'static str {
 }
 
 /// The flag names one subcommand has already spent.
-///
-/// *Requires the `document` feature.*
 ///
 /// `PUT /vouchers/{id}` takes an `id` in the path and an `id` in the body; clap
 /// panics on a duplicate name, so the second claimant is prefixed rather than
