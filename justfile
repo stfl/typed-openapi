@@ -34,24 +34,31 @@ check:
 # pair of features is built. The `builder` runs go further than a compile: the
 # example's demonstration of it is a pair of doctests that only exist when the
 # feature is on, so this is the only recipe that can run them.
+#
+# Each build is linted with warnings denied, as `check` lints the widest one. A
+# warning that only one feature set produces, such as an item that nothing calls
+# without a feature, is absent from the widest build, and a plain `cargo check`
+# prints it and exits zero. `clippy` carries `-D warnings` to this workspace's
+# crates only; `RUSTFLAGS` would carry it to every dependency and build each
+# again.
 
-# Compile the library with each feature alone and with all of them together.
+# Lint the library with each feature alone and with all of them together.
 features:
-    cargo check -p typed-openapi
-    cargo check -p typed-openapi --no-default-features
-    cargo check -p typed-openapi --no-default-features --features clap
-    cargo check -p typed-openapi --no-default-features --features document
-    cargo check -p typed-openapi --no-default-features --features generate
-    cargo check -p typed-openapi --no-default-features --features builder
-    cargo check -p typed-openapi --all-features --all-targets
+    cargo clippy -p typed-openapi -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features --features clap -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features --features document -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features --features generate -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features --features builder -- -D warnings
+    cargo clippy -p typed-openapi --all-features --all-targets -- -D warnings
     RUSTDOCFLAGS="-D warnings" cargo doc -p typed-openapi --no-deps --no-default-features
-    cargo check -p cli --features reqwest-client
-    cargo check -p api-generated --features builder
+    cargo clippy -p cli --features reqwest-client -- -D warnings
+    cargo clippy -p api-generated --features builder -- -D warnings
     cargo test -p api-generated --features builder --doc
     # The line that catches a builder which replaces a wrapper instead of
     # adding one: `api-generated` never calls its own wrappers, so only a
     # crate that does can tell the difference.
-    cargo check -p cli --features builder --all-targets
+    cargo clippy -p cli --features builder --all-targets -- -D warnings
     just bon-free
     just clap-free
     just bigint-free
@@ -125,16 +132,16 @@ test:
 
 # `cargo deny` reads the advisory database over the network, and `check` runs
 # between edits: a check that fails on a fetch timeout is a check people stop
-# running. So `audit` is apart from `check` because of the network. It is apart
-# from `gate` only while the tree holds an advisory that no upgrade repairs.
-# `deny.toml` says why the licence check is left out.
+# running. So `audit` is apart from `check` because of the network, and it is
+# in `gate` so that an advisory filed against a crate in the tree turns the
+# gate red in CI. `deny.toml` says why the licence check is left out.
 
 # Check the dependency tree for advisories, bans and unknown sources.
 audit:
     cargo deny check advisories bans sources
 
 # Everything CI runs, in the order CI runs it.
-gate: check features test blessed package
+gate: check features test blessed package audit
 
 # Every artefact under `api-generated` is committed, so the generator has to be
 # able to reproduce them. A diff here is either the vendor's document moving or

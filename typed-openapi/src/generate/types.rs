@@ -140,7 +140,7 @@ pub(super) fn emit(
     let mut space = TypeSpace::new(&settings);
     space
         .add_ref_types(schemas(definitions)?)
-        .map_err(GenerateError::Typify)?;
+        .map_err(|error| GenerateError::Typify(Box::new(error)))?;
     let names = Names::read(
         &mut space,
         declared.iter().map(String::as_str),

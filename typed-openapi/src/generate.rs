@@ -66,6 +66,7 @@ mod names;
 mod ops;
 mod types;
 
+use std::error::Error;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -318,7 +319,11 @@ impl Settings {
         for layer in &self.overlays {
             overlaid = overlay::apply(overlaid, &read(layer)?).map_err(fault(layer))?;
         }
-        let yaml = serde_yaml_ng::to_string(&overlaid).map_err(GenerateError::Yaml)?;
+        // The emitter keeps its defaults, which quote every string a YAML 1.1
+        // reader would misread (`"N"`, `"yes"`, `"1.0"`), so a reader that
+        // follows 1.1 reads back the strings that were written.
+        let yaml = serde_saphyr::to_string(&overlaid)
+            .map_err(|error| GenerateError::Yaml(Box::new(error)))?;
 
         // Refuse to emit against a document this crate cannot build a CLI from.
         // Everything below trusts that this succeeded.
@@ -841,8 +846,10 @@ pub enum GenerateError {
         #[source]
         source: OverlayError,
     },
+    /// The YAML emitter refused the corrected document. The cause is boxed so
+    /// that no type of the emitter is part of this crate's API.
     #[error("the overlaid document is not representable as YAML")]
-    Yaml(#[source] serde_yaml_ng::Error),
+    Yaml(#[source] Box<dyn Error + Send + Sync>),
     #[error("the overlaid document does not describe a usable CLI")]
     Unusable(#[source] LoadError),
     #[error("the overlaid document is not an OpenAPI 3 document")]
@@ -853,8 +860,10 @@ pub enum GenerateError {
         #[source]
         source: serde_json::Error,
     },
+    /// typify refused a schema. The cause is boxed so that no type of typify
+    /// is part of this crate's API.
     #[error("typify cannot build Rust types from the document's schemas")]
-    Typify(#[source] typify::Error),
+    Typify(#[source] Box<dyn Error + Send + Sync>),
     /// A wrapper would have to name the type of a schema the document's
     /// `components.schemas` never declared. Emitting an identifier for it
     /// anyway is how an adopter ends up bisecting a generated file, so the

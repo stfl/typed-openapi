@@ -143,8 +143,8 @@ rule a caller cannot rely on, and the point of reading the rule off the document
 is that both consumers get the same one. `memchr`, `regress`'s only dependency,
 is already in the graph through `serde_json`.
 
-It also sets the floor: `regress` uses let-chains, so this crate wants **Rust
-1.88** in every feature set.
+It also puts a floor under the compiler: `regress` uses let-chains, which need
+Rust 1.88. CI builds on current stable and on nothing older.
 
 Reproduce the first row with:
 

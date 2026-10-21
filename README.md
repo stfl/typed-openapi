@@ -128,16 +128,18 @@ answers a test from a script instead, are in [docs/client.md][client].
 - **A regex engine in every binary.** Enforcing `pattern` costs one and no
   feature removes it: 810 KB of the example's 4.6 MB stripped binary.
 - **The reduced model is a binary blob**, diffable only by regenerating it.
-- **Rust 1.88**, in every feature set, set by the regex engine. Stable
-  throughout — only this repository's own recipes want nightly.
+- **Stable Rust.** CI builds and tests the crate with all features on, on
+  current stable, and on nothing older. `rust-version` is 1.89, which the YAML
+  reader declares. Only this repository's own recipes want nightly.
 
 ## Where to go next
 
 `typed-openapi/` is the published crate and the only thing on crates.io;
 everything under `examples/toy/` is one adoption of it, held by the same
 `just gate` CI runs — formatting, clippy, rustdoc, each feature alone and all
-together, the tests, a bless that reproduces every committed artefact, and the
-crate built and tested from its own tarball.
+together, the tests, a bless that reproduces every committed artefact, the
+crate built and tested from its own tarball, and an audit of the dependency
+tree for advisories.
 
 | | |
 |---|---|
