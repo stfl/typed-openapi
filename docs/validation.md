@@ -134,20 +134,23 @@ read.
 |---|---|---|
 | a value of the wrong type, or a missing property | `Mismatch` | `` createVoucher: the request body does not fit the schema the document declares at `status` `` |
 | a property that the type does not take, at any depth | `Undeclared` | `` createContact: the request body carries a property that the schema the document declares does not take, at `address.extra` `` |
-| a list where the type takes an object, at any depth, or a scalar as the body itself | `NotAnObject` | `` createContact: the request body has an array at `address`, where the schema the document declares takes an object `` |
+| a list where the type reads an object, at any depth, or a list or a scalar as the body itself where the type reads one | `NotAnObject` | `` createContact: the request body has an array at `address`, where the schema the document declares takes an object `` |
 | a type that cannot be written back as JSON | `Unwritable` | `<operationId>: the type the document declares for the request body cannot be written as JSON` |
 
 They are asked in this order:
 
-1. The body itself: a list or a scalar where the type takes an object is
-   `NotAnObject` at `.`.
+1. The body itself: a list or a scalar where the type reads an object is
+   `NotAnObject` at `.`. A struct, a map and an adjacently tagged union read an
+   object. For an untagged, internally tagged or externally tagged union a scalar
+   body is a `Mismatch`, and so is a list that no member reads. A list that a
+   member reads by position is `NotAnObject` at `.`, found in step 4.
 2. Whether the values have the right types, and no property is missing:
    `Mismatch`. A scalar below the top where the type takes an object is one of
    these, because serde cannot read an object from it.
 3. Whether the type can be written back: `Unwritable`.
 4. The body beside what the type wrote back. The first place in the order of the
-   body that holds a property the type did not write back is `Undeclared`, and
-   the first that holds a list the type read by position is `NotAnObject`.
+   body that holds either a property the type did not write back (`Undeclared`)
+   or a list the type read by position (`NotAnObject`) is the one named.
 5. Where that found nothing, the first property that the type skipped while it
    read is `Undeclared`. It is a property that holds a `null`, an empty list or
    an empty map, and the last section below says where `fits` can see one.
@@ -160,13 +163,15 @@ back as JSON, and walks the body beside what came back. A body key that the type
 did not write back is a property it did not take. A list in the place of an
 object was read by position, because serde fills a struct from a list, and the
 server would read a list. Both hold at every depth and inside every shape typify
-writes: a union (`untagged`, internally tagged or externally tagged), a
-`flatten`ed struct, a map of objects and a list. In an externally tagged union
-the key of the member is a step of the path (`place.address.extra`). A list at
-the top, where the type is a struct or a map, is `NotAnObject` whatever its
-length. Everywhere else a list that the type cannot read is a `Mismatch`, like
-any other value of the wrong type, and so is a scalar where the type takes an
-object.
+writes: a union (untagged, internally tagged, adjacently tagged or externally
+tagged), a `flatten`ed struct, a map of objects and a list. In an externally
+tagged union the key of the member is a step of the path
+(`place.address.extra`). A list at the top, where the type reads an object, is
+`NotAnObject` whatever its length. Everywhere else a list that the type cannot
+read is a `Mismatch`, like any other value of the wrong type. So is a scalar
+below the top where the type takes an object, and a scalar as the body for an
+untagged, internally tagged or externally tagged union: those ask for no shape,
+so the body itself is not asked first.
 
 **There is no way to allow an undeclared property on a call.** No flag, no
 setting and no cargo feature does it. A server may drop a property it does not
@@ -198,9 +203,7 @@ other, because the typed call cannot send it either.** Two shapes do that:
 
 - An `anyOf` that typify writes as an `untagged` enum, given a body that fills
   two of its members. The enum keeps one member, so a property of another member
-  is `Undeclared`. typify writes the enum when it judges the members exclusive,
-  which two objects are when one of them requires a property that the other does
-  not declare.
+  is `Undeclared`. typify writes the enum when it judges the members exclusive.
 - A `oneOf` of an object and a list, given a list that the object reads by
   position. The body is `NotAnObject`.
 
@@ -218,10 +221,14 @@ an empty map out of what it writes when the property is optional, which is what
 typify's `skip_serializing_if` does. So a property that nothing declares and
 whose value is one of those three is found only where the type skips it while it
 reads: the body itself and every object except those inside an untagged union,
-an internally tagged union and a `flatten`ed struct, which serde reads from a
-buffer that nothing is skipped from. Inside those it passes. An externally tagged
-union is read directly, so the property is refused there, and the key of its
-member is in the path. A property with any other value is found everywhere.
+an internally tagged union, an adjacently tagged union whose content comes before
+its tag, and a `flatten`ed struct, which serde reads from a buffer that nothing
+is skipped from. Inside those it passes. An externally tagged union is read
+directly, so the property is refused there, and the key of its member is in the
+path. An adjacently tagged union is read directly while its tag comes first, so
+the same property is refused there when the body writes `{"kind": "a", "data":
+{"x": 1, "extra": null}}` and passes when it writes the `data` before the
+`kind`. A property with any other value is found everywhere.
 
 **A type you own is written back too.** `fits` needs the type to implement
 `Serialize`, and the type has to write the shape it reads: an object as an object

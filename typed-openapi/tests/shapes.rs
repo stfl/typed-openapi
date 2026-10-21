@@ -1,13 +1,15 @@
 //! What `client::fits` makes of the types typify writes.
 //!
 //! `fits` is held to a type by reading a body into it and writing it back, so
-//! what it sees of a body depends on what serde makes of the type: a union is
-//! read from a buffer, a `flatten`ed struct is too, and an externally tagged
-//! enum is not. Which of those typify writes for which schema is typify's call,
-//! and a hand-written type in `src/client.rs` holds only what its author
-//! thought of. So these types are typify's own, written from a JSON Schema in
-//! `tests/fixtures/shapes.json` by `import_types!`, and a release of typify
-//! that writes a schema another way is named by the case that stood on it.
+//! what it sees of a body depends on what serde makes of the type: an untagged
+//! union is read from a buffer, and so are an internally tagged union, a
+//! `flatten`ed struct and an adjacently tagged union whose content comes before
+//! its tag. An externally tagged enum is not. Which of those typify writes for
+//! which schema is typify's call, and a hand-written type in `src/client.rs`
+//! holds only what its author thought of. So these types are typify's own,
+//! written from a JSON Schema in `tests/fixtures/shapes.json` by `import_types!`,
+//! and a release of typify that writes a schema another way is named by the case
+//! that stood on it.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -428,6 +430,126 @@ fn a_property_spelled_like_the_member_that_holds_it_is_named_whole() {
         ),
         undeclared("ei.address.address"),
     )]);
+}
+
+/// The key of an externally tagged member can be the name of the first property
+/// of its content, and then the body holds the same key twice in a row. The path
+/// is the same whatever the skipped property holds: `serde_ignored` sees one that
+/// holds nothing and the walk of the body sees the rest.
+#[test]
+fn a_member_key_that_its_content_repeats_is_in_the_path_whatever_the_value() {
+    for property in [Value::Null, json!([]), json!({}), json!("x")] {
+        let body = json!({"a": {"a": {"x": 1, "extra": property}, "b": 2}});
+        all::<types::Contact>(vec![
+            (
+                "a struct variant",
+                with("rep", body.clone()),
+                undeclared("rep.a.a.extra"),
+            ),
+            (
+                "a newtype variant",
+                with("repn", body.clone()),
+                undeclared("repn.a.a.extra"),
+            ),
+        ]);
+        all::<types::ExternalRepeat>(vec![(
+            "the body, a struct variant",
+            body.clone(),
+            undeclared("a.a.extra"),
+        )]);
+        all::<types::ExternalRepeatNewtype>(vec![(
+            "the body, a newtype variant",
+            body,
+            undeclared("a.a.extra"),
+        )]);
+    }
+}
+
+/// A `oneOf` of objects that each require a constant tag and one content
+/// property is an adjacently tagged enum. Serde reads it directly while the tag
+/// comes first, and from a buffer when the content comes first, so a property
+/// that holds nothing is seen in the first order and passes in the second.
+#[test]
+fn an_adjacently_tagged_union_is_held_to_the_member_its_tag_names() {
+    let content_first = |data: Value| json!({"data": data, "kind": "a"});
+    let tag_first = |data: Value| json!({"kind": "a", "data": data});
+    all::<types::Contact>(vec![
+        (
+            "a member",
+            with("adj", tag_first(json!({"x": 1}))),
+            fits_ok(),
+        ),
+        (
+            "an extra property, the tag first",
+            with("adj", tag_first(json!({"x": 1, "extra": "x"}))),
+            undeclared("adj.data.extra"),
+        ),
+        (
+            "an extra property, the content first",
+            with("adj", content_first(json!({"x": 1, "extra": "x"}))),
+            undeclared("adj.data.extra"),
+        ),
+        (
+            "an extra property that holds nothing, the tag first",
+            with("adj", tag_first(json!({"x": 1, "extra": null}))),
+            undeclared("adj.data.extra"),
+        ),
+        (
+            "an extra property that holds nothing, the content first",
+            with("adj", content_first(json!({"x": 1, "extra": null}))),
+            fits_ok(),
+        ),
+        (
+            "a list in the place of the content",
+            with("adj", tag_first(json!([1]))),
+            not_an_object("adj.data"),
+        ),
+    ]);
+}
+
+/// What the body itself is, asked of the type before it is read. Serde reads a
+/// struct, a map and an adjacently tagged enum with `deserialize_struct` or
+/// `deserialize_map`, so for those a scalar and a list are `NotAnObject`. The
+/// other unions are read from a buffer or by `deserialize_any`, which asks for
+/// no shape: a scalar is a value of the wrong type, and a list is refused only
+/// when a member reads it by position.
+#[test]
+fn a_scalar_or_a_list_as_the_body_is_refused_for_what_the_type_reads() {
+    for scalar in [json!("x"), json!(5), json!(true), Value::Null] {
+        all::<types::Contact>(vec![("a struct", scalar.clone(), not_an_object("."))]);
+        all::<types::Adjacent>(vec![(
+            "an adjacently tagged union",
+            scalar.clone(),
+            not_an_object("."),
+        )]);
+        all::<types::Untagged>(vec![("an untagged union", scalar.clone(), mismatch("."))]);
+        all::<types::Pet>(vec![(
+            "an internally tagged union",
+            scalar.clone(),
+            mismatch("."),
+        )]);
+        all::<types::External>(vec![("an externally tagged union", scalar, mismatch("."))]);
+    }
+    let by_place = json!(["dog", "Rex"]);
+    let by_no_place = json!(["a", 1]);
+    all::<types::Untagged>(vec![
+        (
+            "a list a member reads",
+            by_place.clone(),
+            not_an_object("."),
+        ),
+        ("a list no member reads", by_no_place.clone(), mismatch(".")),
+    ]);
+    // An internally tagged enum takes the first element of a list for its tag.
+    all::<types::Pet>(vec![
+        ("a list a member reads", by_place, not_an_object(".")),
+        (
+            "a list whose tag no member has",
+            json!(["bird", 1]),
+            mismatch("[0]"),
+        ),
+    ]);
+    all::<types::External>(vec![("a list", by_no_place, mismatch("."))]);
 }
 
 /// typify writes an `anyOf` as an enum only when it judges the members

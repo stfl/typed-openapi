@@ -79,11 +79,14 @@ the crate follows [Semantic Versioning][semver].
   `docs/validation.md`, *What `fits` refuses*. The crate depends on
   `serde_ignored` for this.
 - **`BodyError::NotAnObject { op, path, found }`.** `fits` refuses a list where
-  the type takes an object, at any depth, and a scalar as the body itself:
-  `path` is `.` for the body and `address` or `positions[1]` below it. A list of
-  the right length used to pass, because serde fills a struct from a list by
-  position. Below the top, a list that the type cannot read and a scalar are a
-  `Mismatch`. Repair: send an object.
+  the type reads an object, at any depth, and a list or a scalar as the body
+  itself where the type reads an object (a struct, a map or an adjacently tagged
+  union): `path` is `.` for the body and `address` or `positions[1]` below it. A
+  list of the right length used to pass, because serde fills a struct from a list
+  by position. Below the top, a list that the type cannot read and a scalar are a
+  `Mismatch`. So is a scalar as the body for an untagged, internally tagged or
+  externally tagged union, and so is a list that no member of one reads. Repair:
+  send an object.
 - **A body that the type reads as less than the document says is refused.** Two
   shapes: an `anyOf` that typify writes as an `untagged` enum, given a body that
   fills two members (the enum keeps one member, so a property of the other is

@@ -267,6 +267,15 @@
         },
         "ei": {
           "$ref": "#/definitions/ExternalInline"
+        },
+        "rep": {
+          "$ref": "#/definitions/ExternalRepeat"
+        },
+        "repn": {
+          "$ref": "#/definitions/ExternalRepeatNewtype"
+        },
+        "adj": {
+          "$ref": "#/definitions/Adjacent"
         }
       }
     },
@@ -358,6 +367,134 @@
             }
           },
           "additionalProperties": false
+        }
+      ]
+    },
+    "Inner": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        }
+      }
+    },
+    "Wide": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "$ref": "#/definitions/Inner"
+        },
+        "b": {
+          "type": "integer"
+        }
+      }
+    },
+    "ExternalRepeat": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "a"
+          ],
+          "properties": {
+            "a": {
+              "type": "object",
+              "properties": {
+                "a": {
+                  "$ref": "#/definitions/Inner"
+                },
+                "b": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "z"
+          ],
+          "properties": {
+            "z": {
+              "type": "object",
+              "properties": {
+                "c": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ExternalRepeatNewtype": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "a"
+          ],
+          "properties": {
+            "a": {
+              "$ref": "#/definitions/Wide"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "z"
+          ],
+          "properties": {
+            "z": {
+              "$ref": "#/definitions/Point"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Adjacent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "data"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "a"
+              ]
+            },
+            "data": {
+              "$ref": "#/definitions/Inner"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "data"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "b"
+              ]
+            },
+            "data": {
+              "$ref": "#/definitions/Point"
+            }
+          }
         }
       ]
     }

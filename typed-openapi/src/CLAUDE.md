@@ -219,9 +219,10 @@ type reads less than the document says. `fits` reads the body into the type,
 writes the value with `serde_json::to_value` and walks the body beside what came
 back (`beside`): a body list beside a written object was read by place, and a
 body key that the written object lacks was not read. That is the way to see
-inside an untagged union, an internally tagged union and a `flatten`ed struct
-(which is also what typify writes for an `anyOf` it cannot judge exclusive), all
-of which serde reads from a buffer that nothing is skipped from. It puts the key
+inside an untagged union, an internally tagged union, an adjacently tagged union
+whose content comes before its tag, and a `flatten`ed struct (which is also what
+typify writes for an `anyOf` it cannot judge exclusive). Serde reads each of
+them from a buffer, and nothing is skipped from a buffer. It puts the key
 of an externally tagged variant in the path as well. It is why `fits` takes
 `T: Serialize`: a type must write the shape it reads, an object as an object and
 a list as a list, and that holds for the type from `Settings::replace` as well.
@@ -230,35 +231,45 @@ a list as a list, and that holds for the type from `Settings::replace` as well.
 empty map when it writes an optional property (`skip_serializing_if`, in
 typify-impl's `structs.rs`), so the walk lets a key with such a value pass, and
 `serde_ignored` names it where the type skips it while it reads: the body itself
-and every object outside an untagged union, an internally tagged union and a
-`flatten`ed struct, which serde reads from a buffer. Inside one, such a property
-passes. That is a limit, `docs/validation.md` states it, and `tests/shapes.rs`
-and a unit test in `src/client.rs` pin it. An externally tagged union is read
-directly, so a property that holds nothing is refused there. `serde_ignored`
-names no key for a struct variant or a tuple variant, and `located` puts the key
-of the variant back by following the steps along the body: an object with one key
-that cannot take the next step is a variant, and so is a key at the last step
-that holds something, because the skipped property holds nothing.
+and every object outside the shapes that serde reads from a buffer, which are an
+untagged union, an internally tagged union, an adjacently tagged union whose
+content comes before its tag, and a `flatten`ed struct. Inside one, such a
+property passes. That is a limit, `docs/validation.md` states it, and
+`tests/shapes.rs` and a unit test in `src/client.rs` pin it. An externally
+tagged union is read directly, and so is an adjacently tagged one whose tag comes
+first, so a property that holds nothing is refused there. `serde_ignored` names
+the key of no variant, so `located` puts back each one. A variant is the one key
+of its object, and a body can spell it like the property inside it, so `located`
+searches for the reading of the way in which every step leads somewhere, with
+the reading that has no variant key first. The skipped property holds nothing,
+so the way ends at a value that holds nothing. The search remembers the
+readings that went nowhere, by the steps left and the depth, because a body that
+is one key deep over and over has more splits into variants and properties than
+a run could try.
 
 `Probe` asks the type what it reads for the body itself, because the body cannot
 tell: serde derives `visit_seq` beside `visit_map` for a struct, so a list of
 five values reads into a struct of five fields. The type is read from a
 deserializer that holds nothing, and a call to `deserialize_struct` or
-`deserialize_map` is an object. A type that reads itself through
-`deserialize_any` (a union, a `serde_json::Value`) or `deserialize_option` asks
-for none. A list or a scalar at the top is `NotAnObject` at `.` whatever its
-length when the type asks for an object. Everywhere else the walk finds a list
-that serde read by place, and a list that the type cannot read is a `Mismatch`,
-like a scalar, which serde cannot read an object from.
+`deserialize_map` is an object, which is a struct, a map and an adjacently
+tagged union. A type that reads itself through `deserialize_any` (an untagged or
+an internally tagged union, a `serde_json::Value`), `deserialize_enum` (an
+externally tagged union) or `deserialize_option` asks for none. A list or a
+scalar at the top is `NotAnObject` at `.` whatever its length when the type asks
+for an object. For a union that asks for none, a scalar at the top is a
+`Mismatch`, and a list is `NotAnObject` when a member reads it by place and a
+`Mismatch` when none does. Below the top the walk finds a list that serde read
+by place, and a list that the type cannot read is a `Mismatch`, like a scalar,
+which serde cannot read an object from.
 
 `tests/shapes.rs` is the measurement of typify: it runs `typify::import_types!`
 over `tests/fixtures/shapes.json` and holds `fits` to the types typify 0.8 writes
-for each shape (a struct, an untagged, an internally tagged and an externally
-tagged enum, an `anyOf` that typify writes as an enum and one that it writes as a
-struct of `flatten`ed `Option`s, an `allOf`, a map of objects and each way to
-leave the rest open), so a release of typify that writes a shape another way
-fails under the case that stood on it. The unit tests in `src/client.rs` use
-hand-written types and hold the mechanism. Two shapes are narrower in the type
+for each shape (a struct, an untagged, an internally tagged, an adjacently tagged
+and an externally tagged enum, an `anyOf` that typify writes as an enum and one
+that it writes as a struct of `flatten`ed `Option`s, an `allOf`, a map of objects
+and each way to leave the rest open), so a release of typify that writes a shape
+another way fails under the case that stood on it. The unit tests in
+`src/client.rs` use hand-written types and hold the mechanism. Two shapes are narrower in the type
 than in the document, and a body is refused like any other: an `anyOf` that
 typify writes as an `untagged` enum, given a body that fills two members, and a
 `oneOf` of an object and a list given a list that the object reads.
