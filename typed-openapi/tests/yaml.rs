@@ -242,8 +242,8 @@ fn one_anchor_used_a_hundred_times_is_read() {
 }
 
 /// A value that occurs a million times in a document is one anchor and a million
-/// aliases. The value has a million nodes, which is inside the budget of a
-/// 10 MB document, and the reader's own defaults refuse it twice: they stop at
+/// aliases. The value has a million nodes, which is inside the budget's
+/// 2 500 000, and the reader's own defaults refuse it twice: they stop at
 /// 50 000 aliases, and at a million events copied from anchors.
 #[test]
 fn one_anchor_used_a_million_times_is_read() {

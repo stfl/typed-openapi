@@ -33,9 +33,9 @@
 //! yes` is not `true`. `<<` is an ordinary key, not a merge. A mapping with the
 //! same key twice is refused with its line and column. A nesting past 128
 //! levels is refused, and so is a value of more than 2 500 000 nodes or 64 MiB
-//! of scalar text, counted with every alias expanded. That is the size of a
-//! 10 MB document, and an alias bomb is far past it. Comments are not read. Two
-//! YAML 1.1 readings remain: `1_000` is the number 1000, and `017` is a float.
+//! of scalar text, counted with every alias expanded. An alias bomb is far past
+//! them. Comments are not read. Two YAML 1.1 readings remain: `1_000` is the
+//! number 1000, and `017` is a float.
 
 use thiserror::Error;
 
@@ -124,16 +124,15 @@ pub enum Place {
 /// four suits a vendor's OpenAPI document.
 ///
 /// The budget limits the value that a read builds: 2 500 000 nodes and 64 MiB
-/// of scalar text, counted with every alias expanded, at a depth of 128. That is
-/// the size of a 10 MB document. Every other cap is set where a document inside
-/// those limits cannot reach it, so that the budget refuses no other size of
-/// document. A response defined once and used by a hundred operations is the
-/// document working as intended, and a value that occurs a million times is a
-/// large document and not a hostile one. The reader counts what an alias
-/// replays in the node limit, so that limit refuses an alias bomb as it refuses
-/// a text with too many nodes. Only anchors nested inside each other reach the
-/// caps on the events and the bytes that anchors keep, and those caps limit the
-/// memory of the copies.
+/// of scalar text, counted with every alias expanded, at a depth of 128. Every
+/// other cap is set where a document inside those limits cannot reach it, so
+/// that the budget refuses no other size of document. A response defined once
+/// and used by a hundred operations is the document working as intended, and a
+/// value that occurs a million times is a large document and not a hostile one.
+/// The reader counts what an alias replays in the node limit, so that limit
+/// refuses an alias bomb as it refuses a text with too many nodes. Only anchors
+/// nested inside each other reach the caps on the events and the bytes that
+/// anchors keep, and those caps limit the memory of the copies.
 ///
 /// A value holds no comment, and the reader refuses a run of more than 32 of
 /// them between a key and its nested value, so comments are not read. The

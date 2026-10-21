@@ -197,10 +197,10 @@ defaults read the enum value `N` as `false`. They read a vendor's
 `x-cli-writes: yes` as `true`. So `yes`, `no`, `on`, `off`, `y` and `n` stay
 strings, and `<<` is an ordinary key. Comments are not read: a value holds none,
 and the default refuses a run of more than 32 between a key and its nested
-value. The budget limits the value that a read builds, at the size of a 10 MB
-document: 2 500 000 nodes and 64 MiB of scalar text, counted with every alias
-expanded, at a depth of 128. Every other cap is set where a document inside
-those limits cannot reach it, so the budget refuses no other size of document.
+value. The budget limits the value that a read builds: 2 500 000 nodes and
+64 MiB of scalar text, counted with every alias expanded, at a depth of 128.
+Every other cap is set where a document inside those limits cannot reach it, so
+the budget refuses no other size of document.
 A response defined once and used by a hundred operations, and a value that
 occurs a million times, are documents working as intended. The node limit is
 what refuses an alias bomb, because the reader counts each event that an alias
