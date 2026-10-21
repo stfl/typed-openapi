@@ -18,8 +18,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
+use crate::body_reader::{Read, Step, read};
 use crate::model::{Document, DocumentError, DriftError, Operation};
-use crate::read::{Read, Step, read};
 use crate::request::{Invocation, ValueError};
 use crate::transport::{AsyncClient, HttpRequest, HttpResponse, SyncClient};
 use crate::values::Values;
@@ -290,9 +290,12 @@ pub enum BodyError {
 /// buffer, so the property passes in an object that the type reads from one: an
 /// untagged union, an internally tagged union, a `flatten`ed struct and the
 /// content of an adjacently tagged union that comes before its tag. When the
-/// body itself is such an object, it passes at the top as well. Everywhere else
-/// it is [`BodyError::Undeclared`]: in a struct, in an externally tagged union
-/// and in an adjacently tagged union whose tag comes first.
+/// body itself is an untagged union, an internally tagged union or a
+/// `flatten`ed struct, it passes at the top as well. Everywhere else it is
+/// [`BodyError::Undeclared`]: in a struct, in an externally tagged union, in the
+/// content of an adjacently tagged union whose tag comes first, and among the
+/// own keys of an adjacently tagged union, which serde reads directly whichever
+/// key comes first.
 pub fn fits<T: DeserializeOwned + Serialize>(
     op: &str,
     body: &serde_json::Value,

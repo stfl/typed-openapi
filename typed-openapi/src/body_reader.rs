@@ -20,9 +20,11 @@
 //! implements `Deserializer` for. A list and an object are read by `serde_json`
 //! too, through a visitor that hands the type's own visitor an access that knows
 //! the key or the index of each value, and the keys of a map are `serde_json`'s
-//! (an integer key parses as it does there).
+//! (an integer key parses as it does there). The name of a newtype goes to
+//! `serde_json` as well, which reads a `RawValue` through it when its
+//! `raw_value` feature is on.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::fmt;
 use std::iter::Enumerate;
 use std::slice;
@@ -74,7 +76,9 @@ pub(crate) fn read<T: DeserializeOwned>(
 struct Trail<'a> {
     /// The steps from the body to the value being read.
     here: RefCell<Vec<Step<'a>>>,
-    skipped: RefCell<Option<Vec<Step<'a>>>>,
+    /// The first place that the type skipped. A cell is written once, which is
+    /// what keeping only the first asks for.
+    skipped: OnceCell<Vec<Step<'a>>>,
 }
 
 impl<'a> Trail<'a> {
@@ -87,13 +91,22 @@ impl<'a> Trail<'a> {
         answer
     }
 
-    /// The type skipped the value at the place the trail stands. Only the first
-    /// is kept.
+    /// Read `value` with `seed` one step deeper than the trail stands. A refusal
+    /// is said in the error of the access that asked, as `serde_json` says the
+    /// refusal of an element or a value.
+    fn read<S: DeserializeSeed<'a>, E: de::Error>(
+        &self,
+        step: Step<'a>,
+        value: &'a Value,
+        seed: S,
+    ) -> Result<S::Value, E> {
+        self.under(step, || seed.deserialize(Reader { value, trail: self }))
+            .map_err(E::custom)
+    }
+
+    /// The type skipped the value at the place the trail stands.
     fn skip(&self) {
-        let mut skipped = self.skipped.borrow_mut();
-        if skipped.is_none() {
-            *skipped = Some(self.here.borrow().clone());
-        }
+        self.skipped.get_or_init(|| self.here.borrow().clone());
     }
 }
 
@@ -243,13 +256,21 @@ impl<'de> Deserializer<'de> for Reader<'_, 'de> {
         }
     }
 
-    /// A newtype holds the same value, so it is no step in the body.
+    /// A newtype holds the same value, so it is no step in the body. The name goes
+    /// to `serde_json`, which reads a `RawValue` through it when its `raw_value`
+    /// feature is on.
     fn deserialize_newtype_struct<V: Visitor<'de>>(
         self,
-        _: &'static str,
+        name: &'static str,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        visitor.visit_newtype_struct(self)
+        self.value.deserialize_newtype_struct(
+            name,
+            Newtype {
+                visitor,
+                reader: self,
+            },
+        )
     }
 
     /// Serde asks for this where a type has no field for a key, and that is the
@@ -273,6 +294,32 @@ impl<'de> Deserializer<'de> for Reader<'_, 'de> {
         deserialize_u128 deserialize_f32 deserialize_f64 deserialize_char deserialize_str
         deserialize_string deserialize_bytes deserialize_byte_buf deserialize_unit
         deserialize_identifier
+    }
+}
+
+/// The visitor that `serde_json` hands a newtype to. It gives the visitor of the
+/// type the [`Reader`] where `serde_json` gives its own deserialiser, and passes
+/// the map on that `serde_json` reads a `RawValue` from.
+struct Newtype<'t, 'de, V> {
+    visitor: V,
+    reader: Reader<'t, 'de>,
+}
+
+impl<'de, V: Visitor<'de>> Visitor<'de> for Newtype<'_, 'de, V> {
+    type Value = V::Value;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.visitor.expecting(formatter)
+    }
+
+    fn visit_newtype_struct<D: Deserializer<'de>>(self, _: D) -> Result<Self::Value, D::Error> {
+        self.visitor
+            .visit_newtype_struct(self.reader)
+            .map_err(<D::Error as de::Error>::custom)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        self.visitor.visit_map(map)
     }
 }
 
@@ -325,15 +372,7 @@ impl<'de, A: SeqAccess<'de>> SeqAccess<'de> for Elements<'_, 'de, A> {
         // `serde_json` counts the elements it has handed out and refuses a read
         // that leaves any, so its access moves on beside this one.
         self.seq.next_element::<IgnoredAny>()?;
-        self.trail
-            .under(Step::Index(index), || {
-                seed.deserialize(Reader {
-                    value,
-                    trail: self.trail,
-                })
-            })
-            .map(Some)
-            .map_err(<A::Error as de::Error>::custom)
+        self.trail.read(Step::Index(index), value, seed).map(Some)
     }
 
     fn size_hint(&self) -> Option<usize> {
@@ -396,14 +435,7 @@ impl<'de, A: MapAccess<'de>> MapAccess<'de> for Pairs<'_, 'de, A> {
         let Some((key, value)) = self.current.take() else {
             return self.map.next_value_seed(seed);
         };
-        self.trail
-            .under(Step::Key(key), || {
-                seed.deserialize(Reader {
-                    value,
-                    trail: self.trail,
-                })
-            })
-            .map_err(<A::Error as de::Error>::custom)
+        self.trail.read(Step::Key(key), value, seed)
     }
 
     fn size_hint(&self) -> Option<usize> {
@@ -485,14 +517,7 @@ impl<'de, V: VariantAccess<'de>> VariantAccess<'de> for Inside<'_, 'de, V> {
         self,
         seed: S,
     ) -> Result<S::Value, Self::Error> {
-        self.trail
-            .under(Step::Key(self.variant), || {
-                seed.deserialize(Reader {
-                    value: self.content,
-                    trail: self.trail,
-                })
-            })
-            .map_err(<V::Error as de::Error>::custom)
+        self.trail.read(Step::Key(self.variant), self.content, seed)
     }
 
     fn tuple_variant<W: Visitor<'de>>(
@@ -545,6 +570,7 @@ mod tests {
     use std::collections::HashMap;
 
     use serde::Deserialize;
+    use serde_json::value::RawValue;
     use serde_json::{Value, json};
 
     use super::{DeserializeOwned, Deserializer, MapAccess, SeqAccess, Step, Visitor, fmt, read};
@@ -866,6 +892,32 @@ mod tests {
     enum Loose {
         Number(i64),
         Address(Address),
+    }
+
+    /// A property whose text `serde_json` hands over as it is. It asks for a
+    /// newtype struct under a name of its own, which `serde_json` answers with a
+    /// map when its `raw_value` feature is on.
+    #[derive(Debug, PartialEq, Deserialize)]
+    struct Noted {
+        #[serde(deserialize_with = "raw_text")]
+        note: String,
+    }
+
+    fn raw_text<'de, D: Deserializer<'de>>(de: D) -> Result<String, D::Error> {
+        Ok(Box::<RawValue>::deserialize(de)?.get().to_owned())
+    }
+
+    #[test]
+    fn a_raw_value_is_read_as_serde_json_reads_it() {
+        agrees::<Noted>(&[
+            json!({"note": {"k": [1, 2]}}),
+            json!({"note": [{"k": null}]}),
+            json!({"note": "text"}),
+            json!({"note": 1.5}),
+            json!({"note": null}),
+            json!({}),
+            json!([]),
+        ]);
     }
 
     #[test]

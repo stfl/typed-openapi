@@ -156,7 +156,8 @@ serde_json = { workspace = true }
 # file is exactly where a caller cannot find the field by eye. An Overlay that
 # has the wrong shape names the action it stopped in the same way, from
 # `actions[2]`. It wraps the deserialiser serde_json already drives and brings
-# `itoa` with it; tracking the path by hand is that same wrapper written again.
+# `itoa` with it. It gives a place only for a read that fails; the place of a
+# property the type skips without an error is `body_reader`'s own trail.
 serde_path_to_error = { workspace = true }
 # Parses typify's output into the tree the generator rewrites and prints.
 syn = { workspace = true, optional = true }
@@ -174,6 +175,10 @@ typed-openapi = { path = ".", features = ["document", "generate"] }
 # Traces the serde layout of `Document` and every type inside it, which
 # `tests/layout.rs` compares with the committed description.
 serde-reflection = { workspace = true }
+# `serde_json` reads a `RawValue` through a branch behind `raw_value`, and a
+# build that any crate of an adopter asks it of has it on. The reader of a body
+# is tested against that branch.
+serde_json = { workspace = true, features = ["raw_value"] }
 
 # docs.rs builds with every feature on and `--cfg docsrs`, which `lib.rs` turns
 # into `feature(doc_cfg)`: that is what prints "Available on crate feature ...

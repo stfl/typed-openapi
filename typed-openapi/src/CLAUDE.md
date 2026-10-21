@@ -221,16 +221,17 @@ back (`beside`): a body list beside a written object was read by place, and a
 body key that the written object lacks was not read. That is the way to see
 inside an untagged union, an internally tagged union, an adjacently tagged union
 whose content comes before its tag, and a `flatten`ed struct (which is also what
-typify writes for an `anyOf` it cannot judge exclusive). Serde reads each of
-them from a buffer, and nothing is skipped from a buffer. It is why `fits` takes
-`T: Serialize`: a type must write the shape it reads, an object as an object and
-a list as a list, and that holds for the type from `Settings::replace` as well.
+typify writes for an `anyOf` it cannot judge exclusive). Serde reads each of them
+from a buffer, and nothing is skipped from a buffer. Writing the body back is why
+`fits` takes `T: Serialize`: a type must write the shape it reads, an object as
+an object and a list as a list, and that holds for the type from
+`Settings::replace` as well.
 
 **A property that holds nothing is found by the read, and the place is the
 read's.** A type drops a `null`, an empty list and an empty map when it writes an
 optional property (`skip_serializing_if`, in typify-impl's `structs.rs`), so the
-walk lets a key with such a value pass. `src/read.rs` names it where the type
-skips it while it reads. Serde asks its deserializer for
+walk lets a key with such a value pass. `src/body_reader.rs` names it where the
+type skips it while it reads. Serde asks its deserializer for
 `deserialize_ignored_any` where a type has no field for a key, and `Reader` is
 `serde_json`'s reading of a `Value` that knows where it is in the body and notes
 the place when it is asked. Only the first is kept.
@@ -246,18 +247,22 @@ the count of what a read leaves behind are asked of the `&Value` that
 `serde_json` implements `Deserializer` for. A list or an object is read by
 `serde_json` through a visitor that hands the visitor of the type an access that
 knows the step of each value, so the keys of a map (an integer key parses as it
-does there) and every message are `serde_json`'s. A reader that differs from
-`serde_json` in a value or a message is a defect: `src/read.rs` holds a test that
-gives both a set of types and bodies and compares them.
+does there) and every message are `serde_json`'s. The name of a newtype reaches
+`serde_json` too, which reads a `RawValue` through it when the `raw_value`
+feature is on, and any crate of an adopter's build can turn that on. A reader
+that differs from `serde_json` in a value or a message is a defect:
+`src/body_reader.rs` holds a test that gives both a set of types and bodies and
+compares them, `RawValue` among the types.
 
 Serde skips nothing from a buffer, so the property passes inside an untagged
 union, an internally tagged union, a `flatten`ed struct and an adjacently tagged
 union whose content comes before its tag, and at the top when the body itself is
 one of the first three. A struct, an externally tagged union and an adjacently
 tagged union read their own keys directly, so a property that holds nothing is
-refused there, and so is it in an adjacently tagged union whose tag comes first.
-That is a limit, `docs/validation.md` states it, and `tests/shapes.rs` pins it on
-the types typify writes, and a unit test in `src/client.rs` on a type of its own.
+refused there, and so is it in the content of an adjacently tagged union whose
+tag comes first. That is a limit, `docs/validation.md` states it, and
+`tests/shapes.rs` pins it on the types typify writes, and a unit test in
+`src/client.rs` on a type of its own.
 
 `Probe` asks the type what it reads for the body itself, because the body cannot
 tell: serde derives `visit_seq` beside `visit_map` for a struct, so a list of
@@ -282,13 +287,13 @@ and an externally tagged enum, an `anyOf` that typify writes as an enum and one
 that it writes as a struct of `flatten`ed `Option`s, an `allOf`, a map of objects
 and each way to leave the rest open), so a release of typify that writes a shape
 another way fails under the case that stood on it. The unit tests in
-`src/client.rs` and `src/read.rs` use hand-written types and hold the mechanism.
-Two shapes are narrower in the type than in the document, and a body is refused
-like any other: an `anyOf` that typify writes as an `untagged` enum, given a body
-that fills two members, and a `oneOf` of an object and a list given a list that
-the object reads. `docs/validation.md` says both to an adopter. The struct of
-`flatten`ed `Option`s takes the properties of every member, but serde reads a
-member that fails as absent, so a value of the wrong type for a member is
+`src/client.rs` and `src/body_reader.rs` use hand-written types and hold the
+mechanism. Two shapes are narrower in the type than in the document, and a body
+is refused like any other: an `anyOf` that typify writes as an `untagged` enum,
+given a body that fills two members, and a `oneOf` of an object and a list given
+a list that the object reads. `docs/validation.md` says both to an adopter. The
+struct of `flatten`ed `Option`s takes the properties of every member, but serde
+reads a member that fails as absent, so a value of the wrong type for a member is
 `Undeclared` there and not a `Mismatch`.
 
 **`additionalProperties: true` is said as `{}` before typify reads the schema.**

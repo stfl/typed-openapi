@@ -154,7 +154,8 @@ They are asked in this order:
    or a list the type read by position (`NotAnObject`) is the one named.
 5. Where that found nothing, the first property that the type skipped while it
    read is `Undeclared`. It is a property that holds a `null`, an empty list or
-   an empty map, and the last section below says where `fits` can see one.
+   an empty map, and the paragraph *One kind of property is seen only where the
+   type reads its object directly* says where `fits` can see one.
 
 Each of `Undeclared` and `NotAnObject` names one place. An operator sees the next
 one when they have repaired that one.
@@ -231,10 +232,13 @@ of an adjacently tagged union when it comes before the tag. A property of that
 kind passes inside one of them. It passes at the top as well when the type of the
 body itself is an untagged union, an internally tagged union or a `flatten`ed
 struct, because every property of the body is then read from a buffer. Everywhere
-else it is refused: in a struct, in an externally tagged union, and in an
-adjacently tagged union whose tag comes first. `{"kind": "a", "data": {"x": 1,
-"extra": null}}` is refused, and `{"data": {"x": 1, "extra": null}, "kind": "a"}`
-passes. A property with any other value is found everywhere.
+else it is refused: in a struct, in an externally tagged union, in the content of
+an adjacently tagged union whose tag comes first, and among the own keys of an
+adjacently tagged union, which serde reads directly whichever key comes first.
+`{"kind": "a", "data": {"x": 1, "extra": null}}` is refused, and
+`{"data": {"x": 1, "extra": null}, "kind": "a"}` passes. A `zzz` of that kind
+beside `kind` and `data` is refused in both orders. A property with any other
+value is found everywhere.
 
 **A type you own is written back too.** `fits` needs the type to implement
 `Serialize`, and the type has to write the shape it reads: an object as an object

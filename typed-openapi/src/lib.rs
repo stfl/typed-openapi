@@ -70,12 +70,12 @@ mod schema;
 #[cfg(feature = "generate")]
 pub mod generate;
 
+mod body_reader;
 pub mod client;
 pub mod model;
 mod multipart;
 pub mod names;
 pub mod plan;
-mod read;
 pub mod request;
 pub mod scalar;
 pub mod summary;
