@@ -1268,10 +1268,10 @@ fn a_flag_that_requires_another_is_refused_by_the_parser_without_it() {
     );
 }
 
-/// A file under the system's temporary directory, named for this test binary's
-/// process so that two runs do not meet in one file.
+/// A file under `CARGO_TARGET_TMPDIR`, named for this test binary's process so
+/// that two runs do not meet in one file.
 fn scratch(name: &str, text: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "typed-openapi-dispatch-{}-{name}",
         std::process::id()
     ));
@@ -1280,8 +1280,8 @@ fn scratch(name: &str, text: &str) -> std::path::PathBuf {
 }
 
 /// `--json-body` is the base and a field flag is an edit of it. A list or a
-/// scalar has no property to edit, so a flag beside one used to be dropped and
-/// the body went out unchanged, under an exit code of 0 (F-30).
+/// scalar has no property to edit, so a flag beside one has nothing to act on
+/// and is refused (F-30).
 #[test]
 fn a_field_flag_beside_a_body_that_is_not_an_object_is_refused() {
     let doc = document();

@@ -84,7 +84,7 @@ sight and **11 writes** held behind `--commit`. Two of those writes are more tha
 one question, so the document names **2 gates** — `--enshrine` and `--email`,
 with **1 operation** behind each. **5 operations** are asked for no body at all,
 **4 bodies** go out whole because a command line cannot take a nested object, a
-PDF or a multipart upload apart, and **0 parameters** are carried without a flag.
+map with no declared property, a PDF or a multipart upload apart, and **0 parameters** are carried without a flag.
 
 Every number in that paragraph is asserted against the summary by
 [`api/tests/summary.rs`](api/tests/summary.rs), and that is the point rather

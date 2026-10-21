@@ -191,14 +191,18 @@ undeclared property has no way through.** `client::fits` is where a JSON body
 meets the type of its operation. The library cannot name that type, so the
 adopter's seam calls it (`tree::select`, then the generated
 `OperationId::check_body`), and a CLI that only calls `tree::dispatch` has none.
-It asks three things in this order, and each refusal is its own `BodyError`
-variant: is the body an object where the type takes one (`NotAnObject`), do the
-values have the right types (`Mismatch`), and does the type take every property
-(`Undeclared`, found with `serde_ignored` beside `serde_path_to_error`). A new
-refusal is a new variant, since `BodyError` is `#[non_exhaustive]`. None of
-them prints a value of the body, which can be a credential or a client's data,
-and the path is spelled as `serde_path_to_error` spells one (`address.extra`,
-`positions[1].flag`), so `spelled` is kept in step with it.
+Each refusal is its own `BodyError` variant: is the body an object where the
+type takes one (`NotAnObject`), do the values have the right types (`Mismatch`),
+and does the type write back everything the body holds (`Undeclared` for a
+property, `NotAnObject` for a list that serde read by place). A type that cannot
+be written back is `Unwritable`, because there is nothing to hold the body
+beside, and the gate fails closed. A new refusal is a new variant, since
+`BodyError` is `#[non_exhaustive]`. `Undeclared` and `NotAnObject` print no value
+of the body, which can be a credential or a client's data. The cause of a
+`Mismatch` is serde's message, which can quote it. A path is spelled as
+`serde_path_to_error` spells one (`address.extra`, `positions[1].flag`), and
+`client::step` and `client::element` are the one place that spells the steps of
+the walk and of the path `serde_ignored` gives.
 
 D4: no flag, setting or cargo feature lets an undeclared property through on a
 call. The repair is an Overlay that declares it, which an adopter blesses and a
@@ -208,22 +212,60 @@ what the rule is there to prevent. The generated types get no
 a response may carry more than the document says. The rule lives in `fits`
 because a request is the only side it is about.
 
-`takes_an_object` asks the type what it reads, because the body cannot tell:
-serde derives `visit_seq` beside `visit_map` for a struct, so a list of five
-values reads into a struct of five fields. The type is read from a deserializer
-that holds nothing, and a call to `deserialize_struct` or `deserialize_map` is
-an object; a type that reads itself through `deserialize_any` (a union, a
-`serde_json::Value`) or `deserialize_option` asks for none. The question is put
-to the body and not to the types nested in it.
+**The measure is the generated type, found by writing a body back.** The typed
+call is held to the same type, and anything that makes the command line and the
+typed call disagree about an operation is a bug, so a body is refused where the
+type reads less than the document says. `fits` reads the body into the type,
+writes the value with `serde_json::to_value` and walks the body beside what came
+back (`beside`): a body list beside a written object was read by place, and a
+body key that the written object lacks was not read. That is the way to see
+inside a union and a `flatten`ed struct, which serde reads from a buffer that
+nothing is skipped from, and it puts the key of an externally tagged variant in
+the path, which `serde_ignored` does not name. It is why `fits` takes
+`T: Serialize`: a type must write the shape it reads, an object as an object and
+a list as a list, and that holds for the type from `Settings::replace` as well.
 
-What `fits` sees is what the type skips while it reads, and typify decides the
-type, so a limit is a measurement of typify: `additionalProperties: true` beside
-properties gets no field (extras are `Undeclared`), `{}` and a typed schema get
-a map, `false` gets `deny_unknown_fields` (serde refuses first, as a
-`Mismatch`), and a union is an `untagged` enum that serde reads from a buffer
-(nothing is skipped, nothing is seen). The unit tests in `src/client.rs` hold
-each limit open, so one that closes is named; `docs/validation.md`, *What `fits`
-refuses*, says them to an adopter. A move of typify re-measures them.
+`serde_ignored` stays for one case. A type drops a `null`, an empty list and an
+empty map when it writes an optional property (`skip_serializing_if`, in
+typify-impl's `structs.rs`), so the walk lets a key with such a value pass, and
+`serde_ignored` names it where the type skips it while it reads: the body itself
+and every object outside a union and a `flatten`ed struct. Inside one, such a
+property passes. That is a limit, `docs/validation.md` states it, and
+`tests/shapes.rs` and a unit test in `src/client.rs` pin it.
+
+`Probe` asks the type what it reads for the body itself, because the body cannot
+tell: serde derives `visit_seq` beside `visit_map` for a struct, so a list of
+five values reads into a struct of five fields. The type is read from a
+deserializer that holds nothing, and a call to `deserialize_struct` or
+`deserialize_map` is an object. A type that reads itself through
+`deserialize_any` (a union, a `serde_json::Value`) or `deserialize_option` asks
+for none. A list at the top is `NotAnObject` at `.` whatever its length when the
+type asks for an object. Everywhere else the walk finds a list that serde read by
+place, and a list that the type cannot read is a `Mismatch`.
+
+`tests/shapes.rs` is the measurement of typify: it runs `typify::import_types!`
+over `tests/fixtures/shapes.json` and holds `fits` to the types typify 0.8 writes
+for each shape (a struct, an untagged, an internally tagged and an externally
+tagged enum, an `anyOf` and an `allOf`, a map of objects and each way to leave
+the rest open), so a release of typify that writes a shape another way fails
+under the case that stood on it. The unit tests in `src/client.rs` use
+hand-written types and hold the mechanism. Two shapes are narrower in the type
+than in the document, and a body is refused like any other: an `anyOf` that one
+body fills as two members, and a `oneOf` of an object and a list given a list
+that the object reads. `docs/validation.md` says both to an adopter.
+
+**`additionalProperties: true` is said as `{}` before typify reads the schema.**
+typify writes no field for `true` beside declared properties, and the
+`flatten`ed `extra` map for `{}`, which admits the same values and which its own
+comment names as the way to get the map. The check is against the generated type,
+so the first would make a property that the document leaves open `Undeclared`.
+`OpenWithAMap` in `src/generate/types.rs` is a `schemars` visitor that says every
+`true` as `{}`, at every depth, in the named schemas and in the inline ones. It
+walks the schema and not the JSON, so a `default` or an `example` that holds the
+same words is not changed. A schema that states no `additionalProperties` stays
+closed: reading it as open would refuse nothing, and the refusal of an
+undeclared property is the point. `false` stays what typify closes with
+`deny_unknown_fields`.
 
 **Every YAML text is read by one function, and no foreign error is public.**
 `read` in `src/overlay.rs` is the function every document and every Overlay goes

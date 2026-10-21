@@ -296,9 +296,9 @@ fn a_flag_beside_json_body_is_an_edit_not_a_value_that_is_dropped() {
     );
 }
 
-/// The hole the CLI path used to have beside the typed one: a `--json-body`
-/// file the document's own schema refuses is refused here, before a request is
-/// built, rather than sent for the server to reject.
+/// A `--json-body` file the document's own schema refuses is refused here,
+/// before a request is built, rather than sent for the server to reject, as the
+/// typed call is held to the same schema.
 #[test]
 fn a_json_body_that_does_not_fit_the_document_is_refused_with_nothing_sent() {
     let dir = tempdir();
@@ -511,7 +511,7 @@ fn an_open_schema_still_holds_its_values_to_their_type() {
 
 /// F-29, from the input of its probe: five values in the order the generated
 /// `Voucher` declares its fields. Serde reads a struct from a list by place, so
-/// this was a voucher.
+/// the list is refused for what it is.
 #[test]
 fn a_list_in_the_place_of_an_object_stops_the_request() {
     let client = Recorder::new();
@@ -525,12 +525,37 @@ fn a_list_in_the_place_of_an_object_stops_the_request() {
     assert!(
         matches!(
             &error,
-            app::Error::Body(api::BodyError::NotAnObject { op, found })
-                if op == "createVoucher" && *found == "an array"
+            app::Error::Body(api::BodyError::NotAnObject { op, path, found })
+                if op == "createVoucher" && path == "." && *found == "an array"
         ),
         "{error:?}"
     );
     assert!(stderr.contains("createVoucher"), "{stderr}");
+    assert!(client.take().is_empty());
+}
+
+/// F-29 below the top: `address` is a list that holds the two values the
+/// generated `Address` declares, which serde reads by place. The server would
+/// read a list.
+#[test]
+fn a_list_in_the_place_of_a_nested_object_stops_the_request() {
+    let client = Recorder::new();
+
+    let (error, stderr) = refused(
+        &client,
+        &["toy", "raw", "contacts", "create", "--commit"],
+        r#"{"name": "Acme Ltd", "address": ["Vienna", "1 Example Way"]}"#,
+    );
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Body(api::BodyError::NotAnObject { op, path, found })
+                if op == "createContact" && path == "address" && *found == "an array"
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("`address`"), "{stderr}");
     assert!(client.take().is_empty());
 }
 

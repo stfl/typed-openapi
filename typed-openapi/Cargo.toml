@@ -68,6 +68,13 @@ required-features = []
 name = "required"
 required-features = ["document"]
 
+# `import_types!` over a JSON Schema, which is the only way to hold `client::fits`
+# to the types typify writes rather than to a type its author thought of. typify
+# is a dependency of `generate`.
+[[test]]
+name = "shapes"
+required-features = ["generate"]
+
 [[test]]
 name = "summary"
 required-features = ["document"]

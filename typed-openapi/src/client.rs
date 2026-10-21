@@ -156,8 +156,10 @@ impl Client {
 /// This is what a `--json-body` file gets checked against. A refusal names the
 /// operation and says which way the body is wrong, and the variants are apart
 /// so that a caller can tell a wrong value from a property nobody declared.
-/// None of them prints a value from the body: it can be a credential or a
-/// client's data, and the refusal is printed where a log reads it.
+/// `Undeclared` and `NotAnObject` print no value from the body: it can be a
+/// credential or a client's data, and the refusal is printed where a log reads
+/// it. The cause of a `Mismatch` is serde's own message, which can quote the
+/// value it refused.
 ///
 /// A path is in the `jq` spelling: `positions[1].flag`, or `.` for the body
 /// itself. Serde's own message never says which element of which list held the
@@ -182,7 +184,9 @@ pub enum BodyError {
     /// take. A schema that admits further properties (`additionalProperties`)
     /// takes them into a map, so a property of such a body is not this.
     ///
-    /// Only the first property, in the order of the body, is named.
+    /// Only one property is named: the first in the order of the body that the
+    /// type does not write back, or, where there is none, the first that the
+    /// type skipped while it read.
     #[error(
         "{op}: the request body carries a property that the schema the document declares does \
          not take, at `{path}`"
@@ -190,21 +194,38 @@ pub enum BodyError {
     Undeclared {
         /// The `operationId` of the operation whose body was checked.
         op: String,
-        /// Where in the body the property is: `address.extra`.
+        /// Where in the body the property is: `address.extra`. A union that
+        /// serde tags with a key puts the key in the path
+        /// (`place.address.extra`).
         path: String,
     },
-    /// The body is not an object where the type takes one. Serde fills a struct
-    /// from a list by place, so a list of the right length would otherwise fit.
+    /// The body holds a list or a scalar where the type takes an object. Serde
+    /// fills a struct from a list by place, so a list of the right length would
+    /// otherwise fit.
     #[error(
-        "{op}: the request body is {found}, and the schema the document declares for it takes \
-         an object"
+        "{op}: the request body has {found} at `{path}`, where the schema the document declares \
+         takes an object"
     )]
     NotAnObject {
         /// The `operationId` of the operation whose body was checked.
         op: String,
-        /// What the body is, as the message words it after "is": `an array`,
+        /// Where in the body the value is: `address`, `positions[1]`, or `.` for
+        /// the body itself.
+        path: String,
+        /// What the value is, as the message words it after "has": `an array`,
         /// `a string`, `a number`, `a boolean` or `null`.
         found: &'static str,
+    },
+    /// The body fits the type and the type cannot write itself back as JSON, so
+    /// there is nothing to hold the body beside. A type that typify writes
+    /// always can; a type an adopter owns (`Settings::replace`) may not.
+    #[error("{op}: the type the document declares for the request body cannot be written as JSON")]
+    Unwritable {
+        /// The `operationId` of the operation whose body was checked.
+        op: String,
+        /// `serde_json`'s reading of the failure.
+        #[source]
+        source: serde_json::Error,
     },
 }
 
@@ -215,47 +236,142 @@ pub enum BodyError {
 /// operation, which is how a body assembled on a command line is held to the
 /// same schema as a body passed from Rust — before a request is built.
 ///
-/// Three things refuse a body, each as its own [`BodyError`]. A value of the
-/// wrong type, or a missing property, is a mismatch. A body that is not an
-/// object where `T` takes one is refused for what it is. A property that `T`
-/// does not take is refused by its path, because a server may ignore it
-/// without a word and the operator would then believe it took effect. A type
-/// that takes further properties into a map, as typify writes for
-/// `additionalProperties`, takes them all.
+/// Each refusal is its own [`BodyError`]. A value of the wrong type, or a
+/// missing property, is a mismatch. A list or a scalar where `T` takes an
+/// object is refused for what it is, at any depth: serde reads a struct from a
+/// list by place, so the list would otherwise fit. A property that `T` does not
+/// take is refused by its path, because a server may ignore it without a word
+/// and the operator would then believe it took effect. A type that takes
+/// further properties into a map, as typify writes for `additionalProperties`,
+/// takes them all.
 ///
 /// The generated types do not refuse an unknown property themselves
 /// (`deny_unknown_fields`): the same types decode a vendor's responses, and a
 /// response may carry more than the document says. Only a request is held to
 /// the rule, and this is where.
 ///
-/// A property is seen when the type skips it while it reads the body. Serde
-/// reads a union (`oneOf` or `anyOf`, which typify writes as an `untagged`
-/// enum) and a `flatten`ed struct from a buffer, and nothing is skipped from a
-/// buffer in a way the check sees. A property inside one of them passes.
-pub fn fits<T: DeserializeOwned>(op: &str, body: &serde_json::Value) -> Result<(), BodyError> {
+/// The measure is the type. The body is read into `T`, `T` is written back, and
+/// the body is walked beside what came back: a list where the type writes an
+/// object was read by place, and a property the type does not write back was
+/// not read. That holds inside a union (`oneOf`, `anyOf`), which serde reads
+/// from a buffer that nothing is skipped from, and inside a `flatten`ed struct.
+/// So a body that the typed call cannot send is refused as well, whatever the
+/// document says: a union that serde reads as one member keeps that member, and
+/// a property of another one is `Undeclared`. A type has to write the shape it
+/// reads — an object as an object, a list as a list — which every type typify
+/// writes does.
+///
+/// One property passes: a type leaves a `null`, an empty list and an empty map
+/// out of what it writes, as typify's `skip_serializing_if` does for an
+/// optional property. A property of that kind that nothing declares is seen only
+/// where the type skips it while it reads, which is the body itself and every
+/// object that is not inside a union or a `flatten`ed struct. Inside one it
+/// passes.
+pub fn fits<T: DeserializeOwned + Serialize>(
+    op: &str,
+    body: &serde_json::Value,
+) -> Result<(), BodyError> {
     if !body.is_object() && takes_an_object::<T>() {
         return Err(BodyError::NotAnObject {
             op: op.to_owned(),
+            path: ".".to_owned(),
             found: kind(body),
         });
     }
-    let mut undeclared = None;
-    let mut skipped = |path: serde_ignored::Path<'_>| {
-        undeclared.get_or_insert_with(|| spelled(&path));
+    let mut skipped = None;
+    let mut note = |path: serde_ignored::Path<'_>| {
+        skipped.get_or_insert_with(|| spelled(&path));
     };
-    serde_path_to_error::deserialize::<_, T>(serde_ignored::Deserializer::new(body, &mut skipped))
-        .map_err(|refused| BodyError::Mismatch {
-            op: op.to_owned(),
-            path: refused.path().to_string(),
-            source: refused.into_inner(),
-        })?;
-    match undeclared {
-        Some(path) => Err(BodyError::Undeclared {
-            op: op.to_owned(),
-            path,
-        }),
-        None => Ok(()),
+    let read: T =
+        serde_path_to_error::deserialize(serde_ignored::Deserializer::new(body, &mut note))
+            .map_err(|refused| BodyError::Mismatch {
+                op: op.to_owned(),
+                path: refused.path().to_string(),
+                source: refused.into_inner(),
+            })?;
+    let written = serde_json::to_value(&read).map_err(|source| BodyError::Unwritable {
+        op: op.to_owned(),
+        source,
+    })?;
+    let refusal = beside(body, &written, "")
+        .or_else(|| skipped.map(Refusal::Undeclared))
+        .map(|refusal| refusal.of(op));
+    refusal.map_or(Ok(()), Err)
+}
+
+/// What a body holds that its type does not take.
+enum Refusal {
+    /// A property: its path.
+    Undeclared(String),
+    /// A list or a scalar where the type writes an object.
+    NotAnObject { path: String, found: &'static str },
+}
+
+impl Refusal {
+    fn of(self, op: &str) -> BodyError {
+        let op = op.to_owned();
+        match self {
+            Self::Undeclared(path) => BodyError::Undeclared { op, path },
+            Self::NotAnObject { path, found } => BodyError::NotAnObject { op, path, found },
+        }
     }
+}
+
+/// The first place where `body` holds what `written`, the type's own writing of
+/// the same body, does not.
+///
+/// A body list beside a written object was read by place. A body key that the
+/// written object lacks was not read, unless its value is one that the type
+/// leaves out when it writes: typify drops a `null`, an empty list and an empty
+/// map from an optional property.
+fn beside(body: &serde_json::Value, written: &serde_json::Value, at: &str) -> Option<Refusal> {
+    use serde_json::Value;
+    match (body, written) {
+        (Value::Object(body), Value::Object(written)) => body.iter().find_map(|(key, value)| {
+            let there = step(at, key);
+            match written.get(key) {
+                Some(written) => beside(value, written, &there),
+                None if left_out_when_empty(value) => None,
+                None => Some(Refusal::Undeclared(there)),
+            }
+        }),
+        (Value::Array(body), Value::Array(written)) => body
+            .iter()
+            .zip(written)
+            .enumerate()
+            .find_map(|(index, (value, written))| beside(value, written, &element(at, index))),
+        (value, Value::Object(_)) => Some(Refusal::NotAnObject {
+            path: if at.is_empty() {
+                ".".to_owned()
+            } else {
+                at.to_owned()
+            },
+            found: kind(value),
+        }),
+        _ => None,
+    }
+}
+
+/// Is `value` one that a type leaves out of what it writes, as a property it
+/// holds and did not need?
+fn left_out_when_empty(value: &serde_json::Value) -> bool {
+    value.is_null()
+        || value.as_array().is_some_and(Vec::is_empty)
+        || value.as_object().is_some_and(serde_json::Map::is_empty)
+}
+
+/// The path of the property `key` of the object at `at`.
+fn step(at: &str, key: &str) -> String {
+    if at.is_empty() {
+        key.to_owned()
+    } else {
+        format!("{at}.{key}")
+    }
+}
+
+/// The path of the element `index` of the list at `at`.
+fn element(at: &str, index: usize) -> String {
+    format!("{at}[{index}]")
 }
 
 /// What a JSON value is, worded to follow "is".
@@ -283,16 +399,18 @@ fn spelled(path: &serde_ignored::Path<'_>) -> String {
 }
 
 /// The spelling of `path`, which is empty for the body itself. A wrapper that
-/// serde adds around a value (`Some`, a newtype) is no step in the body.
+/// serde adds around a value (`Some`, a newtype struct) is no step in the body.
+///
+/// The key of an externally tagged enum is a step in the body that
+/// `serde_ignored` does not name, so a path from here can lack it. The walk of
+/// the body beside what the type writes names it, and a path from here is used
+/// only for a property that walk cannot see.
 fn below(path: &serde_ignored::Path<'_>) -> String {
     use serde_ignored::Path;
     match path {
         Path::Root => String::new(),
-        Path::Seq { parent, index } => format!("{}[{index}]", below(parent)),
-        Path::Map { parent, key } => match below(parent) {
-            above if above.is_empty() => key.clone(),
-            above => format!("{above}.{key}"),
-        },
+        Path::Seq { parent, index } => element(&below(parent), *index),
+        Path::Map { parent, key } => step(&below(parent), key),
         Path::Some { parent }
         | Path::NewtypeStruct { parent }
         | Path::NewtypeVariant { parent } => below(parent),
@@ -310,17 +428,20 @@ fn below(path: &serde_ignored::Path<'_>) -> String {
 ///
 /// A type that reads itself through `deserialize_any` (a union, a
 /// [`serde_json::Value`]) asks for no particular shape, and neither does an
-/// `Option`, which takes `null`. The answer is `false` for all of them.
+/// `Option`, which takes `null`. The answer is `false` for all of them. The
+/// question is put to the body and to nothing nested in it: below the top,
+/// [`fits`] finds a list read by place from what the type writes back, and a
+/// list of the wrong length is a mismatch there.
 fn takes_an_object<T: DeserializeOwned>() -> bool {
     let asked = Cell::new(false);
-    drop(T::deserialize(Asked(&asked)));
+    drop(T::deserialize(Probe(&asked)));
     asked.get()
 }
 
 /// The deserialiser [`takes_an_object`] reads a type from.
-struct Asked<'a>(&'a Cell<bool>);
+struct Probe<'a>(&'a Cell<bool>);
 
-impl<'de> serde::Deserializer<'de> for Asked<'_> {
+impl<'de> serde::Deserializer<'de> for Probe<'_> {
     type Error = serde::de::value::Error;
 
     fn deserialize_any<V: serde::de::Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
@@ -341,8 +462,10 @@ impl<'de> serde::Deserializer<'de> for Asked<'_> {
         Err(serde::de::Error::custom("the body is read from nothing"))
     }
 
-    /// A newtype is the type inside it, which is how a map the document names
-    /// reads itself.
+    /// A newtype struct is the type inside it. A derived `Deserialize` of one
+    /// that is not `#[serde(transparent)]` asks for a newtype struct and hands
+    /// the visitor a deserialiser for the inner type; without this the question
+    /// would end at the wrapper.
     fn deserialize_newtype_struct<V: serde::de::Visitor<'de>>(
         self,
         _: &'static str,
@@ -438,7 +561,7 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
     use super::{BodyError, fits};
@@ -446,28 +569,24 @@ mod tests {
     /// A body with a list of objects in it, which is the shape whose refusal
     /// is hardest to place by eye: serde's own message does not say which
     /// element of which list held the value.
-    #[derive(Debug, Deserialize)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
+    #[derive(Deserialize, Serialize)]
     struct Save {
         positions: Vec<Position>,
     }
 
-    #[derive(Debug, Deserialize)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
+    #[derive(Deserialize, Serialize)]
     struct Position {
         flag: bool,
     }
 
     /// The body of the toy's `createContact`: a nested object, one level down.
-    #[derive(Debug, Deserialize)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
+    #[derive(Deserialize, Serialize)]
     struct Contact {
         name: String,
         address: Address,
     }
 
-    #[derive(Debug, Deserialize)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
+    #[derive(Deserialize, Serialize)]
     struct Address {
         street: String,
         city: String,
@@ -475,14 +594,12 @@ mod tests {
 
     /// What typify writes for `type: object, additionalProperties: {type:
     /// string}`: a transparent newtype over a map.
-    #[derive(Debug, Deserialize)]
+    #[derive(Deserialize, Serialize)]
     #[serde(transparent)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
     struct Labels(HashMap<String, String>);
 
     /// A struct that takes its undeclared properties into a map of its own.
-    #[derive(Debug, Deserialize)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
+    #[derive(Deserialize, Serialize)]
     struct Open {
         name: String,
         #[serde(flatten)]
@@ -491,14 +608,22 @@ mod tests {
 
     /// The probe's own body: five values, in the order the struct declares its
     /// fields, which serde's derived `Deserialize` reads from a list by place.
-    #[derive(Debug, Deserialize)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
+    #[derive(Deserialize, Serialize)]
     struct Voucher {
         currency: String,
         id: Option<i64>,
         internal_ref: Option<String>,
         status: String,
         total: String,
+    }
+
+    /// Objects at every depth that serde can read from a list: in a list, in a
+    /// map and in a property.
+    #[derive(Deserialize, Serialize)]
+    struct Pack {
+        addresses: Vec<Address>,
+        by_name: HashMap<String, Address>,
+        main: Address,
     }
 
     #[test]
@@ -571,8 +696,12 @@ mod tests {
 
         let refused = fits::<Contact>("createContact", &body).unwrap_err();
 
-        let shown = format!("{refused} / {refused:?}");
-        assert!(!shown.contains("this property is in no schema"), "{shown}");
+        assert!(
+            !refused
+                .to_string()
+                .contains("this property is in no schema"),
+            "{refused}"
+        );
     }
 
     #[test]
@@ -629,15 +758,28 @@ mod tests {
 
         let refused = fits::<Voucher>("createVoucher", &body).unwrap_err();
 
-        let BodyError::NotAnObject { op, found } = &refused else {
+        let BodyError::NotAnObject { op, path, found } = &refused else {
             panic!("the list is refused for what it is, not for its fields: {refused:?}");
         };
         assert_eq!(op, "createVoucher");
+        assert_eq!(path, ".");
         assert_eq!(*found, "an array");
         assert_eq!(
             refused.to_string(),
-            "createVoucher: the request body is an array, and the schema the document \
-             declares for it takes an object"
+            "createVoucher: the request body has an array at `.`, where the schema the document \
+             declares takes an object"
+        );
+    }
+
+    /// The body is an object whatever the length of the list that stands for it,
+    /// so a list that no struct could read is refused for what it is as well.
+    #[test]
+    fn a_list_of_any_length_is_refused_for_what_it_is() {
+        let refused = fits::<Voucher>("createVoucher", &json!(["EUR"])).unwrap_err();
+
+        assert!(
+            matches!(&refused, BodyError::NotAnObject { path, .. } if path == "."),
+            "{refused:?}"
         );
     }
 
@@ -667,6 +809,21 @@ mod tests {
         );
     }
 
+    /// A newtype that is not `#[serde(transparent)]` asks the deserialiser for a
+    /// newtype struct, and the object is in what it wraps.
+    #[test]
+    fn a_newtype_around_an_object_takes_an_object() {
+        #[derive(Deserialize, Serialize)]
+        struct Named(Labels);
+
+        let refused = fits::<Named>("setContactLabels", &json!(["vip"])).unwrap_err();
+
+        assert!(
+            matches!(&refused, BodyError::NotAnObject { path, .. } if path == "."),
+            "{refused:?}"
+        );
+    }
+
     #[test]
     fn a_list_where_the_type_takes_a_list_is_not_refused() {
         assert!(fits::<Vec<Position>>("saveAll", &json!([{"flag": true}])).is_ok());
@@ -681,11 +838,16 @@ mod tests {
         assert!(matches!(refused, BodyError::Mismatch { .. }), "{refused:?}");
     }
 
-    #[derive(Debug, Deserialize)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
+    #[derive(Deserialize, Serialize)]
     struct Customer {
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        memo: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tags: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         address: Option<Address>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         labels: Option<Labels>,
     }
 
@@ -711,48 +873,142 @@ mod tests {
         assert!(fits::<Customer>("createCustomer", &body).is_ok());
     }
 
+    /// A type leaves a property out of what it writes when the property holds
+    /// nothing: typify's `skip_serializing_if`. That is no property of the body
+    /// that the type failed to read.
+    #[test]
+    fn a_declared_property_that_holds_nothing_is_not_refused() {
+        let body = json!({"name": "Acme Ltd", "memo": null, "tags": [], "labels": {}});
+
+        assert!(fits::<Customer>("createCustomer", &body).is_ok());
+    }
+
+    /// The type skips the property while it reads, and `serde_ignored` says so
+    /// even though the value is one the walk of the body lets pass.
+    #[test]
+    fn an_undeclared_property_that_holds_nothing_is_refused_where_the_type_skips_it() {
+        for empty in [Value::Null, json!([]), json!({})] {
+            let top = json!({"name": "Acme Ltd", "undeclaredField": empty});
+            let nested = json!({
+                "name": "Acme Ltd",
+                "address": {"street": "1 Example Way", "city": "Vienna", "extra": empty},
+            });
+
+            let top = fits::<Customer>("createCustomer", &top).unwrap_err();
+            let nested = fits::<Customer>("createCustomer", &nested).unwrap_err();
+
+            assert!(
+                matches!(&top, BodyError::Undeclared { path, .. } if path == "undeclaredField"),
+                "{top:?}"
+            );
+            assert!(
+                matches!(&nested, BodyError::Undeclared { path, .. } if path == "address.extra"),
+                "{nested:?}"
+            );
+        }
+    }
+
+    /// A list where the type reads an object, at each depth serde can read it
+    /// from a list.
+    #[test]
+    fn a_list_in_the_place_of_a_nested_object_is_refused_at_its_path() {
+        let address = json!({"street": "1 Example Way", "city": "Vienna"});
+        let listed = json!(["2 Example Way", "Graz"]);
+        let property = json!({"name": "Acme Ltd", "address": listed});
+        let element = json!({"addresses": [address, listed], "by_name": {}, "main": address});
+        let value = json!({"addresses": [], "by_name": {"k": listed}, "main": address});
+
+        let property = fits::<Customer>("createCustomer", &property).unwrap_err();
+        let element = fits::<Pack>("pack", &element).unwrap_err();
+        let value = fits::<Pack>("pack", &value).unwrap_err();
+
+        for (refused, at) in [
+            (property, "address"),
+            (element, "addresses[1]"),
+            (value, "by_name.k"),
+        ] {
+            assert!(
+                matches!(&refused, BodyError::NotAnObject { path, found, .. }
+                    if path == at && *found == "an array"),
+                "{at}: {refused:?}"
+            );
+        }
+    }
+
+    /// Serde cannot read a list of the wrong length into a struct, so that is a
+    /// value of the wrong type like any other.
+    #[test]
+    fn a_list_that_the_type_cannot_read_in_the_place_of_a_nested_object_is_a_mismatch() {
+        let body = json!({"name": "Acme Ltd", "address": ["1 Example Way"]});
+
+        let refused = fits::<Contact>("createContact", &body).unwrap_err();
+
+        assert!(
+            matches!(&refused, BodyError::Mismatch { path, .. } if path == "address"),
+            "{refused:?}"
+        );
+    }
+
     /// What typify writes for a `oneOf` or an `anyOf` with an object in it.
-    #[derive(Debug, Deserialize)]
+    #[derive(Deserialize, Serialize)]
     #[serde(untagged)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
     enum Either {
         Address(Address),
         Count { count: i64 },
     }
 
-    /// A type that reads one struct through another, which a hand-written type
-    /// may do and typify does not write for a schema.
-    #[derive(Debug, Deserialize)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
+    /// A type that reads one struct through another with `#[serde(flatten)]`,
+    /// which serde reads from a buffer. typify writes that attribute for the map
+    /// of `additionalProperties` beside properties.
+    #[derive(Deserialize, Serialize)]
     struct Composed {
         name: String,
         #[serde(flatten)]
         address: Address,
     }
 
-    /// What typify writes for `additionalProperties: false`.
-    #[derive(Debug, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    #[expect(dead_code, reason = "read only by the deserialiser under test")]
-    struct Closed {
-        name: String,
-    }
-
-    /// The limit `fits` states in its documentation: serde reads a union and a
-    /// `flatten`ed field from a buffer, and nothing is skipped from a buffer.
-    /// When this fails, the limit is gone and the documentation says so.
+    /// Serde reads a union and a `flatten`ed struct from a buffer, and nothing
+    /// is skipped from a buffer, so a property inside one is found by what the
+    /// type writes back.
     #[test]
-    fn a_property_inside_a_union_or_a_flattened_struct_is_not_seen() {
+    fn a_property_inside_a_union_or_a_flattened_struct_is_refused() {
         let address = json!({"street": "1 Example Way", "city": "Vienna", "extra": "x"});
         let composed = json!({"name": "Acme Ltd", "street": "1", "city": "Vienna", "extra": "x"});
 
-        assert!(fits::<Either>("pick", &address).is_ok());
-        assert!(fits::<Composed>("compose", &composed).is_ok());
+        let union = fits::<Either>("pick", &address).unwrap_err();
+        let flattened = fits::<Composed>("compose", &composed).unwrap_err();
+
+        assert!(
+            matches!(&union, BodyError::Undeclared { path, .. } if path == "extra"),
+            "{union:?}"
+        );
+        assert!(
+            matches!(&flattened, BodyError::Undeclared { path, .. } if path == "extra"),
+            "{flattened:?}"
+        );
+    }
+
+    /// The one property the walk of the body lets pass and nothing else sees:
+    /// the type does not write it back, and does not skip it while it reads.
+    /// When this fails, the limit is gone and the documentation says so.
+    #[test]
+    fn an_undeclared_property_that_holds_nothing_inside_a_union_is_not_seen() {
+        for empty in [Value::Null, json!([]), json!({})] {
+            let address = json!({"street": "1 Example Way", "city": "Vienna", "extra": empty});
+
+            assert!(fits::<Either>("pick", &address).is_ok(), "{address}");
+        }
     }
 
     /// A schema that states `additionalProperties: false` is closed by typify
     /// itself, which refuses at the first unknown key, so serde's refusal gets
     /// there before the check does.
+    #[derive(Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
+    struct Closed {
+        name: String,
+    }
+
     #[test]
     fn a_type_that_denies_unknown_fields_refuses_them_as_a_mismatch() {
         let refused =
@@ -767,12 +1023,28 @@ mod tests {
         );
     }
 
-    /// The other limit `fits` states: the question "does the type take an
-    /// object" is asked of the body, and a type nested in it is read by serde.
-    #[test]
-    fn a_list_in_the_place_of_a_nested_object_is_read_by_place() {
-        let body = json!({"name": "Acme Ltd", "address": ["1 Example Way", "Vienna"]});
+    /// A type that reads a body and cannot write it back leaves nothing to hold
+    /// the body beside, and the gate does not let that pass.
+    #[derive(Deserialize)]
+    #[expect(dead_code, reason = "read only by the deserialiser under test")]
+    struct Unwritten {
+        name: String,
+    }
 
-        assert!(fits::<Contact>("createContact", &body).is_ok());
+    impl Serialize for Unwritten {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("this type is not written"))
+        }
+    }
+
+    #[test]
+    fn a_type_that_cannot_be_written_back_is_refused_and_not_let_through() {
+        let refused = fits::<Unwritten>("write", &json!({"name": "Acme Ltd"})).unwrap_err();
+
+        let BodyError::Unwritable { op, source } = &refused else {
+            panic!("there is nothing to hold the body beside: {refused:?}");
+        };
+        assert_eq!(op, "write");
+        assert_eq!(source.to_string(), "this type is not written");
     }
 }

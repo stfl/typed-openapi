@@ -124,19 +124,35 @@ and nothing more has no such seam and sends the file as it is.
 ## What `fits` refuses
 
 `client::fits` refuses a body three ways, each its own `client::BodyError`
-variant, and none of them prints a value from the body. The path is in the `jq`
-spelling, and `.` is the body itself.
+variant, and a fourth variant says that it could not ask. The path is in the `jq`
+spelling, and `.` is the body itself. `Undeclared` and `NotAnObject` print no
+value from the body. The cause of a `Mismatch` is serde's own message, and it can
+quote the value it refused, so print it only where a value in the body may be
+read.
 
 | the body | variant | a refusal reads |
 |---|---|---|
 | a value of the wrong type, or a missing property | `Mismatch` | `` createVoucher: the request body does not fit the schema the document declares at `status` `` |
 | a property that the type does not take, at any depth | `Undeclared` | `` createContact: the request body carries a property that the schema the document declares does not take, at `address.extra` `` |
-| a list or a scalar where the type takes an object | `NotAnObject` | `createVoucher: the request body is an array, and the schema the document declares for it takes an object` |
+| a list or a scalar where the type takes an object, at any depth | `NotAnObject` | `` createContact: the request body has an array at `address`, where the schema the document declares takes an object `` |
+| a type that cannot be written back as JSON | `Unwritable` | `createContact: the type the document declares for the request body cannot be written as JSON` |
 
 They are asked in this order: what the body is, then whether its values have
-the right types, and last which property names the type takes. The `Undeclared`
-refusal names the first property in the order of the body, and an operator sees
-the next one when they have repaired that one.
+the right types, and last which properties the type takes. The `Undeclared`
+refusal names one property: the first in the order of the body that the type does
+not write back. An operator sees the next one when they have repaired that one.
+
+**The measure is the type.** `fits` reads the body into the type, writes the type
+back as JSON, and walks the body beside what came back. A body key that the type
+did not write back is a property it did not take. A list in the place of an
+object was read by position, because serde fills a struct from a list, and the
+server would read a list. Both hold at every depth and inside every shape typify
+writes: a union (`untagged`, internally tagged or externally tagged), a
+`flatten`ed struct, a map of objects and a list. In an externally tagged union
+the key of the member is a step of the path (`place.address.extra`). A list at
+the top, where the type is a struct or a map, is `NotAnObject` whatever its
+length. Everywhere else a list that the type cannot read is a `Mismatch`, like
+any other value of the wrong type.
 
 **There is no way to allow an undeclared property on a call.** No flag, no
 setting and no cargo feature does it. A server may drop a property it does not
@@ -146,30 +162,47 @@ reviewer reads: [`corrections.yaml`](../examples/toy/spec/corrections.yaml)
 declares `internal_ref` that way, and
 [Plain corrections](overlay.md#1-plain-corrections) shows the action.
 
-A schema that types its further properties is a map to typify, and the map takes
-them. `setContactLabels` in the toy has `ContactLabels`, which is
+**A schema that leaves further properties open gets a map for them.** A schema
+that types its further properties is a map to typify, and the map takes them.
+`setContactLabels` in the toy has `ContactLabels`, which is
 `additionalProperties: {type: string}`, so
 `{"vip": "yes", "region": "east"}` is sent as it is, and `{"vip": 1}` is a
-`Mismatch`. The generator adds no `#[serde(deny_unknown_fields)]` to the
-generated types, because the same types decode a vendor's responses and a
-response may carry more than the document says. Only a request is held to the
-rule.
+`Mismatch`. `additionalProperties: true` beside declared properties is the same:
+typify would write no field for it, so the generator says it as
+`additionalProperties: {}` before typify reads the schema, and the type gets the
+`flatten`ed map `extra`. A schema that states no `additionalProperties` is
+closed: JSON Schema reads it as open, but then no body would be refused. To open
+one, declare `additionalProperties` in an Overlay. `additionalProperties: false`
+gets `deny_unknown_fields` from typify, so serde refuses first and the refusal is
+a `Mismatch` whose cause says `unknown field`. The generator adds no
+`#[serde(deny_unknown_fields)]` of its own, because the same types decode a
+vendor's responses and a response may carry more than the document says. Only a
+request is held to the rule.
 
-`fits` sees a property that the type skips while it reads the body, so the
-shape of what typify writes decides what it can see:
+**Where the type reads less than the document says, a body is refused like any
+other, because the typed call cannot send it either.** Two shapes do that:
 
-- **`additionalProperties: true` beside declared properties** gets no field from
-  typify, so its extra properties are `Undeclared`. A schema that states
-  `additionalProperties: {}` gets a map for them. A schema without properties
-  gets a map for either.
-- **`additionalProperties: false`** gets `deny_unknown_fields` from typify, so
-  serde refuses first and the refusal is a `Mismatch` whose cause says
-  `unknown field`.
-- **A union** (`oneOf`, `anyOf`) is an `untagged` enum, which serde reads from a
-  buffer. A property inside one is not seen, and neither is a property in a
-  `flatten`ed struct.
-- **A list for an object** is asked of the body itself. Serde reads a list in
-  the place of an object nested in the body by position, as it always did.
+- An `anyOf` whose members one body fills together. typify writes an `untagged`
+  enum, which keeps one member, so a property of another member is `Undeclared`.
+- A `oneOf` of an object and a list, given a list that the object reads by
+  position. The body is `NotAnObject`.
+
+The repair is an Overlay that makes the schema say what the type reads: one
+member, or the properties declared on one schema.
+
+**One kind of property is not seen.** A type leaves a `null`, an empty list and
+an empty map out of what it writes when the property is optional, which is what
+typify's `skip_serializing_if` does. So a property that nothing declares and
+whose value is one of those three is found only where the type skips it while it
+reads: the body itself and every object outside a union and outside a
+`flatten`ed struct. Inside a union or a `flatten`ed struct it passes. A property
+with any other value is found everywhere.
+
+**A type you own is written back too.** `fits` needs the type to implement
+`Serialize`, and the type has to write the shape it reads: an object as an object
+and a list as a list. A generated type does, and so does a type named in
+`Settings::replace` that reads a string and writes one. A type that cannot be
+written back is `Unwritable`.
 
 Two things are not read at all: an `enum` on a numeric schema, and every
 keyword that describes a shape no flag carries — `minItems`, `minProperties`

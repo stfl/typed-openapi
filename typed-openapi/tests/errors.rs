@@ -210,6 +210,13 @@ fn requesting() -> Vec<Case> {
             },
         ),
         case(
+            "client::BodyError::Unwritable",
+            BodyError::Unwritable {
+                op: "createThing".to_owned(),
+                source: json_error(),
+            },
+        ),
+        case(
             "ArgError::ReadBody",
             ArgError::ReadBody {
                 path: PathBuf::from("body.json"),
