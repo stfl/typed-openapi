@@ -28,8 +28,8 @@ use openapiv3::{
 use thiserror::Error;
 
 use super::{
-    Body, COMMIT, Document, Effect, FIELD_PART, FILE_PART, Field, Gate, JSON_BODY,
-    JSON_BODY_TEMPLATE, Join, Location, Operation, Param, RAW_BODY, Shape, Unsupported,
+    Body, COMMIT, Document, Effect, Field, Gate, Join, Location, Operation, Param, Shape,
+    TRANSPORT, Unmet, Unsupported, spends, unmet,
 };
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
 use crate::scalar::Scalar;
@@ -58,27 +58,6 @@ const GATES: &str = "x-cli-gates";
 /// cannot say that two parameters only mean something together, so the marker
 /// sits on the parameter that needs the other.
 const REQUIRES: &str = "x-cli-requires";
-
-/// The five flags that carry a request's body, spent by every subcommand
-/// before the document has a say.
-///
-/// A parameter or a body field that wants one of these moves aside for it, and
-/// a gate that names one is refused. Nothing here is a person saying yes, which
-/// is why these yield where a gate and the confirmation do not: a
-/// `--body-json-body` is ugly and harmless, where a confirmation nobody typed
-/// is neither.
-///
-/// Spending a word here changes the reduced model of any document that declares
-/// a field spelled the same way, which is the point: the field moves aside at
-/// bless time, where a reviewer sees it, rather than shadowing a flag the CLI
-/// needs.
-const TRANSPORT: [&str; 5] = [
-    JSON_BODY,
-    JSON_BODY_TEMPLATE,
-    RAW_BODY,
-    FILE_PART,
-    FIELD_PART,
-];
 
 /// What a refusal calls the request body.
 ///
@@ -366,11 +345,6 @@ pub enum LoadError {
     },
 }
 
-/// `--help`, which clap declares on every subcommand whether or not anyone
-/// asked. Nothing here can move it, so it is a name the confirmation may not
-/// take.
-const HELP: &str = "help";
-
 /// Why a word cannot be the confirmation.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ConfirmationError {
@@ -429,7 +403,7 @@ impl Loading {
     /// `gates_of`, and for the same reason.
     pub fn commit(mut self, word: &str) -> Result<Self, ConfirmationError> {
         let word = spelled("confirmation", word)?;
-        if TRANSPORT.contains(&word.as_str()) || word == HELP {
+        if spends(&word) {
             return Err(ConfirmationError::Taken { word });
         }
         self.commit = word;
@@ -844,26 +818,24 @@ fn requires_of(op: &str, data: &ParameterData) -> Result<Vec<String>, LoadError>
 /// send, is a requirement no run could meet, so it is refused here rather than
 /// mounted as a flag that refuses everyone who gives it.
 fn companions(op: &str, params: &[Param]) -> Result<(), LoadError> {
-    for param in params {
-        for requires in param.requires() {
-            let Some(companion) = params.iter().find(|other| other.name() == requires) else {
-                return Err(LoadError::RequiresUnknown {
-                    op: op.to_owned(),
-                    name: param.name().to_owned(),
-                    requires: requires.clone(),
-                });
-            };
-            if let Shape::Unreachable(why) = companion.shape() {
-                return Err(LoadError::RequiresUnreachable {
-                    op: op.to_owned(),
-                    name: param.name().to_owned(),
-                    requires: requires.clone(),
-                    why: why.clone(),
-                });
-            }
-        }
+    match unmet(params) {
+        None => Ok(()),
+        Some(Unmet::Unknown { name, requires }) => Err(LoadError::RequiresUnknown {
+            op: op.to_owned(),
+            name: name.to_owned(),
+            requires: requires.to_owned(),
+        }),
+        Some(Unmet::Unreachable {
+            name,
+            requires,
+            why,
+        }) => Err(LoadError::RequiresUnreachable {
+            op: op.to_owned(),
+            name: name.to_owned(),
+            requires: requires.to_owned(),
+            why: why.clone(),
+        }),
     }
-    Ok(())
 }
 
 /// What one parameter is worth on a command line, and the flag it claims when it

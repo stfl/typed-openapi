@@ -15,6 +15,7 @@
 //! test holds the shipped blob to the shipped document to prove the pair was
 //! written by the same run.
 
+mod blob;
 #[cfg(feature = "document")]
 mod reduce;
 
@@ -56,6 +57,42 @@ pub const COMMIT: &str = "commit";
 /// id, so that `tree::answers` reads the same flag there as it does on
 /// a generated subcommand.
 pub const COMMIT_ID: &str = "cli:commit";
+
+/// The five flags that carry a request's body, spent by every subcommand
+/// before the document has a say.
+///
+/// A parameter or a body field that wants one of these moves aside for it, and
+/// a gate that names one is refused. Nothing here is a person saying yes, which
+/// is why these yield where a gate and the confirmation do not: a
+/// `--body-json-body` is ugly and harmless, where a confirmation nobody typed
+/// is neither.
+///
+/// Spending a word here changes the reduced model of any document that declares
+/// a field spelled the same way, which is the point: the field moves aside at
+/// bless time, where a reviewer sees it, rather than shadowing a flag the CLI
+/// needs.
+pub(crate) const TRANSPORT: [&str; 5] = [
+    JSON_BODY,
+    JSON_BODY_TEMPLATE,
+    RAW_BODY,
+    FILE_PART,
+    FIELD_PART,
+];
+
+/// `--help`, which clap declares on every subcommand whether or not anyone
+/// asked. Nothing here can move it, so it is a name the confirmation may not
+/// take.
+const HELP: &str = "help";
+
+/// Whether every subcommand declares a flag of this name already: the flags
+/// that carry a body, and `--help`.
+///
+/// None of them can move, so the confirmation is what gives way when it wants
+/// one. The reduction refuses such a word and a decoded blob is refused for
+/// holding one, and both ask here.
+pub(crate) fn spends(word: &str) -> bool {
+    TRANSPORT.contains(&word) || word == HELP
+}
 
 /// Every operation the document describes, in document order, plus the server
 /// it describes them against.
@@ -415,7 +452,7 @@ pub enum Body {
     },
 }
 
-/// The bytes a bless step wrote are not a reduction this crate can read.
+/// The bytes a bless step wrote are not a reduction this build can read.
 ///
 /// This is the whole of what [`Document::from_blob`] and [`Document::to_blob`]
 /// can say, and therefore the whole of what a shipped binary can fail with —
@@ -425,13 +462,110 @@ pub enum Body {
 /// either feature set tells them the same thing. Reducing a document is
 /// a different job with a different failure list, and `LoadError` — which the
 /// `document` feature brings with the reader — is where that list lives.
+///
+/// Every variant says to run the bless step again, because the repair is the
+/// same for all of them: a blob is written by a bless step, and a blob that
+/// cannot be read is written again.
+///
+/// The first three are the order `from_blob` asks in. It reads the stamp the
+/// blob opens with before it decodes a byte, so [`Unstamped`] and [`Stale`]
+/// never depend on what follows the stamp. The rest are a blob that decodes and
+/// holds something a load would not have written.
+///
+/// [`Unstamped`]: DocumentError::Unstamped
+/// [`Stale`]: DocumentError::Stale
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DocumentError {
-    /// `postcard` could not read the bytes as a reduction, or could not write
-    /// one.
-    #[error("the reduced model the bless step writes is not valid")]
+    /// The bytes do not open with a layout stamp: an empty file, a blob from a
+    /// typed-openapi older than 0.1.0, or a file that is no model blob at all.
+    #[error(
+        "the model blob carries no layout stamp, so a typed-openapi older than 0.1.0 wrote it, \
+         or it is not a model blob; this build reads layout {reads}; run the bless step again"
+    )]
+    Unstamped {
+        /// The layout this build reads, [`Document::MODEL_LAYOUT`].
+        reads: u32,
+    },
+    /// The stamp names another layout than this build reads. Nothing after the
+    /// stamp was decoded, because the same bytes would mean something else.
+    #[error(
+        "the model blob has layout {layout}, written by typed-openapi {version}; \
+         this build reads layout {reads}; run the bless step again"
+    )]
+    Stale {
+        /// The layout the blob was written in.
+        layout: u32,
+        /// The version of typed-openapi that wrote it, as the stamp spells it.
+        version: String,
+        /// The layout this build reads, [`Document::MODEL_LAYOUT`].
+        reads: u32,
+    },
+    /// The stamp is this build's, and `postcard` could not read the bytes after
+    /// it as a reduction, or could not write one.
+    #[error("the model blob is damaged; run the bless step again")]
     Blob(#[from] postcard::Error),
+    /// The document's confirmation word is one a load refuses: a word nobody
+    /// could type as a flag, or one that every subcommand declares already.
+    #[error(
+        "the confirmation word `{word}` of the model blob is not one a load accepts; \
+         run the bless step again"
+    )]
+    Confirmation {
+        /// The word as the blob spells it, without the `--`.
+        word: String,
+    },
+    /// The confirmation word an operation declares is one a load refuses. It is
+    /// the flag clap sees, so a blob that gets past this would stop a binary
+    /// at start-up.
+    #[error(
+        "{op}: the confirmation word `{word}` is not one a load accepts; \
+         run the bless step again"
+    )]
+    OperationConfirmation {
+        /// The `operationId` of the operation that declares the word.
+        op: String,
+        /// The word as the blob spells it, without the `--`.
+        word: String,
+    },
+    /// A flag of an operation, on a parameter or on a body property, is not
+    /// spelled as a load spells one: not kebab-case, not `[a-z0-9-]`, or empty.
+    #[error("{op}: the flag `{flag}` is not one a load spells; run the bless step again")]
+    Flag {
+        /// The `operationId` of the operation that declares the flag.
+        op: String,
+        /// The flag as the blob spells it, without the `--`.
+        flag: String,
+    },
+    /// A parameter requires a name the operation declares no parameter under.
+    #[error(
+        "{op}: `{name}` requires `{requires}`, which is not a parameter of this operation; \
+         run the bless step again"
+    )]
+    RequiresUnknown {
+        /// The `operationId` of the operation that declares the parameter.
+        op: String,
+        /// The parameter that requires another, as the document spells it.
+        name: String,
+        /// The name that no parameter of the operation has.
+        requires: String,
+    },
+    /// A parameter requires one that has no flag, so no request giving the
+    /// first could ever be built.
+    #[error(
+        "{op}: `{name}` requires `{requires}`, and `{requires}` is {why}; \
+         run the bless step again"
+    )]
+    RequiresUnreachable {
+        /// The `operationId` of the operation that declares the parameter.
+        op: String,
+        /// The parameter that requires another, as the document spells it.
+        name: String,
+        /// The listed parameter that has no flag.
+        requires: String,
+        /// Why this crate has no flag for it.
+        why: Unsupported,
+    },
 }
 
 /// A generated inventory and the document it was generated from disagree.
@@ -458,6 +592,17 @@ pub struct DriftError {
 }
 
 impl Document {
+    /// The layout of the model this build reads and writes.
+    ///
+    /// Every blob opens with the number of the layout it was written in, and
+    /// [`Document::from_blob`] refuses another number before it decodes
+    /// anything. The number moves with the layout: a change to a type of the
+    /// model that `postcard` writes differently, such as a field added,
+    /// removed, reordered or retyped, or a variant added, removed or moved,
+    /// needs a new number. The crate's own tests trace the layout and fail on a
+    /// change that left the number where it was.
+    pub const MODEL_LAYOUT: u32 = 1;
+
     /// The same reduction, already done and written down.
     ///
     /// This is the call a shipped binary makes. `Document::load` is bless-time
@@ -465,18 +610,54 @@ impl Document {
     /// path item — and none of it tells a CLI anything that is not already in
     /// here. The bytes come from [`Document::to_blob`] in the same bless run
     /// that wrote the rest of the generated code.
+    ///
+    /// The stamp is read first. A blob that does not open with one is
+    /// [`DocumentError::Unstamped`], and one stamped with another layout is
+    /// [`DocumentError::Stale`]; neither reaches the decoder, so a blob that
+    /// another build wrote never decodes into a wrong model. A blob of this
+    /// layout that does not decode is [`DocumentError::Blob`].
+    ///
+    /// What decodes is then held to the rules a load keeps, because a shipped
+    /// binary starts from the blob and nothing has read the document: the
+    /// confirmation word, every flag and every `requires` are checked, and the
+    /// error names the operation. The two command names and the gates of each
+    /// operation are checked as they decode.
     pub fn from_blob(blob: &[u8]) -> Result<Self, DocumentError> {
-        Ok(postcard::from_bytes(blob)?)
+        let unstamped = || DocumentError::Unstamped {
+            reads: Self::MODEL_LAYOUT,
+        };
+        let (stamp, encoding) = blob::read(blob).ok_or_else(unstamped)?;
+        if stamp.layout != Self::MODEL_LAYOUT {
+            return Err(DocumentError::Stale {
+                layout: stamp.layout,
+                version: stamp.version,
+                reads: Self::MODEL_LAYOUT,
+            });
+        }
+        let document: Self = postcard::from_bytes(encoding)?;
+        document.check()?;
+        Ok(document)
     }
 
     /// This reduction, as the bytes a bless step commits.
     ///
-    /// The encoding is not self-describing and carries no version tag: it is
-    /// written and read by one build of one workspace, and an adopter who skips
-    /// the bless step is caught by the pairing check in `Api::new` and by the
-    /// test that reduces the committed document and compares it with this.
+    /// The bytes open with a stamp: a magic of eight bytes, the number of the
+    /// layout the model is written in ([`Document::MODEL_LAYOUT`], four bytes,
+    /// little-endian), and the version of typed-openapi that wrote it (its
+    /// length in four bytes, little-endian, then its UTF-8). The `postcard`
+    /// encoding follows. The format of the stamp itself never changes, because
+    /// it is what a later build reads of a blob it cannot decode.
+    ///
+    /// The encoding is not self-describing, and the stamp is what tells a build
+    /// that a blob was written in another layout. A blob also carries the
+    /// version, so a bless step run again after the crate moves writes other
+    /// bytes even when the layout stayed. An adopter who skips the bless step
+    /// after a change to a document is caught by the pairing check in `Api::new`
+    /// and by the test that reduces the committed document and compares it with
+    /// this.
     pub fn to_blob(&self) -> Result<Vec<u8>, DocumentError> {
-        Ok(postcard::to_allocvec(self)?)
+        let stamp = blob::stamp(Self::MODEL_LAYOUT, env!("CARGO_PKG_VERSION"));
+        Ok(postcard::to_extend(self, stamp)?)
     }
 
     /// The server the document names first. A caller may override it.
@@ -779,6 +960,45 @@ impl Param {
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
+}
+
+/// A requirement among the parameters of one operation that no request could
+/// meet.
+///
+/// The load and the decode of a blob both refuse such a requirement, each in
+/// its own error, so the question is asked here once and each caller words the
+/// answer.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Unmet<'p> {
+    /// The parameter that `requires` lists is not one the operation declares.
+    Unknown { name: &'p str, requires: &'p str },
+    /// The parameter that `requires` lists has no flag.
+    Unreachable {
+        name: &'p str,
+        requires: &'p str,
+        why: &'p Unsupported,
+    },
+}
+
+/// The first requirement among `params` that no request could meet, in the
+/// order the parameters are listed.
+pub(crate) fn unmet(params: &[Param]) -> Option<Unmet<'_>> {
+    params.iter().find_map(|param| {
+        param.requires().iter().find_map(|requires| {
+            let name = param.name();
+            match params.iter().find(|other| other.name() == requires) {
+                None => Some(Unmet::Unknown { name, requires }),
+                Some(other) => match other.shape() {
+                    Shape::Unreachable(why) => Some(Unmet::Unreachable {
+                        name,
+                        requires,
+                        why,
+                    }),
+                    Shape::Flag { .. } => None,
+                },
+            }
+        })
+    })
 }
 
 impl Field {

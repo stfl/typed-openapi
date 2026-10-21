@@ -272,6 +272,37 @@ a feature adds carries its `cfg` and no `#[doc(cfg(...))]`, and its doc does
 not say again what the label says ("Requires the `document` feature"); the
 module declaration carries the `cfg` for the items inside it.
 
+**The model layout number moves with the layout.** A blob opens with a stamp:
+a magic of 8 bytes, `Document::MODEL_LAYOUT` as a `u32`, and the version of the
+crate that wrote it as a length and UTF-8. `Document::from_blob` reads the stamp
+before it decodes a byte, so a blob of another build is `Unstamped` or `Stale`
+and a blob of this layout that does not decode is `Blob`. Any change to what
+`postcard` writes for `Document` or a type inside it, such as a field added,
+removed, reordered or retyped, a variant added, removed or moved, or the argument
+of a generic, bumps `MODEL_LAYOUT` in the same change. Then
+`TYPED_OPENAPI_WRITE_LAYOUT=1 cargo nextest run -p typed-openapi --test layout`
+writes `tests/layout.json` again, and `just bless` writes the blob again.
+`tests/layout.rs` fails on a layout that moved under the same number and says
+so. It traces types, so no fixture can trip it. It lists every enum of the model
+by hand, because the tracer reads one variant of an enum it meets and the
+registry refuses to describe one it has not read whole; an enum added to the
+model is added there. It traces `Bounds<f64>` apart from `Bounds<i64>`, because
+the tracer names a container without its arguments, and `arguments` in the same
+file stops compiling when `Scalar` changes one. The format of the stamp itself
+never changes, and `tests/blob.rs` writes it out by hand to hold it. The
+version in the stamp makes the blob change with each release, so a version bump
+is followed by `just bless`.
+
+A blob that decodes is held to the rules a load keeps, because a binary starts
+from the blob and nothing else has read the document: `Document::check` in
+`src/model/blob.rs` re-checks the confirmation word, each flag and each
+`requires`, and the error names the operation. The rules are the load's own,
+asked in one place each (`spends`, `names::is_spelled` and `model::unmet`), so a
+word or a requirement that a load starts to refuse is refused on the way in too.
+Postcard drops the message of a `serde` error, so a check inside a `try_from`
+could say only that the blob is damaged; the check runs after the decode for
+that reason, and `Document` deserialises its flags as plain strings.
+
 **A count about the document is derived from it, never written down.**
 `Document::summary` in `src/summary.rs` answers every count an adoption is
 tempted to keep by hand — operations, groups, reads and writes, what stands

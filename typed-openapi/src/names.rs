@@ -306,6 +306,18 @@ pub(crate) fn spelled(origin: &'static str, raw: &str) -> Result<String, NameErr
     Ok(name)
 }
 
+/// Whether `raw` is a name that [`spelled`] leaves as it is.
+///
+/// Every flag a load writes is one: it was spelled, and nothing spells it
+/// again. A flag read off a blob is held to it, because the blob is where a
+/// name arrives that the rule never saw — `spelled` would turn `Id` into `id`
+/// and carry on, and the blob would then hold a flag that its own document
+/// could not have produced.
+#[must_use]
+pub(crate) fn is_spelled(raw: &str) -> bool {
+    spelled("flag", raw).is_ok_and(|name| name == raw)
+}
+
 /// `createVoucher` and `internal_ref` both become flag-shaped: lowercase words
 /// joined by `-`. Characters outside `[A-Za-z0-9]` are separators.
 #[must_use]

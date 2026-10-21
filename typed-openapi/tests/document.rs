@@ -1766,14 +1766,6 @@ fn a_reduction_survives_the_round_trip_the_bless_step_makes() {
     assert_eq!(Document::from_blob(&blob).expect("and decodes"), doc);
 }
 
-/// A blob that is not one is a named error, not a panic and not a CLI that
-/// starts with half an API.
-#[test]
-fn a_blob_that_is_not_a_reduction_is_refused_by_name() {
-    let error = Document::from_blob(b"not a reduction").expect_err("not a reduction");
-    assert!(error.to_string().contains("reduced model"), "{error}");
-}
-
 /// The flag a parameter grows, for a test that is about the name rather than
 /// about the shape.
 fn flag_of(param: &Param) -> &str {

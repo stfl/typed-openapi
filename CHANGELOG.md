@@ -11,6 +11,30 @@ the crate follows [Semantic Versioning][semver].
 
 ### Added
 
+- **A stamp on the model blob, and `Document::MODEL_LAYOUT`.** `to_blob` writes
+  a header before the encoding: a magic of 8 bytes, the layout number as a
+  `u32`, and the version of typed-openapi that wrote it. `MODEL_LAYOUT` is the
+  layout this build reads, 1 in this release, and it moves with any change to
+  what the blob holds. `from_blob` reads the header first, so a blob from
+  another build fails with a message that says what to do and never decodes into
+  a wrong model. All three errors say to run the bless step again:
+  - `DocumentError::Unstamped { reads }`: the bytes carry no stamp, so they are
+    an empty file, a blob of typed-openapi 0.0.2 or older, or no model blob. It
+    names the layout this build reads.
+  - `DocumentError::Stale { layout, version, reads }`: the stamp names another
+    layout. It names that layout, the version that wrote the blob and the layout
+    this build reads.
+  - `DocumentError::Blob`: the stamp is this build's and the bytes after it do
+    not decode. It says the blob is damaged. The message was `the reduced model
+    the bless step writes is not valid`.
+- **A decoded blob is checked again for what a load checks.** `from_blob`
+  refuses a confirmation word that `Loading::commit` refuses, a flag that is not
+  spelled as a load spells it, and a `requires` that names a parameter the
+  operation does not declare or one that has no flag. A blob like that used to
+  decode, and clap stopped the binary at start-up. Five variants carry the
+  operation: `DocumentError::{Confirmation, OperationConfirmation, Flag,
+  RequiresUnknown, RequiresUnreachable}`. Repair: run the bless step again. A
+  blob that a load wrote never meets them.
 - **`OverlayError::Shape`.** An Overlay that is YAML or JSON and has the wrong
   shape (no `actions`, an action with no `target`, a version other than 1.1) is
   `Shape`. It was `Syntax`, whose message said the text "is not valid YAML or
@@ -23,6 +47,12 @@ the crate follows [Semantic Versioning][semver].
 
 ### Changed
 
+- **Every adopter blesses again after the upgrade.** A blob written by 0.0.2
+  has no stamp, so `Document::from_blob` returns `DocumentError::Unstamped` and
+  the generated `Api::new()` fails with it. Repair: run your bless step and
+  commit `src/model.postcard`. The stamp holds the version of typed-openapi, so
+  the blob changes with each release even when the layout does not; a check that
+  blesses again and compares asks for a commit after each upgrade.
 - **The YAML reader is serde-saphyr 2.0 in place of `serde_yaml_ng`.** Every
   document and every Overlay reads into the same value as before, and `yes`,
   `no`, `on`, `off`, `y` and `n` stay strings, as does `<<` as a key. Five
@@ -71,7 +101,7 @@ the crate follows [Semantic Versioning][semver].
   each cause once. Repair: walk `source()` wherever an error is reported, and
   read the cause in a test with `error.source()`; printing `{error}` alone no
   longer shows it. Most messages lose only the `: <cause>` they ended with:
-  `OverlayError`, `PlanError::Request`, `DocumentError::Blob`, `ArgError`,
+  `OverlayError`, `PlanError::Request`, `ArgError`,
   `client::Error::{Document, Request, Encode, Decode}`,
   `LoadError::{Shape, ServerUrl}` and `GenerateError::{Yaml, Unusable,
   NotOpenApi, Schema, Typify, NotRust, Blob}`. These are worded anew:

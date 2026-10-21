@@ -47,6 +47,29 @@ correction belongs, and one `#![allow(...)]` block — generated source is not
 graded on style, and the exemption travels with the file it exempts rather than
 with a wrapping module.
 
+### The blob's stamp
+
+`src/model.postcard` opens with a stamp: a magic of 8 bytes, the number of the
+model layout as a `u32` (`Document::MODEL_LAYOUT`), and the version of
+typed-openapi that wrote it, as a length and then UTF-8. `Document::from_blob`
+reads the stamp before it decodes anything, so a blob that another build wrote
+is refused with a message that says what to do, and never decodes into a wrong
+model. Every refusal has the same repair: run your bless step again and commit
+the blob.
+
+| The blob | `DocumentError` | The message names |
+|---|---|---|
+| does not open with a stamp: an empty file, a blob of typed-openapi 0.0.2, or a file that is no model blob | `Unstamped` | that the blob carries no layout stamp, so a typed-openapi older than 0.1.0 wrote it or it is not a model blob, and the layout this build reads |
+| is stamped with another layout | `Stale` | the layout and the version that wrote the blob, and the layout this build reads |
+| is stamped with this layout and does not decode | `Blob` | that the blob is damaged |
+| decodes, and holds a confirmation word, a flag or a `requires` that a load refuses | `Confirmation`, `OperationConfirmation`, `Flag`, `RequiresUnknown`, `RequiresUnreachable` | the word, flag or parameter, and the operation |
+
+The layout number moves with the layout, not with the crate's version, so a
+release that does not touch the model leaves your blob readable. The stamp
+holds the version too, which makes the bytes of a blessed blob change whenever
+typed-openapi does. A check that blesses again and compares the result asks for
+a commit after each upgrade.
+
 ### The summary page
 
 Adoptions that count something about their own API — how many operations there
