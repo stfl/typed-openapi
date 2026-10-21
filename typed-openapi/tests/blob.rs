@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use typed_openapi::tree;
 use typed_openapi::{
     Answers, Document, DocumentError, Effect, Invocation, Loading, Operation, Plan, Shape,
-    Unsupported, Values,
+    Unsupported, ValueError, Values,
 };
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
@@ -802,6 +802,58 @@ fn a_forgery_clap_builds_is_refused_all_the_same() {
         assert!(!clap_panics(&forged(edit)), "{what}: clap builds it");
         assert!(Document::from_blob(&blob_edited(edit)).is_err(), "{what}");
     }
+}
+
+/// The other side of the line. A load refuses each of these, a value in the blob
+/// can break each, and the check leaves each out, because the break costs only
+/// the run that meets it: clap builds the command tree, nothing a gate holds
+/// back is sent, and the run that meets the value is refused or fails.
+#[test]
+fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {
+    let read = |edit: Edit| {
+        let doc = Document::from_blob(&blob_edited(edit)).expect("the check leaves the rule out");
+        assert!(!clap_panics(&doc), "and clap builds its command line");
+        doc
+    };
+    let request = |doc: &Document, id: &str, values: Values| {
+        let op = doc.get(id).expect("the fixture describes the operation");
+        Invocation::new(op, values).map(|invocation| invocation.request(doc.base()))
+    };
+
+    // `Parameter`: a required parameter with no flag can never be given.
+    let doc = read(|value| {
+        parameter(operation(value, "getVoucher"), "id")["shape"] =
+            json!({ "Unreachable": "Cookie" });
+    });
+    assert!(matches!(
+        request(&doc, "getVoucher", Values::new()),
+        Err(ValueError::MissingParam { .. })
+    ));
+
+    // `Unrunnable`: a `pattern` that no engine runs refuses every value.
+    let doc = read(|value| {
+        let account = &mut operation(value, "createLedgerEntry")["body"]["JsonFields"][0];
+        account["scalar"]["Text"]["pattern"] = json!("(");
+    });
+    let op = doc.get("createLedgerEntry").expect("the fixture has it");
+    let account = op.body().fields().first().expect("the first property");
+    assert!(account.scalar().parse("1234").is_err());
+
+    // `MediaType`: a `Content-Type` that is no header value builds no request.
+    let doc = read(|value| {
+        operation(value, "uploadDocument")["body"]["Opaque"]["media_type"] = json!("a\nb");
+    });
+    let sent = request(&doc, "uploadDocument", Values::new().raw(vec![1]));
+    assert!(sent.expect("the values satisfy it").is_err());
+
+    // `ServerUrl`: a server with no scheme builds no request.
+    let doc = read(|value| value["base"] = json!("localhost:9999"));
+    let sent = request(&doc, "getVoucher", Values::new().param("id", 5));
+    assert!(sent.expect("the values satisfy it").is_err());
+
+    // `NoOperationId`: an empty id is a name in messages and in `get`.
+    let doc = read(|value| operation(value, "getVoucher")["id"] = json!(""));
+    assert!(doc.get("").is_some());
 }
 
 /// `getVoucher` takes `id` in the path; `ghost` is no parameter of it.
