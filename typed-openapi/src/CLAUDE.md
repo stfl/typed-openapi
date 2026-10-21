@@ -201,8 +201,8 @@ beside, and the gate fails closed. A new refusal is a new variant, since
 of the body, which can be a credential or a client's data. The cause of a
 `Mismatch` is serde's message, which can quote it. A path is spelled as
 `serde_path_to_error` spells one (`address.extra`, `positions[1].flag`), and
-`client::step` and `client::element` are the one place that spells the steps of
-the walk and of the path `serde_ignored` gives.
+`client::spelled` is the one place that spells a place, whether the walk found it
+or `serde_ignored` did.
 
 D4: no flag, setting or cargo feature lets an undeclared property through on a
 call. The repair is an Overlay that declares it, which an adopter blesses and a
@@ -219,9 +219,10 @@ type reads less than the document says. `fits` reads the body into the type,
 writes the value with `serde_json::to_value` and walks the body beside what came
 back (`beside`): a body list beside a written object was read by place, and a
 body key that the written object lacks was not read. That is the way to see
-inside a union and a `flatten`ed struct, which serde reads from a buffer that
-nothing is skipped from, and it puts the key of an externally tagged variant in
-the path, which `serde_ignored` does not name. It is why `fits` takes
+inside an untagged union, an internally tagged union and a `flatten`ed struct
+(which is also what typify writes for an `anyOf` it cannot judge exclusive), all
+of which serde reads from a buffer that nothing is skipped from. It puts the key
+of an externally tagged variant in the path as well. It is why `fits` takes
 `T: Serialize`: a type must write the shape it reads, an object as an object and
 a list as a list, and that holds for the type from `Settings::replace` as well.
 
@@ -229,9 +230,15 @@ a list as a list, and that holds for the type from `Settings::replace` as well.
 empty map when it writes an optional property (`skip_serializing_if`, in
 typify-impl's `structs.rs`), so the walk lets a key with such a value pass, and
 `serde_ignored` names it where the type skips it while it reads: the body itself
-and every object outside a union and a `flatten`ed struct. Inside one, such a
-property passes. That is a limit, `docs/validation.md` states it, and
-`tests/shapes.rs` and a unit test in `src/client.rs` pin it.
+and every object outside an untagged union, an internally tagged union and a
+`flatten`ed struct, which serde reads from a buffer. Inside one, such a property
+passes. That is a limit, `docs/validation.md` states it, and `tests/shapes.rs`
+and a unit test in `src/client.rs` pin it. An externally tagged union is read
+directly, so a property that holds nothing is refused there. `serde_ignored`
+names no key for a struct variant or a tuple variant, and `located` puts the key
+of the variant back by following the steps along the body: an object with one key
+that cannot take the next step is a variant, and so is a key at the last step
+that holds something, because the skipped property holds nothing.
 
 `Probe` asks the type what it reads for the body itself, because the body cannot
 tell: serde derives `visit_seq` beside `visit_map` for a struct, so a list of
@@ -239,20 +246,26 @@ five values reads into a struct of five fields. The type is read from a
 deserializer that holds nothing, and a call to `deserialize_struct` or
 `deserialize_map` is an object. A type that reads itself through
 `deserialize_any` (a union, a `serde_json::Value`) or `deserialize_option` asks
-for none. A list at the top is `NotAnObject` at `.` whatever its length when the
-type asks for an object. Everywhere else the walk finds a list that serde read by
-place, and a list that the type cannot read is a `Mismatch`.
+for none. A list or a scalar at the top is `NotAnObject` at `.` whatever its
+length when the type asks for an object. Everywhere else the walk finds a list
+that serde read by place, and a list that the type cannot read is a `Mismatch`,
+like a scalar, which serde cannot read an object from.
 
 `tests/shapes.rs` is the measurement of typify: it runs `typify::import_types!`
 over `tests/fixtures/shapes.json` and holds `fits` to the types typify 0.8 writes
 for each shape (a struct, an untagged, an internally tagged and an externally
-tagged enum, an `anyOf` and an `allOf`, a map of objects and each way to leave
-the rest open), so a release of typify that writes a shape another way fails
-under the case that stood on it. The unit tests in `src/client.rs` use
+tagged enum, an `anyOf` that typify writes as an enum and one that it writes as a
+struct of `flatten`ed `Option`s, an `allOf`, a map of objects and each way to
+leave the rest open), so a release of typify that writes a shape another way
+fails under the case that stood on it. The unit tests in `src/client.rs` use
 hand-written types and hold the mechanism. Two shapes are narrower in the type
-than in the document, and a body is refused like any other: an `anyOf` that one
-body fills as two members, and a `oneOf` of an object and a list given a list
-that the object reads. `docs/validation.md` says both to an adopter.
+than in the document, and a body is refused like any other: an `anyOf` that
+typify writes as an `untagged` enum, given a body that fills two members, and a
+`oneOf` of an object and a list given a list that the object reads.
+`docs/validation.md` says both to an adopter. The struct of `flatten`ed `Option`s
+takes the properties of every member, but serde reads a member that fails as
+absent, so a value of the wrong type for a member is `Undeclared` there and not a
+`Mismatch`.
 
 **`additionalProperties: true` is said as `{}` before typify reads the schema.**
 typify writes no field for `true` beside declared properties, and the

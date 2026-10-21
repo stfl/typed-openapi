@@ -261,6 +261,12 @@
         },
         "closed": {
           "$ref": "#/definitions/Closed"
+        },
+        "al": {
+          "$ref": "#/definitions/Flat"
+        },
+        "ei": {
+          "$ref": "#/definitions/ExternalInline"
         }
       }
     },
@@ -290,6 +296,70 @@
           ]
         }
       }
+    },
+    "Flat": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "b": {
+              "type": "integer"
+            }
+          }
+        }
+      ]
+    },
+    "ExternalInline": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "address"
+          ],
+          "properties": {
+            "address": {
+              "type": "object",
+              "required": [
+                "street"
+              ],
+              "properties": {
+                "street": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "point"
+          ],
+          "properties": {
+            "point": {
+              "type": "object",
+              "required": [
+                "x"
+              ],
+              "properties": {
+                "x": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   }
 }

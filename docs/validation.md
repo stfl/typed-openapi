@@ -134,13 +134,26 @@ read.
 |---|---|---|
 | a value of the wrong type, or a missing property | `Mismatch` | `` createVoucher: the request body does not fit the schema the document declares at `status` `` |
 | a property that the type does not take, at any depth | `Undeclared` | `` createContact: the request body carries a property that the schema the document declares does not take, at `address.extra` `` |
-| a list or a scalar where the type takes an object, at any depth | `NotAnObject` | `` createContact: the request body has an array at `address`, where the schema the document declares takes an object `` |
-| a type that cannot be written back as JSON | `Unwritable` | `createContact: the type the document declares for the request body cannot be written as JSON` |
+| a list where the type takes an object, at any depth, or a scalar as the body itself | `NotAnObject` | `` createContact: the request body has an array at `address`, where the schema the document declares takes an object `` |
+| a type that cannot be written back as JSON | `Unwritable` | `<operationId>: the type the document declares for the request body cannot be written as JSON` |
 
-They are asked in this order: what the body is, then whether its values have
-the right types, and last which properties the type takes. The `Undeclared`
-refusal names one property: the first in the order of the body that the type does
-not write back. An operator sees the next one when they have repaired that one.
+They are asked in this order:
+
+1. The body itself: a list or a scalar where the type takes an object is
+   `NotAnObject` at `.`.
+2. Whether the values have the right types, and no property is missing:
+   `Mismatch`. A scalar below the top where the type takes an object is one of
+   these, because serde cannot read an object from it.
+3. Whether the type can be written back: `Unwritable`.
+4. The body beside what the type wrote back. The first place in the order of the
+   body that holds a property the type did not write back is `Undeclared`, and
+   the first that holds a list the type read by position is `NotAnObject`.
+5. Where that found nothing, the first property that the type skipped while it
+   read is `Undeclared`. It is a property that holds a `null`, an empty list or
+   an empty map, and the last section below says where `fits` can see one.
+
+Each of `Undeclared` and `NotAnObject` names one place. An operator sees the next
+one when they have repaired that one.
 
 **The measure is the type.** `fits` reads the body into the type, writes the type
 back as JSON, and walks the body beside what came back. A body key that the type
@@ -152,7 +165,8 @@ writes: a union (`untagged`, internally tagged or externally tagged), a
 the key of the member is a step of the path (`place.address.extra`). A list at
 the top, where the type is a struct or a map, is `NotAnObject` whatever its
 length. Everywhere else a list that the type cannot read is a `Mismatch`, like
-any other value of the wrong type.
+any other value of the wrong type, and so is a scalar where the type takes an
+object.
 
 **There is no way to allow an undeclared property on a call.** No flag, no
 setting and no cargo feature does it. A server may drop a property it does not
@@ -182,21 +196,32 @@ request is held to the rule.
 **Where the type reads less than the document says, a body is refused like any
 other, because the typed call cannot send it either.** Two shapes do that:
 
-- An `anyOf` whose members one body fills together. typify writes an `untagged`
-  enum, which keeps one member, so a property of another member is `Undeclared`.
+- An `anyOf` that typify writes as an `untagged` enum, given a body that fills
+  two of its members. The enum keeps one member, so a property of another member
+  is `Undeclared`. typify writes the enum when it judges the members exclusive,
+  which two objects are when one of them requires a property that the other does
+  not declare.
 - A `oneOf` of an object and a list, given a list that the object reads by
   position. The body is `NotAnObject`.
 
 The repair is an Overlay that makes the schema say what the type reads: one
 member, or the properties declared on one schema.
 
+An `anyOf` whose members typify cannot judge exclusive, such as objects with
+nothing required, is a struct that takes the properties of every member, and a
+body that fills two members fits. In that struct a value of the wrong type for a
+member is `Undeclared` and not a `Mismatch`: serde reads a member that fails as
+absent, so the key is one the type did not write back.
+
 **One kind of property is not seen.** A type leaves a `null`, an empty list and
 an empty map out of what it writes when the property is optional, which is what
 typify's `skip_serializing_if` does. So a property that nothing declares and
 whose value is one of those three is found only where the type skips it while it
-reads: the body itself and every object outside a union and outside a
-`flatten`ed struct. Inside a union or a `flatten`ed struct it passes. A property
-with any other value is found everywhere.
+reads: the body itself and every object except those inside an untagged union,
+an internally tagged union and a `flatten`ed struct, which serde reads from a
+buffer that nothing is skipped from. Inside those it passes. An externally tagged
+union is read directly, so the property is refused there, and the key of its
+member is in the path. A property with any other value is found everywhere.
 
 **A type you own is written back too.** `fits` needs the type to implement
 `Serialize`, and the type has to write the shape it reads: an object as an object

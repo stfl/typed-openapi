@@ -78,23 +78,20 @@ the crate follows [Semantic Versioning][semver].
   `additionalProperties` is closed. What the check does not see is in
   `docs/validation.md`, *What `fits` refuses*. The crate depends on
   `serde_ignored` for this.
-- **`fits` takes a type that implements `Serialize`.** It writes the value back
-  and walks the body beside it, which is how it sees inside a union. The
-  signature is `fits<T: DeserializeOwned + Serialize>`. Every type the generator
-  writes has both, and so has a type named in `Settings::replace` when it can be
-  written as JSON. A type that cannot is `BodyError::Unwritable { op, source }`.
-  Repair: derive or implement `Serialize` on a type of yours that a body reaches.
-- **`BodyError::NotAnObject { op, path, found }`.** `fits` refuses a list or a
-  scalar where the type takes an object, at any depth: `path` is `.` for the body
-  itself and `address` or `positions[1]` below it. A list of the right length
-  used to pass, because serde fills a struct from a list by position. Below the
-  top, a list that the type cannot read is a `Mismatch`. Repair: send an object.
+- **`BodyError::NotAnObject { op, path, found }`.** `fits` refuses a list where
+  the type takes an object, at any depth, and a scalar as the body itself:
+  `path` is `.` for the body and `address` or `positions[1]` below it. A list of
+  the right length used to pass, because serde fills a struct from a list by
+  position. Below the top, a list that the type cannot read and a scalar are a
+  `Mismatch`. Repair: send an object.
 - **A body that the type reads as less than the document says is refused.** Two
-  shapes: an `anyOf` whose members one body fills together (typify writes an
-  `untagged` enum, which keeps one member, so a property of another member is
+  shapes: an `anyOf` that typify writes as an `untagged` enum, given a body that
+  fills two members (the enum keeps one member, so a property of the other is
   `Undeclared`), and a `oneOf` of an object and a list given a list that the
   object reads by position (`NotAnObject`). The typed call cannot send such a
-  body either. Repair: an Overlay that makes the schema say what the type reads.
+  body either. An `anyOf` that typify writes as a struct of `flatten`ed
+  `Option`s takes the properties of every member. Repair: an Overlay that makes
+  the schema say what the type reads.
 - **`ArgError::FlagBesideNonObject { flag, path, found }`.** A per-field flag
   beside a `--json-body` file whose top level is not an object is refused. It
   was dropped, and the file went out as it was. Repair: drop the flag, or send an
@@ -202,6 +199,13 @@ the crate follows [Semantic Versioning][semver].
   `BodyError::Mismatch { op, path, source }`, with the same message, beside
   `Undeclared`, `NotAnObject` and `Unwritable`. Repair: match the variant where
   you read the fields, with a `_` arm for a refusal added later.
+- **`client::fits` takes a type that implements `Serialize`.** It writes the
+  value back and walks the body beside it, which is how it sees inside a union.
+  The signature is `fits<T: DeserializeOwned + Serialize>`. Every type the
+  generator writes has both, and so has a type named in `Settings::replace` when
+  it can be written as JSON. A type that cannot is
+  `BodyError::Unwritable { op, source }`. Repair: derive or implement
+  `Serialize` on a type of yours that a body reaches.
 
 ### Removed
 

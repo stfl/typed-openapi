@@ -200,6 +200,32 @@ fn a_list_where_the_type_reads_an_object_is_refused_at_every_depth() {
     ]);
 }
 
+/// Serde cannot read an object from a scalar, so below the top a scalar where
+/// the type takes an object is a value of the wrong type. The body itself is
+/// asked first and is refused for what it is.
+#[test]
+fn a_scalar_where_the_type_reads_an_object_is_a_mismatch_below_the_top() {
+    all::<types::Contact>(vec![
+        (
+            "a string for a property",
+            with("address", json!("1 Example Way")),
+            mismatch("address"),
+        ),
+        (
+            "a number for a property",
+            with("address", json!(5)),
+            mismatch("address"),
+        ),
+        (
+            "a string for an externally tagged union",
+            with("ei", json!("x")),
+            mismatch("ei"),
+        ),
+        ("the body itself, a string", json!("x"), not_an_object(".")),
+        ("the body itself, a number", json!(5), not_an_object(".")),
+    ]);
+}
+
 /// A `oneOf` of closed objects that share no property typify tells apart by
 /// value is an `untagged` enum, and serde reads it from a buffer.
 #[test]
@@ -348,12 +374,14 @@ fn a_union_that_serde_reads_as_one_member_refuses_what_the_other_one_holds() {
 }
 
 /// The property that holds nothing, which `fits` can tell from an optional one
-/// only where the type skips it while it reads.
+/// only where the type skips it while it reads. A buffer skips nothing, so
+/// there it passes; an externally tagged enum is read directly, so it does not,
+/// and the key of its member is in the path.
 #[test]
 fn an_undeclared_property_that_holds_nothing_is_seen_outside_a_buffer_only() {
     all::<types::Contact>(vec![
         (
-            "in a union",
+            "in an untagged union",
             with("spot", street_and("extra", Value::Null)),
             fits_ok(),
         ),
@@ -363,13 +391,85 @@ fn an_undeclared_property_that_holds_nothing_is_seen_outside_a_buffer_only() {
             fits_ok(),
         ),
         (
-            "in an externally tagged union, which the type skips as it reads and which names \
-             no variant",
+            "in a flattened struct",
+            with("al", json!({"a": "x", "zzz": null})),
+            fits_ok(),
+        ),
+        (
+            "in an externally tagged union, in a newtype variant",
             with(
                 "place",
                 json!({"address": street_and("extra", Value::Null)}),
             ),
-            undeclared("place.extra"),
+            undeclared("place.address.extra"),
+        ),
+        (
+            "in an externally tagged union, in a struct variant",
+            with("ei", json!({"address": {"street": "s", "extra": []}})),
+            undeclared("ei.address.extra"),
+        ),
+        (
+            "in an externally tagged union, an empty object",
+            with("ei", json!({"point": {"x": 1, "extra": {}}})),
+            undeclared("ei.point.extra"),
+        ),
+    ]);
+}
+
+/// A key of the body that spells like the member holding it is still the
+/// property, and not the member.
+#[test]
+fn a_property_spelled_like_the_member_that_holds_it_is_named_whole() {
+    all::<types::Contact>(vec![(
+        "in an externally tagged union, in a struct variant",
+        with(
+            "ei",
+            json!({"address": {"street": "s", "address": Value::Null}}),
+        ),
+        undeclared("ei.address.address"),
+    )]);
+}
+
+/// typify writes an `anyOf` as an enum only when it judges the members
+/// exclusive. Members that are objects with nothing required cannot be told
+/// apart, so it writes a struct of `flatten`ed `Option`s, and serde reads
+/// that from a buffer.
+#[test]
+fn an_anyof_that_typify_cannot_judge_exclusive_is_a_struct_of_flattened_options() {
+    all::<types::Contact>(vec![
+        ("one member", with("al", json!({"b": 1})), fits_ok()),
+        (
+            "both members",
+            with("al", json!({"a": "x", "b": 1})),
+            fits_ok(),
+        ),
+        (
+            "a property of neither",
+            with("al", json!({"a": "x", "zzz": 1})),
+            undeclared("al.zzz"),
+        ),
+        (
+            "a property of neither, holding nothing",
+            with("al", json!({"a": "x", "zzz": null})),
+            fits_ok(),
+        ),
+        (
+            "a value of the wrong type for a member, which serde reads as that \
+             member being absent",
+            with("al", json!({"b": "s"})),
+            undeclared("al.b"),
+        ),
+    ]);
+    all::<types::Flat>(vec![
+        (
+            "the body, both members",
+            json!({"a": "x", "b": 1}),
+            fits_ok(),
+        ),
+        (
+            "the body, a property of neither",
+            json!({"a": "x", "zzz": 1}),
+            undeclared("zzz"),
         ),
     ]);
 }
