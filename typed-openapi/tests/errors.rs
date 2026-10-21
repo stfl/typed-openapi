@@ -161,6 +161,12 @@ fn reading() -> Vec<Case> {
         from_input("DocumentError::Blob", blob_error(), |e| {
             matches!(e, DocumentError::Blob(_))
         }),
+        // No reduction a load writes fails to encode, so this cause is built
+        // by hand: the variant that holds it is what the case is about.
+        case(
+            "DocumentError::Encode",
+            DocumentError::Encode(postcard::Error::SerializeBufferFull),
+        ),
         from_input(
             "LoadError::Overlay",
             load("openapi: 3.0.3", &[MATCHES_NOTHING]),

@@ -34,7 +34,7 @@ required-features = ["document"]
 # model, which every build has, and reads no document.
 [[test]]
 name = "blob"
-required-features = ["document"]
+required-features = ["document", "clap"]
 
 [[test]]
 name = "dispatch"

@@ -13,6 +13,9 @@
 //!
 //! To write the description again after a bump:
 //! `TYPED_OPENAPI_WRITE_LAYOUT=1 cargo nextest run -p typed-openapi --test layout`.
+//! That command refuses to write while the layout differs from the description
+//! and `MODEL_LAYOUT` is the number the description names, so it is no way past
+//! the guard.
 
 #![expect(
     clippy::expect_used,
@@ -45,7 +48,7 @@ const WRITE: &str = "TYPED_OPENAPI_WRITE_LAYOUT";
 /// one default string for them all. `get` is the shortest word that each of them
 /// accepts: a method, a host for a `Uri`, and lowercase letters for a name.
 /// A field that checks more than they do is refused when it is traced, and the
-/// failure names this constant.
+/// failure names this string and this file.
 const STRING: &str = "get";
 
 /// The description of the layout `MODEL_LAYOUT` names.
@@ -208,10 +211,32 @@ fn verdict(traced: &Description, committed: &Description) -> Result<(), String> 
     }
 }
 
+/// Whether writing `traced` over `committed` is allowed.
+///
+/// Write mode records a layout under the number that names it. A layout that
+/// moved under the number it had is the failure this file guards against, and
+/// writing the description again would make the guard pass over it, so the
+/// number has to move first.
+fn writing(traced: &Description, committed: &Description) -> Result<(), String> {
+    if traced.traces == committed.traces || traced.model_layout != committed.model_layout {
+        return Ok(());
+    }
+    Err(format!(
+        "`{WRITE}` writes tests/layout.json again, and the serde layout of the model changed ({}) \
+         while `Document::MODEL_LAYOUT` is still {}. Bump `MODEL_LAYOUT` in \
+         typed-openapi/src/model.rs first, then run the command again.",
+        differing(traced, committed).join(", "),
+        traced.model_layout
+    ))
+}
+
 #[test]
 fn the_layout_of_the_model_is_the_one_the_committed_description_names() {
     let traced = traced();
     if std::env::var_os(WRITE).is_some() {
+        if let Err(message) = writing(&traced, &committed()) {
+            panic!("{message}");
+        }
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/layout.json");
         let text = serde_json::to_string_pretty(&traced).expect("the description is JSON");
         std::fs::write(&path, text + "\n").expect("tests/layout.json is writable");
@@ -257,6 +282,29 @@ fn a_layout_that_changed_under_the_same_number_fails_and_names_what_to_do() {
     assert!(message.contains("Bump"), "{message}");
     assert!(message.contains("write the description again"), "{message}");
     assert!(message.contains("Document/Operation"), "{message}");
+}
+
+/// The command that a failing guard names must not be a way past it.
+#[test]
+fn the_description_is_not_written_again_under_a_number_that_did_not_move() {
+    let committed = traced();
+    let message = writing(&swapped(&committed), &committed).expect_err("the number did not move");
+    assert!(message.contains("MODEL_LAYOUT"), "{message}");
+    assert!(message.contains("Bump"), "{message}");
+    assert!(message.contains("Document/Operation"), "{message}");
+}
+
+#[test]
+fn the_description_is_written_again_once_the_number_moved_or_nothing_did() {
+    let committed = traced();
+    let mut bumped = swapped(&committed);
+    bumped.model_layout += 1;
+    assert_eq!(writing(&bumped, &committed), Ok(()));
+    assert_eq!(writing(&committed, &committed), Ok(()));
+
+    let mut only_bumped = committed.clone();
+    only_bumped.model_layout += 1;
+    assert_eq!(writing(&only_bumped, &committed), Ok(()));
 }
 
 #[test]

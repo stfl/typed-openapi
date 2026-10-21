@@ -1,8 +1,8 @@
 //! What a model blob opens with, and what reading one checks again.
 //!
 //! A blob that another build wrote is refused by name before a byte of it is
-//! decoded, and a blob that decodes is held to the rules a load keeps, because
-//! a binary starts from the blob and nothing else has read the document.
+//! decoded, and `from_blob` holds a blob that decodes to the rules a load keeps,
+//! because a binary starts from the blob and nothing else has read the document.
 //!
 //! The blobs here are made two ways. A damaged one is a valid blob cut short or
 //! given a header by hand, so these tests also pin the header's format, which
@@ -18,7 +18,10 @@
     reason = "a test that cannot build or edit its fixture should fail loudly and name it"
 )]
 
+use std::panic::{self, AssertUnwindSafe};
+
 use serde_json::{Value, json};
+use typed_openapi::tree;
 use typed_openapi::{Document, DocumentError, Loading, Operation, Shape, Unsupported};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
@@ -72,13 +75,6 @@ fn a_blob_opens_with_its_stamp_and_then_the_encoding() {
         .strip_prefix(header(Document::MODEL_LAYOUT, version).as_slice())
         .expect("magic, layout number, length of the version, version");
     assert!(!body.is_empty(), "the encoding follows the stamp");
-}
-
-#[test]
-fn a_blob_reads_back_as_the_reduction_it_was_written_from() {
-    let doc = document();
-    let blob = doc.to_blob().expect("the reduction encodes");
-    assert_eq!(Document::from_blob(&blob).expect("and decodes"), doc);
 }
 
 /// A blob with no stamp is named as one, whatever else the bytes are: an empty
@@ -178,6 +174,14 @@ fn a_version_that_is_not_text_does_not_hide_the_layout() {
         matches!(&error, DocumentError::Stale { layout, .. } if *layout == other),
         "{error:?}"
     );
+    let message = error.to_string();
+    for part in [
+        &format!("layout {other}"),
+        "written by typed-openapi",
+        "bless step again",
+    ] {
+        assert!(message.contains(part), "{message:?} lacks {part:?}");
+    }
 }
 
 #[test]
@@ -199,6 +203,24 @@ fn a_blob_of_this_layout_that_does_not_decode_is_damaged_and_says_to_bless_again
     }
 }
 
+/// A blob is the stamp and one encoding. Bytes after the encoding were added,
+/// or are what a longer file left behind, so the blob is not what a bless step
+/// wrote.
+#[test]
+fn bytes_after_the_encoding_make_a_damaged_blob() {
+    let mut blob = document().to_blob().expect("the reduction encodes");
+    blob.extend_from_slice(&[0; 13]);
+    let error = refusal(&blob);
+    assert!(
+        matches!(error, DocumentError::Trailing { bytes: 13 }),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    for part in ["damaged", "13 bytes", "bless step again"] {
+        assert!(message.contains(part), "{message:?} lacks {part:?}");
+    }
+}
+
 /// Every length a blob can be cut to: a cut inside the stamp leaves no stamp,
 /// and a cut after it leaves an encoding that ends too soon.
 #[test]
@@ -216,15 +238,20 @@ fn a_blob_cut_at_any_length_is_refused_and_never_panics() {
     }
 }
 
-/// `document()` as JSON, edited by `edit` and written as a blob. What `edit`
-/// breaks is not caught on the way in: `Document` deserialises its flags and
-/// confirmation words as plain strings, so the check under test is the one
-/// `from_blob` makes.
-fn blob_edited(edit: impl FnOnce(&mut Value)) -> Vec<u8> {
+/// `document()` as JSON, edited by `edit` and read back as a `Document`. What
+/// `edit` breaks is not caught on the way in: `Document` deserialises its flags
+/// and confirmation words as plain strings, so this is a reduction that no load
+/// wrote and nothing has checked.
+fn forged(edit: impl FnOnce(&mut Value)) -> Document {
     let mut value = serde_json::to_value(document()).expect("the reduction is a value");
     edit(&mut value);
-    serde_json::from_value::<Document>(value)
-        .expect("the edit keeps the shape of a reduction")
+    serde_json::from_value(value).expect("the edit keeps the shape of a reduction")
+}
+
+/// `forged`, written as a blob, so the check under test is the one `from_blob`
+/// makes.
+fn blob_edited(edit: impl FnOnce(&mut Value)) -> Vec<u8> {
+    forged(edit)
         .to_blob()
         .expect("the edited reduction encodes")
 }
@@ -343,6 +370,223 @@ fn a_flag_a_load_could_not_spell_is_refused_on_a_body_field() {
             ),
             "{flag:?}: {error:?}"
         );
+        let message = error.to_string();
+        for part in ["createVoucher", "bless step again"] {
+            assert!(
+                message.contains(part),
+                "{flag:?}: {message:?} lacks {part:?}"
+            );
+        }
+    }
+}
+
+/// Sets the flag of the parameter `name` of the operation `op`.
+fn set_parameter_flag(value: &mut Value, op: &str, name: &str, flag: &str) {
+    parameter(operation(value, op), name)["shape"]["Flag"]["flag"] = json!(flag);
+}
+
+/// Sets the flag of the body property at `index` of the operation `op`.
+fn set_field_flag(value: &mut Value, op: &str, index: usize, flag: &str) {
+    operation(value, op)["body"]["JsonFields"][index]["flag"] = json!(flag);
+}
+
+/// Sets the gates of the operation `op`.
+fn set_gates(value: &mut Value, op: &str, gates: &[&str]) {
+    operation(value, op)["gates"] = json!(gates);
+}
+
+/// Whether clap refuses to build the command line of `doc`. A flag declared
+/// twice, and one clap declares itself, stop a binary at start-up with a panic,
+/// and `debug_assert` is where a test sees it.
+fn clap_panics(doc: &Document) -> bool {
+    panic::catch_unwind(AssertUnwindSafe(|| {
+        for op in doc {
+            tree::command(op).debug_assert();
+        }
+    }))
+    .is_err()
+}
+
+/// One edit that gives an operation a flag twice.
+struct Twice {
+    what: &'static str,
+    op: &'static str,
+    flag: &'static str,
+    edit: fn(&mut Value),
+}
+
+/// A flag is declared by a parameter, a body property, a gate, and, on a write,
+/// the confirmation. A load keeps each declaration apart from the others, and
+/// clap panics on two of one name.
+fn twice() -> [Twice; 7] {
+    [
+        Twice {
+            what: "two parameters",
+            op: "listVouchers",
+            flag: "limit",
+            edit: |value| set_parameter_flag(value, "listVouchers", "status", "limit"),
+        },
+        Twice {
+            what: "two body properties",
+            op: "createVoucher",
+            flag: "same",
+            edit: |value| {
+                set_field_flag(value, "createVoucher", 0, "same");
+                set_field_flag(value, "createVoucher", 1, "same");
+            },
+        },
+        Twice {
+            what: "a parameter and the confirmation",
+            op: "enshrineVoucher",
+            flag: "commit",
+            edit: |value| set_parameter_flag(value, "enshrineVoucher", "id", "commit"),
+        },
+        Twice {
+            what: "the confirmation of the operation and a parameter",
+            op: "updateVoucher",
+            flag: "id",
+            edit: |value| operation(value, "updateVoucher")["commit"] = json!("id"),
+        },
+        Twice {
+            what: "a gate and a parameter",
+            op: "enshrineVoucher",
+            flag: "id",
+            edit: |value| set_gates(value, "enshrineVoucher", &["id"]),
+        },
+        Twice {
+            what: "a gate and the confirmation",
+            op: "enshrineVoucher",
+            flag: "commit",
+            edit: |value| set_gates(value, "enshrineVoucher", &["commit"]),
+        },
+        Twice {
+            what: "one gate named twice",
+            op: "enshrineVoucher",
+            flag: "enshrine",
+            edit: |value| set_gates(value, "enshrineVoucher", &["enshrine", "enshrine"]),
+        },
+    ]
+}
+
+#[test]
+fn a_flag_declared_twice_is_refused_and_names_the_operation_and_the_flag() {
+    for case in twice() {
+        let error = refusal(&blob_edited(case.edit));
+        assert!(
+            matches!(
+                &error,
+                DocumentError::FlagTwice { op, flag } if op == case.op && flag == case.flag
+            ),
+            "{}: {error:?}",
+            case.what
+        );
+        let message = error.to_string();
+        for part in [case.op, case.flag, "bless step again"] {
+            assert!(
+                message.contains(part),
+                "{}: {message:?} lacks {part:?}",
+                case.what
+            );
+        }
+    }
+}
+
+/// The words every subcommand declares before the document has a say: the five
+/// flags that carry a body, which the reduction moves a document name aside
+/// from, and `--help`, which clap declares and a load does not guard. They are
+/// written out here, because a constant that changed would change the test with
+/// it.
+const SPENT: [&str; 6] = [
+    "help",
+    "json-body",
+    "json-body-template",
+    "raw-body",
+    "file",
+    "field",
+];
+
+#[test]
+fn a_flag_every_subcommand_declares_already_is_refused_wherever_it_stands() {
+    type Place = (&'static str, &'static str, fn(&mut Value, &str));
+    let places: [Place; 3] = [
+        ("a parameter", "listVouchers", |value, word| {
+            set_parameter_flag(value, "listVouchers", "limit", word);
+        }),
+        ("a body property", "createVoucher", |value, word| {
+            set_field_flag(value, "createVoucher", 0, word);
+        }),
+        ("a gate", "enshrineVoucher", |value, word| {
+            set_gates(value, "enshrineVoucher", &[word]);
+        }),
+    ];
+    for word in SPENT {
+        for (what, op, edit) in places {
+            let error = refusal(&blob_edited(|value| edit(value, word)));
+            assert!(
+                matches!(
+                    &error,
+                    DocumentError::FlagSpent { op: found, flag } if found == op && flag == word
+                ),
+                "{what} `{word}`: {error:?}"
+            );
+            let message = error.to_string();
+            for part in [op, word, "bless step again"] {
+                assert!(
+                    message.contains(part),
+                    "{what} `{word}`: {message:?} lacks {part:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A read is sent on sight, so a gate has nothing to hold back, and a load
+/// refuses the document that names one.
+#[test]
+fn a_gate_on_a_read_is_refused_and_names_the_operation_and_the_gate() {
+    let blob = blob_edited(|value| set_gates(value, "getVoucher", &["enshrine"]));
+    let error = refusal(&blob);
+    assert!(
+        matches!(
+            &error,
+            DocumentError::GatedRead { op, gate } if op == "getVoucher" && gate == "enshrine"
+        ),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    for part in ["getVoucher", "enshrine", "bless step again"] {
+        assert!(message.contains(part), "{message:?} lacks {part:?}");
+    }
+}
+
+/// A load guards the confirmation on a write only, because a read declares
+/// none, so a query parameter of a read may be called `commit`. The check
+/// refuses what a load refuses, and that is not among it.
+#[test]
+fn a_parameter_called_like_the_confirmation_on_a_read_is_read_back() {
+    let blob = blob_edited(|value| set_parameter_flag(value, "listVouchers", "type", "commit"));
+    let doc = Document::from_blob(&blob).expect("a load writes this reduction too");
+    assert!(!clap_panics(&doc), "and clap builds its command line");
+}
+
+/// The check is what stands between a forged flag and a panic at start-up: the
+/// forgeries that clap panics on unchecked are all refused.
+#[test]
+fn a_blob_that_would_stop_clap_is_refused_before_it_gets_there() {
+    for case in twice() {
+        assert!(clap_panics(&forged(case.edit)), "{}", case.what);
+        assert!(
+            Document::from_blob(&blob_edited(case.edit)).is_err(),
+            "{}",
+            case.what
+        );
+    }
+    // `createVoucher` declares `--json-body` and `--help`, the others of `SPENT`
+    // are declared by bodies of other shapes.
+    for word in ["help", "json-body"] {
+        let edit = |value: &mut Value| set_field_flag(value, "createVoucher", 0, word);
+        assert!(clap_panics(&forged(edit)), "a body property `{word}`");
+        assert!(Document::from_blob(&blob_edited(edit)).is_err(), "`{word}`");
     }
 }
 
@@ -392,6 +636,10 @@ fn a_requirement_on_a_parameter_without_a_flag_is_refused() {
         ),
         "{error:?}"
     );
+    let message = error.to_string();
+    for part in ["listVouchers", "`session`", "bless step again"] {
+        assert!(message.contains(part), "{message:?} lacks {part:?}");
+    }
 }
 
 /// The check must not refuse what a load writes: every operation of the

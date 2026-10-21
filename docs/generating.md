@@ -62,7 +62,12 @@ the blob.
 | does not open with a stamp: an empty file, a blob of typed-openapi 0.0.2, or a file that is no model blob | `Unstamped` | that the blob carries no layout stamp, so a typed-openapi older than 0.1.0 wrote it or it is not a model blob, and the layout this build reads |
 | is stamped with another layout | `Stale` | the layout and the version that wrote the blob, and the layout this build reads |
 | is stamped with this layout and does not decode | `Blob` | that the blob is damaged |
-| decodes, and holds a confirmation word, a flag or a `requires` that a load refuses | `Confirmation`, `OperationConfirmation`, `Flag`, `RequiresUnknown`, `RequiresUnreachable` | the word, flag or parameter, and the operation |
+| decodes, and more bytes follow the encoding | `Trailing` | that the blob is damaged, and how many bytes follow |
+| decodes, and holds a confirmation word, a flag, a gate or a `requires` that a load refuses | `Confirmation`, `OperationConfirmation`, `Flag`, `FlagSpent`, `FlagTwice`, `GatedRead`, `RequiresUnknown`, `RequiresUnreachable` | the word, flag, gate or parameter, and the operation; `Confirmation` names the document's confirmation word, which belongs to no operation |
+
+Only `from_blob` makes the last check. A `Document` read through `Deserialize`
+in another format is not held to it. `to_blob` fails with `DocumentError::Encode`
+when `postcard` cannot write the model; no reduction a load writes does.
 
 The layout number moves with the layout, not with the crate's version, so a
 release that does not touch the model leaves your blob readable. The stamp

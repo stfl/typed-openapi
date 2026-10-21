@@ -17,7 +17,7 @@ the crate follows [Semantic Versioning][semver].
   layout this build reads, 1 in this release, and it moves with any change to
   what the blob holds. `from_blob` reads the header first, so a blob from
   another build fails with a message that says what to do and never decodes into
-  a wrong model. All three errors say to run the bless step again:
+  a wrong model. All of its errors say to run the bless step again:
   - `DocumentError::Unstamped { reads }`: the bytes carry no stamp, so they are
     an empty file, a blob of typed-openapi 0.0.2 or older, or no model blob. It
     names the layout this build reads.
@@ -25,16 +25,25 @@ the crate follows [Semantic Versioning][semver].
     layout. It names that layout, the version that wrote the blob and the layout
     this build reads.
   - `DocumentError::Blob`: the stamp is this build's and the bytes after it do
-    not decode. It says the blob is damaged. The message was `the reduced model
-    the bless step writes is not valid`.
+    not decode. It says the blob is damaged. Its message is worded anew (see
+    *Changed*).
+  - `DocumentError::Trailing { bytes }`: the stamp is this build's, the bytes
+    decode, and more bytes follow the encoding. It says the blob is damaged.
 - **A decoded blob is checked again for what a load checks.** `from_blob`
-  refuses a confirmation word that `Loading::commit` refuses, a flag that is not
-  spelled as a load spells it, and a `requires` that names a parameter the
-  operation does not declare or one that has no flag. A blob like that used to
-  decode, and clap stopped the binary at start-up. Five variants carry the
-  operation: `DocumentError::{Confirmation, OperationConfirmation, Flag,
-  RequiresUnknown, RequiresUnreachable}`. Repair: run the bless step again. A
-  blob that a load wrote never meets them.
+  refuses a confirmation word that `Loading::commit` refuses, and in each
+  operation a flag that is not spelled as a load spells it, a flag that every
+  subcommand declares already (`help` and the five flags that carry a body), a
+  flag declared twice (by two parameters, two body properties, a gate and a
+  parameter, a gate named twice, or the confirmation word of a write and any of
+  them), a gate on a read, and a `requires` that names a parameter the operation
+  does not declare or one that has no flag. A blob like that used to decode, and
+  clap stopped the binary at start-up. Eight variants carry these refusals:
+  `DocumentError::{Confirmation, OperationConfirmation, Flag, FlagSpent,
+  FlagTwice, GatedRead, RequiresUnknown, RequiresUnreachable}`. Seven name the
+  operation, and `Confirmation` names the document's confirmation word.
+  Repair: run the bless step again. A blob that a load wrote never meets them.
+  Only `from_blob` applies these rules; a `Document` read through `Deserialize`
+  in another format is not held to them.
 - **`OverlayError::Shape`.** An Overlay that is YAML or JSON and has the wrong
   shape (no `actions`, an action with no `target`, a version other than 1.1) is
   `Shape`. It was `Syntax`, whose message said the text "is not valid YAML or
@@ -53,6 +62,13 @@ the crate follows [Semantic Versioning][semver].
   commit `src/model.postcard`. The stamp holds the version of typed-openapi, so
   the blob changes with each release even when the layout does not; a check that
   blesses again and compares asks for a commit after each upgrade.
+- **`DocumentError::Blob` is worded anew, and `DocumentError::Encode` is the
+  failure to write one.** At 0.0.2 `Blob` read `the reduced model the bless step
+  writes is not valid: <cause>`. It reads `the model blob is damaged; run the
+  bless step again`, and the `postcard` error is its `source()`. `to_blob` used
+  to return `Blob` when `postcard` could not write the model; it returns
+  `Encode`, whose message is `the model could not be written as a blob`. Repair:
+  match `Encode` where a bless step handled `Blob` from `to_blob`.
 - **The YAML reader is serde-saphyr 2.0 in place of `serde_yaml_ng`.** Every
   document and every Overlay reads into the same value as before, and `yes`,
   `no`, `on`, `off`, `y` and `n` stay strings, as does `<<` as a key. Five

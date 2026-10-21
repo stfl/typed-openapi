@@ -9,9 +9,12 @@
 //! unreadable by exactly the builds that need it.
 //!
 //! The magic opens with a byte that is not ASCII, so no text file starts with
-//! it, and no blob of 0.0.2, which opened with the length of a URL, does either.
+//! it. A blob of 0.0.2 opened with the length of the server's URL, and the whole
+//! magic never matches it: a URL of 137 bytes opens with `0x89`, and the next
+//! byte of the magic is a `T` that would sit inside the URL, followed by a
+//! newline that no URL holds.
 
-use super::{Document, DocumentError, Field, Operation, Shape, Unmet, spends, unmet};
+use super::{Document, DocumentError, Effect, Field, Gate, Operation, Shape, Unmet, spends, unmet};
 use crate::names::is_spelled;
 
 /// The first eight bytes of every stamped blob: a byte above ASCII, then
@@ -75,7 +78,10 @@ impl Document {
     /// the model, and checks each while it does. A blob arrives with the rules
     /// not applied, and a flag that clap cannot declare stops a binary when its
     /// command tree is built. So the rules a load applies and a blob could
-    /// break are applied again here, and a failure names the operation.
+    /// break are applied again here: the confirmation word, the flags of each
+    /// operation and the gates that stand on it, and each `requires`. A failure
+    /// names the operation, except for the document's own confirmation word,
+    /// which belongs to none.
     pub(super) fn check(&self) -> Result<(), DocumentError> {
         if !confirms(&self.commit) {
             return Err(DocumentError::Confirmation {
@@ -94,22 +100,60 @@ impl Operation {
                 word: self.commit.clone(),
             });
         }
+        self.check_gates()?;
+        self.check_flags()?;
+        self.check_requires()
+    }
+
+    /// A gate stands on a write: a read is sent on sight, and a load refuses
+    /// the document that names a gate on one.
+    fn check_gates(&self) -> Result<(), DocumentError> {
+        match (self.effect, self.gates.first()) {
+            (Effect::Read, Some(gate)) => Err(DocumentError::GatedRead {
+                op: self.id.clone(),
+                gate: gate.as_str().to_owned(),
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// Every flag the operation declares passes the spelling a load gives it,
+    /// is none that every subcommand declares already, and is declared once.
+    ///
+    /// The declarations are the confirmation word of a write, the gates, the
+    /// parameters that have a flag and the properties of a body. A load keeps
+    /// them apart in one namespace, and a name given twice stops clap when the
+    /// command tree is built. A read declares no confirmation, so a parameter of
+    /// a read may be spelled like it.
+    fn check_flags(&self) -> Result<(), DocumentError> {
+        let confirmation = (self.effect == Effect::Write).then_some(self.commit.as_str());
+        let mut declared: Vec<&str> = confirmation.into_iter().collect();
         let flags = self
-            .params
+            .gates
             .iter()
-            .filter_map(|param| match &param.shape {
+            .map(Gate::as_str)
+            .chain(self.params.iter().filter_map(|param| match &param.shape {
                 Shape::Flag { flag, .. } => Some(flag.as_str()),
                 Shape::Unreachable(_) => None,
-            })
+            }))
             .chain(self.body.fields().iter().map(Field::flag));
         for flag in flags {
+            let (op, owned) = (self.id.clone(), flag.to_owned());
             if !is_spelled(flag) {
-                return Err(DocumentError::Flag {
-                    op: self.id.clone(),
-                    flag: flag.to_owned(),
-                });
+                return Err(DocumentError::Flag { op, flag: owned });
             }
+            if spends(flag) {
+                return Err(DocumentError::FlagSpent { op, flag: owned });
+            }
+            if declared.contains(&flag) {
+                return Err(DocumentError::FlagTwice { op, flag: owned });
+            }
+            declared.push(flag);
         }
+        Ok(())
+    }
+
+    fn check_requires(&self) -> Result<(), DocumentError> {
         match unmet(&self.params) {
             None => Ok(()),
             Some(Unmet::Unknown { name, requires }) => Err(DocumentError::RequiresUnknown {

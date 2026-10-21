@@ -289,19 +289,31 @@ registry refuses to describe one it has not read whole; an enum added to the
 model is added there. It traces `Bounds<f64>` apart from `Bounds<i64>`, because
 the tracer names a container without its arguments, and `arguments` in the same
 file stops compiling when `Scalar` changes one. The format of the stamp itself
-never changes, and `tests/blob.rs` writes it out by hand to hold it. The
-version in the stamp makes the blob change with each release, so a version bump
-is followed by `just bless`.
+never changes, and `tests/blob.rs` writes it out by hand to hold it. Write mode
+of that test refuses while the layout differs from the description and the
+number did not move, so the command it names is no way past the guard.
 
-A blob that decodes is held to the rules a load keeps, because a binary starts
-from the blob and nothing else has read the document: `Document::check` in
-`src/model/blob.rs` re-checks the confirmation word, each flag and each
-`requires`, and the error names the operation. The rules are the load's own,
-asked in one place each (`spends`, `names::is_spelled` and `model::unmet`), so a
-word or a requirement that a load starts to refuse is refused on the way in too.
+`Document::from_blob` holds a blob that decodes to the rules a load keeps,
+because a binary starts from the blob and nothing else has read the document.
+`Document::check` in `src/model/blob.rs` re-checks the confirmation word and,
+for each operation, its gates, its flags and each `requires`. The error names
+the operation, except for the document's own confirmation word, which has none.
+The rules are the load's own, asked in one place each (`spends`,
+`names::is_spelled` and `model::unmet`). The flags of an operation share one
+namespace: the confirmation word of a write, the gates, the parameters that
+have a flag and the properties of a body, with `help` and the five `TRANSPORT`
+words spent. `Namespace::guarding` and `gates_of` in `src/model/reduce.rs` keep
+it at load and `Operation::check_flags` keeps it on the way in, so a rule added
+to one is added to the other. A read declares no confirmation word, so a
+parameter of a read may be spelled like it. Bytes after the encoding are
+`Trailing`.
+
 Postcard drops the message of a `serde` error, so a check inside a `try_from`
-could say only that the blob is damaged; the check runs after the decode for
-that reason, and `Document` deserialises its flags as plain strings.
+could say only that the blob is damaged, and a rule that compares two flags
+cannot sit in one field. The check runs after the decode for both reasons.
+`Document` deserialises its flags as plain strings, and a `Document` read
+through `Deserialize` in another format is not held to the check; `Gate` and
+`CommandName` keep their `try_from`, which refuses on every path.
 
 **A count about the document is derived from it, never written down.**
 `Document::summary` in `src/summary.rs` answers every count an adoption is

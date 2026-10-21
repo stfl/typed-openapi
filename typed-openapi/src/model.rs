@@ -2,9 +2,9 @@
 //!
 //! What is here is the reduction itself: a list of [`Operation`]s, the values
 //! each one carries, and the two names a user types to reach it. Every type on
-//! this page is in every build, because the blob a shipped binary reads is
-//! these types and nothing else — so a caller who matches one writes the same
-//! match whatever the feature set.
+//! this page is in every build, because the encoding a shipped binary reads,
+//! after the stamp a blob opens with, is these types and nothing else — so a
+//! caller who matches one writes the same match whatever the feature set.
 //!
 //! Where they come from is `reduce`, which the `document` feature brings and a
 //! shipped binary leaves out. Reducing a document is bless-time work, not
@@ -463,17 +463,26 @@ pub enum Body {
 /// a different job with a different failure list, and `LoadError` — which the
 /// `document` feature brings with the reader — is where that list lives.
 ///
-/// Every variant says to run the bless step again, because the repair is the
-/// same for all of them: a blob is written by a bless step, and a blob that
-/// cannot be read is written again.
+/// Every variant that refuses a blob says to run the bless step again, because
+/// the repair is the same for all of them: a blob is written by a bless step,
+/// and a blob that cannot be read is written again. [`Encode`] is the one
+/// variant that is not about a blob that was read.
 ///
-/// The first three are the order `from_blob` asks in. It reads the stamp the
-/// blob opens with before it decodes a byte, so [`Unstamped`] and [`Stale`]
-/// never depend on what follows the stamp. The rest are a blob that decodes and
-/// holds something a load would not have written.
+/// [`from_blob`] asks in this order. It reads the stamp the blob opens with
+/// before it decodes a byte, so [`Unstamped`] and [`Stale`] never depend on
+/// what follows the stamp. [`Blob`] and [`Trailing`] are a blob that does not
+/// decode as the model and nothing else. The rest are a blob that decodes and
+/// holds something a load would not have written. Each of those names the
+/// operation that holds it, except [`Confirmation`], which names the word the
+/// document confirms with and which belongs to no operation.
 ///
+/// [`from_blob`]: Document::from_blob
 /// [`Unstamped`]: DocumentError::Unstamped
 /// [`Stale`]: DocumentError::Stale
+/// [`Blob`]: DocumentError::Blob
+/// [`Trailing`]: DocumentError::Trailing
+/// [`Confirmation`]: DocumentError::Confirmation
+/// [`Encode`]: DocumentError::Encode
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DocumentError {
@@ -502,9 +511,18 @@ pub enum DocumentError {
         reads: u32,
     },
     /// The stamp is this build's, and `postcard` could not read the bytes after
-    /// it as a reduction, or could not write one.
+    /// it as a reduction.
     #[error("the model blob is damaged; run the bless step again")]
     Blob(#[from] postcard::Error),
+    /// The stamp is this build's, the bytes after it decode as a reduction, and
+    /// more bytes follow the reduction. A blob is the stamp and one encoding and
+    /// nothing else, so bytes that were added or left over from a longer file
+    /// mean the blob is not what a bless step wrote.
+    #[error("the model blob is damaged: {bytes} bytes follow the model; run the bless step again")]
+    Trailing {
+        /// How many bytes follow the encoding of the reduction.
+        bytes: usize,
+    },
     /// The document's confirmation word is one a load refuses: a word nobody
     /// could type as a flag, or one that every subcommand declares already.
     #[error(
@@ -537,6 +555,43 @@ pub enum DocumentError {
         /// The flag as the blob spells it, without the `--`.
         flag: String,
     },
+    /// A flag of an operation, on a parameter, a body property or a gate, is one
+    /// that every subcommand declares already: `--help`, or one of the five flags
+    /// that carry a body. clap would stop the binary at start-up on it.
+    #[error(
+        "{op}: the flag `{flag}` is one every subcommand declares already; \
+         run the bless step again"
+    )]
+    FlagSpent {
+        /// The `operationId` of the operation that declares the flag.
+        op: String,
+        /// The flag as the blob spells it, without the `--`.
+        flag: String,
+    },
+    /// An operation declares one flag twice: on two parameters, on two body
+    /// properties, on a gate and a parameter, on one gate named twice, or on a
+    /// write's confirmation word and anything else. A load gives every
+    /// declaration a flag of its own, and clap would stop the binary at
+    /// start-up on a name given twice.
+    #[error("{op}: the flag `{flag}` is declared twice; run the bless step again")]
+    FlagTwice {
+        /// The `operationId` of the operation that declares the flag.
+        op: String,
+        /// The flag as the blob spells it, without the `--`.
+        flag: String,
+    },
+    /// A read names a gate. A read is sent on sight, so there is nothing for a
+    /// gate to hold back, and a load refuses the document that says both.
+    #[error(
+        "{op}: a read stands behind no gate, and this one names `{gate}`; \
+         run the bless step again"
+    )]
+    GatedRead {
+        /// The `operationId` of the read.
+        op: String,
+        /// The gate as the blob spells it, without the `--`.
+        gate: String,
+    },
     /// A parameter requires a name the operation declares no parameter under.
     #[error(
         "{op}: `{name}` requires `{requires}`, which is not a parameter of this operation; \
@@ -566,6 +621,11 @@ pub enum DocumentError {
         /// Why this crate has no flag for it.
         why: Unsupported,
     },
+    /// `postcard` could not write the reduction as bytes. No reduction a load
+    /// writes fails this way, so it is a defect of the encoder or of a type of
+    /// the model, and the bless step that meets it has no blob to write again.
+    #[error("the model could not be written as a blob")]
+    Encode(#[source] postcard::Error),
 }
 
 /// A generated inventory and the document it was generated from disagree.
@@ -615,13 +675,21 @@ impl Document {
     /// [`DocumentError::Unstamped`], and one stamped with another layout is
     /// [`DocumentError::Stale`]; neither reaches the decoder, so a blob that
     /// another build wrote never decodes into a wrong model. A blob of this
-    /// layout that does not decode is [`DocumentError::Blob`].
+    /// layout that does not decode is [`DocumentError::Blob`], and bytes after
+    /// the encoding are [`DocumentError::Trailing`].
     ///
     /// What decodes is then held to the rules a load keeps, because a shipped
     /// binary starts from the blob and nothing has read the document: the
-    /// confirmation word, every flag and every `requires` are checked, and the
-    /// error names the operation. The two command names and the gates of each
-    /// operation are checked as they decode.
+    /// confirmation word, the flags and gates of each operation, and every
+    /// `requires` are checked. The error names the operation, and for the
+    /// document's own confirmation word it names the word. The two command
+    /// names and the spelling of each gate are checked as they decode.
+    ///
+    /// Only `from_blob` applies these rules. `postcard` drops the message of an
+    /// error a `Deserialize` raises, so a check inside one could not name the
+    /// operation, and a rule that compares two flags cannot sit in a single
+    /// field. A `Document` read through `Deserialize` in another format is not
+    /// held to them.
     pub fn from_blob(blob: &[u8]) -> Result<Self, DocumentError> {
         let unstamped = || DocumentError::Unstamped {
             reads: Self::MODEL_LAYOUT,
@@ -634,7 +702,10 @@ impl Document {
                 reads: Self::MODEL_LAYOUT,
             });
         }
-        let document: Self = postcard::from_bytes(encoding)?;
+        let (document, rest) = postcard::take_from_bytes::<Self>(encoding)?;
+        if !rest.is_empty() {
+            return Err(DocumentError::Trailing { bytes: rest.len() });
+        }
         document.check()?;
         Ok(document)
     }
@@ -657,7 +728,7 @@ impl Document {
     /// this.
     pub fn to_blob(&self) -> Result<Vec<u8>, DocumentError> {
         let stamp = blob::stamp(Self::MODEL_LAYOUT, env!("CARGO_PKG_VERSION"));
-        Ok(postcard::to_extend(self, stamp)?)
+        postcard::to_extend(self, stamp).map_err(DocumentError::Encode)
     }
 
     /// The server the document names first. A caller may override it.
