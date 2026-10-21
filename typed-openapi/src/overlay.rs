@@ -116,6 +116,23 @@ pub enum Place {
     Action(usize),
 }
 
+/// The most nodes that a read builds, counted with every alias expanded. This is
+/// the limit of the value. The caps on the aliases, the anchors and the events
+/// follow from it and are written from it, so that raising it moves them
+/// together.
+const NODE_LIMIT: usize = 2_500_000;
+
+/// The most events that a read parses, replayed events included. A node costs
+/// three events at the most, and an alias of an empty container does: one for
+/// the alias and two for the container it replays. Four events to a node is more
+/// than that, with room for the stream and the document, so the node limit is
+/// reached first.
+const EVENT_LIMIT: usize = 4 * NODE_LIMIT;
+
+/// The most scalar text that a read builds, in bytes, counted with every alias
+/// expanded. The cap on the text that anchors keep is the same number.
+const TEXT_LIMIT: usize = 64 * 1024 * 1024;
+
 /// The options of every YAML read in this crate, and the one place they are
 /// set.
 ///
@@ -124,18 +141,20 @@ pub enum Place {
 /// four suits a vendor's OpenAPI document.
 ///
 /// The budget limits the value that a read builds: 2 500 000 nodes and 64 MiB
-/// of scalar text, counted with every alias expanded, at a depth of 128. Every
-/// other cap is set where a document inside those limits cannot reach it, so
-/// that the budget refuses no other size of document. A response defined once
-/// and used by a hundred operations is the document working as intended, and a
-/// value that occurs a million times is a large document and not a hostile one.
-/// The reader counts what an alias replays in the node limit, so that limit
-/// refuses an alias bomb as it refuses a text with too many nodes. Only anchors
-/// nested inside each other reach the caps on the events and the bytes that
-/// anchors keep, and those caps limit the memory of the copies.
+/// of scalar text, counted with every alias expanded, at a depth of 128. Both
+/// limits are set here and not left to the reader's default. Every other cap is
+/// set where a document inside those limits cannot reach it, with one exception:
+/// an anchor keeps a copy of its events and of its owned text for each anchor
+/// open around it, so anchors nested inside each other can reach the two caps on
+/// what anchors keep with a value that is inside the limits, and those caps
+/// limit the memory of the copies. A response defined once and used by a
+/// hundred operations is the document working as intended, and a value that
+/// occurs a million times is a large document and not a hostile one. The reader
+/// counts what an alias replays in the node limit, so that limit refuses an
+/// alias bomb as it refuses a text with too many nodes.
 ///
-/// A value holds no comment, and the reader refuses a run of more than 32 of
-/// them between a key and its nested value, so comments are not read. The
+/// A value holds no comment, and the reader's default refuses a run of more than
+/// 32 of them between a key and its nested value, so comments are not read. The
 /// snippet stays off, because a message that draws the file across several
 /// lines does not fit under `caused by:`.
 fn reader() -> serde_saphyr::Options {
@@ -144,15 +163,17 @@ fn reader() -> serde_saphyr::Options {
         merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
         budget: serde_saphyr::budget! {
             max_depth: 128,
-            max_nodes: 2_500_000,
-            max_events: 10_000_000,
-            max_aliases: 2_500_000,
-            max_anchors: 2_500_000,
-            max_recorded_anchor_events: 10_000_000,
+            max_nodes: NODE_LIMIT,
+            max_events: EVENT_LIMIT,
+            max_aliases: NODE_LIMIT,
+            max_anchors: NODE_LIMIT,
+            max_total_scalar_bytes: TEXT_LIMIT,
+            max_recorded_anchor_events: EVENT_LIMIT,
+            max_recorded_anchor_bytes: TEXT_LIMIT,
             enforce_alias_anchor_ratio: false,
         },
         alias_limits: serde_saphyr::alias_limits! {
-            max_total_replayed_events: 10_000_000,
+            max_total_replayed_events: EVENT_LIMIT,
         },
         emit_comments: false,
         with_snippet: false,

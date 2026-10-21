@@ -199,12 +199,16 @@ strings, and `<<` is an ordinary key. Comments are not read: a value holds none,
 and the default refuses a run of more than 32 between a key and its nested
 value. The budget limits the value that a read builds: 2 500 000 nodes and
 64 MiB of scalar text, counted with every alias expanded, at a depth of 128.
-Every other cap is set where a document inside those limits cannot reach it, so
-the budget refuses no other size of document.
-A response defined once and used by a hundred operations, and a value that
-occurs a million times, are documents working as intended. The node limit is
-what refuses an alias bomb, because the reader counts each event that an alias
-replays in it. A cap that a later release of the reader adds is a new way to
+Every other cap is set where a document inside those limits cannot reach it,
+with one exception: anchors nested inside each other keep a copy of their events
+and of their owned text for each anchor open around them, so they reach the caps
+on what anchors keep (10 000 000 events, 64 MiB) with a value inside the limits,
+and the reader refuses them. A response defined once and used by a hundred
+operations, and a value that occurs a million times, are documents working as
+intended. The node limit is what refuses an alias bomb, because the reader
+counts each event that an alias replays in it. `NODE_LIMIT` in `src/overlay.rs`
+is the one place the node limit is written, and the caps that follow from it are
+written from it. A cap that a later release of the reader adds is a new way to
 refuse a document the base read, so it is set behind the same limits and gets a
 test in `tests/yaml.rs`. The emitter keeps its defaults, which quote what a
 YAML 1.1 reader would misread. A public error holds an `overlay::Cause` (a
