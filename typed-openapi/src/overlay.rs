@@ -126,7 +126,11 @@ const NODE_LIMIT: usize = 2_500_000;
 /// three events at the most, and an alias of an empty container does: one for
 /// the alias and two for the container it replays. Four events to a node is more
 /// than that, with room for the stream and the document, so the node limit is
-/// reached first.
+/// reached first. The same number caps the events that aliases replay, which the
+/// node limit also reaches first, and the events that anchors keep. The node
+/// limit does not reach the cap on kept events first: anchors nested inside each
+/// other keep a copy of their events each, and reach the cap with a value that is
+/// inside the node limit.
 const EVENT_LIMIT: usize = 4 * NODE_LIMIT;
 
 /// The most scalar text that a read builds, in bytes, counted with every alias
@@ -140,15 +144,15 @@ const TEXT_LIMIT: usize = 64 * 1024 * 1024;
 /// comments, and hold a budget that suits a configuration file. None of the
 /// four suits a vendor's OpenAPI document.
 ///
-/// The budget limits the value that a read builds: 2 500 000 nodes and 64 MiB
-/// of scalar text, counted with every alias expanded, at a depth of 128. Both
-/// limits are set here and not left to the reader's default. Every other cap is
-/// set where a document inside those limits cannot reach it, with one exception:
-/// an anchor keeps a copy of its events and of its owned text for each anchor
-/// open around it, so anchors nested inside each other can reach the two caps on
-/// what anchors keep with a value that is inside the limits, and those caps
-/// limit the memory of the copies. A response defined once and used by a
-/// hundred operations is the document working as intended, and a value that
+/// The budget limits the value that a read builds: [`NODE_LIMIT`] nodes and
+/// [`TEXT_LIMIT`] bytes of scalar text, counted with every alias expanded, at a
+/// depth of 128. Both limits are set here and not left to the reader's default.
+/// Every other cap is set where a document inside those limits cannot reach it,
+/// with one exception: an anchor keeps a copy of its events and of its owned text
+/// for each anchor open around it, so anchors nested inside each other can reach
+/// the two caps on what anchors keep with a value that is inside the limits, and
+/// those caps limit the memory of the copies. A response defined once and used by
+/// a hundred operations is the document working as intended, and a value that
 /// occurs a million times is a large document and not a hostile one. The reader
 /// counts what an alias replays in the node limit, so that limit refuses an
 /// alias bomb as it refuses a text with too many nodes.

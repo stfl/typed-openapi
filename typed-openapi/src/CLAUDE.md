@@ -207,12 +207,15 @@ and the reader refuses them. A response defined once and used by a hundred
 operations, and a value that occurs a million times, are documents working as
 intended. The node limit is what refuses an alias bomb, because the reader
 counts each event that an alias replays in it. `NODE_LIMIT` in `src/overlay.rs`
-is the one place the node limit is written, and the caps that follow from it are
-written from it. A cap that a later release of the reader adds is a new way to
-refuse a document the base read, so it is set behind the same limits and gets a
-test in `tests/yaml.rs`. The emitter keeps its defaults, which quote what a
-YAML 1.1 reader would misread. A public error holds an `overlay::Cause` (a
-message, and an `overlay::Place`: the line and column of the text, or the
+is the one place in code where the node limit is written, and the caps that
+follow from it are written from it. The docs state the numbers too (`2 500 000`,
+`10 000 000`, `64 MiB`), so a change to `NODE_LIMIT`, `EVENT_LIMIT` or
+`TEXT_LIMIT` changes them as well: grep for the numbers in `src/`, `tests/`,
+`docs/` and `CHANGELOG.md`. A cap that a later release of the reader adds is a
+new way to refuse a document the base read, so it is set behind the same limits
+and gets a test in `tests/yaml.rs`. The emitter keeps its defaults, which quote
+what a YAML 1.1 reader would misread. A public error holds an `overlay::Cause`
+(a message, and an `overlay::Place`: the line and column of the text, or the
 action's index) or a boxed `dyn Error + Send + Sync`, so a release of the YAML
 crate, `roas-overlay` or typify is never a break here.
 
