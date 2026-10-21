@@ -50,8 +50,8 @@ use typed_openapi::overlay::{self, Cause, OverlayError, Place};
 /// and more than one four-hundredth of it. It is wide so that a slow runner does
 /// not turn the gate red. A CI run in which a refusal takes more than half the
 /// bound is the reason to set the bound again, at no less than five times the
-/// slowest run known. No doc states a time that a host or a runner measured,
-/// because the next sample can make it false.
+/// slowest run known. Neither this doc nor the module doc states a time that a
+/// host or a runner measured, because the next sample can make it false.
 const REFUSAL_WITHIN: Duration = Duration::from_secs(120);
 
 /// The stack of the thread that calls the reader in the depth test. Descending
