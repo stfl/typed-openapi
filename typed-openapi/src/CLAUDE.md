@@ -209,15 +209,17 @@ intended. The node limit is what refuses an alias bomb, because the reader
 counts each event that an alias replays in it. `NODE_LIMIT` in `src/overlay.rs`
 is the one place in code where the node limit is written, and the caps that
 follow from it are written from it. The docs state the numbers too (`2 500 000`,
-`2 500 001`, `10 000 000`, `64 MiB`), so a change to `NODE_LIMIT`,
-`EVENT_LIMIT` or `TEXT_LIMIT` changes them as well: grep for the numbers in
-`src/`, `tests/`, `docs/` and `CHANGELOG.md`. A cap that a later release of the
-reader adds is a new way to refuse a document the base read, so it is set behind
-the same limits and gets a test in `tests/yaml.rs`. The emitter keeps its
-defaults, which quote what a YAML 1.1 reader would misread. A public error holds
-an `overlay::Cause` (a message, and an `overlay::Place`: the line and column of
-the text, or the action's index) or a boxed `dyn Error + Send + Sync`, so a
-release of the YAML crate, `roas-overlay` or typify is never a break here.
+`2 500 001`, `10 000 000`, `64 MiB`, and `400`, the bomb's nodes over the node
+limit, in the doc of `REFUSAL_WITHIN`), so a change to `NODE_LIMIT`,
+`EVENT_LIMIT`, `TEXT_LIMIT` or the bomb's `BOMB_LEAVES` changes them as well:
+grep for the numbers in `src/`, `tests/`, `docs/` and `CHANGELOG.md`. A cap that
+a later release of the reader adds is a new way to refuse a document the base
+read, so it is set behind the same limits and gets a test in `tests/yaml.rs`.
+The emitter keeps its defaults, which quote what a YAML 1.1 reader would
+misread. A public error holds an `overlay::Cause` (a message, and an
+`overlay::Place`: the line and column of the text, or the action's index) or a
+boxed `dyn Error + Send + Sync`, so a release of the YAML crate, `roas-overlay`
+or typify is never a break here.
 
 The depth limit is a recursion limit, and the library holds it on any thread. The
 reader descends 128 levels before it refuses the 129th, which takes up to 3 MiB
