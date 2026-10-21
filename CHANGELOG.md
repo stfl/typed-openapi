@@ -24,26 +24,32 @@ the crate follows [Semantic Versioning][semver].
   - `DocumentError::Stale { layout, version, reads }`: the stamp names another
     layout. It names that layout, the version that wrote the blob and the layout
     this build reads.
-  - `DocumentError::Blob`: the stamp is this build's and the bytes after it do
-    not decode. It says the blob is damaged. Its message is worded anew (see
-    *Changed*).
-  - `DocumentError::Trailing { bytes }`: the stamp is this build's, the bytes
-    decode, and more bytes follow the encoding. It says the blob is damaged.
+  - `DocumentError::Blob` and `DocumentError::Trailing { bytes }`: the stamp is
+    this build's and the blob is damaged. In `Blob` the bytes after the stamp do
+    not decode, and its message is worded anew (see *Changed*). In `Trailing` the
+    bytes decode and more bytes follow the encoding, and the message counts them.
 - **A decoded blob is checked again for what a load checks.** `from_blob`
-  refuses a confirmation word that `Loading::commit` refuses, and in each
-  operation a flag that is not spelled as a load spells it, a flag that every
-  subcommand declares already (`help` and the five flags that carry a body), a
-  flag declared twice (by two parameters, two body properties, a gate and a
-  parameter, a gate named twice, or the confirmation word of a write and any of
-  them), a gate on a read, and a `requires` that names a parameter the operation
-  does not declare or one that has no flag. A blob like that used to decode, and
-  clap stopped the binary at start-up. Eight variants carry these refusals:
-  `DocumentError::{Confirmation, OperationConfirmation, Flag, FlagSpent,
-  FlagTwice, GatedRead, RequiresUnknown, RequiresUnreachable}`. Seven name the
-  operation, and `Confirmation` names the document's confirmation word.
-  Repair: run the bless step again. A blob that a load wrote never meets them.
-  Only `from_blob` applies these rules; a `Document` read through `Deserialize`
-  in another format is not held to them.
+  refuses a confirmation word that `Loading::commit` refuses. In each operation
+  it refuses a flag that is not spelled as a load spells it, a flag that every
+  subcommand spends (`help` and the five flags that carry a body), two
+  declarations that take one flag (two parameters, two body properties, a gate
+  and a parameter or a body property, a gate named twice, or the confirmation
+  word of a write and any of them), a gate on a read, a method that writes held
+  as a read, a group or a command called `help`, and a `requires` that names a
+  parameter the operation does not declare or one that has no flag. It refuses
+  two operations under one `<group> <command>`. A blob like that used to decode.
+  In a debug build of the binary, clap panicked at start-up on a flag declared
+  twice, on `help` or a body flag that the subcommand declares already, on two
+  operations under one name and on a group or command called `help`; in a
+  release build one declaration took the place of the other. A write held as a
+  read was sent without `--commit`. The other refusals stopped no build.
+  Eleven variants carry these refusals: `DocumentError::{Confirmation,
+  OperationConfirmation, Flag, FlagSpent, FlagTwice, GatedRead, WriteAsRead,
+  NameSpent, DuplicateCommand, RequiresUnknown, RequiresUnreachable}`. Nine name
+  the operation, `DuplicateCommand` names both of two, and `Confirmation` names
+  the document's confirmation word. Repair: run the bless step again. A blob that
+  a load wrote never meets them. Only `from_blob` applies these rules; a
+  `Document` read through `Deserialize` in another format is not held to them.
 - **`OverlayError::Shape`.** An Overlay that is YAML or JSON and has the wrong
   shape (no `actions`, an action with no `target`, a version other than 1.1) is
   `Shape`. It was `Syntax`, whose message said the text "is not valid YAML or
@@ -67,8 +73,12 @@ the crate follows [Semantic Versioning][semver].
   writes is not valid: <cause>`. It reads `the model blob is damaged; run the
   bless step again`, and the `postcard` error is its `source()`. `to_blob` used
   to return `Blob` when `postcard` could not write the model; it returns
-  `Encode`, whose message is `the model could not be written as a blob`. Repair:
-  match `Encode` where a bless step handled `Blob` from `to_blob`.
+  `Encode`, whose message is `the model could not be written as a blob`.
+  `DocumentError` no longer implements `From<postcard::Error>`, so a `?` on a
+  `postcard` error does not turn into `Blob`. Repair: match `Encode` where a
+  bless step handled `Blob` from `to_blob`, and write
+  `map_err(DocumentError::Blob)` where your own code read a blob with `postcard`
+  and wanted `Blob`.
 - **The YAML reader is serde-saphyr 2.0 in place of `serde_yaml_ng`.** Every
   document and every Overlay reads into the same value as before, and `yes`,
   `no`, `on`, `off`, `y` and `n` stay strings, as does `<<` as a key. Five

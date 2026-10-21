@@ -10,11 +10,14 @@
 //!
 //! The magic opens with a byte that is not ASCII, so no text file starts with
 //! it. A blob of 0.0.2 opened with the length of the server's URL, and the whole
-//! magic never matches it: a URL of 137 bytes opens with `0x89`, and the next
-//! byte of the magic is a `T` that would sit inside the URL, followed by a
-//! newline that no URL holds.
+//! magic never matches it. `0x89` opens a length that the next byte, `T`, ends
+//! at 10 761, and a URL that long would open with `OAMDL` and a newline, which
+//! no URL holds.
 
-use super::{Document, DocumentError, Effect, Field, Gate, Operation, Shape, Unmet, spends, unmet};
+use super::{
+    Document, DocumentError, Effect, Field, Gate, Operation, Shape, Unmet, first_collision,
+    gate_on_read, spends, spends_command, unmet,
+};
 use crate::names::is_spelled;
 
 /// The first eight bytes of every stamped blob: a byte above ASCII, then
@@ -72,28 +75,50 @@ fn confirms(word: &str) -> bool {
 }
 
 impl Document {
-    /// Hold a decoded reduction to what a load keeps.
+    /// Hold a decoded reduction to the rules of a load that it can break.
     ///
-    /// A load writes the confirmation word, every flag and every `requires` of
-    /// the model, and checks each while it does. A blob arrives with the rules
-    /// not applied, and a flag that clap cannot declare stops a binary when its
-    /// command tree is built. So the rules a load applies and a blob could
-    /// break are applied again here: the confirmation word, the flags of each
-    /// operation and the gates that stand on it, and each `requires`. A failure
-    /// names the operation, except for the document's own confirmation word,
-    /// which belongs to none.
+    /// A load writes the model and checks it while it does, and a blob arrives
+    /// with those rules not applied. The rules applied again are the
+    /// confirmation word, the names and the flags of each operation and the
+    /// gates that stand on it, the effect a method allows, each `requires`, and
+    /// the names two operations share. A failure names the operation, or both of
+    /// two, except for the document's own confirmation word, which belongs to
+    /// none.
+    ///
+    /// A rule joins them when a value in the blob can break it and the break
+    /// does one of two things: the binary panics, in clap when it builds the
+    /// command tree in a debug build (in a release build one declaration
+    /// silently takes the place of another), or a request that the gate holds
+    /// back is sent on sight. A rule whose break costs only the run that meets it
+    /// stays out: a `pattern` that no engine runs refuses every value of its flag
+    /// when the flag is parsed, and a start-up that compiled every pattern would
+    /// pay for that on every run. The spelling of a flag and each `requires` are
+    /// repeated too, though a blob that breaks either builds a command line: a
+    /// flag nobody can type and a `requires` nothing meets are a model that no
+    /// load wrote, and the one message names the operation.
     pub(super) fn check(&self) -> Result<(), DocumentError> {
         if !confirms(&self.commit) {
             return Err(DocumentError::Confirmation {
                 word: self.commit.clone(),
             });
         }
-        self.ops.iter().try_for_each(Operation::check)
+        self.ops.iter().try_for_each(Operation::check)?;
+        match first_collision(&self.ops) {
+            None => Ok(()),
+            Some((first, second)) => Err(DocumentError::DuplicateCommand {
+                group: first.group.clone(),
+                command: first.command.clone(),
+                first: first.id.clone(),
+                second: second.id.clone(),
+            }),
+        }
     }
 }
 
 impl Operation {
     fn check(&self) -> Result<(), DocumentError> {
+        self.check_names()?;
+        self.check_effect()?;
         if !confirms(&self.commit) {
             return Err(DocumentError::OperationConfirmation {
                 op: self.id.clone(),
@@ -105,26 +130,55 @@ impl Operation {
         self.check_requires()
     }
 
-    /// A gate stands on a write: a read is sent on sight, and a load refuses
-    /// the document that names a gate on one.
-    fn check_gates(&self) -> Result<(), DocumentError> {
-        match (self.effect, self.gates.first()) {
-            (Effect::Read, Some(gate)) => Err(DocumentError::GatedRead {
+    /// Neither name is one clap declares itself. Each is spelled already,
+    /// because a `CommandName` is read through the spelling rule.
+    fn check_names(&self) -> Result<(), DocumentError> {
+        [("group", &self.group), ("command", &self.command)]
+            .into_iter()
+            .find(|(_, name)| spends_command(name.as_str()))
+            .map_or(Ok(()), |(what, name)| {
+                Err(DocumentError::NameSpent {
+                    op: self.id.clone(),
+                    what,
+                    name: name.as_str().to_owned(),
+                })
+            })
+    }
+
+    /// A method that writes is not held as a read, which is sent on sight and
+    /// declares no confirmation. The converse is no fault: the document's
+    /// `x-cli-writes` makes a `GET` a write, and the blob does not say whether
+    /// it did.
+    fn check_effect(&self) -> Result<(), DocumentError> {
+        match (self.effect, Effect::of_method(&self.method)) {
+            (Effect::Read, Effect::Write) => Err(DocumentError::WriteAsRead {
                 op: self.id.clone(),
-                gate: gate.as_str().to_owned(),
+                method: self.method.as_str().to_owned(),
             }),
             _ => Ok(()),
         }
     }
 
+    /// A gate stands on a write: a read is sent on sight, and a load refuses
+    /// the document that names a gate on one.
+    fn check_gates(&self) -> Result<(), DocumentError> {
+        gate_on_read(self.effect, &self.gates).map_or(Ok(()), |gate| {
+            Err(DocumentError::GatedRead {
+                op: self.id.clone(),
+                gate: gate.as_str().to_owned(),
+            })
+        })
+    }
+
     /// Every flag the operation declares passes the spelling a load gives it,
-    /// is none that every subcommand declares already, and is declared once.
+    /// is none that every subcommand spends already, and is declared once.
     ///
     /// The declarations are the confirmation word of a write, the gates, the
     /// parameters that have a flag and the properties of a body. A load keeps
-    /// them apart in one namespace, and a name given twice stops clap when the
-    /// command tree is built. A read declares no confirmation, so a parameter of
-    /// a read may be spelled like it.
+    /// them apart in one namespace. A debug build of the binary panics on a name
+    /// given twice when it builds the command tree, and a release build lets one
+    /// declaration take the place of the other. A read declares no confirmation,
+    /// so a parameter of a read may be spelled like it.
     fn check_flags(&self) -> Result<(), DocumentError> {
         let confirmation = (self.effect == Effect::Write).then_some(self.commit.as_str());
         let mut declared: Vec<&str> = confirmation.into_iter().collect();
@@ -138,15 +192,23 @@ impl Operation {
             }))
             .chain(self.body.fields().iter().map(Field::flag));
         for flag in flags {
-            let (op, owned) = (self.id.clone(), flag.to_owned());
             if !is_spelled(flag) {
-                return Err(DocumentError::Flag { op, flag: owned });
+                return Err(DocumentError::Flag {
+                    op: self.id.clone(),
+                    flag: flag.to_owned(),
+                });
             }
             if spends(flag) {
-                return Err(DocumentError::FlagSpent { op, flag: owned });
+                return Err(DocumentError::FlagSpent {
+                    op: self.id.clone(),
+                    flag: flag.to_owned(),
+                });
             }
             if declared.contains(&flag) {
-                return Err(DocumentError::FlagTwice { op, flag: owned });
+                return Err(DocumentError::FlagTwice {
+                    op: self.id.clone(),
+                    flag: flag.to_owned(),
+                });
             }
             declared.push(flag);
         }

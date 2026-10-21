@@ -62,8 +62,8 @@ the blob.
 | does not open with a stamp: an empty file, a blob of typed-openapi 0.0.2, or a file that is no model blob | `Unstamped` | that the blob carries no layout stamp, so a typed-openapi older than 0.1.0 wrote it or it is not a model blob, and the layout this build reads |
 | is stamped with another layout | `Stale` | the layout and the version that wrote the blob, and the layout this build reads |
 | is stamped with this layout and does not decode | `Blob` | that the blob is damaged |
-| decodes, and more bytes follow the encoding | `Trailing` | that the blob is damaged, and how many bytes follow |
-| decodes, and holds a confirmation word, a flag, a gate or a `requires` that a load refuses | `Confirmation`, `OperationConfirmation`, `Flag`, `FlagSpent`, `FlagTwice`, `GatedRead`, `RequiresUnknown`, `RequiresUnreachable` | the word, flag, gate or parameter, and the operation; `Confirmation` names the document's confirmation word, which belongs to no operation |
+| decodes, and more bytes follow the encoding | `Trailing` | that the blob is damaged, and how many bytes are left after the model |
+| decodes, and holds a confirmation word, a flag, a gate, a method, a name or a `requires` that a load refuses | `Confirmation`, `OperationConfirmation`, `Flag`, `FlagSpent`, `FlagTwice`, `GatedRead`, `WriteAsRead`, `NameSpent`, `DuplicateCommand`, `RequiresUnknown`, `RequiresUnreachable` | the word, flag, gate, method, name or parameter, and the operation, or both of two operations that share a name; `Confirmation` names the document's confirmation word, which belongs to no operation |
 
 Only `from_blob` makes the last check. A `Document` read through `Deserialize`
 in another format is not held to it. `to_blob` fails with `DocumentError::Encode`

@@ -29,7 +29,7 @@ use thiserror::Error;
 
 use super::{
     Body, COMMIT, Document, Effect, Field, Gate, Join, Location, Operation, Param, Shape,
-    TRANSPORT, Unmet, Unsupported, spends, unmet,
+    TRANSPORT, Unmet, Unsupported, first_collision, gate_on_read, spends, unmet,
 };
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
 use crate::scalar::Scalar;
@@ -513,7 +513,7 @@ impl Document {
                 ops.push(Operation::build(path, method, op, params, whole)?);
             }
         }
-        if let Some(collision) = first_collision(&ops) {
+        if let Some(collision) = collision(&ops) {
             return Err(collision);
         }
         Ok(Self {
@@ -686,12 +686,12 @@ fn gates_of(
         }
         gates.push(gate);
     }
-    match (effect, gates.first()) {
-        (Effect::Read, Some(gate)) => Err(LoadError::GatedRead {
+    match gate_on_read(effect, &gates) {
+        Some(gate) => Err(LoadError::GatedRead {
             op: id.to_owned(),
             gate: gate.clone(),
         }),
-        _ => Ok(gates),
+        None => Ok(gates),
     }
 }
 
@@ -724,18 +724,12 @@ fn listed<'o>(
 /// Two operations under one `<group> <command>` would silently shadow each
 /// other, so the document is refused instead — never resolved by renaming one
 /// of them, which would move a name nobody asked to move.
-fn first_collision(ops: &[Operation]) -> Option<LoadError> {
-    ops.iter().enumerate().find_map(|(index, op)| {
-        let later = ops
-            .get(index + 1..)?
-            .iter()
-            .find(|later| later.group == op.group && later.command == op.command)?;
-        Some(LoadError::DuplicateCommand {
-            group: op.group.clone(),
-            command: op.command.clone(),
-            first: op.id.clone(),
-            second: later.id.clone(),
-        })
+fn collision(ops: &[Operation]) -> Option<LoadError> {
+    first_collision(ops).map(|(first, second)| LoadError::DuplicateCommand {
+        group: first.group.clone(),
+        command: first.command.clone(),
+        first: first.id.clone(),
+        second: second.id.clone(),
     })
 }
 
@@ -759,10 +753,7 @@ fn effect_of(method: &Method, op: &openapiv3::Operation) -> Effect {
     if op.extensions.get(WRITES) == Some(&serde_json::Value::Bool(true)) {
         return Effect::Write;
     }
-    match *method {
-        Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE => Effect::Read,
-        _ => Effect::Write,
-    }
+    Effect::of_method(method)
 }
 
 impl Param {

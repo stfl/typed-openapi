@@ -1,8 +1,9 @@
 //! What a model blob opens with, and what reading one checks again.
 //!
 //! A blob that another build wrote is refused by name before a byte of it is
-//! decoded, and `from_blob` holds a blob that decodes to the rules a load keeps,
-//! because a binary starts from the blob and nothing else has read the document.
+//! decoded, and `from_blob` checks a blob that decodes against the rules of a
+//! load that a binary needs, because it starts from the blob and nothing else has
+//! read the document.
 //!
 //! The blobs here are made two ways. A damaged one is a valid blob cut short or
 //! given a header by hand, so these tests also pin the header's format, which
@@ -20,9 +21,13 @@
 
 use std::panic::{self, AssertUnwindSafe};
 
+use clap::Command;
 use serde_json::{Value, json};
 use typed_openapi::tree;
-use typed_openapi::{Document, DocumentError, Loading, Operation, Shape, Unsupported};
+use typed_openapi::{
+    Answers, Document, DocumentError, Effect, Invocation, Loading, Operation, Plan, Shape,
+    Unsupported, Values,
+};
 
 const TOY: &str = include_str!("fixtures/toy.yaml");
 const CORRECTIONS: &str = include_str!("fixtures/corrections.yaml");
@@ -205,19 +210,28 @@ fn a_blob_of_this_layout_that_does_not_decode_is_damaged_and_says_to_bless_again
 
 /// A blob is the stamp and one encoding. Bytes after the encoding were added,
 /// or are what a longer file left behind, so the blob is not what a bless step
-/// wrote.
+/// wrote. The message counts them in words that read right for one byte.
 #[test]
 fn bytes_after_the_encoding_make_a_damaged_blob() {
-    let mut blob = document().to_blob().expect("the reduction encodes");
-    blob.extend_from_slice(&[0; 13]);
-    let error = refusal(&blob);
-    assert!(
-        matches!(error, DocumentError::Trailing { bytes: 13 }),
-        "{error:?}"
-    );
-    let message = error.to_string();
-    for part in ["damaged", "13 bytes", "bless step again"] {
-        assert!(message.contains(part), "{message:?} lacks {part:?}");
+    for extra in [1_usize, 13] {
+        let mut blob = document().to_blob().expect("the reduction encodes");
+        blob.extend(std::iter::repeat_n(0, extra));
+        let error = refusal(&blob);
+        assert!(
+            matches!(error, DocumentError::Trailing { bytes } if bytes == extra),
+            "{extra}: {error:?}"
+        );
+        let message = error.to_string();
+        for part in [
+            "damaged",
+            &format!("left after the model: {extra};"),
+            "bless step again",
+        ] {
+            assert!(
+                message.contains(part),
+                "{extra}: {message:?} lacks {part:?}"
+            );
+        }
     }
 }
 
@@ -247,6 +261,9 @@ fn forged(edit: impl FnOnce(&mut Value)) -> Document {
     edit(&mut value);
     serde_json::from_value(value).expect("the edit keeps the shape of a reduction")
 }
+
+/// One edit of a reduction as JSON, which a table of forgeries holds.
+type Edit = fn(&mut Value);
 
 /// `forged`, written as a blob, so the check under test is the one `from_blob`
 /// makes.
@@ -395,14 +412,17 @@ fn set_gates(value: &mut Value, op: &str, gates: &[&str]) {
     operation(value, op)["gates"] = json!(gates);
 }
 
-/// Whether clap refuses to build the command line of `doc`. A flag declared
-/// twice, and one clap declares itself, stop a binary at start-up with a panic,
-/// and `debug_assert` is where a test sees it.
+/// Whether clap refuses to build the command line of `doc`, with every group
+/// under one command as a binary mounts them. A flag declared twice, a name clap
+/// declares itself and two operations under one name stop a debug build of a
+/// binary at start-up with a panic, and `debug_assert` is where a test sees it.
+/// The command of one operation alone shows none of the last two: they are
+/// between operations.
 fn clap_panics(doc: &Document) -> bool {
     panic::catch_unwind(AssertUnwindSafe(|| {
-        for op in doc {
-            tree::command(op).debug_assert();
-        }
+        Command::new("toy")
+            .subcommands(tree::commands(doc))
+            .debug_assert();
     }))
     .is_err()
 }
@@ -412,7 +432,7 @@ struct Twice {
     what: &'static str,
     op: &'static str,
     flag: &'static str,
-    edit: fn(&mut Value),
+    edit: Edit,
 }
 
 /// A flag is declared by a parameter, a body property, a gate, and, on a write,
@@ -540,6 +560,149 @@ fn a_flag_every_subcommand_declares_already_is_refused_wherever_it_stands() {
     }
 }
 
+/// Moves the operation `op` under `<group> <command>`.
+fn move_to(value: &mut Value, op: &str, group: &str, command: &str) {
+    let op = operation(value, op);
+    op["group"] = json!(group);
+    op["command"] = json!(command);
+}
+
+/// A load refuses a document with two operations under one name, because one
+/// would shadow the other, and clap panics on the tree that holds them. The
+/// first is the one that comes first in the document, whichever was moved.
+#[test]
+fn two_operations_under_one_name_are_refused_and_both_are_named() {
+    let cases: [(&str, &str, &str, Edit); 3] = [
+        ("listVouchers", "getVoucher", "vouchers list", |value| {
+            move_to(value, "getVoucher", "vouchers", "list");
+        }),
+        (
+            "renderVoucher",
+            "archiveVoucher",
+            "vouchers render",
+            |value| {
+                move_to(value, "archiveVoucher", "vouchers", "render");
+            },
+        ),
+        ("listVouchers", "getVoucher", "vouchers get", |value| {
+            move_to(value, "listVouchers", "vouchers", "get");
+        }),
+    ];
+    assert!(!clap_panics(&document()), "the fixture builds");
+    for (first, second, name, edit) in cases {
+        assert!(clap_panics(&forged(edit)), "{name}: the tree panics");
+        let error = refusal(&blob_edited(edit));
+        assert!(
+            matches!(
+                &error,
+                DocumentError::DuplicateCommand { group, command, first: one, second: two }
+                    if format!("{group} {command}") == name && one == first && two == second
+            ),
+            "{name}: {error:?}"
+        );
+        let message = error.to_string();
+        for part in [first, second, name, "bless step again"] {
+            assert!(message.contains(part), "{name}: {message:?} lacks {part:?}");
+        }
+    }
+}
+
+/// clap declares a `help` subcommand on the tree and on every group, and nothing
+/// moves it, so a group or a command called `help` is two subcommands of one
+/// name.
+#[test]
+fn a_group_or_a_command_called_help_is_refused_and_names_the_operation() {
+    let cases: [(&str, Edit); 2] = [
+        ("group", |value| {
+            move_to(value, "getVoucher", "help", "get");
+        }),
+        ("command", |value| {
+            move_to(value, "getVoucher", "vouchers", "help");
+        }),
+    ];
+    for (what, edit) in cases {
+        assert!(clap_panics(&forged(edit)), "{what}: the tree panics");
+        let error = refusal(&blob_edited(edit));
+        assert!(
+            matches!(
+                &error,
+                DocumentError::NameSpent { op, what: found, name }
+                    if op == "getVoucher" && *found == what && name == "help"
+            ),
+            "{what}: {error:?}"
+        );
+        let message = error.to_string();
+        for part in ["getVoucher", what, "`help`", "bless step again"] {
+            assert!(message.contains(part), "{what}: {message:?} lacks {part:?}");
+        }
+    }
+}
+
+/// A load makes every method but four a write. A write held as a read declares
+/// no confirmation, and the gate sends a read on sight.
+#[test]
+fn a_method_that_writes_held_as_a_read_is_refused_and_names_the_operation() {
+    let as_read = |method: &'static str| {
+        move |value: &mut Value| {
+            let op = operation(value, "getVoucher");
+            op["method"] = json!(method);
+            op["effect"] = json!("Read");
+        }
+    };
+    for method in ["POST", "PUT", "PATCH", "DELETE", "CONNECT", "PURGE"] {
+        let error = refusal(&blob_edited(as_read(method)));
+        assert!(
+            matches!(
+                &error,
+                DocumentError::WriteAsRead { op, method: found }
+                    if op == "getVoucher" && found == method
+            ),
+            "{method}: {error:?}"
+        );
+        let message = error.to_string();
+        for part in ["getVoucher", method, "as a read", "bless step again"] {
+            assert!(
+                message.contains(part),
+                "{method}: {message:?} lacks {part:?}"
+            );
+        }
+    }
+}
+
+/// The harm the check stands in front of: with no check, a write held as a read
+/// goes out on sight, with no confirmation to give.
+#[test]
+fn a_write_held_as_a_read_would_be_sent_without_a_confirmation() {
+    let edit = |value: &mut Value| operation(value, "archiveVoucher")["effect"] = json!("Read");
+    let doc = forged(edit);
+    let op = doc.get("archiveVoucher").expect("the fixture describes it");
+    let invocation = Invocation::new(op, Values::new().param("id", 5)).expect("values");
+    let request = invocation.request(doc.base()).expect("a request");
+    assert!(matches!(
+        Plan::decide(op, &Answers::new(), request),
+        Plan::Send(_)
+    ));
+    assert!(Document::from_blob(&blob_edited(edit)).is_err());
+}
+
+/// The four safe methods are reads a load writes, so they decode held as reads,
+/// and a `GET` the document marks as a write decodes held as one: the blob does
+/// not hold the marker, and the check cannot find a `GET` held as a read that
+/// the document made a write.
+#[test]
+fn a_method_that_reads_decodes_held_as_a_read_and_a_get_may_write() {
+    for method in ["GET", "HEAD", "OPTIONS", "TRACE"] {
+        let blob = blob_edited(|value| operation(value, "getVoucher")["method"] = json!(method));
+        let doc = Document::from_blob(&blob).expect("a load writes this reduction too");
+        let op = doc.get("getVoucher").expect("the operation is there");
+        assert_eq!(op.method().as_str(), method);
+    }
+    let render = document();
+    let render = render.get("renderVoucher").expect("the fixture marks it");
+    assert_eq!(render.method().as_str(), "GET");
+    assert_eq!(render.effect(), Effect::Write, "a GET the document marks");
+}
+
 /// A read is sent on sight, so a gate has nothing to hold back, and a load
 /// refuses the document that names one.
 #[test]
@@ -569,8 +732,8 @@ fn a_parameter_called_like_the_confirmation_on_a_read_is_read_back() {
     assert!(!clap_panics(&doc), "and clap builds its command line");
 }
 
-/// The check is what stands between a forged flag and a panic at start-up: the
-/// forgeries that clap panics on unchecked are all refused.
+/// The check is what stands between a forgery and a panic at start-up in a debug
+/// build: the forgeries that clap panics on unchecked are all refused.
 #[test]
 fn a_blob_that_would_stop_clap_is_refused_before_it_gets_there() {
     for case in twice() {
@@ -587,6 +750,57 @@ fn a_blob_that_would_stop_clap_is_refused_before_it_gets_there() {
         let edit = |value: &mut Value| set_field_flag(value, "createVoucher", 0, word);
         assert!(clap_panics(&forged(edit)), "a body property `{word}`");
         assert!(Document::from_blob(&blob_edited(edit)).is_err(), "`{word}`");
+    }
+    // The confirmation of a write is declared beside `--help`.
+    let edit = |value: &mut Value| operation(value, "updateVoucher")["commit"] = json!("help");
+    assert!(clap_panics(&forged(edit)), "a confirmation `help`");
+    assert!(Document::from_blob(&blob_edited(edit)).is_err());
+}
+
+/// What a debug build meets is not every refusal. These forgeries build a
+/// command line without a panic, and are refused all the same: a word that
+/// nobody can type, a gate on a read, a requirement on a parameter that is not
+/// there, a spent word that this subcommand does not declare, a confirmation
+/// that a read does not declare, and a write that is held as a read.
+#[test]
+fn a_forgery_clap_builds_is_refused_all_the_same() {
+    type Forgery = (&'static str, Edit);
+    let forgeries: [Forgery; 10] = [
+        ("the document's word", |value| {
+            value["commit"] = json!("!! not a flag !!");
+        }),
+        ("an unspelled confirmation", |value| {
+            operation(value, "updateVoucher")["commit"] = json!("!! not a flag !!");
+        }),
+        ("help as the confirmation of a read", |value| {
+            operation(value, "getVoucher")["commit"] = json!("help");
+        }),
+        ("an unspelled parameter flag", |value| {
+            set_parameter_flag(value, "getVoucher", "id", "!! not a flag !!");
+        }),
+        ("a gate on a read", |value| {
+            set_gates(value, "getVoucher", &["enshrine"]);
+        }),
+        ("a spent gate that the body does not declare", |value| {
+            set_gates(value, "enshrineVoucher", &["json-body"]);
+        }),
+        ("a spent gate on a body of other fields", |value| {
+            set_gates(value, "createVoucher", &["raw-body"]);
+        }),
+        ("a requirement on a parameter that is not there", |value| {
+            parameter(operation(value, "getVoucher"), "id")["requires"] = json!(["ghost"]);
+        }),
+        (
+            "a requirement on a parameter without a flag",
+            require_a_cookie,
+        ),
+        ("a write held as a read", |value| {
+            operation(value, "archiveVoucher")["effect"] = json!("Read");
+        }),
+    ];
+    for (what, edit) in forgeries {
+        assert!(!clap_panics(&forged(edit)), "{what}: clap builds it");
+        assert!(Document::from_blob(&blob_edited(edit)).is_err(), "{what}");
     }
 }
 
@@ -609,24 +823,28 @@ fn a_requirement_on_a_parameter_the_operation_does_not_declare_is_refused() {
     assert!(error.to_string().contains("getVoucher"), "{error}");
 }
 
+/// Gives `listVouchers` a cookie parameter `session`, which has no flag, and
+/// makes its first parameter require it.
+fn require_a_cookie(value: &mut Value) {
+    let op = operation(value, "listVouchers");
+    let params = op["params"]
+        .as_array_mut()
+        .expect("the operation has parameters");
+    let mut cookie = params.first().cloned().expect("and a first one");
+    cookie["name"] = json!("session");
+    cookie["required"] = json!(false);
+    cookie["shape"] = json!({ "Unreachable": "Cookie" });
+    cookie["requires"] = json!([]);
+    params.push(cookie);
+    let first = params.first_mut().expect("and a first one");
+    first["requires"] = json!(["session"]);
+}
+
 /// A parameter with no flag cannot be given, so a requirement on it is a
 /// requirement nothing meets.
 #[test]
 fn a_requirement_on_a_parameter_without_a_flag_is_refused() {
-    let blob = blob_edited(|value| {
-        let op = operation(value, "listVouchers");
-        let params = op["params"]
-            .as_array_mut()
-            .expect("the operation has parameters");
-        let mut cookie = params.first().cloned().expect("and a first one");
-        cookie["name"] = json!("session");
-        cookie["required"] = json!(false);
-        cookie["shape"] = json!({ "Unreachable": "Cookie" });
-        cookie["requires"] = json!([]);
-        params.push(cookie);
-        let first = params.first_mut().expect("and a first one");
-        first["requires"] = json!(["session"]);
-    });
+    let blob = blob_edited(require_a_cookie);
     let error = refusal(&blob);
     assert!(
         matches!(

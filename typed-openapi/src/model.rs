@@ -94,6 +94,42 @@ pub(crate) fn spends(word: &str) -> bool {
     TRANSPORT.contains(&word) || word == HELP
 }
 
+/// Whether clap declares a subcommand of this name itself, on every command
+/// that has subcommands.
+///
+/// Nothing can move it, so a group or a command that wears the name is two
+/// subcommands with one spelling. A decoded blob is refused for holding one.
+pub(crate) fn spends_command(name: &str) -> bool {
+    name == HELP
+}
+
+/// The gate that stands on a read, if one does.
+///
+/// A read is sent on sight, so there is nothing for a gate to hold back. The
+/// load refuses a document that names a gate on a read, and a decoded blob is
+/// refused for holding one, and both ask here.
+pub(crate) fn gate_on_read(effect: Effect, gates: &[Gate]) -> Option<&Gate> {
+    match (effect, gates.first()) {
+        (Effect::Read, gate) => gate,
+        (Effect::Write, _) => None,
+    }
+}
+
+/// The first two operations that sit under one `<group> <command>`, in the order
+/// of the document.
+///
+/// The load refuses a document that has two, because one would shadow the other.
+/// A decoded blob is refused for holding two, and both ask here.
+pub(crate) fn first_collision(ops: &[Operation]) -> Option<(&Operation, &Operation)> {
+    ops.iter().enumerate().find_map(|(index, op)| {
+        let later = ops
+            .get(index + 1..)?
+            .iter()
+            .find(|later| later.group == op.group && later.command == op.command)?;
+        Some((op, later))
+    })
+}
+
 /// Every operation the document describes, in document order, plus the server
 /// it describes them against.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -468,13 +504,16 @@ pub enum Body {
 /// and a blob that cannot be read is written again. [`Encode`] is the one
 /// variant that is not about a blob that was read.
 ///
-/// [`from_blob`] asks in this order. It reads the stamp the blob opens with
-/// before it decodes a byte, so [`Unstamped`] and [`Stale`] never depend on
-/// what follows the stamp. [`Blob`] and [`Trailing`] are a blob that does not
-/// decode as the model and nothing else. The rest are a blob that decodes and
-/// holds something a load would not have written. Each of those names the
-/// operation that holds it, except [`Confirmation`], which names the word the
-/// document confirms with and which belongs to no operation.
+/// [`from_blob`] asks the first four in this order. It reads the stamp the blob
+/// opens with before it decodes a byte, so [`Unstamped`] and [`Stale`] never
+/// depend on what follows the stamp. [`Blob`] and [`Trailing`] are a blob that
+/// does not decode as the model and nothing else. The rest are a blob that
+/// decodes and holds something a load would not have written, and a rule that
+/// compares two flags needs the whole model, so they are asked after the
+/// decode, in the order of the document and not of this page. Each of them
+/// names the operation that holds it, [`DuplicateCommand`] names both of two,
+/// and [`Confirmation`] names the word the document confirms with, which
+/// belongs to no operation.
 ///
 /// [`from_blob`]: Document::from_blob
 /// [`Unstamped`]: DocumentError::Unstamped
@@ -482,6 +521,7 @@ pub enum Body {
 /// [`Blob`]: DocumentError::Blob
 /// [`Trailing`]: DocumentError::Trailing
 /// [`Confirmation`]: DocumentError::Confirmation
+/// [`DuplicateCommand`]: DocumentError::DuplicateCommand
 /// [`Encode`]: DocumentError::Encode
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -513,18 +553,20 @@ pub enum DocumentError {
     /// The stamp is this build's, and `postcard` could not read the bytes after
     /// it as a reduction.
     #[error("the model blob is damaged; run the bless step again")]
-    Blob(#[from] postcard::Error),
+    Blob(#[source] postcard::Error),
     /// The stamp is this build's, the bytes after it decode as a reduction, and
     /// more bytes follow the reduction. A blob is the stamp and one encoding and
     /// nothing else, so bytes that were added or left over from a longer file
     /// mean the blob is not what a bless step wrote.
-    #[error("the model blob is damaged: {bytes} bytes follow the model; run the bless step again")]
+    #[error(
+        "the model blob is damaged: bytes left after the model: {bytes}; run the bless step again"
+    )]
     Trailing {
         /// How many bytes follow the encoding of the reduction.
         bytes: usize,
     },
     /// The document's confirmation word is one a load refuses: a word nobody
-    /// could type as a flag, or one that every subcommand declares already.
+    /// could type as a flag, or one that every subcommand spends already.
     #[error(
         "the confirmation word `{word}` of the model blob is not one a load accepts; \
          run the bless step again"
@@ -534,8 +576,10 @@ pub enum DocumentError {
         word: String,
     },
     /// The confirmation word an operation declares is one a load refuses. It is
-    /// the flag clap sees, so a blob that gets past this would stop a binary
-    /// at start-up.
+    /// the flag clap sees: where it is `help`, or a flag that the subcommand
+    /// declares already, a debug build of the binary panics when it builds the
+    /// command tree, and a release build lets one declaration take the place of
+    /// the other.
     #[error(
         "{op}: the confirmation word `{word}` is not one a load accepts; \
          run the bless step again"
@@ -556,10 +600,13 @@ pub enum DocumentError {
         flag: String,
     },
     /// A flag of an operation, on a parameter, a body property or a gate, is one
-    /// that every subcommand declares already: `--help`, or one of the five flags
-    /// that carry a body. clap would stop the binary at start-up on it.
+    /// that every subcommand spends already: `--help`, or one of the five flags
+    /// that carry a body. Where the subcommand declares the word too, which is
+    /// always so for `help`, a debug build of the binary panics when it builds
+    /// the command tree, and a release build lets one declaration take the place
+    /// of the other.
     #[error(
-        "{op}: the flag `{flag}` is one every subcommand declares already; \
+        "{op}: the flag `{flag}` is one every subcommand already spends; \
          run the bless step again"
     )]
     FlagSpent {
@@ -568,11 +615,12 @@ pub enum DocumentError {
         /// The flag as the blob spells it, without the `--`.
         flag: String,
     },
-    /// An operation declares one flag twice: on two parameters, on two body
-    /// properties, on a gate and a parameter, on one gate named twice, or on a
-    /// write's confirmation word and anything else. A load gives every
-    /// declaration a flag of its own, and clap would stop the binary at
-    /// start-up on a name given twice.
+    /// Two declarations of one operation take one flag. A declaration is a
+    /// parameter, a body property, a gate or, on a write, the confirmation word,
+    /// and any two of them clash, as does one gate named twice. A load gives
+    /// every declaration a flag of its own. A debug build of the binary panics
+    /// when it builds the command tree and meets a flag twice, and a release
+    /// build lets one declaration take the place of the other.
     #[error("{op}: the flag `{flag}` is declared twice; run the bless step again")]
     FlagTwice {
         /// The `operationId` of the operation that declares the flag.
@@ -591,6 +639,58 @@ pub enum DocumentError {
         op: String,
         /// The gate as the blob spells it, without the `--`.
         gate: String,
+    },
+    /// An operation is marked a read and its method writes. A load makes every
+    /// method but `GET`, `HEAD`, `OPTIONS` and `TRACE` a write, so a blob that
+    /// says otherwise is one that no load wrote, and a read is sent on sight:
+    /// the subcommand declares no confirmation word, and nothing holds the
+    /// request back.
+    ///
+    /// The blob does not hold the document's `x-cli-writes`, so the check finds
+    /// a method that writes held as a read and cannot find a `GET` that the
+    /// document marks as a write and the blob holds as a read.
+    #[error(
+        "{op}: `{method}` writes, and the model blob holds the operation as a read, \
+         which is sent on sight; run the bless step again"
+    )]
+    WriteAsRead {
+        /// The `operationId` of the operation held as a read.
+        op: String,
+        /// The method of the operation, as the blob spells it.
+        method: String,
+    },
+    /// A group or a command is named `help`. clap declares a `help` subcommand
+    /// on every command that has subcommands, so a debug build of the binary
+    /// panics when it builds the command tree, and a release build lets one
+    /// take the place of the other.
+    #[error(
+        "{op}: the {what} `{name}` is a subcommand that clap declares itself; \
+         run the bless step again"
+    )]
+    NameSpent {
+        /// The `operationId` of the operation under the name.
+        op: String,
+        /// Which of the two names it is: `group` or `command`.
+        what: &'static str,
+        /// The name as the blob spells it.
+        name: String,
+    },
+    /// Two operations sit under one `<group> <command>`. A load refuses a
+    /// document that has two. A debug build of the binary panics when it builds
+    /// the command tree, and a release build lets one shadow the other.
+    #[error(
+        "`{first}` and `{second}` are both `{group} {command}` on the command line; \
+         run the bless step again"
+    )]
+    DuplicateCommand {
+        /// The group both operations are mounted under.
+        group: CommandName,
+        /// The command both operations are mounted under.
+        command: CommandName,
+        /// The `operationId` of the operation that comes first in the blob.
+        first: String,
+        /// The `operationId` of the later one.
+        second: String,
     },
     /// A parameter requires a name the operation declares no parameter under.
     #[error(
@@ -651,6 +751,22 @@ pub struct DriftError {
     pub found: Option<String>,
 }
 
+impl Effect {
+    /// What the method alone makes of an operation: every method but `GET`,
+    /// `HEAD`, `OPTIONS` and `TRACE` writes.
+    ///
+    /// The document's `x-cli-writes` can add a write to a safe method and never
+    /// removes one, so this is the least an operation is. The load starts from
+    /// it, and a decoded blob that holds a read where this says write is
+    /// refused.
+    pub(crate) fn of_method(method: &Method) -> Self {
+        match *method {
+            Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE => Self::Read,
+            _ => Self::Write,
+        }
+    }
+}
+
 impl Document {
     /// The layout of the model this build reads and writes.
     ///
@@ -678,12 +794,20 @@ impl Document {
     /// layout that does not decode is [`DocumentError::Blob`], and bytes after
     /// the encoding are [`DocumentError::Trailing`].
     ///
-    /// What decodes is then held to the rules a load keeps, because a shipped
-    /// binary starts from the blob and nothing has read the document: the
-    /// confirmation word, the flags and gates of each operation, and every
-    /// `requires` are checked. The error names the operation, and for the
-    /// document's own confirmation word it names the word. The two command
-    /// names and the spelling of each gate are checked as they decode.
+    /// What decodes is then checked again, because a shipped binary starts from
+    /// the blob and nothing has read the document. The check repeats these rules
+    /// of a load: the confirmation word; for each operation, its flags, which
+    /// are spelled as a load spells them, none that clap declares itself and
+    /// each declared once, its gates, which stand on a write only, the effect its
+    /// method allows, each `requires`, and a group or a command that is not
+    /// `help`; and one `<group> <command>` for each operation. It repeats no
+    /// rule whose input the blob does not hold, such as a `$ref`, and none whose
+    /// break costs only the run that meets it: a `pattern` that no engine runs
+    /// refuses every value of its flag when the flag is parsed.
+    ///
+    /// The error names the operation, and for the document's own confirmation
+    /// word it names the word. The two command names and the spelling of each
+    /// gate are checked as they decode.
     ///
     /// Only `from_blob` applies these rules. `postcard` drops the message of an
     /// error a `Deserialize` raises, so a check inside one could not name the
@@ -702,7 +826,8 @@ impl Document {
                 reads: Self::MODEL_LAYOUT,
             });
         }
-        let (document, rest) = postcard::take_from_bytes::<Self>(encoding)?;
+        let (document, rest) =
+            postcard::take_from_bytes::<Self>(encoding).map_err(DocumentError::Blob)?;
         if !rest.is_empty() {
             return Err(DocumentError::Trailing { bytes: rest.len() });
         }

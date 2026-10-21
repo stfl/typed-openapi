@@ -290,30 +290,59 @@ model is added there. It traces `Bounds<f64>` apart from `Bounds<i64>`, because
 the tracer names a container without its arguments, and `arguments` in the same
 file stops compiling when `Scalar` changes one. The format of the stamp itself
 never changes, and `tests/blob.rs` writes it out by hand to hold it. Write mode
-of that test refuses while the layout differs from the description and the
-number did not move, so the command it names is no way past the guard.
+of `tests/layout.rs` refuses while the layout differs from the description and
+the number did not move, so the command it names is no way past the guard.
 
-`Document::from_blob` holds a blob that decodes to the rules a load keeps,
+`Document::from_blob` checks a blob that decodes against the rules a load keeps,
 because a binary starts from the blob and nothing else has read the document.
-`Document::check` in `src/model/blob.rs` re-checks the confirmation word and,
-for each operation, its gates, its flags and each `requires`. The error names
-the operation, except for the document's own confirmation word, which has none.
-The rules are the load's own, asked in one place each (`spends`,
-`names::is_spelled` and `model::unmet`). The flags of an operation share one
-namespace: the confirmation word of a write, the gates, the parameters that
-have a flag and the properties of a body, with `help` and the five `TRANSPORT`
-words spent. `Namespace::guarding` and `gates_of` in `src/model/reduce.rs` keep
-it at load and `Operation::check_flags` keeps it on the way in, so a rule added
-to one is added to the other. A read declares no confirmation word, so a
-parameter of a read may be spelled like it. Bytes after the encoding are
-`Trailing`.
+`Document::check` in `src/model/blob.rs` repeats the confirmation word and, for
+each operation, its names, its effect, its gates, its flags and each `requires`,
+and then the names two operations share. The error names the operation, or both
+of two, except for the document's own confirmation word, which has none. Each
+rule is asked in one place that the load and the check share: `spends`,
+`gate_on_read`, `first_collision`, `Effect::of_method` and `unmet` in
+`src/model.rs`, because `reduce` is behind the `document` feature and `blob` is
+not, and `names::is_spelled`. `spends_command` is beside them and only the check
+asks it: the load accepts a group or a command called `help`. `check_requires`
+matches `Unmet` with no `_` arm, so a new way for a `requires` to fail stops
+compiling until the decode names it.
+
+The flags of an operation share one namespace: the confirmation word of a write,
+the gates, the parameters that have a flag and the properties of a body, with
+`help` and the five `TRANSPORT` words spent. `Namespace::guarding` and
+`gates_of` in `src/model/reduce.rs` keep it at load and
+`Operation::check_flags` keeps it on the way in, so a rule added to one is added
+to the other. A read declares no confirmation word, so a parameter of a read may
+be spelled like it. The effect is the one rule the blob holds only in part: it
+does not hold `x-cli-writes`, so the check finds a method that writes held as a
+read and cannot find a `GET` that the document marked as a write.
+
+**The check repeats a rule of the load when a break of it is inside a line.** A
+value in the blob can break a rule, and the break does one of two things. The
+binary panics: clap does when it builds the command tree in a debug build, or
+other code that reads the value, and in a release build one declaration silently
+takes the place of another. Or a request that the gate holds back is sent on
+sight. Those two are the damage the check stands in front of, because a damaged
+blob must not make clap panic and the gate is the first invariant of the crate.
+A load refusal whose break is neither is left out, because it costs only the run
+that meets it: a `pattern` that no engine runs refuses every value of its flag
+when the flag is parsed, and repeating the rule would compile every pattern of
+every operation at each start-up to run one subcommand. A refusal whose input the
+blob does not hold (the document's text, a `$ref`, an `x-cli-` marker) cannot be
+broken from the blob at all. Three rules are repeated that the line would not
+ask for: the spelling of the confirmation word and of a flag, and each
+`requires`. A blob that breaks them builds a command line and holds nothing
+back. A slice that adds a refusal at load asks whether a value in the blob can
+break it, reads what a binary does with the blob that does, and adds the check
+when the answer is inside the line.
 
 Postcard drops the message of a `serde` error, so a check inside a `try_from`
-could say only that the blob is damaged, and a rule that compares two flags
-cannot sit in one field. The check runs after the decode for both reasons.
-`Document` deserialises its flags as plain strings, and a `Document` read
-through `Deserialize` in another format is not held to the check; `Gate` and
-`CommandName` keep their `try_from`, which refuses on every path.
+could say only that the blob is damaged, and a rule that compares two flags or two
+operations cannot sit in one field. The check runs after the decode for both
+reasons. `Document` deserialises its flags as plain strings, and a `Document`
+read through `Deserialize` in another format is not held to the check; `Gate` and
+`CommandName` keep their `try_from`, which refuses on every path. Bytes after
+the encoding are `Trailing`.
 
 **A count about the document is derived from it, never written down.**
 `Document::summary` in `src/summary.rs` answers every count an adoption is
