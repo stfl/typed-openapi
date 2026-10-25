@@ -614,7 +614,7 @@ fn a_base_url_with_userinfo_is_refused_and_the_refusal_does_not_print_it() {
     for text in [
         "http://alice:s3cret@127.0.0.1:18473/",
         // The `http` crate reads this as a path with no authority. The load reads
-        // it as an authority, and so does a client that is handed the text.
+        // it as an authority.
         "//alice:s3cret@127.0.0.1:18473/",
     ] {
         let error = invocation
@@ -817,6 +817,55 @@ fn a_dry_run_never_prints_userinfo() {
     assert_eq!(
         render(&path),
         "DELETE //127.0.0.1:18473/base/things/a HTTP/1.1\n"
+    );
+}
+
+/// The request line of a dry run is the path that is sent. When the URI has a
+/// host, a `//` at the start of its path is part of the path and not an
+/// authority, so an `@` after it stays in the line: `http://host//u@h/` is a
+/// base, and so is a document path that starts with `//u@h/`.
+#[test]
+fn a_dry_run_shows_the_path_that_is_sent() {
+    let doc = doc();
+    let op = doc.get("getThing").expect("the operation");
+    let invocation = Invocation::new(op, Values::new().param("name", "a")).expect("values");
+
+    for (text, shown) in [
+        (
+            "http://host//u@h/",
+            "GET //u@h/things/a HTTP/1.1\nhost: host\n",
+        ),
+        (
+            "http://host:9//u@h/api",
+            "GET //u@h/api/things/a HTTP/1.1\nhost: host:9\n",
+        ),
+    ] {
+        let request = invocation
+            .request(&base(text))
+            .unwrap_or_else(|error| panic!("{text}: {error:?}"));
+        assert_eq!(render(&request), shown, "{text}");
+    }
+
+    let odd = Document::load(
+        &document(
+            "http://api.example.test",
+            "  //u@h/x:
+    get:
+      operationId: oddPath
+      x-cli-group: odd
+      responses: { \"200\": { description: ok } }
+",
+        ),
+        &[],
+    )
+    .expect("the document loads");
+    let request = Invocation::new(odd.get("oddPath").expect("the operation"), Values::new())
+        .expect("values")
+        .request(odd.base())
+        .expect("a request");
+    assert_eq!(
+        render(&request),
+        "GET //u@h/x HTTP/1.1\nhost: api.example.test\n"
     );
 }
 

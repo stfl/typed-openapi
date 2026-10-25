@@ -311,8 +311,9 @@ fn authority_spans(text: &str) -> impl Iterator<Item = Range<usize>> {
 }
 
 /// `text` with the userinfo of each authority that `authority_spans` reads
-/// left out. This is how a dry run shows the host and the request line and how a
-/// `Debug` shows a base: a credential belongs in neither.
+/// left out. This is how a dry run shows its host and the request line of a URI
+/// with no host, and how a `Debug` shows a base: a credential belongs in none of
+/// them.
 fn without_userinfo(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut from = 0;
@@ -730,19 +731,25 @@ fn encode(raw: &str) -> String {
 pub fn render(request: &Request<Vec<u8>>) -> String {
     use std::fmt::Write as _;
 
+    let uri = request.uri();
+    let target = uri
+        .path_and_query()
+        .map_or("/", http::uri::PathAndQuery::as_str);
     let mut out = String::new();
+    // With a host, the path and query are only a part of the URI, and a `//` at
+    // the start of them is a path. With none, they are the whole text that
+    // `authority_spans` reads, as it reads a base.
     let _ = writeln!(
         out,
         "{} {} HTTP/1.1",
         request.method(),
-        without_userinfo(
-            request
-                .uri()
-                .path_and_query()
-                .map_or("/", http::uri::PathAndQuery::as_str)
-        )
+        if uri.authority().is_some() {
+            target.to_owned()
+        } else {
+            without_userinfo(target)
+        }
     );
-    if let Some(authority) = request.uri().authority() {
+    if let Some(authority) = uri.authority() {
         let _ = writeln!(out, "host: {}", without_userinfo(authority.as_str()));
     }
     for (name, value) in request.headers() {

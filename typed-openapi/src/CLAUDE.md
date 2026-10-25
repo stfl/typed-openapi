@@ -505,10 +505,14 @@ No text that the library makes holds a base URL's userinfo. The refusals of
 `LoadError::ServerUrl` prints a URL that holds no userinfo where an authority is
 read, because the userinfo is read first; `render` prints the host and the port;
 and a type that holds a base writes its `Debug` by hand and leaves the userinfo
-and the query out (`request::without_userinfo_and_query`). `render` and the
-`Debug` leave the userinfo out through `without_userinfo`, which reads the places
-that `userinfo_in` reads, so a text is changed exactly when it is refused, and a
-test holds the two together. Three types hold a base. `Client` holds the
+and the query out (`request::without_userinfo_and_query`). The `Debug` leaves
+the userinfo out through `without_userinfo`, which reads the places that
+`userinfo_in` reads, so a text is changed exactly when it is refused, and a test
+holds the two together. `render` gives it the text of the host, and the request
+line only of a URI with no host, because only then are the path and the query
+the whole text that is read. With a host a `//` at the start of the path is a
+path, an `@` after it is no userinfo, and the line shows the path that is sent
+(`http://host//u@h/`). Three types hold a base. `Client` holds the
 caller's, and `Document` holds the one its load, its blob or a read through
 `Deserialize` in another format gave it: the last two read with no load, and
 `from_blob` does not repeat `ServerBase`, so the base of a `Document` can hold

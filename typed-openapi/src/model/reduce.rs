@@ -105,12 +105,12 @@ pub enum LoadError {
     NoServer,
     /// The first server's URL is not a URL, once each variable in it is replaced
     /// by its default. A variable the server does not declare has no default
-    /// and stays in the URL as it is written. A URL that holds userinfo is
-    /// [`LoadError::ServerBase`] whether it is a URL or not, as the document
-    /// spells it and with the defaults in it, so this message prints no
-    /// credential. A text with an `@` in none of the places where an authority is
-    /// read (see [`BaseUrlError::Userinfo`]), such as `http:/u@h/a b`, is refused
-    /// here, and the message prints it.
+    /// and stays in the URL as it is written. A URL whose text with the
+    /// defaults in it holds userinfo is [`LoadError::ServerBase`] whether it is
+    /// a URL or not, and when the URL is refused the spelling is read too, so
+    /// this message prints no credential. A text with an `@` in none of the
+    /// places where an authority is read (see [`BaseUrlError::Userinfo`]), such
+    /// as `http:/u@h/a b`, is refused here, and the message prints it.
     #[error("`servers[0].url` is not a URL: {}", refused_url(.url, .filled))]
     ServerUrl {
         /// `servers[0].url` as the document spells it.
