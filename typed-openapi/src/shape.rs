@@ -1,12 +1,13 @@
 //! Where the specification puts each object of an OpenAPI 3.0 document: which
 //! key of which object leads to another object, and what the keys of a map are.
 //!
-//! Two walks read the overlaid document before the object model does.
-//! [`required`](crate::required) looks for a schema that requires a key nothing
-//! declares, and [`markers`](crate::markers) looks for an `x-cli-` key that
-//! nothing reads. Each has to tell an object the specification gives fixed
-//! fields from a name somebody chose and from JSON that is the vendor's own, so
-//! they read one table.
+//! Three walks read the overlaid document. [`required`](crate::required) and
+//! [`markers`](crate::markers) read it before the object model does, and look
+//! for a schema that requires a key nothing declares and for an `x-cli-` key that
+//! nothing reads. [`patterns`](crate::patterns) reads it after the reduction, and
+//! looks for a `pattern` that the Unicode flag reads another way. Each has to
+//! tell an object the specification gives fixed fields from a name somebody chose
+//! and from JSON that is the vendor's own, so they read one table.
 //!
 //! # The table is a list of what is entered
 //!
@@ -39,8 +40,8 @@
 //! Paths Object that is no path, and a key of the Responses Object that is no
 //! status code. A walk says how far it reaches with a [`Reach`].
 //!
-//! Both walks enter what 3.0.3 defines, so a map added to the table for a route
-//! of that kind is added for both. Only the schema walk enters the rest, and
+//! Every walk enters what 3.0.3 defines, so a map added to the table for a route
+//! of that kind is added for all of them. Only the schema walk enters the rest, and
 //! [`Reach::Whole`] is where the table says why:
 //!
 //! - The marker walk judges a key by where it stands. Nothing builds a request
@@ -168,7 +169,8 @@ pub(crate) enum Reach {
     /// What OpenAPI 3.0.3 defines, and so what the object model reads. The walk
     /// of [`markers`](crate::markers) reaches this far, because it judges a key
     /// by where it stands, and a key under a position that the model drops
-    /// stands nowhere.
+    /// stands nowhere. So does the walk of [`patterns`](crate::patterns), because
+    /// a generated type is made of what the model reads and of nothing it drops.
     Defined,
     /// What 3.0.3 defines, and the routes and keys beside it that a 3.0
     /// document may carry and the model drops. The walk of

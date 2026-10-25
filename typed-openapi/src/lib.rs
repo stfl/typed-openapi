@@ -67,6 +67,8 @@ mod openapi;
 #[cfg(feature = "document")]
 pub mod overlay;
 #[cfg(feature = "document")]
+mod patterns;
+#[cfg(feature = "document")]
 pub mod required;
 #[cfg(feature = "document")]
 mod schema;

@@ -143,9 +143,10 @@ fn an_amount_in_cents_is_a_multiple_of_a_cent() {
     assert_eq!(cause(&refused), "`0.005` is not a multiple of 0.01");
 }
 
-/// The three spellings of a refused `multipleOf`, on a query parameter and on a
-/// property of a flat body: a step of 0 refuses every value, a negative step is
-/// no step, and the remainder of `i64::MIN` by `-1` panics.
+/// The five steps that are refused, on a query parameter and on a property of a
+/// flat body: a step of 0 has no multiples, whether it is spelled `0` or `0.0`,
+/// and a negative step is no step. A step of `-1` is the one with which the
+/// remainder of `i64::MIN` overflows, if the load lets it through.
 const STEPS: &[(&str, &str, &str)] = &[
     ("integer", "0", "0"),
     ("integer", "-1", "-1"),
@@ -266,6 +267,190 @@ fn a_unicode_pattern_on_a_body_property_is_refused_by_name() {
             if op == "createPerson" && name == "surname" && raw == r"^\p{L}+$"),
         "{error:?}"
     );
+}
+
+/// An `enum` that lists `null` and nothing a flag can send states no value to
+/// take. JSON Schema admits no integer under it, and reading it as no rule at all
+/// would admit every one, so the document is refused by name on a parameter and on
+/// a property of a flat body.
+#[test]
+fn an_enum_of_null_alone_is_refused_while_the_document_is_reduced() {
+    for schema in [
+        "{ type: integer, enum: [null] }",
+        "{ type: number, nullable: true, enum: [null] }",
+        "{ type: boolean, enum: [null, null] }",
+        "{ type: string, enum: [null] }",
+    ] {
+        let paths = format!(
+            "  /entries:\n    get:\n      operationId: listEntries\n      parameters:\n        - {{ name: \
+             kind, in: query, schema: {schema} }}\n      responses: {{ \"200\": {{ description: OK }} }}\n"
+        );
+        let error = Document::load(&document(&paths), &[]).expect_err("the enum names no value");
+        assert!(
+            matches!(&error, LoadError::Unrunnable { op, name, source: ScalarError::Rule { raw, .. } }
+                if op == "listEntries" && name == "kind" && raw == "null"),
+            "{schema}: {error:?}"
+        );
+        assert_eq!(
+            cause(&error),
+            "`null` is all that the `enum` lists, and a flag cannot send it"
+        );
+
+        let body = format!("{{ type: object, properties: {{ kind: {schema} }} }}");
+        let error = Document::load(&holding(&body, PLAIN, ""), &[])
+            .expect_err("the same enum on a body property is refused the same way");
+        assert!(
+            matches!(&error, LoadError::Unrunnable { op, name, .. }
+                if op == "holdsPattern" && name == "kind"),
+            "{schema}: {error:?}"
+        );
+
+        let list = format!("{{ type: array, items: {schema} }}");
+        let paths = format!(
+            "  /entries:\n    get:\n      operationId: listEntries\n      parameters:\n        - {{ name: \
+             kinds, in: query, schema: {list} }}\n      responses: {{ \"200\": {{ description: OK }} }}\n"
+        );
+        let error = Document::load(&document(&paths), &[]).expect_err("so are the items of a list");
+        assert!(
+            matches!(&error, LoadError::Unrunnable { name, .. } if name == "kinds"),
+            "{schema}: {error:?}"
+        );
+    }
+}
+
+/// `null` beside a value a flag can send is the way OpenAPI 3.0 says that a value
+/// may be absent, and the values the `enum` lists are the rule.
+#[test]
+fn an_enum_of_null_beside_a_value_is_the_rule_of_that_value() {
+    let doc = read(&[
+        "{ name: kind, in: query, schema: { type: integer, nullable: true, enum: [null, 7] } }",
+    ]);
+    let op = doc.get("listEntries").expect("the operation");
+    Invocation::new(op, Values::new().param("kind", "7")).expect("7 is listed");
+    let refused = refusal(&doc, Values::new().param("kind", "8"));
+    assert_eq!(cause(&refused), "`8` is not one of 7");
+}
+
+/// A document with one operation, `holdsPattern`, whose request body is `body`
+/// and whose success response is `answer`, beside whatever `components` holds.
+fn holding(body: &str, answer: &str, components: &str) -> String {
+    format!(
+        "openapi: 3.0.3\n\
+         info: {{ title: t, version: \"1\" }}\n\
+         servers: [{{ url: 'http://localhost:9999' }}]\n\
+         paths:\n  /people:\n    post:\n      operationId: holdsPattern\n      requestBody:\n        \
+         required: true\n        content:\n          application/json:\n            schema: {body}\n      \
+         responses:\n        \"200\":\n          description: OK\n          content:\n            \
+         application/json:\n              schema: {answer}\n{components}"
+    )
+}
+
+/// The `pattern` of a name that a vendor's server runs with the Unicode flag.
+const NAME: &str = "{ type: string, pattern: '^\\p{L}+$' }";
+
+/// A schema with nothing to refuse.
+const PLAIN: &str = "{ type: object, properties: { id: { type: integer } } }";
+
+/// A document, the `operationId` that holds the schema with the pattern in it
+/// (`None` where no operation does), and where the schema is as an Overlay names a
+/// target.
+type Site = (String, Option<&'static str>, String);
+
+/// The places a generated type is made of that no flag is: a response, a nested
+/// property, the items of an array, a flat property that comes after a nested one
+/// (the body then goes whole through `--json-body`), and a named schema.
+fn sites() -> Vec<Site> {
+    let at = |place: &str| format!("$.paths['/people'].post.{place}");
+    let body = |place: &str| {
+        at(&format!(
+            "requestBody.content['application/json'].schema{place}"
+        ))
+    };
+    let answer = |place: &str| {
+        at(&format!(
+            "responses['200'].content['application/json'].schema{place}"
+        ))
+    };
+    let nested = format!(
+        "{{ type: object, properties: {{ address: {{ type: object, properties: {{ city: {NAME} }} }} }} }}"
+    );
+    let items = format!("{{ type: array, items: {NAME} }}");
+    let after_a_nested = format!(
+        "{{ type: object, properties: {{ address: {{ type: object, properties: {{ line: {{ type: string }} }} }}, surname: {NAME} }} }}"
+    );
+    let flat = format!("{{ type: object, properties: {{ surname: {NAME} }} }}");
+    let named = format!("components:\n  schemas:\n    Surname: {NAME}\n");
+    let op = Some("holdsPattern");
+    vec![
+        (holding(PLAIN, &flat, ""), op, answer(".properties.surname")),
+        (
+            holding(&nested, PLAIN, ""),
+            op,
+            body(".properties.address.properties.city"),
+        ),
+        (holding(&items, PLAIN, ""), op, body(".items")),
+        (
+            holding(&after_a_nested, PLAIN, ""),
+            op,
+            body(".properties.surname"),
+        ),
+        (
+            holding(PLAIN, PLAIN, &named),
+            None,
+            "$.components.schemas.Surname".to_owned(),
+        ),
+    ]
+}
+
+/// `F-44` is about the generated type, which is made of more schemas than make a
+/// flag. The pattern is refused in each, naming the operation where one holds the
+/// schema, and the schema as an Overlay names a target.
+#[test]
+fn a_unicode_pattern_is_refused_in_every_schema_a_type_is_made_of() {
+    for (document, op, place) in sites() {
+        let error = Document::load(&document, &[]).expect_err("the pattern is refused");
+        assert!(
+            matches!(&error, LoadError::UnrunnablePattern { op: held, at: found, source: ScalarError::Rule { raw, .. } }
+                if held.as_deref() == op && *found == place && raw == r"^\p{L}+$"),
+            "{place}: {error:?}"
+        );
+        let head = op.map_or_else(String::new, |op| format!("{op}: "));
+        assert_eq!(
+            error.to_string(),
+            format!("{head}`{place}` states a rule that cannot run")
+        );
+        assert_eq!(
+            cause(&error),
+            "`^\\p{L}+$` holds `\\p{`, which means one thing with the Unicode flag and another \
+             without it, and a generated type cannot be given the flag"
+        );
+    }
+}
+
+/// A flat property is a flag, so it keeps the refusal that names the property,
+/// whatever the response and the other properties hold.
+#[test]
+fn a_unicode_pattern_that_becomes_a_flag_is_refused_with_its_property() {
+    let flat = format!("{{ type: object, properties: {{ surname: {NAME} }} }}");
+    let error = Document::load(&holding(&flat, PLAIN, ""), &[]).expect_err("refused");
+    assert!(
+        matches!(&error, LoadError::Unrunnable { op, name, .. }
+            if op == "holdsPattern" && name == "surname"),
+        "{error:?}"
+    );
+}
+
+/// A pattern that means the same with and without the flag is carried wherever a
+/// schema states it.
+#[test]
+fn a_pattern_without_a_flagged_escape_loads_in_every_schema() {
+    let ascii = "{ type: string, pattern: '^[A-Za-z]+$' }";
+    let body = format!("{{ type: array, items: {ascii} }}");
+    let answer = format!(
+        "{{ type: object, properties: {{ address: {{ type: object, properties: {{ city: {ascii} }} }} }} }}"
+    );
+    let components = format!("components:\n  schemas:\n    Surname: {ascii}\n");
+    Document::load(&holding(&body, &answer, &components), &[]).expect("the document loads");
 }
 
 /// What the refusal must not swallow: an escaped backslash before `p{`, a brace

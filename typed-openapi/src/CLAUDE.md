@@ -163,11 +163,12 @@ A list parameter's `minItems`, `maxItems` and `uniqueItems` are one value,
 cannot hold them because no one value breaks them. `Items::check` is the only
 place they are enforced and `Items::note` the only rendering, and its refusal is
 the note after "is not a list of". `Invocation::new` asks it (`listed`) for each
-parameter given at least once, after every value has met the rules of `items`, so
-the command line and the typed call are refused alike (`ValueError::BadList`).
-`uniqueItems` compares what the items' rule reads, so `1` and `01` are one
-integer. A list rule that is stated for a body's array belongs to the generated
-type, and `Items` is read for parameters only.
+parameter given at least once, after every value has met the rules of `items`,
+so the command line and the typed call are refused alike
+(`ValueError::BadList`). `uniqueItems` compares what the items' rule reads, so
+`1` and `01` are one integer. `Items` is read for parameters only. A list rule
+that a body's array states is checked by no road: typify 0.8 enforces neither
+`minItems` nor `maxItems` and writes a `Vec`, and `docs/validation.md` says so.
 
 `pattern` runs on `regress`, the engine typify puts inside a generated newtype's
 `FromStr`, so a value the command line accepts is a value the generated type
@@ -191,16 +192,16 @@ and the bounds `Scalar::parse` enforces.
 `Field` carry the `format` the value's schema declares, in the document's own
 spelling; `Operation::carrying` asks which values of an operation are of a kind,
 and `Carrier` says which half of the request each is in. It is deliberately
-*not* on `Scalar`: everything a `Scalar` carries is a
-rule `Scalar::parse` enforces and `Scalar::note` renders, so a format placed
-there would be a rule by the back door — the defect the invariant above exists
-to prevent. Where there is no value there is no kind, which is why an
-`Unreachable` parameter and a `JsonWhole` body report none, and why the format
-is read off the same schema the `Scalar` was read off — the items' for a list.
-`schema::format_of` reads it off `stated()`, which is what `Settings::replace`
-keys on too, so the generated types and the reduced model name one vocabulary.
-Unlike `description_of`, the named schema wins over the field: a sentence is
-about the field, a kind is about the value.
+*not* on `Scalar`: everything a `Scalar` carries is a rule `Scalar::parse`
+enforces and `Scalar::note` renders, bar a string `enum`, whose values the flag
+lists, so a format placed there would be a rule by the back door — the defect
+the invariant above exists to prevent. Where there is no value there is no kind,
+which is why an `Unreachable` parameter and a `JsonWhole` body report none, and
+why the format is read off the same schema the `Scalar` was read off — the
+items' for a list. `schema::format_of` reads it off `stated()`, which is what
+`Settings::replace` keys on too, so the generated types and the reduced model
+name one vocabulary. Unlike `description_of`, the named schema wins over the
+field: a sentence is about the field, a kind is about the value.
 
 **`Operation::carrying` is the whole question; `Body::fields` and
 `Param::format` are its parts, and all three are public.** `Body::fields` is the
@@ -226,9 +227,26 @@ rules of a value that run but not as the vendor means: a `pattern` with `\p{`,
 `\P{` or `\u{`, which has another meaning with the Unicode flag than without it,
 and the generated type cannot be given the flag, and a `multipleOf` that is not
 more than 0. Both are `LoadError::Unrunnable`, whose cause prints the pattern or
-the step. The escape is found by reading the pattern, a backslash taking the
-character after it, so `\\p{3}` is not one. Compiling both sides with the flag is
-the alternative that is out of scope, because it is a change to typify.
+the step, and so is an `enum` that lists `null` and no other value, which
+`runnable_scalar` in `src/model/reduce.rs` asks beside it because `Scalar` holds
+no `null` and the rule would otherwise read as no rule. The escape is found by
+reading the pattern, a backslash taking the character after it, so `\\p{3}` is
+not one. Compiling both sides with the flag is the alternative that is out of
+scope, because it is a change to typify.
+
+The escape rule is asked of every schema the model reads, and not only of the
+values that become flags, because the generated types are made of the named
+schemas, the inline body and the inline response, and each of them runs its
+`pattern` without the flag. `src/patterns.rs` walks the overlaid document by the
+table of `src/shape.rs` at `Reach::Defined`, after the reduction, so that a
+value that becomes a flag keeps the refusal that names its parameter and every
+other schema is `LoadError::UnrunnablePattern`, which names the operation where
+the schema stands in one and the schema as an Overlay names a target. It reaches
+a few schemas that no type is made of, such as an error response's. Both ask
+`scalar::unflagged`, so the rule is written once. A rule of this kind that is
+added for a value is added for every schema, or a document that loads depends on
+which property comes first (`json_body` sends the whole body through
+`--json-body` at the first property that is not a scalar).
 
 **A document is read as the version it says, or refused by name.**
 `Document::load_with` asks the vendor's `openapi` right after it reads the

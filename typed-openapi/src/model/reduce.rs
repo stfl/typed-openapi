@@ -37,10 +37,10 @@ use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected
 use crate::openapi::Misfit;
 use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
-use crate::scalar::{Items, Scalar};
+use crate::scalar::{Items, Scalar, ScalarError};
 use crate::schema::{
-    RefError, description_of, format_of, is_json, is_media_type, is_multipart, resolve,
-    resolve_schema, scalar_of, template,
+    RefError, description_of, format_of, is_json, is_media_type, is_multipart, lists_only_null,
+    resolve, resolve_schema, scalar_of, template,
 };
 
 /// What a refusal calls the request body.
@@ -554,9 +554,13 @@ pub enum LoadError {
         /// The `content` key as the document spells it.
         media_type: String,
     },
-    /// A rule the document states that cannot be run — a `pattern` no regex
-    /// engine here reads. Refused while the document is reduced, because a rule
-    /// that cannot run is one every value would otherwise pass.
+    /// A rule the document states about a parameter or a body property that
+    /// cannot be run as the document means it: a `pattern` that no regex engine
+    /// here reads, a `pattern` that holds `\p{`, `\P{` or `\u{`, a `multipleOf`
+    /// that is not more than 0, or an `enum` that lists `null` and no other value.
+    /// Refused while the document is reduced, because the flag would refuse every
+    /// value, admit every value, or read a rule that the vendor's server reads
+    /// another way.
     #[error("{op}: `{name}` states a rule that cannot run")]
     Unrunnable {
         /// The `operationId` of the operation that states the rule.
@@ -564,7 +568,29 @@ pub enum LoadError {
         /// The parameter or body property the rule is stated about, as the
         /// document spells it.
         name: String,
-        /// The rule that cannot run, with the engine's reason.
+        /// The rule that cannot run: the engine's reason for a `pattern` it
+        /// cannot read, the `pattern` and the escape it holds, the step, or the
+        /// `null` that an `enum` lists alone.
+        #[source]
+        source: crate::scalar::ScalarError,
+    },
+    /// A `pattern` of a schema that holds `\p{`, `\P{` or `\u{`, in a place a
+    /// flag is not made of. It means one thing with the Unicode flag and another
+    /// without it, and the generated type cannot be given the flag, so the type
+    /// refuses the vendor's own responses that a server running the pattern with
+    /// the flag accepts. The walk reads every schema that the object model reads,
+    /// and `Unrunnable` is the same refusal for the `pattern` of a value that
+    /// becomes a flag.
+    #[error("{}`{at}` states a rule that cannot run", crate::patterns::held_by(.op.as_deref()))]
+    UnrunnablePattern {
+        /// The `operationId` of the operation the schema stands in, and `None`
+        /// where it stands in no operation or in one with no id: a component,
+        /// or a parameter that a path item shares.
+        op: Option<String>,
+        /// The schema, spelled as an Overlay names a target:
+        /// `$.components.schemas.Person.properties.surname`.
+        at: String,
+        /// The `pattern` and the escape it holds.
         #[source]
         source: crate::scalar::ScalarError,
     },
@@ -877,9 +903,14 @@ impl Document {
         // On the raw document too, because the object model drops a marker
         // standing beside a `$ref` without a word.
         crate::markers::check(&doc)?;
-        let doc = crate::openapi::model_of(&doc)
+        let model = crate::openapi::model_of(&doc)
             .map_err(|Misfit { at, source }| LoadError::Shape { at, source })?;
-        Self::from_openapi(&doc, &loading.commit)
+        let loaded = Self::from_openapi(&model, &loading.commit)?;
+        // After the reduction, so that a `pattern` which becomes a flag is
+        // refused there, with the parameter that holds it. This reads the rest:
+        // the schemas that types are made of and flags are not.
+        crate::patterns::check(&doc)?;
+        Ok(loaded)
     }
 
     fn from_openapi(doc: &OpenAPI, commit: &str) -> Result<Self, LoadError> {
@@ -1564,16 +1595,16 @@ fn shape_of(
     };
     // One value, or a list of them: an array is asked about its items, and
     // whichever schema describes the value is the one everything about that
-    // value is read off — so a list's rules and its declared kind are its
-    // items', which is where a list of days says that a day is what it holds.
+    // value is read off — so the rules of each value and its declared kind are
+    // the items', which is where a list of days says that a day is what it
+    // holds, and the rules of the list are the array's own.
     let (value, rules) = match under(items_of(schema, components), op, &data.name)? {
         Some((items, rules)) => (Cow::Owned(items), Some(rules)),
         None => (Cow::Borrowed(schema), None),
     };
-    let Some(scalar) = under(scalar_of(&value, components), op, &data.name)? else {
+    let Some(scalar) = runnable_scalar(&value, components, op, &data.name)? else {
         return Ok(Shape::Unreachable(Unsupported::Structured));
     };
-    runnable(&scalar, op, &data.name)?;
     // The style is read whatever the schema is, because it is not only about
     // delimiters: `matrix` puts a `;name=` in front of one path value as surely
     // as in front of a list. A style written out as `form` instead would be a
@@ -1776,13 +1807,12 @@ fn json_body(
     let mut fields = Vec::with_capacity(object.properties.len());
     for (name, property) in &object.properties {
         let property = property.clone().unbox();
-        let Some(scalar) = under(scalar_of(&property, components), id, name)? else {
+        let Some(scalar) = runnable_scalar(&property, components, id, name)? else {
             // One nested property is enough: the whole body goes through
             // `--json-body`, and no sibling gets a flag the request builder
             // would then throw away.
             return whole();
         };
-        runnable(&scalar, id, name)?;
         // A property whose name has no kebab-case spelling has no flag either,
         // and the body's rule is about whether a property has one rather than
         // about why it has none — so it goes the way a nested property goes.
@@ -1845,13 +1875,43 @@ fn under<T>(read: Result<T, RefError>, op: &str, name: &str) -> Result<T, LoadEr
     })
 }
 
-/// Refuse a rule that cannot be run, naming the operation and the value it was
-/// stated about.
+/// The scalar a value's schema states, once every rule it carries is known to
+/// run, and `None` where the schema does not fit on a flag.
+///
+/// The one place a parameter and a body property are read for their rules, so
+/// that the two cannot refuse different things.
+fn runnable_scalar(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+    op: &str,
+    name: &str,
+) -> Result<Option<Scalar>, LoadError> {
+    let Some(scalar) = under(scalar_of(schema, components), op, name)? else {
+        return Ok(None);
+    };
+    if under(lists_only_null(schema, components), op, name)? {
+        return Err(LoadError::Unrunnable {
+            op: op.to_owned(),
+            name: name.to_owned(),
+            source: ScalarError::Rule {
+                raw: "null".to_owned(),
+                rule: "is all that the `enum` lists, and a flag cannot send it".to_owned(),
+            },
+        });
+    }
+    runnable(&scalar, op, name)?;
+    Ok(Some(scalar))
+}
+
+/// Refuse a rule that cannot be run as the document means it, naming the
+/// operation and the value it was stated about.
 ///
 /// A `pattern` the engine cannot read refuses every value, so a document that
-/// states one describes a flag nothing can satisfy. Saying so while the
-/// document is reduced is what keeps that a bless-time failure rather than a
-/// user's.
+/// states one describes a flag nothing can satisfy. A `pattern` with `\p{`, `\P{`
+/// or `\u{` is read another way by the flag and by a server that runs it with the
+/// Unicode flag, and a `multipleOf` that is not more than 0 has no multiples to
+/// admit. Saying so while the document is reduced is what keeps each a bless-time
+/// failure rather than a user's.
 fn runnable(scalar: &Scalar, op: &str, name: &str) -> Result<(), LoadError> {
     scalar.runnable().map_err(|source| LoadError::Unrunnable {
         op: op.to_owned(),

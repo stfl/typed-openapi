@@ -812,7 +812,7 @@ fn param_arg(op: &Operation, param: &Param) -> Option<Arg> {
         scalar,
         list,
         // The kind the document calls this value is not a rule about it, and
-        // the help line carries rules: every note beside a flag is something
+        // the help line carries rules: every rule note beside a flag is something
         // `Scalar::parse` refuses a value for, or `Items::check` refuses a list
         // for, and a format is something nothing here can refuse a value for.
         format: _,

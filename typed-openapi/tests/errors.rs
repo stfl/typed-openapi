@@ -70,6 +70,9 @@ const URL: &str = "http://localhost";
 const SOUND: &str = "{ name: n, in: query, schema: { type: integer } }";
 const UNRESOLVABLE: &str = "{ name: n, in: query, schema: { $ref: '#/components/schemas/Nope' } }";
 const UNRUNNABLE: &str = "{ name: n, in: query, schema: { type: string, pattern: '(?P<n>' } }";
+/// A schema that no flag is made of, which holds an escape of the Unicode flag.
+const UNICODE_SCHEMA: &str =
+    "{ name: n, in: cookie, schema: { type: string, pattern: '^\\p{L}+$' } }";
 
 /// Text that is not YAML.
 const NOT_YAML: &str = "actions: [\n";
@@ -282,6 +285,11 @@ fn loading() -> Vec<Case> {
             "LoadError::Unrunnable",
             load(&document(URL, UNRUNNABLE), &[]),
             |e| matches!(e, LoadError::Unrunnable { .. }),
+        ),
+        from_input(
+            "LoadError::UnrunnablePattern",
+            load(&document(URL, UNICODE_SCHEMA), &[]),
+            |e| matches!(e, LoadError::UnrunnablePattern { .. }),
         ),
     ]
 }

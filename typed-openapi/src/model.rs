@@ -389,7 +389,7 @@ pub enum Shape {
 /// what the document states about the list as a whole.
 ///
 /// The fields are public because there is nothing here to keep true: each one
-/// is read straight off the parameter's schema.
+/// is read straight off the parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct List {
     /// How the values reach the request.

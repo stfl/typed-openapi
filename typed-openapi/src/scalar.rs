@@ -1,12 +1,14 @@
 //! The value kinds a command-line flag can carry, the rules the document states
 //! about them, and how a raw argument string becomes the JSON the wire wants.
 //!
-//! A [`Scalar`] is the only thing this crate knows about a schema: everything
-//! richer than these five kinds is a whole-body affair and never reaches a flag.
-//! What one carries is what the document said — a `pattern`, a length, a bound,
-//! a step — and every one of those is enforced by [`Scalar::parse`], because a
-//! rule that only reaches `--help` is a rule the user finds out about from the
-//! server.
+//! A [`Scalar`], and the [`Items`] of a list parameter, are the only things this
+//! crate knows about a schema: everything richer than these five kinds is a
+//! whole-body affair and never reaches a flag. What a `Scalar` carries is what the
+//! document said — a `pattern`, a length, a bound, a step, an `enum` — and every
+//! one of those is enforced by [`Scalar::parse`], because a rule that only reaches
+//! `--help` is a rule the user finds out about from the server. [`Items`] holds
+//! what an array says about its values taken together, which no single value can
+//! break: `minItems`, `maxItems` and `uniqueItems`.
 //!
 //! `pattern` runs on `regress`, the ECMA-262 engine typify puts inside a
 //! generated newtype's `FromStr`. One engine, one rule, one set of bytes: a
@@ -15,8 +17,7 @@
 //!
 //! A rule has one note, the words that finish "is not …", and its refusal is
 //! those words after "is not": the help line and the refusal cannot describe
-//! two rules. A list parameter's own rules, which no single value can break, are
-//! [`Items`].
+//! two rules.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -92,6 +93,10 @@ pub enum Limit<T> {
 /// One value, one check and one note: [`Items::check`] is the only place
 /// `minItems`, `maxItems` and `uniqueItems` are enforced, and [`Items::note`]
 /// the only place they are rendered. The default states nothing.
+///
+/// An adopter's own command that takes a list asks them as one that takes a
+/// value asks [`Scalar::parse`] and [`Scalar::note`]: the check for the values
+/// the operator gave, and the note for the help line.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Items {
     /// `minItems`.
@@ -102,7 +107,8 @@ pub struct Items {
     pub unique: bool,
 }
 
-/// A raw argument the document's schema rejects.
+/// What the document's schema refuses: a value the operator typed, the values
+/// given for a list parameter, or a rule of the document that cannot be run.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ScalarError {
     /// Not the kind of value the document asks for at all.
@@ -124,16 +130,21 @@ pub enum ScalarError {
         /// the operator types them.
         allowed: Vec<String>,
     },
-    /// The right kind of value, refused by a rule the document states. `rule`
-    /// finishes the sentence and carries the document's own number, which is
-    /// the only part a user can act on; nothing branches on which keyword it
-    /// came from.
+    /// What a rule the document states says is not so, in the document's own
+    /// number: a value of the right kind that breaks the rule, a list that breaks
+    /// the rules of its array, or a rule that has no meaning, such as a `pattern`
+    /// that cannot be run as the vendor means it. `rule` finishes the sentence and
+    /// carries the document's own number, which is the only part a user can act
+    /// on; nothing branches on which keyword it came from.
     #[error("`{raw}` {rule}")]
     Rule {
-        /// The argument as the operator typed it.
+        /// What the sentence is about. The argument as the operator typed it, for
+        /// a value; the values given for a list parameter, joined with `, `; the
+        /// `pattern` or the `multipleOf` step as the document spells it, for a
+        /// rule that cannot be run.
         raw: String,
-        /// The rest of the sentence: what the value broke, with the document's
-        /// own number in it.
+        /// The rest of the sentence: what `raw` is not, or what it holds, with the
+        /// document's own number in it.
         rule: String,
     },
     /// A `pattern` the engine cannot read. Every value is refused, because a
@@ -165,9 +176,11 @@ impl ScalarError {
         }
     }
 
-    /// `raw`, which is not what a rule's note says. Every refusal of a rule is
-    /// built here, from the note that `--help` shows for it, so a refusal cannot
-    /// describe a different rule from the one the help line advertised.
+    /// `raw`, which is not what a rule's note says. Every refusal of a rule but an
+    /// `enum`'s is built here, from the note that `--help` shows for it, so a
+    /// refusal cannot describe a different rule from the one the help line
+    /// advertised. [`ScalarError::outside`] builds the refusal of an `enum`, from
+    /// the list that its note spells (`one_of`).
     fn refusal(raw: &str, note: &str) -> Self {
         Self::rule(raw, format!("is not {note}"))
     }
@@ -313,7 +326,8 @@ impl Items {
 
     fn notes(&self) -> Vec<String> {
         let mut notes = Vec::new();
-        if let Some(least) = self.min {
+        // A list of at least 0 values is any list, so the rule states nothing.
+        if let Some(least) = self.min.filter(|least| *least > 0) {
             notes.push(at_least(least));
         }
         if let Some(most) = self.max {
@@ -424,16 +438,7 @@ impl Text {
             return Ok(());
         };
         compiled(pattern)?;
-        match flagged_escape(pattern) {
-            Some(escape) => Err(ScalarError::rule(
-                pattern,
-                format!(
-                    "holds `{escape}`, which means one thing with the Unicode flag and another \
-                     without it, and a generated type cannot be given the flag"
-                ),
-            )),
-            None => Ok(()),
-        }
+        unflagged(pattern)
     }
 
     fn notes(&self) -> Vec<String> {
@@ -464,6 +469,22 @@ fn at_most_long(count: usize) -> String {
 /// `pattern`.
 fn a_match_for(pattern: &str) -> String {
     format!("a match for {pattern}")
+}
+
+/// Refuse a `pattern` that means one thing with the Unicode flag and another
+/// without it, naming the escape. The reduction asks it of every `pattern` that
+/// becomes a flag, and `patterns` asks it of every schema the document states.
+pub(crate) fn unflagged(pattern: &str) -> Result<(), ScalarError> {
+    match flagged_escape(pattern) {
+        Some(escape) => Err(ScalarError::rule(
+            pattern,
+            format!(
+                "holds `{escape}`, which means one thing with the Unicode flag and another \
+                 without it, and a generated type cannot be given the flag"
+            ),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The escape in `pattern` that the Unicode flag gives another meaning: `\p{`,
@@ -647,10 +668,7 @@ fn has_only_number_characters(raw: &str) -> bool {
 /// so the two are compared as decimal numbers, whatever the spelling: `1.0`,
 /// `1e0` and `001` are one number.
 fn exact(raw: &str, value: f64) -> bool {
-    match (Decimal::of(raw), Decimal::of(&format!("{value:e}"))) {
-        (Some(spelled), Some(printed)) => spelled == printed,
-        (Some(_), None) | (None, _) => false,
-    }
+    Decimal::beside(raw, value).is_some_and(|(spelled, printed)| spelled == printed)
 }
 
 /// A decimal number, without its spelling: the digits from the first one that is
@@ -664,6 +682,13 @@ struct Decimal {
 }
 
 impl Decimal {
+    /// The number `raw` spells and the number `float` stands for, which is the
+    /// shortest text that reads back as the float, or `None` when either has no
+    /// reading.
+    fn beside(raw: &str, float: f64) -> Option<(Self, Self)> {
+        Some((Self::of(raw)?, Self::of(&format!("{float:e}"))?))
+    }
+
     /// `text` as a number, when it is spelled as `f64::from_str` reads one:
     /// a sign, digits with a point somewhere among them, and an exponent. Zero
     /// is zero whatever its exponent says, so `0e99999999999999999999` is read
@@ -850,10 +875,7 @@ impl Numeric for f64 {
     // the digits `raw` spells, and the step the shortest text that reads back as
     // the float, which is the number the document wrote.
     fn is_multiple_of(self, raw: &str, step: Self) -> bool {
-        match (Decimal::of(raw), Decimal::of(&format!("{step:e}"))) {
-            (Some(value), Some(step)) => value.is_multiple_of(&step),
-            (Some(_), None) | (None, _) => false,
-        }
+        Decimal::beside(raw, step).is_some_and(|(value, step)| value.is_multiple_of(&step))
     }
 
     fn is_step(self) -> bool {
@@ -1026,8 +1048,9 @@ mod tests {
     }
 
     /// `probes/A3b/scalars` (`multiple`): a binary float divides `0.07` by `0.01`
-    /// to `7.000000000000001`, and refused 159 of the 1000 amounts in cents. The
-    /// value is the digits it was written with, and so is the step.
+    /// to `7.000000000000001`, which is no whole number, and the same is true of 159
+    /// of the 1000 amounts in cents. The value is the digits it was written with,
+    /// and so is the step.
     #[test]
     fn a_decimal_step_is_decided_on_the_digits_and_not_in_a_float() {
         let cents = stepped(0.01);
@@ -1068,7 +1091,7 @@ mod tests {
         }
     }
 
-    /// The old comparison also said yes where it should say no: `1e17 / 3.0` is
+    /// A quotient in a float also says yes where it should say no: `1e17 / 3.0` is
     /// `33333333333333332`, a whole number, and `1e17` is not a multiple of 3.
     #[test]
     fn a_step_is_not_met_because_a_float_rounded_the_quotient_to_a_whole_number() {
@@ -1625,6 +1648,23 @@ mod tests {
         assert!(items.check(&text, &["a", "b"]).is_err());
         assert!(Items::default().check(&text, &[]).is_ok());
         assert_eq!(Items::default().note(), None);
+    }
+
+    /// A `minItems` of 0 asks for nothing, so the help line carries no note for it
+    /// and every list meets it.
+    #[test]
+    fn a_list_of_at_least_no_values_states_no_rule() {
+        let items = Items {
+            min: Some(0),
+            ..Items::default()
+        };
+        assert_eq!(items.note(), None);
+        assert!(items.check(&Scalar::Text(Text::default()), &[]).is_ok());
+        let capped = Items {
+            max: Some(2),
+            ..items
+        };
+        assert_eq!(capped.note().as_deref(), Some("at most 2 values"));
     }
 
     /// A value that its own rule refuses is refused as that value, so a list

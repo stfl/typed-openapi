@@ -55,10 +55,12 @@ $ toy vouchers create --total 1,50 --currency EUR --status open
 error: invalid value '1,50' for '--total <STRING>': `1,50` is not a match for ^-?[0-9]+(\.[0-9]{1,2})?$
 ```
 
-Every rule the document states about a value is enforced, in the document's own
-numbers — `pattern`, the lengths, the bounds, `multipleOf`, an `enum` of numbers
-or booleans, and a list's `minItems`, `maxItems` and `uniqueItems` — on both
-roads. What that costs is a fifth of the binary: [docs/validation.md][val].
+Every rule the document states about a parameter is enforced, in the document's
+own numbers — `pattern`, the lengths, the bounds, `multipleOf`, an `enum` of
+numbers or booleans, and a list's `minItems`, `maxItems` and `uniqueItems` — on
+the command line and in a typed call alike. A body field's flag runs the same
+rules, and its generated type runs fewer: [docs/validation.md][val] says which.
+What that costs is a fifth of the binary.
 
 ## The gate
 

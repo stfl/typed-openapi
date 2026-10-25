@@ -1,9 +1,11 @@
 # What is checked, and what checking costs
 
 Every rule the document states about a scalar value, and about a list of them,
-is enforced. The primer is [the README](../README.md); this page is the
-reference for someone deciding how much of their API's contract they get for
-free, and what the engine that provides it costs their binary.
+is enforced on a parameter and on a body field's flag. The generated type of a
+body field runs fewer of them, and [Where each rule runs](#where-each-rule-runs)
+says which. The primer is [the README](../README.md); this page is the reference
+for someone deciding how much of their API's contract they get for free, and
+what the engine that provides it costs their binary.
 
 ## The rules
 
@@ -42,9 +44,12 @@ help line below shows the note and the refusal says it, so the two cannot
 describe different rules. The one exception is a string `enum`, which has no
 note: the flag lists its values, and they complete.
 
-**A numeric `enum` admits a value, not a spelling.** `enum: [100, 200]` admits
-`+200` and `2e2` as it admits `200`, and the request carries `200`. An `enum`
-beside a bound or a step keeps both. A boolean `enum` of one value, `[true]`,
+**A numeric `enum` admits a value, not a spelling.** `enum: [100, 200]` on an
+integer admits `+200` and `0200` as it admits `200`, and on a number it admits
+`2e2` and `200.0` too; the request carries `200`. An `enum` beside a bound or a
+step keeps both. An `enum` that lists `null` and no other value names no value a
+flag can send, so it refuses the document while it is reduced, as a `pattern` that
+cannot run does. A boolean `enum` of one value, `[true]`,
 admits that value only; one that lists both says what `type: boolean` says and
 adds no note.
 
@@ -143,12 +148,30 @@ generated type run a pattern without the flag, and a vendor's server may run it
 with, so a name such as `Müller` would be refused by one side and `p{L}` accepted
 by the other. A backslash takes the character after it, so `\\p{3}` is a
 backslash and then a `p`. The repair is an Overlay that states the pattern
-another way, with a class such as `[A-Za-zÀ-ÿ]`.
+another way, and the class is a choice the adopter makes: `[A-Za-zÀ-ÿ]` refuses
+`Łukasz` and admits `a×b`, where `\p{L}` with the flag does the opposite. An
+Overlay that removes the `pattern` leaves the rule to the server.
 
 ```
 listPeople: `surname` states a rule that cannot run
   caused by: `^\p{L}+$` holds `\p{`, which means one thing with the Unicode flag and another without it, and a generated type cannot be given the flag
 ```
+
+A flag is one place out of many, because the generated types are made of every
+named schema, of an inline body and of an inline response, and each of them runs
+its `pattern` without the flag too. So the refusal reads every schema that the
+object model reads, and a schema that no flag is made of is refused as
+`LoadError::UnrunnablePattern`. It names the operation where the schema stands in
+one that has an id, and the schema as an Overlay names a target:
+
+```
+getPerson: `$.paths['/people/{id}'].get.responses['200'].content['application/json'].schema.properties.surname` states a rule that cannot run
+  caused by: `^\p{L}+$` holds `\p{`, which means one thing with the Unicode flag and another without it, and a generated type cannot be given the flag
+```
+
+That reaches the schema of an error response and of a callback, which no type is
+made of; the `pattern` there is the same disagreement, and the Overlay line that
+repairs it is the one the others need.
 
 ## Where each rule runs
 
@@ -164,10 +187,21 @@ knowing before you decide how much to put in the document.
 | a whole body from `--json-body FILE` | `client::fits`, called by the adopter's own seam | the command line, before the request is built |
 
 A parameter never passes through a generated type, so `Scalar` is the only thing
-that can ever check one. A body field has both roads, and they run the same rule
-for as long as the rule is one the *schema* states: the flag runs every rule
-`Scalar` carries, and a `pattern` among them is the same expression on the same
-engine the generated newtype's `FromStr` runs.
+that can ever check one. A body field has both roads, and the flag runs every
+rule `Scalar` carries. The generated type runs fewer, as typify 0.8 writes it:
+
+- **Both roads run** a `pattern`, which is the same expression on the same engine
+  as the generated newtype's `FromStr`, `minLength`, `maxLength`, and an `enum` of
+  strings, integers or numbers.
+- **Both roads run an integer's range** only as far as the Rust integer that
+  typify picks holds it: `u64` for `minimum: 0`, `NonZeroU64` for `minimum: 1`,
+  `i8` for `-128` to `127`.
+- **Only the flag runs** a boolean `enum`, `multipleOf`, a bound that no Rust
+  integer holds (`maximum: 100` is an `i64`), and a bound of a `number`, which is
+  an `f64`. A typed call, and `client::fits` over a whole body, accept what the
+  flag refuses, and the server is the one that refuses it.
+- **No road runs** `minItems`, `maxItems` and `uniqueItems` of an array in a
+  body: typify writes a `Vec`, and `Items` is read for parameters only.
 
 The roads part where a field's reading lives in a Rust type rather than in the
 schema. **An integer format is one such place.** `format: int32` is a name and not

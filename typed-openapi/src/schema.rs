@@ -211,6 +211,34 @@ pub(crate) fn scalar_of(
     })
 }
 
+/// Whether this schema's `enum` lists values and every one of them is `null`.
+///
+/// A flag cannot send `null`, so [`scalar_of`] leaves such an `enum` out, and the
+/// scalar it reads then admits every value, where JSON Schema admits none that is
+/// not `null`. The reduction asks this beside `scalar_of` and refuses the schema,
+/// because reading it as no rule at all would be the approximation it forbids.
+pub(crate) fn lists_only_null(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+) -> Result<bool, RefError> {
+    let schema = stated(schema, components)?;
+    let SchemaKind::Type(ty) = &schema.schema_kind else {
+        return Ok(false);
+    };
+    Ok(match ty {
+        Type::String(s) => only_null(&s.enumeration),
+        Type::Number(n) => only_null(&n.enumeration),
+        Type::Integer(i) => only_null(&i.enumeration),
+        Type::Boolean(b) => only_null(&b.enumeration),
+        Type::Object(_) | Type::Array(_) => false,
+    })
+}
+
+/// Whether an `enum` lists something, and that something is `null` alone.
+fn only_null<T>(enumeration: &[Option<T>]) -> bool {
+    !enumeration.is_empty() && enumeration.iter().all(Option::is_none)
+}
+
 /// What a property says about itself, and what it inherits by pointing
 /// somewhere else.
 ///

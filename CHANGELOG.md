@@ -661,7 +661,10 @@ the crate follows [Semantic Versioning][semver].
   enums in its corrected document, and four of them are query parameters
   (`GET /Invoice`, `/Order` and `/Voucher` `status`, and
   `getTotalDataExportCount`'s required `status`): its CLI enforces them when it
-  moves its rev. The model changes, so this is a break of three public shapes
+  moves its rev. `--json-body-template` shows the first value that an `enum` of
+  integers, numbers or booleans lists, where it showed `0`, `0.0` or `false`;
+  repair: none, the template is a shape and not a request. The model changes, so
+  this is a break of three public shapes
   and of the blob:
   - `Scalar::Boolean` is `Scalar::Boolean(Option<bool>)`, with the one value that
     an `enum` of `type: boolean` lists, and `None` where there is none or it
@@ -689,17 +692,35 @@ the crate follows [Semantic Versioning][semver].
   first 1000 amounts in cents, `0.07` and `0.29` among them, were refused with a
   false reason, and `1e17` was admitted as a multiple of `3`. The digits
   are exact, so `0.07`, `0.29` and `19.99` are multiples of `0.01`, and the
-  remainder of an integer cannot panic. Repair: none; a value that the flag
-  refused wrongly is accepted.
+  remainder of an integer cannot panic. A value that the flag admitted wrongly is
+  refused now: `1e17` is no multiple of `3`. Repair: none for a value that the
+  flag refused wrongly, which is accepted now; for a value that it admitted
+  wrongly, send a multiple.
 - **A `pattern` with `\p{`, `\P{` or `\u{` is refused while the document is
-  reduced.** Without the Unicode flag `\p{L}` is the text `p{L}`, and with it a
-  letter, and the command line and the generated type run a `pattern` without the
-  flag. A vendor's server that runs it with the flag disagrees with both about
-  `Müller` and `p{L}`. The document is refused as
-  `LoadError::Unrunnable { op, name, source }`, and the cause prints the pattern
-  and the escape. A backslash takes the character after it, so `\\p{3}` loads.
-  sevdesk-cli's 43 patterns use none. Repair: an Overlay that states the pattern
-  another way, such as `[A-Za-zÀ-ÿ]` for a letter.
+  reduced, in every schema the model reads.** Without the Unicode flag `\p{L}` is
+  the text `p{L}`, and with it a letter. The command line and the generated type
+  run a `pattern` without the flag, and each generated type that holds one
+  refuses `Müller` and accepts `p{L}` where a vendor's server that runs it with
+  the flag does the opposite. On a value that becomes a flag the document is
+  refused as `LoadError::Unrunnable { op, name, source }`. In any other schema
+  (a response, a nested property, the items of an array body, a named schema) it
+  is refused as the new `LoadError::UnrunnablePattern { op, at, source }`, which
+  names the operation where one holds the schema and the schema as an Overlay
+  names a target. `LoadError` is `#[non_exhaustive]`, so the variant is no break.
+  The cause prints the pattern and the escape. A backslash takes the character
+  after it, so `\\p{3}` loads. sevdesk-cli's 43 patterns use none. Repair: an
+  Overlay that states the pattern another way, and the class is a choice. A
+  class such as `[A-Za-zÀ-ÿ]` refuses `Łukasz` and admits `a×b`, where `\p{L}`
+  with the flag does the opposite; an Overlay that removes the `pattern` leaves
+  the rule to the server.
+- **An `enum` that lists `null` and no other value is refused while the document
+  is reduced.** A flag cannot send `null`, so the `enum` left no rule and the
+  flag admitted every value, where JSON Schema admits no integer under
+  `{ type: integer, enum: [null] }`. The document is refused as
+  `LoadError::Unrunnable { op, name, source }` on a parameter and on a property
+  of a flat body. `null` beside a value stays the way OpenAPI 3.0 says that a
+  value may be absent. Repair: an Overlay that removes the `enum`, or lists the
+  values.
 - **A `multipleOf` that is not more than 0 is refused while the document is
   reduced.** A step of 0 refused every value, and `multipleOf: -1` with the value
   `i64::MIN` made `Scalar::parse` panic. The document is refused as

@@ -378,31 +378,32 @@ impl<'a> Invocation<'a> {
             // A parameter with no flag is given nothing, even when another
             // parameter with its name is: the values under a name are the
             // first parameter's, and the loop above has already seen to them.
-            let given = match param.shape() {
+            let given: Vec<&str> = match param.shape() {
                 Shape::Flag { .. } => values
                     .params()
                     .iter()
                     .filter(|(wire, _)| wire == param.name())
-                    .count(),
-                Shape::Unreachable(_) => 0,
+                    .map(|(_, raw)| raw.as_str())
+                    .collect(),
+                Shape::Unreachable(_) => Vec::new(),
             };
-            if param.required() && given == 0 {
+            if param.required() && given.is_empty() {
                 return Err(ValueError::MissingParam {
                     op: name(),
                     name: param.name().to_owned(),
                 });
             }
-            if given > 1 && !param.shape().repeatable() {
+            if given.len() > 1 && !param.shape().repeatable() {
                 return Err(ValueError::RepeatedParam {
                     op: name(),
                     name: param.name().to_owned(),
-                    given,
+                    given: given.len(),
                 });
             }
-            if given > 0 {
-                listed(op, param, &values)?;
+            if !given.is_empty() {
+                listed(op, param, &given)?;
             }
-            if given > 0
+            if !given.is_empty()
                 && let Some(requires) = param
                     .requires()
                     .iter()
@@ -665,10 +666,10 @@ fn rendered(op: &Operation, values: &Values) -> Result<Vec<(String, String)>, Va
     Ok(params)
 }
 
-/// Hold the values given for a list parameter to what the document states about
-/// the list. Every value has met its own rules before this runs, so this is the
-/// only place that asks the rules which no one value can break.
-fn listed(op: &Operation, param: &Param, values: &Values) -> Result<(), ValueError> {
+/// Hold the values given for a list parameter, `raws`, to what the document
+/// states about the list. Every value has met its own rules before this runs, so
+/// this is the only place that asks the rules which no one value can break.
+fn listed(op: &Operation, param: &Param, raws: &[&str]) -> Result<(), ValueError> {
     let Shape::Flag {
         scalar,
         list: Some(list),
@@ -677,14 +678,8 @@ fn listed(op: &Operation, param: &Param, values: &Values) -> Result<(), ValueErr
     else {
         return Ok(());
     };
-    let raws: Vec<&str> = values
-        .params()
-        .iter()
-        .filter(|(wire, _)| wire == param.name())
-        .map(|(_, raw)| raw.as_str())
-        .collect();
     list.items
-        .check(scalar, &raws)
+        .check(scalar, raws)
         .map_err(|source| ValueError::BadList {
             op: op.id().to_owned(),
             name: param.name().to_owned(),
