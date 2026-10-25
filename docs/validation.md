@@ -42,8 +42,9 @@ text that reads back as the float is the number that was typed, compared as
 decimal numbers and not as text, so `1.0`, `1e0` and `001` are one number and are
 accepted. A number with many significant digits can fail it, and so can a number
 too small for a float (`1e-400`, `4.9e-325`); `0.30000000000000004` has 17 digits
-and passes, because a float holds it exactly. A document that needs such a number
-states the value as a `string` with a `pattern`, as the toy's `Voucher.total` does.
+and passes, because it is the shortest text of its float. A document that needs
+such a number states the value as a `string` with a `pattern`, as the toy's
+`Voucher.total` does.
 
 The same rules are the flag's help line, rendered by the same code:
 
@@ -202,7 +203,8 @@ makes holds the userinfo of a base URL. The refusals of `RequestError::Base` and
 `LoadError::ServerBase` print no part of the URL, and so a server URL that holds
 userinfo is `ServerBase` also when it is no URL, and `LoadError::ServerUrl` prints
 a URL that holds none. A dry run prints the host and the port, and the `Debug` of
-a `Client` prints its base without the userinfo.
+a `Client` and of a `Document` prints its base without the userinfo and the
+query.
 
 ## What `fits` refuses
 

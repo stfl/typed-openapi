@@ -823,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn a_number_that_a_float_holds_exactly_is_accepted_however_it_is_spelled() {
+    fn a_number_that_is_the_shortest_text_of_its_float_is_accepted_however_it_is_spelled() {
         let plain = Scalar::Number(Bounds::default());
         for raw in [
             "0.1",

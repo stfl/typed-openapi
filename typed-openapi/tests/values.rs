@@ -764,14 +764,16 @@ fn a_dry_run_never_prints_userinfo() {
     assert_eq!(render(&plain), "GET /x HTTP/1.1\nhost: 127.0.0.1:18473\n");
 }
 
-/// A `Debug` goes to logs, and the base of a client is the caller's.
+/// A `Debug` goes to logs, and the base of a client is the caller's. Its query
+/// is left out as well, because a key goes there (`?api_key=…`) and a request
+/// from such a base is refused.
 #[test]
-fn the_debug_of_a_client_holds_no_userinfo() {
+fn the_debug_of_a_client_holds_no_userinfo_and_no_query() {
     let doc = doc();
     for (text, shown) in [
         (
-            "http://alice:s3cret@127.0.0.1:18473/api?x=1",
-            "base: http://127.0.0.1:18473/api?x=1",
+            "http://alice:s3cret@127.0.0.1:18473/api?key=k3y",
+            "base: http://127.0.0.1:18473/api",
         ),
         ("http://u:p@[::1]:8080/x", "base: http://[::1]:8080/x"),
         ("http://@host/", "base: http://host/"),
@@ -786,10 +788,53 @@ fn the_debug_of_a_client_holds_no_userinfo() {
         let debug = format!("{client:?}");
         assert!(debug.contains(shown), "{text}: {debug}");
         assert!(
-            !debug.contains("alice") && !debug.contains("s3cret") && !debug.contains("u:p"),
+            !debug.contains("alice")
+                && !debug.contains("s3cret")
+                && !debug.contains("u:p")
+                && !debug.contains("k3y"),
             "{text}: {debug}"
         );
     }
+}
+
+/// A blob is read with no load, and `Document::from_blob` does not repeat the
+/// refusal of a server URL, so a document can hold a base with userinfo and a
+/// query. Its `Debug`, and the `Debug` of a client over it, leave both out, and
+/// a request from that base is refused all the same.
+#[test]
+fn the_debug_of_a_document_read_from_a_blob_holds_no_userinfo_and_no_query() {
+    let mut value = serde_json::to_value(doc()).expect("a document is a value");
+    value
+        .as_object_mut()
+        .expect("a document is an object")
+        .insert(
+            "base".to_owned(),
+            "http://alice:s3cret@127.0.0.1:18473/api?key=k3y".into(),
+        );
+    let edited: Document = serde_json::from_value(value).expect("the edit reads back");
+    let document = Document::from_blob(&edited.to_blob().expect("the edit encodes"))
+        .expect("a blob is not refused for its base");
+    let client = Client::over(document.clone()).expect("a client");
+
+    for (what, debug) in [
+        ("document", format!("{document:?}")),
+        ("document, pretty", format!("{document:#?}")),
+        ("client", format!("{client:?}")),
+    ] {
+        assert!(
+            debug.contains("base: http://127.0.0.1:18473/api,"),
+            "{what}: {debug}"
+        );
+        for secret in ["alice", "s3cret", "k3y"] {
+            assert!(!debug.contains(secret), "{what}: `{secret}` in {debug}");
+        }
+    }
+    let op = document.get("getThing").expect("the operation");
+    let invocation = Invocation::new(op, Values::new().param("name", "a")).expect("values");
+    assert!(matches!(
+        invocation.request(document.base()),
+        Err(RequestError::Base(BaseUrlError::Userinfo))
+    ));
 }
 
 /// A document with a `servers` entry the caller could not have sent to without a
@@ -828,6 +873,10 @@ fn a_server_with_userinfo_a_query_or_a_fragment_is_refused_at_load() {
 /// `http://alice:s3cret@host/a b` is no URL, and `ServerUrl` prints the URL it
 /// refuses, so the userinfo is read from the text first and the refusal is
 /// `ServerBase`. No `LoadError` holds the text, in a field or in a message.
+///
+/// The text before the `://` is whatever the document wrote: a variable that
+/// `variables` does not declare, a space or a tab in front, a scheme with a
+/// character that no scheme holds, or a userinfo that stands before the `://`.
 #[test]
 fn a_server_url_with_userinfo_that_is_no_url_is_refused_for_the_userinfo() {
     for url in [
@@ -837,6 +886,13 @@ fn a_server_url_with_userinfo_that_is_no_url_is_refused_for_the_userinfo() {
         "//alice:s3cret@host/a b",
         "http://alice:s3cret@{undeclared}/",
         "http://alice:s3cret@host?q=a b",
+        "{scheme}://alice:s3cret@host/",
+        " http://alice:s3cret@host/",
+        "\thttp://alice:s3cret@host/",
+        "htt p://alice:s3cret@host/",
+        "ht_tp://alice:s3cret@host/",
+        "1http://alice:s3cret@host/a b",
+        "alice:s3cret@host://x",
     ] {
         let error = Document::load(&document(url, PATHS), &[]).expect_err(url);
         assert!(
@@ -863,6 +919,10 @@ fn an_at_sign_past_the_authority_is_no_userinfo() {
         "http://host/a b",
         "http://host/a@b c",
         "http://host?u=a@b c",
+        // Nothing stands where an authority stands.
+        "http:/u@h/a b",
+        "/redirect?to=http://u@h/ x",
+        "host/path?u=a://b@c x",
     ] {
         let error = Document::load(&document(url, PATHS), &[]).expect_err(url);
         assert!(
@@ -947,7 +1007,7 @@ fn the_words_of_a_server_refusal_name_the_overlay_and_the_repair_loads() {
 /// A server that is a plain base loads: a port, a path, a trailing slash, a base
 /// that is relative.
 #[test]
-fn a_server_that_is_a_plain_base_still_loads() {
+fn a_server_that_is_a_plain_base_loads() {
     for url in [
         "http://127.0.0.1:18473",
         "https://api.example.test:8443/v1/",
@@ -980,7 +1040,9 @@ fn a_negative_number_is_a_separate_word() {
     let body = sent(&doc, &["n", "create", "--n", "-5", "--sum", "-1.5"]);
     assert_eq!(body.body().as_slice(), br#"{"sum":-1.5,"n":-5}"#);
     // clap's own test of a negative number takes no leading point and no sign
-    // after the exponent, and `--sum=-.5` has always worked.
+    // after the exponent, so these words reach the value parser only because
+    // the flag takes any word. The joined and the separate word send the same
+    // query.
     for (typed, sent_as) in [("-.5", "-0.5"), ("-1e-3", "-0.001"), ("-1e+3", "-1000")] {
         let separate = sent(&doc, &["things", "get", "--name", "a", "--sum", typed]);
         let joined = sent(
@@ -1336,8 +1398,8 @@ fn an_integer_past_i64_is_out_of_range_on_both_roads() {
     assert!(!flag.to_string().contains("is not an integer"), "{flag}");
 }
 
-/// The body is the parsed value too: `007` is the number 7, and a number a float
-/// holds exactly is sent as the float.
+/// The body is the parsed value too: `007` is the number 7, and a number that is
+/// the shortest text of its float is sent as the float.
 #[test]
 fn a_body_flag_is_sent_as_it_was_parsed() {
     let doc = doc();

@@ -205,13 +205,14 @@ written down.
 
 **A value may start with a dash.** The word after a flag that takes a number or
 a text is its value, whatever the word looks like, and the flag's parser judges
-it. So `--limit -5`, `--total -12.50` and `--total -.5` work, and not only
-`--limit=-5`. A word that looks like a flag is a value too: `--type --commit`
-gives `type` the text `--commit` and confirms nothing. A read is sent at once, so
-`vouchers list --type --commit` sends `?type=--commit`, and a write that is not
-confirmed shows the value in its dry run. A number flag refuses a word that is no
-number (`--limit --commit` is *not an integer*), and an `enum` flag takes a word
-that starts with a dash only when the word is one of its values.
+it. So `--limit -5` and `--total -12.50` work, and not only `--limit=-5`, and a
+`<NUMBER>` flag takes `-.5` and `-1e-3` as a separate word. A word that looks
+like a flag is a value too: `--type --commit` gives `type` the text `--commit`
+and confirms nothing. A read is sent at once, so `vouchers list --type --commit`
+sends `?type=--commit`, and a write that is not confirmed shows the value in its
+dry run. A number flag refuses a word that is no number (`--limit --commit` is
+*not an integer*), and an `enum` flag takes a word that starts with a dash only
+when the word is one of its values.
 
 A `--file` part is sent under the file's own name and under the media type its
 extension names: `application/pdf` for `.pdf`, `image/png` for `.png`,
@@ -326,8 +327,11 @@ apart. A comma inside one item of a header list is refused
 items: `--x-tags "a,b" --x-tags c` is a refusal, because `x-tags: a,b,c` is three
 items to a receiver. An empty item is refused too (`ValueError::HeaderItemEmpty`),
 because a receiver ignores an empty list element, so `--x-tags "" --x-tags c`
-would be read as the one item `c`. A header that is not a list takes a comma as a
-character of its value, and an empty value.
+would be read as the one item `c`. A space or a tab at the start or the end of
+an item is refused as well (`ValueError::HeaderWhitespace`), because a receiver
+strips it: `--x-tags " b"` would be read as the item `b`. A header that is not a
+list takes a comma as a character of its value, and an empty value. A space or a
+tab at the edge of its value is refused all the same.
 
 Every value goes through the item schema's own rule, so a list is checked the
 way a single value is — once at the flag, once again in `Invocation::new`.

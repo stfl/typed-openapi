@@ -254,7 +254,7 @@ impl BaseUrlError {
     /// credential must not be.
     #[cfg(feature = "document")]
     pub(crate) fn userinfo_in(text: &str) -> Result<(), Self> {
-        if authority_of(text).contains('@') {
+        if authorities_of(text).any(|authority| authority.contains('@')) {
             return Err(Self::Userinfo);
         }
         Ok(())
@@ -272,29 +272,28 @@ impl BaseUrlError {
     }
 }
 
-/// What stands between the scheme and the first `/`, `?` or `#` of `text`. A
-/// text without a scheme is read from its start, after a leading `//`, because
-/// a server URL that is no URL can still hold a credential, and the authority
-/// is where one is.
+/// Every place in `text` where an authority can stand, each up to the first
+/// `/`, `?` or `#`: after the first `://` that no `/`, `?` or `#` comes before,
+/// or after a leading `//`, and the start of the text.
+///
+/// A server URL that is no URL can still hold a credential, and the text before
+/// its `://` is whatever the document wrote: a variable that nothing declares, a
+/// space, a scheme with a character that no scheme holds. So the text before
+/// the `://` is not judged to be a scheme, and the start of the text is read as
+/// an authority too (`alice:s3cret@host://x`). A URL that parses has a scheme
+/// and an authority, so the start of its text holds no `@`.
 #[cfg(feature = "document")]
-fn authority_of(text: &str) -> &str {
+fn authorities_of(text: &str) -> impl Iterator<Item = &str> {
+    let delimiters = ['/', '?', '#'];
     let after_scheme = text
         .split_once("://")
-        .filter(|(scheme, _)| is_scheme(scheme))
-        .map_or_else(|| text.strip_prefix("//").unwrap_or(text), |(_, rest)| rest);
-    after_scheme
-        .split_once(['/', '?', '#'])
-        .map_or(after_scheme, |(authority, _)| authority)
-}
-
-/// RFC 3986 section 3.1: a letter, then letters, digits, `+`, `-` and `.`.
-#[cfg(feature = "document")]
-fn is_scheme(text: &str) -> bool {
-    let mut chars = text.chars();
-    chars
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic())
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        .filter(|(before, _)| !before.contains(delimiters))
+        .map(|(_, rest)| rest)
+        .or_else(|| text.strip_prefix("//"));
+    std::iter::once(text).chain(after_scheme).map(move |from| {
+        from.split_once(delimiters)
+            .map_or(from, |(authority, _)| authority)
+    })
 }
 
 /// Why an invocation did not become a request.
@@ -730,10 +729,14 @@ fn host_of(authority: &Authority) -> &str {
         .map_or_else(|| authority.as_str(), |(_, host)| host)
 }
 
-/// A base URL as text a message may hold: its scheme, host, port, path and
-/// query, and no userinfo. This is how a type that holds the caller's base
-/// shows it in its `Debug`.
-pub(crate) fn without_userinfo(base: &Uri) -> String {
+/// A base URL as text a message may hold: its scheme, host, port and path. This
+/// is how a type that holds a base shows it in its `Debug`.
+///
+/// Userinfo is left out because it is a credential. The query is left out
+/// because a key goes there (`?api_key=…`), and a request from a base that holds
+/// one is refused (`BaseUrlError::Query`), so the base is shown as what a
+/// request would be built from.
+pub(crate) fn without_userinfo_and_query(base: &Uri) -> String {
     let mut out = String::new();
     if let Some(scheme) = base.scheme_str() {
         out.push_str(scheme);
@@ -742,10 +745,7 @@ pub(crate) fn without_userinfo(base: &Uri) -> String {
     if let Some(authority) = base.authority() {
         out.push_str(host_of(authority));
     }
-    out.push_str(
-        base.path_and_query()
-            .map_or("", http::uri::PathAndQuery::as_str),
-    );
+    out.push_str(base.path());
     out
 }
 

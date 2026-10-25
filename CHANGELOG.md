@@ -546,13 +546,17 @@ the crate follows [Semantic Versioning][semver].
   - No text that the library makes holds a base URL's userinfo. The refusals of
     `BaseUrlError` and `LoadError::ServerBase` print no part of the URL, and
     `render` prints the host and the port of a request and never its userinfo.
-    A server URL that holds userinfo is `ServerBase` also when it is no URL: it
-    was `LoadError::ServerUrl`, which printed the URL, the userinfo among it. A
-    document that was refused as `ServerUrl` for that reason is refused as
-    `ServerBase` now, and no document that loaded is refused for it.
-  - The `Debug` of a `Client` prints its base without the userinfo. It printed
-    the base whole, so a `{client:?}` in a log held the credential of a
-    `Client::with_base`.
+    A server URL that holds userinfo is `ServerBase` also when it is no URL, and
+    whatever stands before its `://` (a variable that nothing declares, a space,
+    a character that no scheme holds): it was `LoadError::ServerUrl`, which
+    printed the URL, the userinfo among it. A document that was refused as
+    `ServerUrl` for that reason is refused as `ServerBase` now, and no document
+    that loaded is refused for it. A text with no authority, such as
+    `http:/u@h/a b`, holds no userinfo and stays `ServerUrl`.
+  - The `Debug` of a `Client` and of a `Document` prints the base without its
+    userinfo and its query. It printed the base whole, so a `{client:?}` in a log
+    held the credential of a `Client::with_base`, and a `Document` that
+    `from_blob` read held the one its blob was written with.
 
   Repair for a caller: pass a base URL with the scheme, host, port and path
   only, and set the credential in the client adapter (`docs/client.md`).
@@ -591,8 +595,9 @@ the crate follows [Semantic Versioning][semver].
   (`LoadError::HeaderName { op, name }`); it loaded, and a request that gave it a
   value failed. A header with no flag sends nothing and is not asked. `ValueError`
   is `#[non_exhaustive]`, so the variants are no break. Repair: an Overlay that
-  corrects the name or removes the parameter; send each item of a header list
-  with no comma in it and no whitespace at its edge, and leave out an empty item.
+  corrects the name or removes the parameter; send a header value, and each item
+  of a header list, with no space or tab at its edge; send no comma inside an
+  item of a list; and leave out an empty item.
 - **A number is sent as it was parsed, and a number that would be sent as
   another one is refused.** A parameter was checked by `Scalar::parse` and its
   raw text went on the wire, so `+5` was sent as `%2B5` and `007` as written,
@@ -614,9 +619,10 @@ the crate follows [Semantic Versioning][semver].
   and `typify` writes `i32` for a body property of `format: int32`.
 - **A flag takes a value that starts with a dash.** The word after an `<INT>`,
   `<NUMBER>` or `<STRING>` flag is its value, whatever it looks like: `--limit -5`
-  and `--total -.5`, where clap read `-5` as a flag and only `--limit=-5` worked.
-  A word that looks like a flag is a value too. `--type --commit` gives `type`
-  the text `--commit` and confirms nothing; a read is sent at once, so
+  and `--total -12.50`, where clap read `-5` as a flag and only `--limit=-5`
+  worked. A `<NUMBER>` flag takes `-.5` and `-1e-3` as a separate word the same
+  way. A word that looks like a flag is a value too. `--type --commit` gives
+  `type` the text `--commit` and confirms nothing; a read is sent at once, so
   `vouchers list --type --commit` sends `?type=--commit`, and an unconfirmed write
   shows the value in its dry run. A number flag refuses a word that is no number,
   and an `enum` flag takes a word that starts with a dash only when it is one of

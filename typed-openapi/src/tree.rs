@@ -99,7 +99,8 @@ pub enum ArgError {
     },
     /// A flag that the command stores as another type than the one the
     /// operation reads: a `String` for a parameter, a field and a part of a
-    /// multipart body, and a `PathBuf` for the file of a body. A verb of the
+    /// multipart body (`--file` too, which names a file and is read as text),
+    /// and a `PathBuf` for `--json-body` and `--raw-body`. A verb of the
     /// adopter's own that declares `--id` with `value_parser!(i64)` is one,
     /// whatever type the document gives the parameter. The command is the
     /// adopter's and not this crate's, so the repair is in the flag's
@@ -372,11 +373,10 @@ pub fn answers(op: &Operation, matches: &ArgMatches) -> Answers {
 
 /// Did the command line carry this flag?
 ///
-/// `ArgMatches::get_flag` panics on an id the `Command` never declared in a
-/// debug build, and a panic is the wrong answer to "is this gate answered?". A
-/// command with no flag for a gate has no answer for it, and no answer is
-/// `false` — the reading the gate has everywhere else, and the one that holds
-/// the request back.
+/// `ArgMatches::get_flag` panics on an id the `Command` never declared, and a
+/// panic is the wrong answer to "is this gate answered?". A command with no flag
+/// for a gate has no answer for it, and no answer is `false` — the reading the
+/// gate has everywhere else, and the one that holds the request back.
 fn flag(matches: &ArgMatches, id: &str) -> bool {
     matches
         .try_get_one::<bool>(id)

@@ -107,7 +107,8 @@ pub enum LoadError {
     /// by its default. A variable the server does not declare has no default
     /// and stays in the URL as it is written. A URL that holds userinfo is
     /// [`LoadError::ServerBase`] whether it is a URL or not, so this message
-    /// prints no credential.
+    /// prints no credential. A text with no authority, such as `http:/u@h/a b`,
+    /// holds no userinfo and is refused here.
     #[error("`servers[0].url` is not a URL: {}", refused_url(.url, .filled))]
     ServerUrl {
         /// `servers[0].url` as the document spells it.
@@ -124,9 +125,10 @@ pub enum LoadError {
     /// a query or a fragment, which a request would send, drop or leak. The cause
     /// says which, and neither it nor this message prints the URL, because a
     /// credential or a key would be in it. A URL that holds userinfo is refused
-    /// for it also when the text is no URL, because [`LoadError::ServerUrl`]
-    /// prints the URL. An Overlay corrects the URL. A caller who names the base
-    /// is held to the same rule when the request is built.
+    /// for it also when the text is no URL, wherever its authority stands in
+    /// the text, because [`LoadError::ServerUrl`] prints the URL. An Overlay
+    /// corrects the URL. A caller who names the base is held to the same rule
+    /// when the request is built.
     #[error("`servers[0].url` cannot be the base URL of a request; correct it in an Overlay")]
     ServerBase {
         /// What the URL holds that a request cannot keep.

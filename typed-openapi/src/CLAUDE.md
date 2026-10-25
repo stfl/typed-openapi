@@ -233,10 +233,15 @@ spells it and as it was refused, with the defaults in it). A URL that holds
 userinfo, a query or a fragment is `ServerBase`, which says which and prints none
 of the URL, because the part that is refused is the part that is a credential or
 a key. Userinfo is read from the text before the text is parsed
-(`BaseUrlError::userinfo_in`: what stands between the scheme and the first `/`,
-`?` or `#`), so a URL that holds userinfo and is no URL is `ServerBase` as well,
-and `ServerUrl` prints a URL that holds none. It is the rule that
-`Invocation::request` holds a caller's base to.
+(`BaseUrlError::userinfo_in`: what stands up to the first `/`, `?` or `#` after
+the first `://` that none of the three comes before, after a leading `//`, and at
+the start of the text), so a URL that holds userinfo and is no URL is
+`ServerBase` as well, and `ServerUrl` prints a URL that holds none. The text
+before the `://` is not judged to be a scheme, because a document writes
+whatever it writes there (`{scheme}`, a space), and a credential is a credential
+in a URL that nothing parses. A text with no authority (`http:/u@h/a b`) holds
+no userinfo and stays `ServerUrl`. It is the rule that `Invocation::request`
+holds a caller's base to.
 
 **A refusal names its operation and the place it stopped, and its repair only
 where the repair is true.** A `LoadError` from one operation carries the
@@ -491,11 +496,17 @@ fragment is refused in the text of the document's server
 No text that the library makes holds a base URL's userinfo. The refusals of
 `BaseUrlError` and `LoadError::ServerBase` print no part of the URL;
 `LoadError::ServerUrl` prints a URL that holds no userinfo, because the userinfo
-is read first; `render` prints the host and the port; and the one type that holds
-a caller's base, `Client`, writes its `Debug` by hand and leaves the userinfo out
-(`request::without_userinfo`, which `render` shares with it through `host_of`). A
-type that comes to hold a caller's base owes the same. `Document` does not: its
-base comes from a load, which refuses userinfo. The text of the operator's own
+is read first; `render` prints the host and the port; and a type that holds a
+base writes its `Debug` by hand and leaves the userinfo and the query out
+(`request::without_userinfo_and_query`, which `render` shares with it through
+`host_of`). Three types hold a base. `Client` holds the caller's, and `Document`
+holds the one its load or its blob gave it: a blob is read with no load, and
+`from_blob` does not repeat `ServerBase`, so the base of a `Document` can hold
+userinfo, and `Document` binds each of its fields by name in its `Debug`, so a
+field added there stops it compiling. `Call` holds a reference to the base of
+its `Client` and its `Debug` shows none. A type that comes to hold a base owes
+the same. The query is left out with the userinfo because a key goes there, and
+a request from a base that holds one is refused. The text of the operator's own
 argument is the operator's, and clap repeats it in its own errors.
 
 **A request body is held to the generated type in one place, and an
@@ -655,8 +666,10 @@ misread. A public error holds an `overlay::Cause` (a message, and an
 `overlay::Place`: the line and column of the text, or the action's index) or a
 boxed `dyn Error + Send + Sync`, so a release of the YAML crate, `roas-overlay`
 or typify is never a break here. The foreign types that a public error does
-carry come from crates at 1.0 or later: `serde_json::Error`, `http::Error`,
-`http::uri::InvalidUri`, `postcard::Error`, `syn::Error`, `std::io::Error` and
+carry come from crates at 1.0 or later: `serde_json::Error`,
+`serde_json::Value` (`OverlayError::OpenApiVersion`), `http::Error`,
+`http::StatusCode` (`client::Error::Status`), `http::uri::InvalidUri`,
+`postcard::Error`, `syn::Error`, `std::io::Error` and
 `clap::parser::MatchesError`. A type of a 0.x crate in a public error would make
 a release of that crate a break here.
 
