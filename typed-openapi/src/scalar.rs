@@ -382,9 +382,10 @@ fn is_whole(raw: &str) -> bool {
     !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-/// Is `raw` spelled with digits only, whatever it says: `1e400` is, and `inf`
-/// is not.
-fn is_digits(raw: &str) -> bool {
+/// Is `raw` spelled with the characters of a decimal number only (digits, a
+/// sign, a point and an exponent mark), whatever number it says: `1e400` is, and
+/// `inf` is not.
+fn has_only_number_characters(raw: &str) -> bool {
     raw.bytes()
         .all(|byte| byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.' | b'e' | b'E'))
 }
@@ -416,22 +417,24 @@ struct Decimal {
 
 impl Decimal {
     /// `text` as a number, when it is spelled as `f64::from_str` reads one:
-    /// a sign, digits with a point somewhere among them, and an exponent.
+    /// a sign, digits with a point somewhere among them, and an exponent. Zero
+    /// is zero whatever its exponent says, so `0e99999999999999999999` is read
+    /// before the exponent is. Any other number whose exponent is past an `i64`
+    /// has no reading.
     fn of(text: &str) -> Option<Self> {
         let (negative, unsigned) = match text.strip_prefix('-') {
             Some(rest) => (true, rest),
             None => (false, text.strip_prefix('+').unwrap_or(text)),
         };
-        let (mantissa, power) = match unsigned.split_once(['e', 'E']) {
-            Some((mantissa, power)) => (mantissa, power.parse::<i64>().ok()?),
-            None => (unsigned, 0),
-        };
-        let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-        let digits = format!("{whole}{fraction}");
-        if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        let (mantissa, power) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+        if !is_whole(power) {
             return None;
         }
-        let exponent = power.checked_sub(i64::try_from(fraction.len()).ok()?)?;
+        let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+        let digits = format!("{whole}{fraction}");
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
         let significant = digits.trim_matches('0');
         if significant.is_empty() {
             return Some(Self {
@@ -440,6 +443,10 @@ impl Decimal {
                 exponent: 0,
             });
         }
+        let exponent = power
+            .parse::<i64>()
+            .ok()?
+            .checked_sub(i64::try_from(fraction.len()).ok()?)?;
         let trailing = digits.len() - digits.trim_end_matches('0').len();
         Some(Self {
             negative,
@@ -462,11 +469,13 @@ pub(crate) trait Numeric: Copy + PartialOrd + fmt::Display {
 
     /// This kind read out of one argument, with the JSON it goes out as.
     ///
-    /// One step, because the three can disagree. A float that parses but is not
-    /// finite is not a number JSON carries, and "is not a number" is the honest
-    /// answer rather than a `null` on the wire. A number that the type cannot
-    /// hold is out of range, and a float that holds only the nearest of its
-    /// digits would send another number than the one that was checked.
+    /// One step, because three questions about `raw` can have three different
+    /// answers: is it a number of this kind, does the type hold it, and does
+    /// JSON carry it as it is. A float that parses but is not finite is not a
+    /// number JSON carries, and "is not a number" is the honest answer rather
+    /// than a `null` on the wire. A number that the type cannot hold is out of
+    /// range, and a float that holds only the nearest of its digits would send
+    /// another number than the one that was checked.
     fn read(raw: &str) -> Result<(Self, serde_json::Value), ScalarError>;
 
     /// `multipleOf`: whether dividing by `step` leaves a whole number.
@@ -482,9 +491,9 @@ impl Numeric for i64 {
             .map_err(|_| {
                 // An integer that is too long for an `i64` is a number all the
                 // same, and `typify` writes a `u64` for `minimum: 0`. A text
-                // that is all digits and fails to parse can only have
-                // overflowed. The count stops at the first digit that does, so
-                // a number with a point in it is no integer however long it is.
+                // of digits, with or without a sign, that fails to parse can
+                // only have overflowed. A text with a point or an exponent in it
+                // is no integer however long it is.
                 if is_whole(raw) {
                     ScalarError::rule(
                         raw,
@@ -511,7 +520,7 @@ impl Numeric for f64 {
     fn read(raw: &str) -> Result<(Self, serde_json::Value), ScalarError> {
         let kind = || ScalarError::kind(raw, Self::KIND);
         let value = raw.parse::<Self>().map_err(|_| kind())?;
-        if value.is_infinite() && is_digits(raw) {
+        if value.is_infinite() && has_only_number_characters(raw) {
             return Err(ScalarError::rule(
                 raw,
                 format!(
@@ -795,6 +804,7 @@ mod tests {
             "0.1000000000000000055511151231257827",
             "-9007199254740993",
             "4.9e-325",
+            "1e-99999999999999999999",
         ] {
             let refused = refusal(&plain, raw);
             assert!(
@@ -832,8 +842,32 @@ mod tests {
             "5e-324",
             "100000000000000000000000",
             "0.00000000000000000000000000000000000000000000000001",
+            "0e99999999999999999999",
+            "-0.000E-99999999999999999999",
         ] {
             assert!(plain.parse(raw).is_ok(), "{raw}");
+        }
+    }
+
+    /// Zero is zero whatever its exponent says, and any other number needs an
+    /// exponent that an `i64` holds.
+    #[test]
+    fn a_decimal_reads_zero_before_it_reads_the_exponent() {
+        let zero = Decimal::of("0");
+        assert!(zero.is_some());
+        for text in [
+            "0e99999999999999999999",
+            "-0.00E-99999999999999999999",
+            "0e0",
+        ] {
+            assert_eq!(Decimal::of(text), zero, "{text}");
+        }
+        for text in ["1e99999999999999999999", "1e-99999999999999999999"] {
+            assert_eq!(Decimal::of(text), None, "{text}");
+        }
+        // What `f64::from_str` refuses has no reading, zero or not.
+        for text in ["0e", "0ex", "0e+", "1e", "e5", "", "0.0.0"] {
+            assert_eq!(Decimal::of(text), None, "{text:?}");
         }
     }
 

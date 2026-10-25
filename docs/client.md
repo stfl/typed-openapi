@@ -94,7 +94,8 @@ come from the document's first server or from the base you name with
 `Client::with_base` or the `base` argument of `Plan::build` and `tree::dispatch`.
 A base with userinfo (`user:password@`) or a query is refused when the request is
 built, with `RequestError::Base`, and a server URL in the document is refused
-when it loads. Nothing of the URL is printed. A client would send the userinfo as
+when it loads. These refusals print no part of the URL, and the `Debug` of a
+`Client` prints its base without the userinfo. A client would send the userinfo as
 an `Authorization` header and a dry run would print it, and a query would be
 dropped from every request in silence. A fragment never reaches a `Uri`, since the
 `http` crate drops it when it parses. Put the credential in the adapter, as

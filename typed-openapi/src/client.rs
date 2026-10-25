@@ -20,7 +20,7 @@ use thiserror::Error;
 
 use crate::body_reader::{Read, Step, read};
 use crate::model::{Document, DocumentError, DriftError, Operation};
-use crate::request::{Invocation, RequestError, ValueError};
+use crate::request::{Invocation, RequestError, ValueError, without_userinfo};
 use crate::transport::{AsyncClient, HttpRequest, HttpResponse, SyncClient};
 use crate::values::Values;
 
@@ -97,10 +97,20 @@ pub enum Error {
 }
 
 /// One document, one server, and a typed way to call anything in it.
-#[derive(Debug)]
 pub struct Client {
     document: Document,
     base: Uri,
+}
+
+/// The base is shown without its userinfo: a caller names it, and a `Debug` goes
+/// to logs.
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Client")
+            .field("document", &self.document)
+            .field("base", &format_args!("{}", without_userinfo(&self.base)))
+            .finish()
+    }
 }
 
 impl Client {

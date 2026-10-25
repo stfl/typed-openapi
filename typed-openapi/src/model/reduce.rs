@@ -105,7 +105,9 @@ pub enum LoadError {
     NoServer,
     /// The first server's URL is not a URL, once each variable in it is replaced
     /// by its default. A variable the server does not declare has no default
-    /// and stays in the URL as it is written.
+    /// and stays in the URL as it is written. A URL that holds userinfo is
+    /// [`LoadError::ServerBase`] whether it is a URL or not, so this message
+    /// prints no credential.
     #[error("`servers[0].url` is not a URL: {}", refused_url(.url, .filled))]
     ServerUrl {
         /// `servers[0].url` as the document spells it.
@@ -121,8 +123,10 @@ pub enum LoadError {
     /// The first server's URL cannot be the base of a request: it holds userinfo,
     /// a query or a fragment, which a request would send, drop or leak. The cause
     /// says which, and neither it nor this message prints the URL, because a
-    /// credential or a key would be in it. An Overlay corrects the URL. A caller
-    /// who names the base is held to the same rule when the request is built.
+    /// credential or a key would be in it. A URL that holds userinfo is refused
+    /// for it also when the text is no URL, because [`LoadError::ServerUrl`]
+    /// prints the URL. An Overlay corrects the URL. A caller who names the base
+    /// is held to the same rule when the request is built.
     #[error("`servers[0].url` cannot be the base URL of a request; correct it in an Overlay")]
     ServerBase {
         /// What the URL holds that a request cannot keep.
@@ -159,11 +163,12 @@ pub enum LoadError {
         /// `$.paths['/upload'].post.servers`.
         at: String,
     },
-    /// A header parameter whose name is no header name: it holds a space or
-    /// another character that a header name cannot, so no request could carry it
-    /// and the `http` crate would refuse every one that was built. An Overlay
-    /// corrects the name or removes the parameter. A parameter in another place
-    /// has no header name to be.
+    /// A header parameter that would claim a flag and whose name is no header
+    /// name: it holds a space or another character that a header name cannot, so
+    /// no request could carry it and the `http` crate would refuse every one that
+    /// was built. An Overlay corrects the name or removes the parameter. A
+    /// parameter in another place has no header name to be, and one with no flag
+    /// sends nothing.
     #[error(
         "{op}: the header parameter `{name}` is not a header name; correct or remove it in an \
          Overlay"
@@ -875,6 +880,10 @@ impl Document {
     fn from_openapi(doc: &OpenAPI, commit: &str) -> Result<Self, LoadError> {
         let server = doc.servers.first().ok_or(LoadError::NoServer)?;
         let with_defaults = filled(server);
+        // Before the parse: a URL with userinfo that is no URL is refused for the
+        // userinfo, and `ServerUrl` prints the URL.
+        BaseUrlError::userinfo_in(&with_defaults)
+            .map_err(|source| LoadError::ServerBase { source })?;
         let base =
             Uri::try_from(with_defaults.as_str()).map_err(|source| LoadError::ServerUrl {
                 url: server.url.clone(),

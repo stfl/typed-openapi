@@ -40,9 +40,10 @@ float, which holds the nearest of its digits: `9007199254740993` would go out as
 `9007199254740992.0`, and `1e-400` as `0.0`. The test is whether the shortest
 text that reads back as the float is the number that was typed, compared as
 decimal numbers and not as text, so `1.0`, `1e0` and `001` are one number and are
-accepted. A number of more than 15 or 16 significant digits is where it fails. A
-document that needs more states the value as a `string` with a `pattern`, as the
-toy's `Voucher.total` does.
+accepted. A number with many significant digits can fail it, and so can a number
+too small for a float (`1e-400`, `4.9e-325`); `0.30000000000000004` has 17 digits
+and passes, because a float holds it exactly. A document that needs such a number
+states the value as a `string` with a `pattern`, as the toy's `Voucher.total` does.
 
 The same rules are the flag's help line, rendered by the same code:
 
@@ -166,20 +167,28 @@ A body field is the JSON value that was parsed, so `007` is the number 7 there
 too, and a `number` is a float in JSON: `1e3` is `1000.0`. A text is sent as it
 was typed.
 
-`Invocation::new` refuses three more values, none of them a rule of the schema,
+`Invocation::new` refuses five more values, none of them a rule of the schema,
 because the request would reach another place or carry another header than the
-one the value names. Each refusal names the operation and the parameter, on both
-roads, and none prints a value that may be a credential:
+one the value names. A header value is refused when a receiver that follows
+RFC 9110 would read another value, or another list, than the caller gave. Each
+refusal names the operation and the parameter, on both roads, and none prints a
+header value, which may be a credential:
 
 | the value | variant | why |
 |---|---|---|
 | a path parameter that is empty, `.` or `..` | `ValueError::PathSegment` | a server or a proxy reads such a segment as a step along the path, so `DELETE /things/..` reaches the collection above. A list is judged as the segment it makes, so `..` beside another item is a name |
 | a header value that `http::HeaderValue` refuses | `ValueError::HeaderValue` | a control character other than a tab. A line break in a header is how a header is injected |
+| a header value, or an item of a header list, that starts or ends with a space or a tab | `ValueError::HeaderWhitespace` | a receiver does not read it as part of the value, so it reads another value than the caller gave |
 | a comma inside one item of a header list | `ValueError::HeaderItemComma` | a header list is written with commas between its items and is not percent-encoded, so the receiver reads two items. A comma in a query or a path list is percent-encoded and stays one |
+| an empty item of a header list | `ValueError::HeaderItemEmpty` | a receiver ignores an empty list element, so `["", "c"]` written as `,c` is read as the one item `c` |
 
-A header parameter whose name `http::HeaderName` refuses (`X Bad`) refuses the
-document: `LoadError::HeaderName`, and an Overlay corrects the name or removes
-the parameter.
+A byte of 0x80 or above reaches the receiver as it is, and so does an empty value
+that is no list, so neither is refused.
+
+A header parameter that would claim a flag, and whose name `http::HeaderName`
+refuses (`X Bad`), refuses the document: `LoadError::HeaderName`, and an Overlay
+corrects the name or removes the parameter. A header parameter with no flag sends
+nothing, so its name is not asked.
 
 A base URL is the scheme, the host and the path of every request, and nothing
 else of it is kept. One with userinfo (`user:password@`) or a query is refused
@@ -188,8 +197,12 @@ first server, `Client::with_base`, and the `base` of `Plan::build`, `Selection`
 and `tree::dispatch`. A server URL in the document is refused when the document
 loads (`LoadError::ServerBase`), with a fragment too, which an `http::Uri` cannot
 hold and so only the text of a document can. A credential belongs in the client
-adapter ([client.md](client.md#writing-an-adapter)). No message prints any part of
-the URL, and a dry run prints the host and the port.
+adapter ([client.md](client.md#writing-an-adapter)). No text that the library
+makes holds the userinfo of a base URL. The refusals of `RequestError::Base` and
+`LoadError::ServerBase` print no part of the URL, and so a server URL that holds
+userinfo is `ServerBase` also when it is no URL, and `LoadError::ServerUrl` prints
+a URL that holds none. A dry run prints the host and the port, and the `Debug` of
+a `Client` prints its base without the userinfo.
 
 ## What `fits` refuses
 

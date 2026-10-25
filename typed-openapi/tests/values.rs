@@ -391,6 +391,157 @@ fn a_comma_in_a_header_that_is_not_a_list_is_a_character_of_the_value() {
     assert_eq!(request.headers()["x-trace"], "a,b");
 }
 
+/// RFC 9110 section 5.6.1.2: a recipient ignores an empty list element. `h list
+/// --x-tags '' --x-tags c` would be sent as `x-tags: ,c`, which a receiver reads
+/// as the one item `c`, and `--x-tags ''` alone as a header with no item.
+#[test]
+fn an_empty_item_of_a_header_list_is_refused() {
+    let doc = doc();
+    for items in [vec![""], vec!["", "c"], vec!["a", ""], vec!["a", "", "c"]] {
+        let error = refused(
+            &doc,
+            "getThing",
+            Values::new()
+                .param("name", "a")
+                .each("X-Tags", items.clone()),
+        );
+        assert!(
+            matches!(&error, ValueError::HeaderItemEmpty { op, name }
+                if op == "getThing" && name == "X-Tags"),
+            "{items:?}: {error:?}"
+        );
+    }
+    assert_eq!(
+        refused(
+            &doc,
+            "getThing",
+            Values::new().param("name", "a").each("X-Tags", ["", "c"])
+        )
+        .to_string(),
+        "getThing: `X-Tags` was given an empty item, and a receiver ignores an empty item of a \
+         header list"
+    );
+    for args in [
+        ["--x-tags", "", "--x-tags", "c"],
+        ["--x-tags", "a", "--x-tags", ""],
+    ] {
+        let line: Vec<&str> = ["things", "get", "--name", "a"]
+            .into_iter()
+            .chain(args)
+            .collect();
+        let error = stopped(&doc, &line);
+        assert!(
+            matches!(&error, DispatchError::Plan(PlanError::Value(
+                ValueError::HeaderItemEmpty { op, name }
+            )) if op == "getThing" && name == "X-Tags"),
+            "{args:?}: {error:?}"
+        );
+    }
+}
+
+/// RFC 9110 sections 5.5 and 5.6.1: a field value does not start or end with
+/// whitespace, and whitespace around a comma is not part of an item. A receiver
+/// strips it, so it reads another value than the caller gave.
+#[test]
+fn a_space_or_a_tab_at_the_edge_of_a_header_value_or_item_is_refused() {
+    let doc = doc();
+    for value in [" a", "a ", "\ta", "a\t", " ", "\t", "  a  "] {
+        let error = refused(
+            &doc,
+            "getThing",
+            Values::new().param("name", "a").param("X-Trace", value),
+        );
+        assert!(
+            matches!(&error, ValueError::HeaderWhitespace { op, name }
+                if op == "getThing" && name == "X-Trace"),
+            "{value:?}: {error:?}"
+        );
+        for items in [["a", value], [value, "b"]] {
+            let error = refused(
+                &doc,
+                "getThing",
+                Values::new().param("name", "a").each("X-Tags", items),
+            );
+            assert!(
+                matches!(&error, ValueError::HeaderWhitespace { name, .. } if name == "X-Tags"),
+                "{items:?}: {error:?}"
+            );
+        }
+    }
+    assert_eq!(
+        refused(
+            &doc,
+            "getThing",
+            Values::new().param("name", "a").param("X-Trace", " s3cret")
+        )
+        .to_string(),
+        "getThing: `X-Trace` was given a value that starts or ends with a space or a tab, and a \
+         receiver does not read it as part of the value"
+    );
+    for args in [
+        ["--x-trace", " s3cret"],
+        ["--x-trace", "s3cret\t"],
+        ["--x-tags", " s3cret"],
+    ] {
+        let line: Vec<&str> = ["things", "get", "--name", "a"]
+            .into_iter()
+            .chain(args)
+            .collect();
+        let error = stopped(&doc, &line);
+        assert!(
+            matches!(&error, DispatchError::Plan(PlanError::Value(
+                ValueError::HeaderWhitespace { op, name }
+            )) if op == "getThing" && (name == "X-Trace" || name == "X-Tags")),
+            "{args:?}: {error:?}"
+        );
+        assert!(!chain(&error).contains("s3cret"), "{error}");
+    }
+}
+
+/// Whitespace inside a value, an empty value that is no list, and text past
+/// ASCII reach the receiver as the same bytes, so they are sent.
+#[test]
+fn a_header_value_that_a_receiver_reads_as_it_was_given_is_sent() {
+    let doc = doc();
+    let op = doc.get("getThing").expect("the operation");
+    for value in ["a b", "a\tb", "a  b", "", "\u{a0}a\u{a0}", "a;b=c"] {
+        let request = Invocation::new(op, Values::new().param("name", "a").param("X-Trace", value))
+            .expect("a value a receiver reads as given")
+            .request(doc.base())
+            .expect("a request");
+        assert_eq!(
+            request.headers()["x-trace"].as_bytes(),
+            value.as_bytes(),
+            "{value:?}"
+        );
+    }
+    let request = Invocation::new(
+        op,
+        Values::new()
+            .param("name", "a")
+            .each("X-Tags", ["a b", "c\td"]),
+    )
+    .expect("items with whitespace inside")
+    .request(doc.base())
+    .expect("a request");
+    assert_eq!(request.headers()["x-tags"], "a b,c\td");
+    let request = sent(
+        &doc,
+        &[
+            "things",
+            "get",
+            "--name",
+            "a",
+            "--x-trace",
+            "",
+            "--x-tags",
+            "a b",
+        ],
+    );
+    assert_eq!(request.headers()["x-trace"], "");
+    assert_eq!(request.headers()["x-tags"], "a b");
+}
+
 /// `A2/wire` `badheader list --x-bad v` is the input. A name that no request
 /// could carry refuses the document, and the `http` crate does not have to refuse
 /// every request that is built from it.
@@ -613,6 +764,34 @@ fn a_dry_run_never_prints_userinfo() {
     assert_eq!(render(&plain), "GET /x HTTP/1.1\nhost: 127.0.0.1:18473\n");
 }
 
+/// A `Debug` goes to logs, and the base of a client is the caller's.
+#[test]
+fn the_debug_of_a_client_holds_no_userinfo() {
+    let doc = doc();
+    for (text, shown) in [
+        (
+            "http://alice:s3cret@127.0.0.1:18473/api?x=1",
+            "base: http://127.0.0.1:18473/api?x=1",
+        ),
+        ("http://u:p@[::1]:8080/x", "base: http://[::1]:8080/x"),
+        ("http://@host/", "base: http://host/"),
+        (
+            "http://127.0.0.1:18473/api",
+            "base: http://127.0.0.1:18473/api",
+        ),
+    ] {
+        let client = Client::over(doc.clone())
+            .expect("a client")
+            .with_base(base(text));
+        let debug = format!("{client:?}");
+        assert!(debug.contains(shown), "{text}: {debug}");
+        assert!(
+            !debug.contains("alice") && !debug.contains("s3cret") && !debug.contains("u:p"),
+            "{text}: {debug}"
+        );
+    }
+}
+
 /// A document with a `servers` entry the caller could not have sent to without a
 /// credential or a query in it is a document refused, whichever of the three it
 /// holds, and whichever part of the URL is a variable.
@@ -643,6 +822,71 @@ fn a_server_with_userinfo_a_query_or_a_fragment_is_refused_at_load() {
         for secret in ["alice", "s3cret", "key=", "secret", "#top", "127.0.0.1"] {
             assert!(!shown.contains(secret), "{url}: `{secret}` in {shown}");
         }
+    }
+}
+
+/// `http://alice:s3cret@host/a b` is no URL, and `ServerUrl` prints the URL it
+/// refuses, so the userinfo is read from the text first and the refusal is
+/// `ServerBase`. No `LoadError` holds the text, in a field or in a message.
+#[test]
+fn a_server_url_with_userinfo_that_is_no_url_is_refused_for_the_userinfo() {
+    for url in [
+        "http://alice:s3cret@host/a b",
+        "http://alice:s3cret@host:port/",
+        "alice:s3cret@host/a b",
+        "//alice:s3cret@host/a b",
+        "http://alice:s3cret@{undeclared}/",
+        "http://alice:s3cret@host?q=a b",
+    ] {
+        let error = Document::load(&document(url, PATHS), &[]).expect_err(url);
+        assert!(
+            matches!(
+                &error,
+                LoadError::ServerBase {
+                    source: BaseUrlError::Userinfo
+                }
+            ),
+            "{url}: {error:?}"
+        );
+        for secret in ["alice", "s3cret"] {
+            assert!(!chain(&error).contains(secret), "{url}: {error}");
+            assert!(!format!("{error:?}").contains(secret), "{url}: {error:?}");
+        }
+    }
+}
+
+/// An `@` that is not in the authority is no userinfo, and a URL that is no URL
+/// and holds none is still `ServerUrl`, which prints it.
+#[test]
+fn an_at_sign_past_the_authority_is_no_userinfo() {
+    for url in [
+        "http://host/a b",
+        "http://host/a@b c",
+        "http://host?u=a@b c",
+    ] {
+        let error = Document::load(&document(url, PATHS), &[]).expect_err(url);
+        assert!(
+            matches!(&error, LoadError::ServerUrl { url: given, .. } if given == url),
+            "{url}: {error:?}"
+        );
+        assert!(chain(&error).contains(url), "{url}: {error}");
+    }
+    for url in [
+        "http://host/a@b",
+        "/redirect?to=http://u@h/",
+        "http://host/x#u@h",
+        "http://host#u@h",
+    ] {
+        let loaded = Document::load(&document(url, PATHS), &[]);
+        assert!(
+            !matches!(
+                loaded,
+                Err(LoadError::ServerBase {
+                    source: BaseUrlError::Userinfo
+                })
+            ),
+            "{url}: {loaded:?}"
+        );
     }
 }
 
@@ -700,8 +944,8 @@ fn the_words_of_a_server_refusal_name_the_overlay_and_the_repair_loads() {
     assert_eq!(doc.base().to_string(), "http://127.0.0.1:18473/api");
 }
 
-/// What loaded before still loads: a port, a path, a trailing slash, a base that
-/// is relative.
+/// A server that is a plain base loads: a port, a path, a trailing slash, a base
+/// that is relative.
 #[test]
 fn a_server_that_is_a_plain_base_still_loads() {
     for url in [
@@ -735,19 +979,36 @@ fn a_negative_number_is_a_separate_word() {
 
     let body = sent(&doc, &["n", "create", "--n", "-5", "--sum", "-1.5"]);
     assert_eq!(body.body().as_slice(), br#"{"sum":-1.5,"n":-5}"#);
+    // clap's own test of a negative number takes no leading point and no sign
+    // after the exponent, and `--sum=-.5` has always worked.
+    for (typed, sent_as) in [("-.5", "-0.5"), ("-1e-3", "-0.001"), ("-1e+3", "-1000")] {
+        let separate = sent(&doc, &["things", "get", "--name", "a", "--sum", typed]);
+        let joined = sent(
+            &doc,
+            &["things", "get", "--name", "a", &format!("--sum={typed}")],
+        );
+        assert_eq!(
+            separate.uri().query(),
+            Some(&*format!("sum={sent_as}")),
+            "{typed}"
+        );
+        assert_eq!(joined.uri().query(), separate.uri().query(), "{typed}");
+    }
     // A path value too.
     let path = sent(&doc, &["items", "get", "--id", "-5"]);
     assert_eq!(path.uri().path(), "/base/items/-5");
 }
 
-/// A word that starts with a dash and is no number is still no integer.
+/// A word that starts with a dash and is no number is the value of the flag
+/// before it, and the flag's parser refuses it as a number.
 #[test]
 fn a_dash_word_is_not_an_integer() {
     let doc = doc();
     for (value, kind) in [
-        ("-abc", ErrorKind::UnknownArgument),
+        ("-abc", ErrorKind::ValueValidation),
         ("-5.5", ErrorKind::ValueValidation),
         ("-", ErrorKind::ValueValidation),
+        ("--sum", ErrorKind::ValueValidation),
     ] {
         let error = line(&doc, &["things", "get", "--name", "a", "--n", value])
             .expect_err("the value is refused");
@@ -877,7 +1138,7 @@ fn a_command_that_declares_no_flag_gives_no_value_and_no_panic() {
 
 /// A verb of the adopter's own may declare a field's flag with no parser of the
 /// document's rule. `Invocation::new` holds a body to its kind only, so the
-/// rule is the reading's, and the value that was dropped in silence is refused.
+/// rule is the reading's, and a value that breaks it is refused with the rule.
 #[test]
 fn a_field_the_verb_read_with_no_rule_is_refused_with_the_documents_rule() {
     let doc = Document::load(
@@ -1018,6 +1279,42 @@ fn a_number_that_does_not_survive_the_round_trip_is_refused_on_both_roads() {
     }
 }
 
+/// Zero is zero whatever its exponent says, so a mantissa of zeros is read before
+/// the exponent is, and an exponent past `i64` does not make it a number that
+/// would be sent as another one.
+#[test]
+fn a_zero_with_an_exponent_past_i64_is_zero_on_both_roads() {
+    let doc = doc();
+    for raw in ["0e99999999999999999999", "0.00e-99999999999999999999"] {
+        assert_eq!(
+            uri(
+                &doc,
+                "getThing",
+                Values::new().param("name", "a").param("sum", raw)
+            ),
+            "http://api.example.test/base/things/a?sum=0",
+            "{raw}"
+        );
+        let request = sent(&doc, &["things", "get", "--name", "a", "--sum", raw]);
+        assert_eq!(request.uri().query(), Some("sum=0"), "{raw}");
+        let body = sent(&doc, &["n", "create", "--sum", raw]);
+        assert_eq!(body.body().as_slice(), br#"{"sum":0.0}"#, "{raw}");
+    }
+    // A number that is not zero, with an exponent no `i64` holds, is still refused.
+    let error = refused(
+        &doc,
+        "getThing",
+        Values::new()
+            .param("name", "a")
+            .param("sum", "1e-99999999999999999999"),
+    );
+    assert!(
+        matches!(&error, ValueError::BadValue { source: ScalarError::Rule { rule, .. }, .. }
+            if rule.starts_with("does not survive the round trip")),
+        "{error:?}"
+    );
+}
+
 #[test]
 fn an_integer_past_i64_is_out_of_range_on_both_roads() {
     let doc = doc();
@@ -1034,6 +1331,7 @@ fn an_integer_past_i64_is_out_of_range_on_both_roads() {
     );
     let flag =
         line(&doc, &["things", "get", "--name", "a", "--n", raw]).expect_err("the flag refuses it");
+    assert_eq!(flag.kind(), ErrorKind::ValueValidation);
     assert!(flag.to_string().contains("is out of range"), "{flag}");
     assert!(!flag.to_string().contains("is not an integer"), "{flag}");
 }

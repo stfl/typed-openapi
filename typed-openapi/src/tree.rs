@@ -98,16 +98,19 @@ pub enum ArgError {
         raw: String,
     },
     /// A flag that the command stores as another type than the one the
-    /// operation reads, such as a verb of the adopter's own that declares
-    /// `--id` with `value_parser!(i64)` where the document types it as text.
-    /// The command is the adopter's and not this crate's, so the repair is in
-    /// the flag's declaration, and the refusal names the flag.
+    /// operation reads: a `String` for a parameter, a field and a part of a
+    /// multipart body, and a `PathBuf` for the file of a body. A verb of the
+    /// adopter's own that declares `--id` with `value_parser!(i64)` is one,
+    /// whatever type the document gives the parameter. The command is the
+    /// adopter's and not this crate's, so the repair is in the flag's
+    /// declaration, and the refusal names the flag.
     #[error("`--{flag}` holds a value of another type than the one the operation reads")]
     FlagType {
         /// The flag, without the leading `--`.
         flag: String,
-        /// clap's reading of the mismatch: the type it holds and the type that
-        /// was asked for.
+        /// clap's reading of the mismatch. In a debug build it prints the two
+        /// types, the one it holds and the one that was asked for; in a release
+        /// build it prints their `TypeId`s.
         #[source]
         source: MatchesError,
     },
@@ -369,10 +372,11 @@ pub fn answers(op: &Operation, matches: &ArgMatches) -> Answers {
 
 /// Did the command line carry this flag?
 ///
-/// `ArgMatches::get_flag` panics on an id the `Command` never declared, and a
-/// panic is the wrong answer to "is this gate answered?". A command with no
-/// flag for a gate has no answer for it, and no answer is `false` — the reading
-/// the gate has everywhere else, and the one that holds the request back.
+/// `ArgMatches::get_flag` panics on an id the `Command` never declared in a
+/// debug build, and a panic is the wrong answer to "is this gate answered?". A
+/// command with no flag for a gate has no answer for it, and no answer is
+/// `false` — the reading the gate has everywhere else, and the one that holds
+/// the request back.
 fn flag(matches: &ArgMatches, id: &str) -> bool {
     matches
         .try_get_one::<bool>(id)
@@ -396,7 +400,7 @@ pub fn values(op: &Operation, matches: &ArgMatches) -> Result<Values, ArgError> 
         let Shape::Flag { flag, .. } = param.shape() else {
             continue;
         };
-        // `get_many` serves both kinds: a flag given once yields one value, and
+        // `strings` serves both kinds: a flag given once yields one value, and
         // a repeatable one yields every occurrence, in the order they were
         // typed — which is the order they go on the wire in.
         for raw in strings(matches, flag)? {
@@ -767,8 +771,8 @@ fn strings<'m>(
 }
 
 /// The one value of a flag, when it was given. A flag that the command never
-/// declared was not given: `get_one` panics on it, and a panic is the wrong
-/// answer for a command this crate did not build.
+/// declared was not given: `get_one` panics on it in a debug build, and a panic
+/// is the wrong answer for a command this crate did not build.
 fn one<'m, T: std::any::Any + Clone + Send + Sync + 'static>(
     matches: &'m ArgMatches,
     id: &str,
@@ -982,13 +986,16 @@ fn value_arg(flag: &str, scalar: &Scalar, help: Option<String>, required: bool) 
                 .map_err(|e| e.to_string())
         })
     };
-    // A number flag takes a negative number as the word after it, and a text flag
-    // takes any word, one that starts with a dash too. In an accounting API a
-    // negative amount or an offset is ordinary, and clap reads `-5` as a flag of
-    // its own unless it is told what the flag is for.
+    // The word after a flag that takes a number or a text is its value, whatever
+    // the word starts with, and the value parser judges it. In an accounting API
+    // a negative amount or an offset is ordinary, and clap reads `-5` as a flag
+    // of its own unless it is told what the flag is for. `allow_negative_numbers`
+    // is not that: clap's check of a number takes no leading `.` and no sign after
+    // `e`, so `-.5` and `-1e-3` would be flags of their own.
     arg = match scalar {
-        Scalar::Integer(_) | Scalar::Number(_) => arg.allow_negative_numbers(true),
-        Scalar::Text(_) | Scalar::Choice(_) => arg.allow_hyphen_values(true),
+        Scalar::Integer(_) | Scalar::Number(_) | Scalar::Text(_) | Scalar::Choice(_) => {
+            arg.allow_hyphen_values(true)
+        }
         Scalar::Boolean => arg,
     };
     if let Some(help) = help {

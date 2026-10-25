@@ -229,11 +229,14 @@ every later refusal and every generated wrapper calls the operation by it. A
 server URL with variables takes the `default` of each, which OpenAPI requires
 for every variable; a variable that `variables` does not declare stays in the
 URL, which is then no URL (`ServerUrl`, which prints the URL as the document
-spells it and as it was refused, with the defaults in it). A URL that is one and
-holds userinfo, a query or a fragment is `ServerBase`, which says which and
-prints none of the URL, because the part that is refused is the part that is a
-credential or a key. It is the rule that `Invocation::request` holds a caller's
-base to.
+spells it and as it was refused, with the defaults in it). A URL that holds
+userinfo, a query or a fragment is `ServerBase`, which says which and prints none
+of the URL, because the part that is refused is the part that is a credential or
+a key. Userinfo is read from the text before the text is parsed
+(`BaseUrlError::userinfo_in`: what stands between the scheme and the first `/`,
+`?` or `#`), so a URL that holds userinfo and is no URL is `ServerBase` as well,
+and `ServerUrl` prints a URL that holds none. It is the rule that
+`Invocation::request` holds a caller's base to.
 
 **A refusal names its operation and the place it stopped, and its repair only
 where the repair is true.** A `LoadError` from one operation carries the
@@ -465,18 +468,35 @@ the defect progenitor's `cli.rs` ships.
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
 
-`Invocation::new` refuses every value that the request would carry wrongly,
-whichever road it came by. Beside the schema it refuses a path value that is
-empty, `.` or `..` (judged as the segment a list makes), a header value that
-`HeaderValue` refuses, and a comma inside one item of a header list, which is not
-percent-encoded as a query or a path list is. The messages name the parameter and
-print no value, because a header value can be a credential. `Invocation::request`
-refuses a base URL that holds userinfo or a query (`BaseUrlError`), so the gate,
-the typed call and the command line end in one refusal whoever names the base,
-and `render` prints the host and the port and never the userinfo. An `http::Uri`
-drops a fragment when it parses, so the fragment is refused in the text of the
-document's server (`LoadError::ServerBase`) and nowhere else. No message prints
-the URL.
+`Invocation::new` refuses five values that the request would carry as another
+value than the caller gave, whichever road they came by. Beside the schema it
+refuses a path value that is empty, `.` or `..` (judged as the text `url` writes
+for a list), and four header values. A receiver that follows RFC 9110 would
+read another value, or another list, than the caller gave when the value holds
+a byte that `HeaderValue` refuses (`HeaderValue`), starts or ends with a space or
+a tab (`HeaderWhitespace`, an item of a list too), and, for a header list, when
+one item holds a comma (`HeaderItemComma`: a header is not percent-encoded as a
+query or a path list is) or is empty (`HeaderItemEmpty`: a receiver ignores an
+empty list element). A byte of 0x80 or above reaches the receiver as it is, and
+so does an empty value that is no list, so neither is refused. A header refusal
+names the parameter and prints no value, because a header value can be a
+credential; `PathSegment` prints its segment, which is one of three fixed words.
+`Invocation::request` refuses a base URL that holds userinfo or a query
+(`BaseUrlError`), so the gate, the typed call and the command line end in one
+refusal whoever names the base, and `render` prints the host and the port and
+never the userinfo. An `http::Uri` drops a fragment when it parses, so the
+fragment is refused in the text of the document's server
+(`LoadError::ServerBase`) and nowhere else.
+
+No text that the library makes holds a base URL's userinfo. The refusals of
+`BaseUrlError` and `LoadError::ServerBase` print no part of the URL;
+`LoadError::ServerUrl` prints a URL that holds no userinfo, because the userinfo
+is read first; `render` prints the host and the port; and the one type that holds
+a caller's base, `Client`, writes its `Debug` by hand and leaves the userinfo out
+(`request::without_userinfo`, which `render` shares with it through `host_of`). A
+type that comes to hold a caller's base owes the same. `Document` does not: its
+base comes from a load, which refuses userinfo. The text of the operator's own
+argument is the operator's, and clap repeats it in its own errors.
 
 **A request body is held to the generated type in one place, and an
 undeclared property has no way through.** `client::fits` is where a JSON body
@@ -601,9 +621,9 @@ closed: reading it as open would refuse nothing, and the refusal of an
 undeclared property is the point. `false` stays what typify closes with
 `deny_unknown_fields`.
 
-**Every YAML text is read by one function, and no foreign error is public.**
-`read` in `src/overlay.rs` is the function every document and every Overlay goes
-through, into a `serde_json::Value`, before anything else looks at it. That
+**Every YAML text is read by one function, and no type of a 0.x crate is in a
+public error.** `read` in `src/overlay.rs` is the function every document and
+every Overlay goes through, into a `serde_json::Value`, before anything else looks at it. That
 order is what tells `Syntax` (not readable as YAML or JSON) from `Shape` (YAML
 of the wrong shape). The reader's options are in `reader`, which `read_here`
 calls, and `read` calls `read_here`. The options are not the reader's defaults:
@@ -634,7 +654,11 @@ The emitter keeps its defaults, which quote what a YAML 1.1 reader would
 misread. A public error holds an `overlay::Cause` (a message, and an
 `overlay::Place`: the line and column of the text, or the action's index) or a
 boxed `dyn Error + Send + Sync`, so a release of the YAML crate, `roas-overlay`
-or typify is never a break here.
+or typify is never a break here. The foreign types that a public error does
+carry come from crates at 1.0 or later: `serde_json::Error`, `http::Error`,
+`http::uri::InvalidUri`, `postcard::Error`, `syn::Error`, `std::io::Error` and
+`clap::parser::MatchesError`. A type of a 0.x crate in a public error would make
+a release of that crate a break here.
 
 The depth limit is a recursion limit, and the library holds it on any thread. The
 reader descends 128 levels before it refuses the 129th, which takes up to 3 MiB

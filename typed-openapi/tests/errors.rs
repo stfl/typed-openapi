@@ -119,8 +119,8 @@ fn bad_value() -> ValueError {
         .expect_err("`s3cr3t-value` is not an integer")
 }
 
-/// A verb of the adopter's own that declares `--n` as an integer where the
-/// document types the parameter as text of the operation's own kind.
+/// A verb of the adopter's own that declares `--n` with a parser that stores an
+/// `i64`, where `values` reads a `String` whatever type the document gives `n`.
 fn flag_type() -> ArgError {
     let doc = Document::load(&document(URL, SOUND), &[]).expect("a document");
     let op = doc.get("listThings").expect("the one operation");

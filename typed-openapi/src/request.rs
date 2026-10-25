@@ -4,11 +4,14 @@
 //! `Invocation` that exists names an operation, carries every required
 //! parameter, carries nothing the operation does not declare, and holds a body
 //! of the kind the operation asks for. Every value is held to the rules of its
-//! schema and is kept as it was parsed, so `+5` is `5`. Three refusals are of
-//! the request and not of the schema: a path value that is empty, `.` or `..`,
-//! which a server reads as a step along the path and not as a name; a header
-//! value that [`http::HeaderValue`] refuses; and a comma inside one item of a
-//! header list, which the receiver splits in two.
+//! schema and is kept as it was parsed, so `+5` is `5`. Five refusals are of the
+//! request and not of the schema. A path value that is empty, `.` or `..` is
+//! refused, because a server reads it as a step along the path and not as a
+//! name. A header value is refused when a receiver that follows RFC 9110 would
+//! read another value, or another list, than the caller gave: a byte that
+//! [`http::HeaderValue`] refuses, a space or a tab at the start or the end of a
+//! value or of one item of a list, and in a header list a comma inside one item
+//! and an empty item.
 //! [`Invocation::request`] is then a rendering, not a decision. It refuses a
 //! base URL that holds userinfo or a query, because a request would send the one
 //! and drop the other, and it hands on the `http` crate's refusal of anything
@@ -29,15 +32,15 @@ use crate::values::{Payload, Values};
 
 /// Values the document rejects for this operation.
 ///
-/// Every variant names the operation by its `operationId` in `op`. The nine that
-/// are about a parameter also carry it in `name`: the name the document gives
-/// it, or, in [`ValueError::UnknownParam`], the name the caller gave, which the
-/// document does not declare. The three about the body carry no `name`.
+/// Every variant names the operation by its `operationId` in `op`. The eleven
+/// that are about a parameter also carry it in `name`: the name the document
+/// gives it, or, in [`ValueError::UnknownParam`], the name the caller gave, which
+/// the document does not declare. The three about the body carry no `name`.
 ///
-/// The three that refuse a path segment, a header value and a header list item
-/// print no value of the caller's: a header value can be a credential. The
-/// segment is one of three fixed words, so [`ValueError::PathSegment`] shows it.
-/// The cause of [`ValueError::BadValue`] quotes the value.
+/// The four that refuse a header value print no value of the caller's: a header
+/// value can be a credential. The segment of [`ValueError::PathSegment`] is one
+/// of three fixed words, so that variant shows it. The cause of
+/// [`ValueError::BadValue`] quotes the value.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ValueError {
@@ -134,6 +137,33 @@ pub enum ValueError {
         /// The header parameter, as the document spells it on the wire.
         name: String,
     },
+    /// An empty item in a header list. A receiver ignores an empty list element
+    /// (RFC 9110, section 5.6.1.2), so `["", "c"]` written as `,c` would be read
+    /// as the one item `c`, and `[""]` as no item at all.
+    #[error(
+        "{op}: `{name}` was given an empty item, and a receiver ignores an empty item of a header \
+         list"
+    )]
+    HeaderItemEmpty {
+        /// The `operationId` of the operation the values were checked against.
+        op: String,
+        /// The header parameter, as the document spells it on the wire.
+        name: String,
+    },
+    /// A space or a tab at the start or the end of a header value, or of one item
+    /// of a header list. A receiver does not count it as part of the value
+    /// (RFC 9110, sections 5.5 and 5.6.1), so the value it reads is another one
+    /// than the caller gave.
+    #[error(
+        "{op}: `{name}` was given a value that starts or ends with a space or a tab, and a \
+         receiver does not read it as part of the value"
+    )]
+    HeaderWhitespace {
+        /// The `operationId` of the operation the values were checked against.
+        op: String,
+        /// The header parameter, as the document spells it on the wire.
+        name: String,
+    },
     /// A parameter given without one the document says has to come with it.
     #[error("{op}: `{name}` is given, and `{requires}` has to be given with it")]
     MissingCompanion {
@@ -215,8 +245,23 @@ impl BaseUrlError {
         Ok(())
     }
 
-    /// What a request cannot keep of the server URL of a document, as the
-    /// document spells it once its variables have their defaults.
+    /// Whether the text of a server URL holds userinfo, as the document spells
+    /// it once its variables have their defaults.
+    ///
+    /// It is asked of the text and before the text is parsed, so a URL that
+    /// holds userinfo and is no URL is refused for the userinfo. The refusal
+    /// that a URL that does not parse gets prints the URL, and that is where a
+    /// credential must not be.
+    #[cfg(feature = "document")]
+    pub(crate) fn userinfo_in(text: &str) -> Result<(), Self> {
+        if authority_of(text).contains('@') {
+            return Err(Self::Userinfo);
+        }
+        Ok(())
+    }
+
+    /// What a request cannot keep of the server URL of a document, once the
+    /// text is a URL.
     #[cfg(feature = "document")]
     pub(crate) fn of_server(text: &str, base: &Uri) -> Result<(), Self> {
         Self::of(base)?;
@@ -225,6 +270,31 @@ impl BaseUrlError {
         }
         Ok(())
     }
+}
+
+/// What stands between the scheme and the first `/`, `?` or `#` of `text`. A
+/// text without a scheme is read from its start, after a leading `//`, because
+/// a server URL that is no URL can still hold a credential, and the authority
+/// is where one is.
+#[cfg(feature = "document")]
+fn authority_of(text: &str) -> &str {
+    let after_scheme = text
+        .split_once("://")
+        .filter(|(scheme, _)| is_scheme(scheme))
+        .map_or_else(|| text.strip_prefix("//").unwrap_or(text), |(_, rest)| rest);
+    after_scheme
+        .split_once(['/', '?', '#'])
+        .map_or(after_scheme, |(authority, _)| authority)
+}
+
+/// RFC 3986 section 3.1: a letter, then letters, digits, `+`, `-` and `.`.
+#[cfg(feature = "document")]
+fn is_scheme(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
 /// Why an invocation did not become a request.
@@ -305,10 +375,11 @@ impl<'a> Invocation<'a> {
         Ok(invocation)
     }
 
-    /// A path value that is empty, `.` or `..` is no name for a resource.
+    /// A path value that is empty, `.` or `..` is no name for a resource. The
+    /// segment is the text `url` writes, so what is judged is what is sent.
     fn check_segments(&self) -> Result<(), ValueError> {
         for sent in self.placed(Location::Path) {
-            let segment = sent.values.join(",");
+            let segment = commas(&sent.values);
             if matches!(segment.as_str(), "" | "." | "..") {
                 return Err(ValueError::PathSegment {
                     op: self.op.id().to_owned(),
@@ -320,12 +391,16 @@ impl<'a> Invocation<'a> {
         Ok(())
     }
 
-    /// A header value is what `HeaderValue` takes, and an item of a header list
-    /// has no comma in it, because the list is written with commas between its
-    /// items and a header is not percent-encoded.
+    /// A header value reaches a receiver as the caller gave it. The receiver
+    /// reads another value, or another list, when the value holds a byte that
+    /// `HeaderValue` refuses, when it starts or ends with a space or a tab, and,
+    /// for a list written with commas between its items and not percent-encoded,
+    /// when an item holds a comma or is empty.
     fn check_headers(&self) -> Result<(), ValueError> {
         let op = || self.op.id().to_owned();
         for sent in self.placed(Location::Header) {
+            let name = || sent.name.to_owned();
+            let is_list = sent.join.is_some();
             if sent
                 .values
                 .iter()
@@ -333,13 +408,25 @@ impl<'a> Invocation<'a> {
             {
                 return Err(ValueError::HeaderValue {
                     op: op(),
-                    name: sent.name.to_owned(),
+                    name: name(),
                 });
             }
-            if sent.join.is_some() && sent.values.iter().any(|item| item.contains(',')) {
+            if is_list && sent.values.iter().any(|item| item.contains(',')) {
                 return Err(ValueError::HeaderItemComma {
                     op: op(),
-                    name: sent.name.to_owned(),
+                    name: name(),
+                });
+            }
+            if is_list && sent.values.iter().any(|item| item.is_empty()) {
+                return Err(ValueError::HeaderItemEmpty {
+                    op: op(),
+                    name: name(),
+                });
+            }
+            if sent.values.iter().any(|item| is_padded(item)) {
+                return Err(ValueError::HeaderWhitespace {
+                    op: op(),
+                    name: name(),
                 });
             }
         }
@@ -641,6 +728,31 @@ fn host_of(authority: &Authority) -> &str {
         .as_str()
         .rsplit_once('@')
         .map_or_else(|| authority.as_str(), |(_, host)| host)
+}
+
+/// A base URL as text a message may hold: its scheme, host, port, path and
+/// query, and no userinfo. This is how a type that holds the caller's base
+/// shows it in its `Debug`.
+pub(crate) fn without_userinfo(base: &Uri) -> String {
+    let mut out = String::new();
+    if let Some(scheme) = base.scheme_str() {
+        out.push_str(scheme);
+        out.push_str("://");
+    }
+    if let Some(authority) = base.authority() {
+        out.push_str(host_of(authority));
+    }
+    out.push_str(
+        base.path_and_query()
+            .map_or("", http::uri::PathAndQuery::as_str),
+    );
+    out
+}
+
+/// Does `item` start or end with a space or a tab? RFC 9110 leaves those two
+/// out of a field value (section 5.5) and out of a list item (section 5.6.1).
+fn is_padded(item: &str) -> bool {
+    item.starts_with([' ', '\t']) || item.ends_with([' ', '\t'])
 }
 
 /// A path segment that is no name, as a message shows it.
