@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use typed_openapi::names::NameError;
 use typed_openapi::overlay::OverlayError;
 use typed_openapi::{
-    Body, ConfirmationError, Document, LoadError, Loading, RefError, Shape, Unsupported,
+    Body, ConfirmationError, Document, LoadError, Loading, Place, RefError, Shape, Unsupported,
 };
 
 /// A document at `version` with one server, and whatever the case puts after it.
@@ -740,8 +740,9 @@ fn a_parameter_with_a_letter_outside_ascii_has_no_flag_and_a_required_one_refuse
     );
     let error = refused(&required);
     assert!(
-        matches!(&error, LoadError::Parameter { op, name, why }
-            if op == "listItems" && name == "straße" && *why == Unsupported::Unspellable),
+        matches!(&error, LoadError::Parameter { op, name, place, why }
+            if op == "listItems" && name == "straße" && *place == Place::Query
+                && *why == Unsupported::Unspellable),
         "{error:?}"
     );
     assert_eq!(

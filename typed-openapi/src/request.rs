@@ -144,11 +144,17 @@ impl<'a> Invocation<'a> {
             }
         }
         for param in op.params() {
-            let given = values
-                .params()
-                .iter()
-                .filter(|(wire, _)| wire == param.name())
-                .count();
+            // A parameter with no flag is given nothing, even when another
+            // parameter with its name is: the values under a name are the
+            // first parameter's, and the loop above has already seen to them.
+            let given = match param.shape() {
+                Shape::Flag { .. } => values
+                    .params()
+                    .iter()
+                    .filter(|(wire, _)| wire == param.name())
+                    .count(),
+                Shape::Unreachable(_) => 0,
+            };
             if param.required() && given == 0 {
                 return Err(ValueError::MissingParam {
                     op: name(),

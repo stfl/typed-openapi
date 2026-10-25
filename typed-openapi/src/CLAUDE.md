@@ -298,14 +298,15 @@ adds no recursion to either walk.
 
 **A shape this crate cannot spell stops at the operation, not at the document.**
 A parameter that is `in: cookie`, described by `content`, neither a value nor a
-list of values, declaring a `style` this crate does not serialise, or *named* in
-a way `names::spelled` refuses, is carried as `Shape::Unreachable` — named on
-the subcommand's long help and in the wrapper's documentation, and given no
-flag, no argument and no place in the request — and only a *required* one is a
-`LoadError`, because an operation that could never build a correct request is
-worth refusing by name. It is the rule a body already follows, where one nested
-property sends the whole body through `--json-body` rather than refusing the
-document that holds it.
+list of values, declaring a `style` this crate does not serialise, *named* in a
+way `names::spelled` refuses, or sharing its name with an earlier parameter of
+the operation (`Unsupported::Shared(Place)`), is carried as `Shape::Unreachable` —
+named on the subcommand's long help and in the wrapper's documentation, and
+given no flag, no argument and no place in the request — and only a *required*
+one is a `LoadError`, because an operation that could never build a correct
+request is worth refusing by name. It is the rule a body already follows, where
+one nested property sends the whole body through `--json-body` rather than
+refusing the document that holds it.
 
 Every flag a user types passes `names::spelled`, which is why a body property
 spelled `*` sends its body whole rather than claiming a flag called `""`. The
@@ -328,6 +329,92 @@ said "does not kebab-case" would look right. A path segment that holds one needs
 `x-cli-group` or `x-cli-command`, and `Name` says so; a gate or the confirmation
 word is refused; a parameter is `Unreachable`, and only a required one refuses
 the document; a body property sends the body whole.
+
+**An operation's parameters are the ones OpenAPI defines, and the request goes
+where the document says.** A parameter is its name and its place. `declared` in
+`src/model/reduce.rs` follows the `$ref` of each parameter and builds the one
+list that everything reads: the path item's entries in the order the path item
+lists them, each entry of the operation with the name and the place of one of
+them in that one's slot, and then the operation's other entries in the order the
+operation lists them. An entry of the operation with a pair that no slot is left
+for is another parameter, which is how two entries of one pair stay two. The
+list is the one order the document fixes, because `openapiv3` keeps none between
+a path item's `parameters` and its methods, and an override that keeps its slot
+keeps the wrapper's argument order and the help order where the path item put
+them. `declared` drops the header parameters `Accept`, `Content-Type` and
+`Authorization`, compared without case and in a header only, because OpenAPI
+3.0.3 says they "SHALL be ignored". They are dropped and not carried as
+`Unreachable`, because a required one would then refuse a document that is
+right, and a flag for the `Authorization` header puts a credential in argv, in
+shell history and in every dry run. A credential that the document declares
+under another name is a parameter like any other. `place` is the one map from
+the four kinds of `openapiv3::Parameter` to `Place`, with no `_` arm.
+
+`Values` is keyed by the name alone, and so is `Operation::param`, which finds
+the first. So of two parameters left with one name the one that is later in the
+list is `Unsupported::Shared(Place)`, the place of the earlier one, whatever the
+shape or the place of either, and unless it has a reason of its own: a reason of
+its own wins over `Shared`. It claims no flag, and a required one is
+`LoadError::Parameter`. The earlier one keeps the name even when it has no flag
+itself (`in: cookie`, `content`), and a required path parameter that comes
+later refuses the document. `docs/cli.md` says the repairs of both costs. A
+rule by reachability would make `Operation::param` "the first parameter with a
+flag", and a rule by place would add a second order beside the list. Both would
+widen a public seam for a rare document, and both would contradict spec F-10
+("the one the document lists later"). The values under a name are the first parameter's, so
+`Invocation::new` counts the given values of a parameter with a flag only. The
+generator reads the same list: `entry_of_flag` finds the entry that a flag was
+read from in what `declared` returns, which is the first entry with the flag's
+name, because the first entry keeps the name and no later one has a flag. So a
+wrapper's argument is typed by the entry that won, inline or by a `$ref`, and
+the generator keeps no second copy of the merge.
+
+`LoadError::Parameter` says where the refused parameter is (`place`), because
+the repair depends on it. `repair` names a repair that loads the document when
+the parameter is the one fault in it. A document with more faults is refused for
+one at a time, and each repair ends its own refusal and brings back none that an
+earlier repair ended. A path parameter that is not `required` is refused
+(`OptionalPathParameter`), so dropping the `required` of one is never named.
+A path parameter is renamed together with its variable (`rename`), because the
+template names it and no `update` of the parameter alone loads; no Overlay
+action renames a key, so the Overlay writes the path item again under the new
+path and removes the old one. The request is the same, because in the `simple`
+style, the only one this CLI writes in a path, the name of a path parameter does
+not go on the wire. So the rename gives up no parameter, and it is the repair
+for a name with no spelling and for a shared name when one of the two is a path
+parameter and the other is not, whichever of them was refused.
+
+The words follow one rule. A repair that keeps every parameter the operation
+declares is named first. A repair that also ends the fault by giving up a part
+of the document is named after it, because only the adopter knows if that part
+is the vendor's mistake: removing the namesake, which gives the refused
+parameter its flag, or dropping the `required` of a parameter off the path. No
+repair is named that does not load, so a parameter off the path is never told to
+remove a namesake that is a path parameter, because the template names it. Two
+cases get no rename. Both names go on the wire when neither parameter is in the
+path, so a rename changes the request and is no correction. Two path parameters
+of one name have one variable in the template, so no rename parts them, and the
+later one is told to remove the earlier. A message with two parameters of one
+name says which parameter each repair acts on (`parameter`: its place and its
+name, and "earlier" and "later" where the place is the same), and never writes
+"its" for either one: the `required` of the namesake is no repair, and a
+pronoun reads as the parameter named last. Each repair that `repair` names has a
+test in `tests/wire.rs` that loads the document with the Overlay the words name,
+and a new reason or place adds one.
+
+`reconcile` holds the path template to the path parameters, and refuses a
+variable with no path parameter, a path parameter with no variable and a path
+parameter that is not required, so `{id}` is never on the wire. A `{` that
+nothing closes is text and not a variable. `no_servers` refuses a `servers` on a
+path item or on an operation (`Servers`), because a request goes to
+`Document::base` and the model holds no host per operation; it spells the list
+as an Overlay names a target, so the repair is a line to paste.
+
+None of these rules is repeated by `Document::check`. The model holds no
+`servers`, and a blob that breaks one of the others sends a request that is
+wrong, which costs the run that meets it. A write is still held by
+`Plan::decide`, and the flags of an operation are distinct by their own names,
+so clap does not panic.
 
 **A body template is read from the model and reaches no request.** The body with
 no per-field flags is the body `--help` cannot describe, so `Body::JsonWhole`

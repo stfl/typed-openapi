@@ -1,5 +1,5 @@
 {
-  "model_layout": 4,
+  "model_layout": 5,
   "traces": {
     "Bounds<f64>": {
       "Bounds": {
@@ -291,6 +291,22 @@
           }
         ]
       },
+      "Place": {
+        "ENUM": {
+          "0": {
+            "Path": "UNIT"
+          },
+          "1": {
+            "Query": "UNIT"
+          },
+          "2": {
+            "Header": "UNIT"
+          },
+          "3": {
+            "Cookie": "UNIT"
+          }
+        }
+      },
       "Scalar": {
         "ENUM": {
           "0": {
@@ -405,6 +421,13 @@
           },
           "4": {
             "Unspellable": "UNIT"
+          },
+          "5": {
+            "Shared": {
+              "NEWTYPE": {
+                "TYPENAME": "Place"
+              }
+            }
           }
         }
       }

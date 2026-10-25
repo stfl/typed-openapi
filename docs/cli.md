@@ -180,7 +180,7 @@ own type rather than the box `DispatchError::Transport` carries.
 
 | what the document says | what the subcommand grows |
 |---|---|
-| a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is |
+| a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is; none for the three headers [OpenAPI ignores](#headers-openapi-says-to-ignore) |
 | the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode` |
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
 | a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE` |
@@ -319,34 +319,101 @@ nothing lands on them.
 
 ### Parameters with no flag
 
-Five shapes have no command-line spelling: `in: cookie`, a parameter described
+Six shapes have no command-line spelling: `in: cookie`, a parameter described
 by `content` instead of `schema`, one whose schema is neither a value nor a list
 of values, one declaring a `style` this CLI does not write — `spaceDelimited`,
-`pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — and
-one whose *name* has no kebab-case spelling. The style is read whatever the
-schema is, because it is not only about delimiters: `matrix` puts a `;name=` in
-front of a single value too.
+`pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — one
+whose *name* has no kebab-case spelling, and one whose name an earlier parameter
+of the operation has (the list is below). The style is read whatever the schema is, because it is
+not only about delimiters: `matrix` puts a `;name=` in front of a single value
+too.
 
-The last of the five is the only one that is about the name rather than the
-value. A flag is `[a-z0-9-]` once kebab-cased, the rule a command name and a
-gate also pass, and a parameter named `*` or `()` reduces to nothing under it.
-A name with a character outside ASCII, such as `straße`, has no spelling
-either: it is not kebab-cased to `stra-e`, and nothing is transliterated.
+The last two are about the name rather than the value. A flag is `[a-z0-9-]`
+once kebab-cased, the rule a command name and a gate also pass, and a parameter
+named `*` or `()` reduces to nothing under it. A name with a character outside
+ASCII, such as `straße`, has no spelling either: it is not kebab-cased to
+`stra-e`, and nothing is transliterated.
 
-None of them refuses the document. The parameter stays in the reduction, the
-subcommand grows nothing for it, and its long help carries a line of its own
-below the method, the path and the `operationId`:
+The parameters of an operation are one list. It holds the path item's
+parameters in the order the path item lists them, with a parameter of the
+operation that has the name and the place of one of them in its slot, and then
+the operation's other parameters in the order the operation lists them.
+A path-level `id` that an operation overrides is one `--id`, held to the rules
+the operation's entry states, and it keeps its place in the wrapper's arguments
+and on the help page.
+
+OpenAPI tells two parameters apart by their name and their place, so `ref` in
+the path and `ref` in the query are two parameters. A value reaches a parameter
+by its name alone, on the command line and in the typed wrapper alike, so of
+two parameters with one name the one that comes first in the list has the flag
+and the one that comes later has none.
+
+A parameter with no flag does not refuse the document. The parameter stays in
+the reduction, the subcommand grows nothing for it, and its long help carries a
+line of its own below the method, the path and the `operationId`:
 
 ```
 `filter` has no flag: it is neither a value nor a list of values. The request
 goes out without it.
 ```
 
+The line for the `ref` in the query gives its reason as sharing its name with
+the `path` parameter.
+
 The one exception is a parameter the document marks `required: true`. That
 operation could never build a correct request, so it is a `LoadError::Parameter`
-naming the parameter and the reason when the document is read, and an
-[Overlay](overlay.md) is the way out — retype the parameter, or drop its
-`required`.
+naming the parameter, the reason and where it is when the document is read, and
+an [Overlay](overlay.md) is the way out. The error names a repair that loads:
+
+- Off the path, correct the parameter or drop its `required`.
+- A path parameter is always required (see below), so its `required` is never
+  named, and the correction is. A name with no spelling, such as `straße`, is
+  corrected by renaming the parameter and its variable in the path together,
+  because the template names the parameter: an Overlay writes the path item again
+  under the new path and removes the old one, and
+  [docs/overlay.md](overlay.md#1-plain-corrections) shows the actions. In the
+  `simple` style, the only one this CLI writes in a path, the name of a path
+  parameter never goes on the wire, only its value in place of the variable, so
+  the request does not change.
+- A name that two parameters share is mended in one of three ways. The rename
+  comes first where it applies, because it gives nothing up, and the message
+  names it before the others:
+  - When one of the two is a path parameter and the other is not, rename the path
+    parameter and its variable together, as above. The document keeps every
+    parameter it declares, and the refused parameter gets its flag. A namesake
+    that can have no flag, an `in: cookie` or a `content` one, still has none,
+    so the request does not carry it.
+  - Remove the other parameter from wherever the document declares it. That gives
+    the refused one its flag, and the document no longer declares the removed
+    one. The template needs a path parameter, so a required query or header
+    parameter whose namesake is a path parameter is not told to remove it.
+  - Drop the `required` of the refused parameter, when it is off the path. That
+    gives up the requirement.
+
+  The message names the last two after the rename because each gives up a part of
+  the document, and only you know if that part is the vendor's mistake. It says
+  whose `required` is dropped, because it names two parameters of one name, and
+  the `required` of the other one does not mend the refusal. It names the
+  repairs that apply to the refused parameter:
+  - A path parameter whose namesake is a path parameter: the removal only. A
+    rename does not part them, because the template has one variable for both.
+  - A path parameter whose namesake is off the path: the rename, then the
+    removal.
+  - A parameter off the path whose namesake is a path parameter: the rename,
+    then the drop of the `required` of the refused parameter. The template needs
+    the namesake, so the message does not name the removal.
+  - A parameter off the path whose namesake is off the path too: the removal,
+    then the drop of the `required` of the refused parameter. Both names go on
+    the wire, so a rename would change the request. Where both have one place,
+    the message calls them the earlier one and the later one.
+
+The rule for a shared name has two costs. A required path parameter that comes
+after its namesake refuses the document, because it is required and has no flag.
+It is mended by the rename, or by removing the namesake that comes first, and
+only by the removal when the namesake is a path parameter too. And a parameter
+that can have no flag, an `in: cookie` or a `content` one, still holds its name,
+so a later query or header parameter with that name has none either. The repair
+of that cost is an Overlay that removes the namesake that comes first.
 
 An object is refused a spelling rather than given a guessed one. OpenAPI says
 how a *flat* object serialises under `deepObject` and says nothing about a
@@ -359,6 +426,38 @@ all — `form-data` where `multipart/form-data` was meant is a
 `LoadError::MediaType`, not a `--raw-body` sent under a `Content-Type` no server
 parses. [docs/overlay.md](overlay.md#1-plain-corrections) has the action that
 repairs one.
+
+### The path and its parameters
+
+The path template and the path parameters are held to each other while the
+document is reduced. A request that went out with `{id}` in it, or with a value
+thrown away, looks sent and is not read. Each of these is a `LoadError` that
+names the operation and the name, and each names the Overlay that mends it:
+
+| the document has | the repair |
+|---|---|
+| a variable in the path and no path parameter of that name (`UnboundVariable`) | add the parameter |
+| a path parameter and no variable of its name in the path (`UnusedPathParameter`) | remove the parameter |
+| a path parameter that is not `required: true` (`OptionalPathParameter`) | set `required: true` |
+
+A parameter in the query or in a header does not answer a variable, whatever
+its name. A variable that the path repeats is one variable.
+
+### Headers OpenAPI says to ignore
+
+A header parameter named `Accept`, `Content-Type` or `Authorization`, compared
+without case, is not a parameter of the operation. OpenAPI 3.0.3 says its
+definition "SHALL be ignored": the media type of a request comes from its body,
+what it accepts is the client's, and a credential is a security scheme. The
+reduction drops the three, so none of them grows a flag, none is carried as a
+parameter with no flag, and a required one does not refuse the document, which
+a parameter with no flag would. A converted Swagger 2 document often declares
+them. So the `Authorization` header is never a flag, and a bearer token never
+lands in a shell's history or in the output of a dry run, and a request carries
+one `content-type`, the body's. A credential that the document declares under
+another name, such as an `X-Api-Key` header or an `api_key` query parameter, is
+a flag like any other parameter, and so is a parameter named `authorization` in
+the query, which is not a header.
 
 ### Per-field flags are merged over `--json-body`
 

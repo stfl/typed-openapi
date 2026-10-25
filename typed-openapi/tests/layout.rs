@@ -29,7 +29,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_reflection::{ContainerFormat, Registry, Samples, Tracer, TracerConfig};
 use typed_openapi::scalar::{Bounds, Limit};
-use typed_openapi::{Body, Document, Effect, Join, Location, Scalar, Shape, Unsupported};
+use typed_openapi::{Body, Document, Effect, Join, Location, Place, Scalar, Shape, Unsupported};
 
 /// The description the layout is held to, written by this test.
 const COMMITTED: &str = include_str!("layout.json");
@@ -109,6 +109,7 @@ fn document_trace() -> Registry {
     trace::<Join>(&mut tracer, &samples);
     trace::<Limit<i64>>(&mut tracer, &samples);
     trace::<Location>(&mut tracer, &samples);
+    trace::<Place>(&mut tracer, &samples);
     trace::<Scalar>(&mut tracer, &samples);
     trace::<Shape>(&mut tracer, &samples);
     trace::<Unsupported>(&mut tracer, &samples);

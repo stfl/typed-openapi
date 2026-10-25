@@ -8,7 +8,7 @@
 #
 # This document is the other half. Every shape in it is one a real vendor
 # document has written by accident: schema names that differ only in case,
-# parameters named after Rust keywords, one wire name in two places, a property
+# parameters named after Rust keywords, two names that spell one flag, a property
 # whose name has no letters in it, a description whose list markers Markdown
 # reads as code, a body that is an array, a body with no properties, five
 # parameters this crate cannot spell, and three spellings of `help`, which is
@@ -128,13 +128,14 @@ paths:
       operationId: appendLogEntry
       summary: Append one line to a firing's log
       parameters:
-        # One wire name in two places, which is a thing OpenAPI allows and a
-        # command line cannot spell twice.
+        # Two wire names that spell one flag and one Rust word, which is a thing
+        # OpenAPI allows (a name is case sensitive) and a command line cannot
+        # spell twice.
         - name: ref
           in: path
           required: true
           schema: { type: string }
-        - name: ref
+        - name: Ref
           in: query
           schema: { type: string }
       # A body stated inline one of whose properties is an object, which sends

@@ -453,12 +453,20 @@ Three things are worth knowing:
   declare its `items` inline: a `$ref` to an array schema is a
   `GenerateError::Unsupported` naming the parameter.
 - **Two values that reduce to one Rust word get one argument each.** A document
-  may name a parameter `self` and another `Self`, or use one wire name in the
-  path and again in the query; a function signature binds each name once, so
-  the later of the two is `self_2` or `ref_2`. What it sends is unaffected —
-  the wire name travels beside the argument as a literal — and the wrapper's
-  own documentation says which name the moved argument carries, the way the
-  flag that moved aside says so on its help line.
+  may name a parameter `self` and another `Self`, or `ref` in the path and `Ref`
+  in the query; a function signature binds each name once, so the later of the
+  two is `self_2` or `ref_2`. What it sends is unaffected — the wire name
+  travels beside the argument as a literal — and the wrapper's own
+  documentation says which name the moved argument carries, the way the flag
+  that moved aside says so on its help line.
+- **One wire name gets one argument.** A parameter is identified by its name and
+  its place, so a document may use `ref` in the path and again in the query, and
+  an operation may override a parameter of its path item. The override is one
+  argument, with the type that the operation's entry states, inline or by a
+  `$ref`. The request builder is given values by name alone, so the one that
+  comes later of two parameters with one name has no argument (the order is in
+  [docs/cli.md](cli.md#parameters-with-no-flag)), and the wrapper's own
+  documentation says so, as it does for any parameter it cannot carry.
 
 [typify]: https://docs.rs/typify
 [bon]: https://bon-rs.com

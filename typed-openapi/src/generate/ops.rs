@@ -14,14 +14,14 @@
 //! `--json-body` file is held to the same schema a Rust caller is.
 
 use heck::{ToPascalCase, ToSnakeCase};
-use openapiv3::{OpenAPI, ReferenceOr, Schema, SchemaKind, Type};
+use openapiv3::{Components, OpenAPI, Parameter, ReferenceOr, Schema, SchemaKind, Type};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use syn::visit_mut::VisitMut as _;
 
 use super::GenerateError;
 use super::names::{JsonBody, Names, Site};
-use crate::model::{Body, Shape};
+use crate::model::{Body, Shape, declared, entry_of_flag};
 use crate::{Document, Operation};
 
 /// What one operation contributes to the generated file.
@@ -93,6 +93,8 @@ pub(super) fn emit(
 /// One pass over the document, in its order — which is the order every
 /// generated list below is in, and the order `Api::new` checks.
 fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>, GenerateError> {
+    let empty = Components::default();
+    let components = api.components.as_ref().unwrap_or(&empty);
     model
         .iter()
         .map(|op| {
@@ -105,6 +107,12 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
             // named here, once, rather than at each of the places that can
             // fail.
             let emitted = || {
+                // The parameters as the reduction read them, so that a wrapper's
+                // argument is typed by the entry that won and not by the path
+                // item's entry that the operation's entry replaced.
+                let declared = declared(path_item, operation, components).map_err(|source| {
+                    unsupported(format!("a parameter cannot be followed: {source}"))
+                })?;
                 Ok(Emitted {
                     row: quote! { (#id, #method, #path) },
                     variant: variant_of(op)?,
@@ -112,8 +120,8 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                     group: op.group().as_str().to_owned(),
                     command: op.command().as_str().to_owned(),
                     body: json_body_type(op, operation, names)?,
-                    method: wrapper(op, path_item, operation, names)?,
-                    builder_method: builder_wrapper(op, path_item, operation, names)?,
+                    method: wrapper(op, &declared, operation, names)?,
+                    builder_method: builder_wrapper(op, &declared, operation, names)?,
                 })
             };
             emitted().map_err(|source| GenerateError::Operation {
@@ -317,7 +325,7 @@ fn json_body_type(
 
 fn wrapper(
     op: &Operation,
-    item: &openapiv3::PathItem,
+    declared: &[&Parameter],
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
@@ -333,7 +341,7 @@ fn wrapper(
         // The delegate beside this one forwards the argument names; a
         // positional call has no use for them.
         names: _,
-    } = signature_of(op, item, operation, names)?;
+    } = signature_of(op, declared, operation, names)?;
     let response = response_type(op, operation, names)?;
     let variant = variant_of(op)?;
     let doc = paragraphs(
@@ -426,7 +434,7 @@ fn gate_note(op: &Operation) -> String {
 /// cannot come to describe different requests.
 fn builder_wrapper(
     op: &Operation,
-    item: &openapiv3::PathItem,
+    declared: &[&Parameter],
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
@@ -436,7 +444,7 @@ fn builder_wrapper(
         args,
         names: arguments,
         ..
-    } = signature_of(op, item, operation, names)?;
+    } = signature_of(op, declared, operation, names)?;
     let response = response_type(op, operation, names)?;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
@@ -543,7 +551,7 @@ impl Signature {
 
 fn signature_of(
     op: &Operation,
-    item: &openapiv3::PathItem,
+    declared: &[&Parameter],
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<Signature, GenerateError> {
@@ -554,7 +562,7 @@ fn signature_of(
         notes: Vec::new(),
     };
     for param in op.params() {
-        add_param(&mut out, param, item, operation, names)?;
+        add_param(&mut out, param, declared, names)?;
     }
     match op.body() {
         Body::None => {}
@@ -590,8 +598,7 @@ fn signature_of(
 fn add_param(
     out: &mut Signature,
     param: &crate::Param,
-    item: &openapiv3::PathItem,
-    operation: &openapiv3::Operation,
+    declared: &[&Parameter],
     names: &Names,
 ) -> Result<(), GenerateError> {
     let join = match param.shape() {
@@ -617,7 +624,7 @@ fn add_param(
         &word,
         &format!("sends the document's `{}`", param.name()),
     );
-    let schema = param_schema(item, operation, param.name())?;
+    let schema = param_schema(declared, param.name())?;
     let wire = param.name();
     if join.is_some() {
         // A list parameter is the wire name given once per value, which is the
@@ -646,22 +653,15 @@ fn multipart_note(parts: &Ident, names: &[String]) -> String {
     }
 }
 
-/// The schema one parameter declares, keyed on the document's own name.
+/// The schema one parameter declares, read off the entry the reduction made its
+/// flag from: the one that won, where an operation replaced a path item's.
 fn param_schema<'d>(
-    item: &'d openapiv3::PathItem,
-    operation: &'d openapiv3::Operation,
+    declared: &[&'d Parameter],
     name: &str,
 ) -> Result<&'d ReferenceOr<Schema>, GenerateError> {
-    let declared = item
-        .parameters
-        .iter()
-        .chain(&operation.parameters)
-        .find_map(|p| {
-            let ReferenceOr::Item(p) = p else { return None };
-            (p.parameter_data_ref().name == name).then_some(p)
-        })
+    let entry = entry_of_flag(declared, name)
         .ok_or_else(|| unsupported(format!("`{name}` is not declared on this operation")))?;
-    let openapiv3::ParameterSchemaOrContent::Schema(schema) = &declared.parameter_data_ref().format
+    let openapiv3::ParameterSchemaOrContent::Schema(schema) = &entry.parameter_data_ref().format
     else {
         return Err(unsupported(format!(
             "`{name}` is declared with `content`, not `schema`"

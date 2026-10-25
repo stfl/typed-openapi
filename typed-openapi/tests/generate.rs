@@ -114,6 +114,124 @@ fn a_generated_newtype_over_a_string_prints_and_needs_no_engine_of_its_own() {
     );
 }
 
+/// A path item that states `id` as a string, and an operation that overrides it
+/// with an integer. The path item's `key` is in the query, and the operation's
+/// `key` is in a header, so they are two parameters that share a name, and the
+/// header's has no argument. A boolean `key` in the header is what an argument
+/// typed by the wrong parameter would show.
+const OVERRIDDEN: &str = r#"
+openapi: 3.0.3
+info: { title: Overridden, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+      - { name: key, in: query, schema: { type: string } }
+    get:
+      operationId: getThing
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: key, in: header, schema: { type: boolean } }
+      responses:
+        "200": { description: OK }
+"#;
+
+/// A path-level parameter that an operation overrides is one argument, typed by
+/// the operation's entry, and a second parameter with a name that the first
+/// already has is a note and no argument: a value is filed under a name, so the
+/// wrapper has one argument for it.
+#[test]
+fn an_overridden_parameter_is_one_argument_typed_by_the_operations_entry() {
+    let dir = out("overridden");
+    let document = wrote(&dir, "overridden.yaml", OVERRIDDEN);
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the document generates");
+
+    let ops = read(&dir.join("src/ops.rs"));
+
+    assert!(
+        ops.contains("pub fn get_thing(&self, id: i64, key: Option<&str>)"),
+        "the wrapper does not take the operation's `id` and the path item's `key`:\n{ops}"
+    );
+    assert!(
+        ops.contains(
+            "The document's `key` parameter is not an argument: it is sharing its name with the \
+             `query` parameter."
+        ),
+        "the wrapper does not say why the header `key` is not an argument:\n{ops}"
+    );
+}
+
+/// A `{id}` path with the path item's parameters in `ITEM`, an operation that
+/// names `#/components/parameters/Id`, and that component in `COMPONENT`.
+const REFERRED: &str = r##"
+openapi: 3.0.3
+info: { title: Referred, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things/{id}:
+    parameters: ITEM
+    get:
+      operationId: getThing
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: OK }
+components:
+  parameters:
+    Id: COMPONENT
+"##;
+
+/// The entry that wins may be a reference, and it types the argument all the
+/// same: the path item's entry that it replaced does not. A parameter that the
+/// document gives by reference alone is declared too.
+#[test]
+fn an_argument_is_typed_by_the_winning_entry_when_the_operation_names_it_by_reference() {
+    let text = "{ name: id, in: path, required: true, schema: { type: string } }";
+    let integer = "{ name: id, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }";
+    for (name, item, component, wrapper) in [
+        (
+            "over-text",
+            &format!("[{text}]"),
+            integer,
+            "pub fn get_thing(&self, id: i64)",
+        ),
+        (
+            "over-integer",
+            &format!("[{integer}]"),
+            text,
+            "pub fn get_thing(&self, id: &str)",
+        ),
+        (
+            "alone",
+            &"[]".to_owned(),
+            integer,
+            "pub fn get_thing(&self, id: i64)",
+        ),
+    ] {
+        let dir = out(&format!("referred-{name}"));
+        let document = wrote(
+            &dir,
+            "referred.yaml",
+            &REFERRED
+                .replace("ITEM", item)
+                .replace("COMPONENT", component),
+        );
+        Settings::new(&document)
+            .write_to(&dir)
+            .unwrap_or_else(|error| panic!("{name}: the document generates: {error}"));
+
+        let ops = read(&dir.join("src/ops.rs"));
+
+        assert!(
+            ops.contains(wrapper),
+            "{name}: the wrapper is not `{wrapper}`:\n{ops}"
+        );
+    }
+}
+
 /// The artefacts are one Overlay application seen several ways, so the
 /// reduction a binary loads has to be the reduction of the document that was
 /// committed beside it. Reducing the written YAML again is the only check that
