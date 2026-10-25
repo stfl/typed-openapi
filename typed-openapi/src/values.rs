@@ -210,4 +210,10 @@ impl Values {
     pub fn payload(&self) -> Option<&Payload> {
         self.body.as_ref()
     }
+
+    /// The body, moved out. `Invocation::new` keeps the parameters in the text it
+    /// checked them to.
+    pub(crate) fn into_body(self) -> Option<Payload> {
+        self.body
+    }
 }

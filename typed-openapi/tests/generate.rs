@@ -164,6 +164,60 @@ fn an_overridden_parameter_is_one_argument_typed_by_the_operations_entry() {
     );
 }
 
+/// A body property and a query parameter of one integer format.
+const FORMATTED_INTEGERS: &str = r#"
+openapi: 3.0.3
+info: { title: Formatted, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /counts:
+    post:
+      operationId: createCount
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, format: int32 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [count]
+              properties:
+                count: { type: integer, format: int32 }
+                total: { type: integer, minimum: 0 }
+      responses:
+        "200": { description: OK }
+"#;
+
+/// `docs/validation.md` says where the two roads part for an integer format. The
+/// flag reads an `i64` whatever the format says, because a format names a rule
+/// and is not one. typify gives a body property the type of its format, so the
+/// typed road cannot hold a value past it, and a parameter is an `i64` argument.
+#[test]
+fn an_integer_format_types_a_body_property_and_leaves_a_parameter_an_i64() {
+    let dir = out("formatted-integers");
+    let document = wrote(&dir, "counts.yaml", FORMATTED_INTEGERS);
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the document generates");
+
+    let types = read(&dir.join("src/types.rs"));
+    let ops = read(&dir.join("src/ops.rs"));
+
+    assert!(
+        types.contains("pub count: i32"),
+        "a body property of `format: int32` is not an `i32`:\n{types}"
+    );
+    assert!(
+        types.contains("pub total: ::std::option::Option<u64>"),
+        "a body property with `minimum: 0` is not a `u64`:\n{types}"
+    );
+    assert!(
+        ops.contains("limit: Option<i64>"),
+        "a parameter of `format: int32` is not an `i64` argument:\n{ops}"
+    );
+}
+
 /// A `{id}` path with the path item's parameters in `ITEM`, an operation that
 /// names `#/components/parameters/Id`, and that component in `COMPONENT`.
 const REFERRED: &str = r##"

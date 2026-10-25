@@ -19,7 +19,9 @@ one, and `Scalar::parse` checks all of it.
 | `pattern: ^[A-Z]+$` | | `` `x1` does not match ^[A-Z]+$ `` |
 | `enum: [draft, paid]` | `<STRING>` | `` `void` is not one of draft, paid `` — and these complete |
 | `type: integer` | `<INT>` | `` `5.0` is not an integer `` |
+| `type: integer`, past an `i64` | | `` `9223372036854775808` is out of range: an integer here is between -9223372036854775808 and 9223372036854775807 `` |
 | `type: number` | `<NUMBER>` | `` `x` is not a number `` |
+| `type: number`, more digits than a 64-bit float holds | | `` `9007199254740993` does not survive the round trip through a 64-bit float, which would send 9007199254740992 `` |
 | `minimum: 1` | | `` `0` is not at least 1 `` |
 | `minimum: 0`, `exclusiveMinimum: true` | | `` `0` is not more than 0 `` |
 | `maximum: 100` | | `` `101` is not at most 100 `` |
@@ -30,6 +32,19 @@ one, and `Scalar::parse` checks all of it.
 Lengths count characters rather than bytes, so a three-character `€€€` passes a
 `maxLength: 3`. A number JSON cannot carry — an infinity, a NaN — is *not a
 number* rather than a `null` on the wire.
+
+**A number is refused when it would be sent as another number.** An integer past
+`i64` is a number all the same, and `typify` writes a `u64` for `minimum: 0`, so
+it is *out of range* and never "not an integer". A `number` goes through a 64-bit
+float, which holds the nearest of its digits: `9007199254740993` would go out as
+`9007199254740992.0`, and `1e-400` as `0.0`. The test is whether the shortest
+text that reads back as the float is the number that was typed, compared as
+decimal numbers and not as text, so `1.0`, `1e0` and `001` are one number and are
+accepted. A number with many significant digits can fail it, and so can a number
+too small for a float (`1e-400`, `4.9e-325`); `0.30000000000000004` has 17 digits
+and passes, because it is the shortest text of its float. A document that needs
+a number that fails it states the value as a `string` with a `pattern`, as the
+toy's `Voucher.total` does.
 
 The same rules are the flag's help line, rendered by the same code:
 
@@ -84,7 +99,7 @@ knowing before you decide how much to put in the document.
 
 | the value | checked by | when |
 |---|---|---|
-| a path, query or header parameter | `Scalar::parse`, in the flag's value parser and again in `Invocation::new` | the command line, and every typed call |
+| a path, query or header parameter | `Scalar::parse`, in the flag's value parser, and again in `Invocation::new`, which keeps the parsed text (`Scalar::wire`) that is sent | the command line, and every typed call |
 | a body field, from a per-field flag | `Scalar::parse`, in the flag's value parser | the command line |
 | a body field, in a generated type | the type's own `FromStr` / `Deserialize` | every typed call, and every response |
 | a whole body from `--json-body FILE` | `client::fits`, called by the adopter's own seam | the command line, before the request is built |
@@ -96,7 +111,18 @@ for as long as the rule is one the *schema* states: the flag runs every rule
 engine the generated newtype's `FromStr` runs.
 
 The roads part where a field's reading lives in a Rust type rather than in the
-schema. A property whose `format` an adopter claims with `Settings::replace`, on
+schema. **An integer format is one such place.** `format: int32` is a name and not
+a rule, so a flag reads any `i64`, while `typify` writes `i32` for a body property
+of that format (and `u64` for an integer with `minimum: 0`). The typed road cannot
+hold `3000000000` in that property, and `--count 3000000000` is accepted by the
+flag: only the check of the whole body (`client::fits`, on the adopter's seam)
+refuses it, as a `Mismatch`. A parameter of the same format is an `i64` argument
+on both roads, so nothing parts there. To have the flag refuse the value, state
+the range in the schema with `minimum` and `maximum`; an Overlay does that.
+`tests/generate.rs` holds the two types.
+
+The roads part again where a field's reading lives in a Rust type of the
+adopter's. A property whose `format` an adopter claims with `Settings::replace`, on
 a schema that states no rule of its own, is read by that type on the typed road
 and by nothing at all on the flag. `createLedgerEntry`'s `amount` is
 `format: money` with no `pattern`: a body carrying `"12,50"` is refused by
@@ -120,6 +146,72 @@ for it, and [`examples/toy/cli/src/raw.rs`](../examples/toy/cli/src/raw.rs) is
 that check in nine lines: the generated `OperationId::check_body` hands the body
 and the operation's type to `client::fits`. A CLI that calls `tree::dispatch`
 and nothing more has no such seam and sends the file as it is.
+
+## What goes on the wire
+
+**The value that was checked is the value that is sent.** `Invocation::new` keeps
+each parameter as `Scalar::wire` wrote it, so a number is sent as it was parsed
+and not as it was typed. A typed caller writes a number with `ToString`, and what
+it wrote is sent as it came, so the command line and the typed call send one
+request for one number:
+
+| typed | sent |
+|---|---|
+| `+5`, `type: integer` | `5` |
+| `007`, `type: integer` | `7` |
+| `-0`, `type: integer` | `0` |
+| `1e3`, `type: number` | `1000` |
+| `1.0`, `type: number` | `1` |
+| `007.25`, `type: number` | `7.25` |
+
+A body field is the JSON value that was parsed, so `007` is the number 7 there
+too, and a `number` is a float in JSON: `1e3` is `1000.0`. A text is sent as it
+was typed.
+
+`Invocation::new` refuses five more values, none of them a rule of the schema,
+because the request would reach another place or carry another header than the
+one the value names. A header value is refused when a receiver that follows
+RFC 9110 would read another value, or another list, than the caller gave. Each
+refusal names the operation and the parameter, on both roads, and none prints a
+header value, which may be a credential:
+
+| the value | variant | why |
+|---|---|---|
+| a path parameter that is empty, `.` or `..` | `ValueError::PathSegment` | a server or a proxy reads such a segment as a step along the path, so `DELETE /things/..` reaches the collection above. A list is judged as the segment it makes, so `..` beside another item is a name |
+| a header value that `http::HeaderValue` refuses | `ValueError::HeaderValue` | a control character other than a tab. A line break in a header is how a header is injected |
+| a header value, or an item of a header list, that starts or ends with a space or a tab | `ValueError::HeaderWhitespace` | a receiver does not read it as part of the value, so it reads another value than the caller gave |
+| a comma inside one item of a header list | `ValueError::HeaderItemComma` | a header list is written with commas between its items and is not percent-encoded, so the receiver reads two items. A comma in a query or a path list is percent-encoded and stays one |
+| an empty item of a header list | `ValueError::HeaderItemEmpty` | a receiver ignores an empty list element, so `["", "c"]` written as `,c` is read as the one item `c` |
+
+A byte of 0x80 or above reaches the receiver as it is, and so does an empty value
+that is no list, so neither is refused.
+
+A header parameter that would claim a flag, and whose name `http::HeaderName`
+refuses (`X Bad`), refuses the document: `LoadError::HeaderName`, and an Overlay
+corrects the name or removes the parameter. A header parameter with no flag sends
+nothing, so its name is not asked.
+
+A base URL is the scheme, the host and the path of every request, and nothing
+else of it is kept. One with userinfo (`user:password@`) or a query is refused
+when a request is built (`RequestError::Base`), whoever names it: the document's
+first server, `Client::with_base`, and the `base` of `Plan::build`, `Selection`
+and `tree::dispatch`. Userinfo is looked for where an authority is read: in the
+text up to its first `/`, `?` or `#`, and, when that character starts a `//`, in
+the text after it up to the next one. So `//user:password@host/`, which the
+`http` crate reads as a path, is refused as `http://user:password@host/` is. A
+server URL in the document is refused when the document loads
+(`LoadError::ServerBase`), with a fragment too, which an `http::Uri` cannot hold
+and so only the text of a document can. A credential belongs in the client
+adapter ([client.md](client.md#writing-an-adapter)). No text that the library
+makes holds the userinfo of a base URL. The refusals of `RequestError::Base` and
+`LoadError::ServerBase` print no part of the URL, and so a server URL that holds
+userinfo is `ServerBase` also when it is no URL, whatever stands before its `//`
+but a `/`, `?` or `#`. `LoadError::ServerUrl` prints the URL as the document
+spells it and with the defaults in it, and both are read first. A text with an
+`@` in none of the places where an authority is read, such as `http:/u@h/a b`,
+stays `ServerUrl`, and its message prints it. A dry run prints the host and the
+port, and the `Debug` of a `Client` and of a `Document` prints its base without
+the userinfo and the query.
 
 ## What `fits` refuses
 

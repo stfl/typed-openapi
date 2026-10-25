@@ -23,13 +23,14 @@ use std::error::Error;
 use std::io;
 use std::path::PathBuf;
 
+use clap::{Arg, Command, value_parser};
 use typed_openapi::client::{BodyError, Error as ClientError};
 use typed_openapi::generate::GenerateError;
 use typed_openapi::overlay::{self, OverlayError};
 use typed_openapi::plan::PlanError;
-use typed_openapi::request::ValueError;
+use typed_openapi::request::{RequestError, ValueError};
 use typed_openapi::scalar::ScalarError;
-use typed_openapi::tree::{ArgError, DispatchError};
+use typed_openapi::tree::{self, ArgError, DispatchError};
 use typed_openapi::{Document, DocumentError, Invocation, LoadError, Values};
 
 /// An OpenAPI document with `parameters` on its one operation and the server
@@ -116,6 +117,42 @@ fn bad_value() -> ValueError {
     let op = doc.get("listThings").expect("the one operation");
     Invocation::new(op, Values::new().param("n", "s3cr3t-value"))
         .expect_err("`s3cr3t-value` is not an integer")
+}
+
+/// A verb of the adopter's own that declares `--n` with a parser that stores an
+/// `i64`, where `values` reads a `String` whatever type the document gives `n`.
+fn flag_type() -> ArgError {
+    let doc = Document::load(&document(URL, SOUND), &[]).expect("a document");
+    let op = doc.get("listThings").expect("the one operation");
+    let matches = Command::new("list")
+        .arg(Arg::new("n").long("n").value_parser(value_parser!(i64)))
+        .get_matches_from(["list", "--n", "5"]);
+    tree::values(op, &matches).expect_err("`--n` holds an integer")
+}
+
+/// A verb of the adopter's own that reads a field's flag with no rule of the
+/// document's.
+fn field_value() -> ArgError {
+    let paths = "\x20 /things:\n\
+                 \x20   post:\n\
+                 \x20     operationId: createThing\n\
+                 \x20     requestBody:\n\
+                 \x20       content:\n\
+                 \x20         application/json:\n\
+                 \x20           schema:\n\
+                 \x20             type: object\n\
+                 \x20             properties:\n\
+                 \x20               code: { type: string, maxLength: 2 }\n\
+                 \x20     responses: { \"200\": { description: OK } }\n";
+    let text = format!(
+        "openapi: 3.0.3\ninfo: {{ title: Errors, version: \"1.0\" }}\nservers: [{{ url: \"{URL}\" }}]\npaths:\n{paths}"
+    );
+    let doc = Document::load(&text, &[]).expect("a document");
+    let op = doc.get("createThing").expect("the one operation");
+    let matches = Command::new("create")
+        .arg(Arg::new("code").long("code"))
+        .get_matches_from(["create", "--code", "abc"]);
+    tree::values(op, &matches).expect_err("`abc` is longer than two characters")
 }
 
 /// One chain to check, under the name of the variant at its head.
@@ -224,6 +261,11 @@ fn loading() -> Vec<Case> {
             |e| matches!(e, LoadError::ServerUrl { .. }),
         ),
         from_input(
+            "LoadError::ServerBase",
+            load(&document("http://u:p@localhost", SOUND), &[]),
+            |e| matches!(e, LoadError::ServerBase { .. }),
+        ),
+        from_input(
             "LoadError::Unresolvable",
             load(&document(URL, UNRESOLVABLE), &[]),
             |e| matches!(e, LoadError::Unresolvable { .. }),
@@ -242,7 +284,11 @@ fn requesting() -> Vec<Case> {
         from_input("ValueError::BadValue", bad_value(), |e| {
             matches!(e, ValueError::BadValue { .. })
         }),
-        case("PlanError::Request", PlanError::Request(http_error())),
+        case(
+            "PlanError::Request",
+            PlanError::Request(RequestError::Http(http_error())),
+        ),
+        case("RequestError::Http", RequestError::Http(http_error())),
         case("PlanError::Value", PlanError::Value(bad_value())),
         case(
             "client::BodyError::Mismatch",
@@ -259,6 +305,12 @@ fn requesting() -> Vec<Case> {
                 source: json_error(),
             },
         ),
+        from_input("ArgError::FlagType", flag_type(), |e| {
+            matches!(e, ArgError::FlagType { .. })
+        }),
+        from_input("ArgError::FieldValue", field_value(), |e| {
+            matches!(e, ArgError::FieldValue { .. })
+        }),
         case(
             "ArgError::ReadBody",
             ArgError::ReadBody {
@@ -292,13 +344,16 @@ fn calling() -> Vec<Case> {
         ),
         case(
             "DispatchError::Plan",
-            DispatchError::Plan(PlanError::Request(http_error())),
+            DispatchError::Plan(PlanError::Request(RequestError::Http(http_error()))),
         ),
         case(
             "client::Error::Document",
             ClientError::Document(blob_error()),
         ),
-        case("client::Error::Request", ClientError::Request(http_error())),
+        case(
+            "client::Error::Request",
+            ClientError::Request(RequestError::Http(http_error())),
+        ),
         case(
             "client::Error::Encode",
             ClientError::Encode(

@@ -41,5 +41,10 @@ thiserror = { workspace = true }
 # The sync client the binary ships with, behind `ureq-client`.
 ureq = { workspace = true, optional = true }
 
+[dev-dependencies]
+# `Document::load`, which the e2e case for a free-text path parameter needs: the
+# toy's document has none, and its binary starts from the blob.
+typed-openapi = { path = "../../../typed-openapi", features = ["document"] }
+
 [lints]
 workspace = true

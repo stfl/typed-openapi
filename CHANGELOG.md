@@ -528,6 +528,125 @@ the crate follows [Semantic Versioning][semver].
   belongs, and drop the argument at a call of a wrapper that took one; for the
   refusal, drop the name from `x-cli-requires` in an Overlay. A script that typed
   `--authorization` loses the flag.
+- **A base URL with userinfo, a query or a fragment is refused.** A dry run
+  printed `user:password` in its `host:` line, a confirmed run sent it as a
+  `Basic` header, and the query was dropped from every request in silence.
+  Whoever names the base is held to it, and a request is never built from one
+  that holds any of the three:
+  - `RequestError::Base(BaseUrlError)` comes from `Invocation::request`, so the
+    gate, the typed call and the command line all end in it, for the document's
+    first server, `Client::with_base`, and the `base` of `Plan::build`,
+    `Selection::plan`, `Selection::send` and `tree::dispatch`. `BaseUrlError` is
+    `Userinfo`, `Query` or `Fragment`, and an `http::Uri` drops a fragment when
+    it parses, so only the text of a document holds one.
+  - `LoadError::ServerBase { source }` refuses a document whose first server URL
+    holds one of the three, variables filled in. A document that loaded with
+    one is refused now. Repair: an Overlay that corrects `servers[0].url`
+    (`docs/overlay.md`).
+  - No text that the library makes holds a base URL's userinfo. The refusals of
+    `BaseUrlError` and `LoadError::ServerBase` print no part of the URL, and
+    `render` prints the host and the port of a request and never its userinfo.
+    Userinfo is looked for where an authority is read: in the text up to its
+    first `/`, `?` or `#`, and, when that character starts a `//`, in the text
+    after it up to the next one. So a base is refused for `//alice:s3cret@host/`
+    too, which the `http` crate takes for a path with no authority and a request
+    was built from, and a dry run, a message and a `Debug` leave that userinfo
+    out.
+  - A server URL that holds userinfo is `ServerBase` also when it is no URL, and
+    whatever stands before its `//` but a `/`, `?` or `#` (a variable that
+    nothing declares, a space, a character that no scheme holds, no colon): it
+    was `LoadError::ServerUrl`, which printed the URL, the userinfo among it.
+    `ServerUrl` prints the URL as the document spells it beside the one with the
+    defaults in it, so a URL that is refused is read in both. A document that was
+    refused as `ServerUrl` for that reason is refused as `ServerBase` now. A text
+    with an `@` in none of the places that are read, such as `http:/u@h/a b`,
+    stays `ServerUrl`, and its message prints it.
+  - The `Debug` of a `Client` and of a `Document` prints the base without its
+    userinfo and its query. It printed the base whole, so a `{client:?}` in a log
+    held the credential of a `Client::with_base`, and a `Document` that
+    `from_blob` read held the one its blob was written with.
+
+  Repair for a caller: pass a base URL with the scheme, host, port and path
+  only, and set the credential in the client adapter (`docs/client.md`).
+  `LoadError` is `#[non_exhaustive]`, so the variant is no break.
+- **`Invocation::request` returns `RequestError`, not `http::Error`.**
+  `RequestError` is `#[non_exhaustive]`: `Base(BaseUrlError)` and
+  `Http(http::Error)`. `PlanError::Request` and `client::Error::Request` carry a
+  `RequestError` and print what they printed. Repair: match `Http(error)` where
+  you matched the `http::Error`, or print the error and its `source()` as before.
+- **A path value that is empty, `.` or `..` is refused.** `DELETE /things/..` was
+  built and sent as written, a server or a proxy read it as the collection above,
+  and reqwest sent `DELETE /` itself. `ValueError::PathSegment { op, name, value }`
+  refuses it in `Invocation::new`, so the command line and the typed call refuse
+  the same value, and a list is judged as the segment it makes. Repair: send
+  a name.
+- **A header value that a receiver would read as another value, or another
+  list, than the caller gave is refused by name.** The `http` crate refused a
+  control character late, as "failed to parse header value", with no name; the
+  rest was sent as it came. Four refusals come from `Invocation::new`, each
+  `ValueError::<variant> { op, name }`, and none prints the value:
+  - `HeaderValue`: a byte that `http::HeaderValue` refuses (a control character
+    other than a tab).
+  - `HeaderWhitespace`: a space or a tab at the start or the end of a value, or of
+    one item of a list, which a receiver strips (RFC 9110 sections 5.5 and 5.6.1).
+    `" a"` was sent as `" a"`.
+  - `HeaderItemComma`: a comma inside one item of a header list, which a receiver
+    reads as two items. `["a,b", "c"]` was sent as `a,b,c`.
+  - `HeaderItemEmpty`: an empty item of a header list, which a receiver ignores
+    (section 5.6.1.2). `["", "c"]` was sent as `,c`, and `[""]` as an empty value.
+
+  A comma in a query list or a path list is percent-encoded and stays one item,
+  and a comma in a header that is not a list is a character of the value. A byte
+  of 0x80 or above and an empty value that is no list reach the receiver as they
+  are, so they are sent. A header parameter that would claim a flag and whose name
+  is no header name, such as `X Bad`, refuses the document
+  (`LoadError::HeaderName { op, name }`); it loaded, and a request that gave it a
+  value failed. A header with no flag sends nothing and is not asked. `ValueError`
+  is `#[non_exhaustive]`, so the variants are no break. Repair: an Overlay that
+  corrects the name or removes the parameter; send no control character other
+  than a tab in a header value; send a header value, and each item of a header
+  list, with no space or tab at its edge; send no comma inside an item of a list;
+  and leave out an empty item.
+- **A number is sent as it was parsed, and a number that would be sent as
+  another one is refused.** A parameter was checked by `Scalar::parse` and its
+  raw text went on the wire, so `+5` was sent as `%2B5` and `007` as written,
+  where the typed call sent `5`. `Scalar::wire` is the text that is sent, and
+  `Invocation::new` keeps it: `+5` is `5`, `007` is `7`, `1e3` is `1000`. Two
+  refusals change, as `ScalarError::Rule`:
+  - A `type: number` value that does not survive the round trip through a 64-bit
+    float is refused. A parameter went out as it was typed, `9007199254740993` and
+    `1e-400` among them, and a body field went out as the nearest float:
+    `9007199254740992.0` and `0.0`. A value past what a float holds (`1e400`) was
+    refused as *not a number*, and is refused as *out of range* now.
+  - A `type: integer` value past `i64` is *out of range*. It was refused as *not
+    an integer*, and `typify` writes a `u64` for `minimum: 0`.
+
+  A body field is the JSON value that was parsed, as before. Repair: send fewer
+  digits, or declare the value a `string` with a `pattern`, as the toy's
+  `Voucher.total` does. `docs/validation.md` lists integer formats among the
+  places where the two roads part: a flag reads an `i64` whatever `format` says,
+  and `typify` writes `i32` for a body property of `format: int32`.
+- **A flag takes a value that starts with a dash.** The word after an `<INT>`,
+  `<NUMBER>` or `<STRING>` flag is its value, whatever it looks like: `--limit -5`
+  and `--total -12.50`, where clap read `-5` as a flag and only `--limit=-5`
+  worked. A `<NUMBER>` flag takes `-.5` and `-1e-3` as a separate word the same
+  way. A word that looks like a flag is a value too. `--type --commit` gives
+  `type` the text `--commit` and confirms nothing; a read is sent at once, so
+  `vouchers list --type --commit` sends `?type=--commit`, and an unconfirmed write
+  shows the value in its dry run. A number flag refuses a word that is no number,
+  and an `enum` flag takes a word that starts with a dash only when it is one of
+  its values. Repair: none; a script that relied on clap's refusal of the word
+  after a flag sees the word taken as the value.
+- **`tree::values` reads a flag of another type as an error, and a field is held
+  to its rule.** A verb of your own that declares `--id` with
+  `value_parser!(i64)` where the document types it as text made `values` panic.
+  It reads every flag with `try_get_*` now, as `answers` does: a flag the command
+  never declared is a flag that was not given, and a flag of another type is
+  `ArgError::FlagType { flag, source }`, which names it. A per-field flag that the
+  document's rule for the field refuses is `ArgError::FieldValue { flag, source }`
+  where the field was dropped from the body in silence. `ArgError` is
+  `#[non_exhaustive]`, so both are no break. Repair: declare the flag as text,
+  which is what `values` reads, and type a value that the field's rule accepts.
 
 ### Removed
 

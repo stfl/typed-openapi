@@ -20,6 +20,7 @@ mod blob;
 mod reduce;
 
 use std::collections::HashMap;
+use std::fmt;
 
 use http::{Method, Uri};
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,7 @@ pub use self::reduce::{ConfirmationError, LoadError, Loading};
 #[cfg(feature = "generate")]
 pub(crate) use self::reduce::{declared, entry_of_flag};
 use crate::names::{CommandName, NameError, renamed, spelled};
+use crate::request::without_userinfo_and_query;
 use crate::scalar::Scalar;
 
 /// Whole-body flag, for every operation that takes JSON.
@@ -154,12 +156,31 @@ pub(crate) fn first_collision(ops: &[Operation]) -> Option<(&Operation, &Operati
 
 /// Every operation the document describes, in document order, plus the server
 /// it describes them against.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     #[serde(with = "uri_string")]
     base: Uri,
     commit: String,
     ops: Vec<Operation>,
+}
+
+/// The base is shown without its userinfo and its query. A load refuses a
+/// server that holds either, but a blob is read with no load, and so is a
+/// document read through `Deserialize` in another format, and a `Debug` goes to
+/// logs. Every field is bound by name, so a field added to `Document` stops this
+/// from compiling until it is shown or left out on purpose.
+impl fmt::Debug for Document {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { base, commit, ops } = self;
+        f.debug_struct("Document")
+            .field(
+                "base",
+                &format_args!("{}", without_userinfo_and_query(base)),
+            )
+            .field("commit", commit)
+            .field("ops", ops)
+            .finish()
+    }
 }
 
 /// One operation: one subcommand under one group, one request.

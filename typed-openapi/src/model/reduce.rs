@@ -20,6 +20,7 @@
 
 use std::borrow::Cow;
 
+use http::header::HeaderName;
 use http::{Method, Uri};
 use openapiv3::{
     Components, OpenAPI, Parameter, ParameterData, ParameterSchemaOrContent, PathItem, PathStyle,
@@ -34,6 +35,7 @@ use super::{
 use crate::markers::{COMMAND, GATES, GROUP, REQUIRES, WRITES};
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
 use crate::openapi::Misfit;
+use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
 use crate::scalar::Scalar;
 use crate::schema::{
@@ -103,7 +105,12 @@ pub enum LoadError {
     NoServer,
     /// The first server's URL is not a URL, once each variable in it is replaced
     /// by its default. A variable the server does not declare has no default
-    /// and stays in the URL as it is written.
+    /// and stays in the URL as it is written. A URL whose text with the
+    /// defaults in it holds userinfo is [`LoadError::ServerBase`] whether it is
+    /// a URL or not, and when the URL is refused the spelling is read too, so
+    /// this message prints no credential. A text with an `@` in none of the
+    /// places where an authority is read (see [`BaseUrlError::Userinfo`]), such
+    /// as `http:/u@h/a b`, is refused here, and the message prints it.
     #[error("`servers[0].url` is not a URL: {}", refused_url(.url, .filled))]
     ServerUrl {
         /// `servers[0].url` as the document spells it.
@@ -115,6 +122,21 @@ pub enum LoadError {
         /// The `http` crate's reason.
         #[source]
         source: http::uri::InvalidUri,
+    },
+    /// The first server's URL cannot be the base of a request: it holds userinfo,
+    /// a query or a fragment, which a request would send, drop or leak. The cause
+    /// says which, and neither it nor this message prints the URL, because a
+    /// credential or a key would be in it. A URL that holds userinfo is refused
+    /// for it also when the text is no URL, whatever stands before the `//` that
+    /// begins its authority but a `/`, `?` or `#`, because
+    /// [`LoadError::ServerUrl`] prints the URL. An Overlay corrects the URL. A
+    /// caller who names the base is held to the same rule when the request is
+    /// built.
+    #[error("`servers[0].url` cannot be the base URL of a request; correct it in an Overlay")]
+    ServerBase {
+        /// What the URL holds that a request cannot keep.
+        #[source]
+        source: BaseUrlError,
     },
     /// An operation without an `operationId`, which is the name every later
     /// refusal and every generated wrapper uses for it. An Overlay adds one.
@@ -145,6 +167,22 @@ pub enum LoadError {
         /// The list, spelled as an Overlay names a target:
         /// `$.paths['/upload'].post.servers`.
         at: String,
+    },
+    /// A header parameter that would claim a flag and whose name is no header
+    /// name: it holds a space or another character that a header name cannot, so
+    /// no request could carry it and the `http` crate would refuse every one that
+    /// was built. An Overlay corrects the name or removes the parameter. A
+    /// parameter in another place has no header name to be, and one with no flag
+    /// sends nothing.
+    #[error(
+        "{op}: the header parameter `{name}` is not a header name; correct or remove it in an \
+         Overlay"
+    )]
+    HeaderName {
+        /// The `operationId` of the operation.
+        op: String,
+        /// The parameter, as the document spells it.
+        name: String,
     },
     /// A variable in the path template that no path parameter of the operation
     /// answers. The request would go out with the braces in it. An Overlay adds
@@ -845,14 +883,7 @@ impl Document {
     }
 
     fn from_openapi(doc: &OpenAPI, commit: &str) -> Result<Self, LoadError> {
-        let server = doc.servers.first().ok_or(LoadError::NoServer)?;
-        let with_defaults = filled(server);
-        let base =
-            Uri::try_from(with_defaults.as_str()).map_err(|source| LoadError::ServerUrl {
-                url: server.url.clone(),
-                filled: with_defaults.clone(),
-                source,
-            })?;
+        let base = base_of(doc.servers.first().ok_or(LoadError::NoServer)?)?;
         let empty = Components::default();
         // Which segment groups this document is a fact about all of its paths,
         // so it is read once and then applied one path at a time.
@@ -886,6 +917,42 @@ impl Document {
             commit: commit.to_owned(),
             ops,
         })
+    }
+}
+
+/// The base of every request: the URL of the first server, once it is a URL that
+/// a request can be built from.
+///
+/// The userinfo is read from the text before it is parsed, so a URL that holds
+/// userinfo and is no URL is refused for the userinfo, and `ServerUrl` prints a
+/// URL that holds none.
+fn base_of(server: &Server) -> Result<Uri, LoadError> {
+    let with_defaults = filled(server);
+    BaseUrlError::userinfo_in(&with_defaults).map_err(|source| LoadError::ServerBase { source })?;
+    let base = Uri::try_from(with_defaults.as_str())
+        .map_err(|source| unparsed(server, with_defaults.clone(), source))?;
+    BaseUrlError::of_server(&with_defaults, &base)
+        .map_err(|source| LoadError::ServerBase { source })?;
+    Ok(base)
+}
+
+/// The refusal of a first server whose URL does not parse: `ServerBase` when it
+/// holds userinfo, and `ServerUrl` when it does not.
+///
+/// `ServerUrl` prints the URL as the document spells it beside the one with the
+/// defaults in it, and a default that holds a `/` can move the `@` out of the
+/// authority of the one and not of the other. So the spelling is read too, once
+/// the filled text is refused. A filled text that parses is the URL a request
+/// goes to, and the spelling is not read then: in `http://{h}alice:s3cret@host/`
+/// with `h` defaulting to `x/` the authority is `x`.
+fn unparsed(server: &Server, with_defaults: String, source: http::uri::InvalidUri) -> LoadError {
+    match BaseUrlError::userinfo_in(&server.url) {
+        Err(userinfo) => LoadError::ServerBase { source: userinfo },
+        Ok(()) => LoadError::ServerUrl {
+            url: server.url.clone(),
+            filled: with_defaults,
+            source,
+        },
     }
 }
 
@@ -1525,6 +1592,14 @@ fn shape_of(
     // a value can never reach takes nothing from the namespace.
     if let Some(place) = namesake {
         return Ok(Shape::Unreachable(Unsupported::Shared(place)));
+    }
+    // A header the request would carry has a name that a header can have. A
+    // parameter with no flag sends nothing, so its name is no one's business.
+    if location == Location::Header && HeaderName::from_bytes(data.name.as_bytes()).is_err() {
+        return Err(LoadError::HeaderName {
+            op: op.to_owned(),
+            name: data.name.clone(),
+        });
     }
     Ok(Shape::Flag {
         flag: flags

@@ -57,10 +57,13 @@ pub fn root(api: &Api) -> Command {
                 .value_name("URL")
                 .help("Server to send to")
                 // Parsed where it arrives, so what the rest of the CLI passes
-                // around is a `Uri` and not a string that might be one. A
-                // `--base-url` the document's own server could not be is
-                // clap's error, naming the value the user typed — never a
-                // quiet fall back to the server they were overriding.
+                // around is a `Uri` and not a string that might be one. A text
+                // that is no `Uri` is clap's error, naming the value the user
+                // typed — never a quiet fall back to the server they were
+                // overriding. A `Uri` with userinfo or a query passes clap and
+                // is refused when a request is built (`RequestError::Base`),
+                // which prints none of it. A fragment is dropped when the text
+                // is parsed, as every client drops it.
                 .value_parser(value_parser!(Uri))
                 .default_value(api.base().to_string()),
         )

@@ -20,7 +20,7 @@ use thiserror::Error;
 
 use crate::body_reader::{Read, Step, read};
 use crate::model::{Document, DocumentError, DriftError, Operation};
-use crate::request::{Invocation, ValueError};
+use crate::request::{Invocation, RequestError, ValueError, without_userinfo_and_query};
 use crate::transport::{AsyncClient, HttpRequest, HttpResponse, SyncClient};
 use crate::values::Values;
 
@@ -53,11 +53,11 @@ pub enum Error {
     /// parameter, or says the body is the problem.
     #[error(transparent)]
     Values(#[from] ValueError),
-    /// The values satisfied the operation and the `http` crate refused the
-    /// request they render to: a base URI, a header name or a header value it
-    /// cannot carry.
-    #[error("cannot build the request")]
-    Request(#[from] http::Error),
+    /// The values satisfied the operation and the request they render to could
+    /// not be built: the base URL holds userinfo or a query, or the `http` crate
+    /// refused what the document names, such as a header name.
+    #[error(transparent)]
+    Request(#[from] RequestError),
     /// A typed argument that does not serialise to JSON, so there is no body to
     /// send. The cause is `serde_json`'s reading of the value.
     #[error("cannot serialise the request body")]
@@ -97,10 +97,23 @@ pub enum Error {
 }
 
 /// One document, one server, and a typed way to call anything in it.
-#[derive(Debug)]
 pub struct Client {
     document: Document,
     base: Uri,
+}
+
+/// The base is shown without its userinfo and its query: a caller names it, and
+/// a `Debug` goes to logs.
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Client")
+            .field("document", &self.document)
+            .field(
+                "base",
+                &format_args!("{}", without_userinfo_and_query(&self.base)),
+            )
+            .finish()
+    }
 }
 
 impl Client {

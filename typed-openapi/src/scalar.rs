@@ -129,6 +129,14 @@ impl ScalarError {
             rule,
         }
     }
+
+    /// `raw`, which is not the kind of value `wanted` finishes the sentence for.
+    fn kind(raw: &str, wanted: &'static str) -> Self {
+        Self::Kind {
+            raw: raw.to_owned(),
+            wanted,
+        }
+    }
 }
 
 impl Scalar {
@@ -137,15 +145,12 @@ impl Scalar {
     pub fn parse(&self, raw: &str) -> Result<serde_json::Value, ScalarError> {
         match self {
             Self::Text(text) => text.check(raw).map(|()| raw.into()),
-            Self::Integer(bounds) => bounded(bounds, raw),
-            Self::Number(bounds) => bounded(bounds, raw),
+            Self::Integer(bounds) => bounded(bounds, raw).map(|(_, json)| json),
+            Self::Number(bounds) => bounded(bounds, raw).map(|(_, json)| json),
             Self::Boolean => raw
                 .parse::<bool>()
                 .map(Into::into)
-                .map_err(|_| ScalarError::Kind {
-                    raw: raw.to_owned(),
-                    wanted: "`true` or `false`",
-                }),
+                .map_err(|_| ScalarError::kind(raw, "`true` or `false`")),
             Self::Choice(allowed) => {
                 if allowed.iter().any(|value| value == raw) {
                     Ok(raw.into())
@@ -155,6 +160,25 @@ impl Scalar {
                         allowed: allowed.clone(),
                     })
                 }
+            }
+        }
+    }
+
+    /// The text of one parameter's value as the request carries it: the value
+    /// that [`Scalar::parse`] reads out of `raw`, written the way the typed call
+    /// writes it.
+    ///
+    /// The number checked is the number sent. `+5` and `007` go out as `5` and
+    /// `7`, `1e3` as `1000`, and a number a typed caller wrote with `ToString` is
+    /// sent as it came. Every rule of [`Scalar::parse`] runs first, and it is the
+    /// only place one does: a refusal here is the refusal there. A value that is
+    /// not a number goes out as it was given.
+    pub fn wire(&self, raw: &str) -> Result<String, ScalarError> {
+        match self {
+            Self::Integer(bounds) => bounded(bounds, raw).map(|(value, _)| value.to_string()),
+            Self::Number(bounds) => bounded(bounds, raw).map(|(value, _)| value.to_string()),
+            Self::Text(_) | Self::Boolean | Self::Choice(_) => {
+                self.parse(raw).map(|_| raw.to_owned())
             }
         }
     }
@@ -341,14 +365,95 @@ fn compiled(pattern: &str) -> Result<Regex, ScalarError> {
     })
 }
 
-/// One argument as a number the document's rules admit.
-fn bounded<T: Numeric>(bounds: &Bounds<T>, raw: &str) -> Result<serde_json::Value, ScalarError> {
-    let (value, json) = T::read(raw).ok_or_else(|| ScalarError::Kind {
-        raw: raw.to_owned(),
-        wanted: T::KIND,
-    })?;
+/// One argument as a number the document's rules admit, and the JSON it goes
+/// out as in a body.
+fn bounded<T: Numeric>(
+    bounds: &Bounds<T>,
+    raw: &str,
+) -> Result<(T, serde_json::Value), ScalarError> {
+    let (value, json) = T::read(raw)?;
     bounds.check(value, raw)?;
-    Ok(json)
+    Ok((value, json))
+}
+
+/// Is `raw` an integer's digits, with a sign or without one?
+fn is_whole(raw: &str) -> bool {
+    let digits = raw.strip_prefix(['+', '-']).unwrap_or(raw);
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Is `raw` spelled with the characters of a decimal number only (digits, a
+/// sign, a point and an exponent mark), whatever number it says: `1e400` is, and
+/// `inf` is not.
+fn has_only_number_characters(raw: &str) -> bool {
+    raw.bytes()
+        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.' | b'e' | b'E'))
+}
+
+/// Is `value`, the float nearest to `raw`, the number that `raw` spells?
+///
+/// A float holds the nearest of its digits, and a request that sends `value`
+/// sends another number than the one that was checked when the two differ:
+/// `9007199254740993` is sent as `9007199254740992`, and `1e-400` as `0`. The
+/// shortest text that reads back as `value` is the number the float stands for,
+/// so the two are compared as decimal numbers, whatever the spelling: `1.0`,
+/// `1e0` and `001` are one number.
+fn exact(raw: &str, value: f64) -> bool {
+    match (Decimal::of(raw), Decimal::of(&format!("{value:e}"))) {
+        (Some(spelled), Some(printed)) => spelled == printed,
+        (Some(_), None) | (None, _) => false,
+    }
+}
+
+/// A decimal number, without its spelling: the digits from the first one that is
+/// not zero to the last one that is not zero, and the power of ten they are
+/// multiplied by. Zero has no digits and no sign.
+#[derive(Debug, PartialEq, Eq)]
+struct Decimal {
+    negative: bool,
+    digits: String,
+    exponent: i64,
+}
+
+impl Decimal {
+    /// `text` as a number, when it is spelled as `f64::from_str` reads one:
+    /// a sign, digits with a point somewhere among them, and an exponent. Zero
+    /// is zero whatever its exponent says, so `0e99999999999999999999` is read
+    /// before the exponent is. Any other number whose exponent is past an `i64`
+    /// has no reading.
+    fn of(text: &str) -> Option<Self> {
+        let (negative, unsigned) = match text.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, text.strip_prefix('+').unwrap_or(text)),
+        };
+        let (mantissa, power) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+        if !is_whole(power) {
+            return None;
+        }
+        let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+        let digits = format!("{whole}{fraction}");
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        let significant = digits.trim_matches('0');
+        if significant.is_empty() {
+            return Some(Self {
+                negative: false,
+                digits: String::new(),
+                exponent: 0,
+            });
+        }
+        let exponent = power
+            .parse::<i64>()
+            .ok()?
+            .checked_sub(i64::try_from(fraction.len()).ok()?)?;
+        let trailing = digits.len() - digits.trim_end_matches('0').len();
+        Some(Self {
+            negative,
+            digits: significant.to_owned(),
+            exponent: exponent.checked_add(i64::try_from(trailing).ok()?)?,
+        })
+    }
 }
 
 /// The two number kinds a document can ask one flag for.
@@ -364,10 +469,14 @@ pub(crate) trait Numeric: Copy + PartialOrd + fmt::Display {
 
     /// This kind read out of one argument, with the JSON it goes out as.
     ///
-    /// One step, because the two can disagree: a float that parses but is not
-    /// finite is not a number JSON carries, and "is not a number" is the honest
-    /// answer rather than a `null` on the wire.
-    fn read(raw: &str) -> Option<(Self, serde_json::Value)>;
+    /// One step, because three questions about `raw` can have three different
+    /// answers: is it a number of this kind, does the type hold it, and does
+    /// JSON carry it as it is. A float that parses but is not finite is not a
+    /// number JSON carries, and "is not a number" is the honest answer rather
+    /// than a `null` on the wire. A number that the type cannot hold is out of
+    /// range, and a float that holds only the nearest of its digits would send
+    /// another number than the one that was checked.
+    fn read(raw: &str) -> Result<(Self, serde_json::Value), ScalarError>;
 
     /// `multipleOf`: whether dividing by `step` leaves a whole number.
     fn divisible_by(self, step: Self) -> bool;
@@ -376,8 +485,28 @@ pub(crate) trait Numeric: Copy + PartialOrd + fmt::Display {
 impl Numeric for i64 {
     const KIND: &'static str = "an integer";
 
-    fn read(raw: &str) -> Option<(Self, serde_json::Value)> {
-        raw.parse::<Self>().ok().map(|value| (value, value.into()))
+    fn read(raw: &str) -> Result<(Self, serde_json::Value), ScalarError> {
+        raw.parse::<Self>()
+            .map(|value| (value, value.into()))
+            .map_err(|_| {
+                // An integer that is too long for an `i64` is a number all the
+                // same, and `typify` writes a `u64` for `minimum: 0`. A text
+                // of digits, with or without a sign, that fails to parse can
+                // only have overflowed. A text with a point or an exponent in it
+                // is no integer however long it is.
+                if is_whole(raw) {
+                    ScalarError::rule(
+                        raw,
+                        format!(
+                            "is out of range: an integer here is between {} and {}",
+                            Self::MIN,
+                            Self::MAX
+                        ),
+                    )
+                } else {
+                    ScalarError::kind(raw, Self::KIND)
+                }
+            })
     }
 
     fn divisible_by(self, step: Self) -> bool {
@@ -388,9 +517,30 @@ impl Numeric for i64 {
 impl Numeric for f64 {
     const KIND: &'static str = "a number";
 
-    fn read(raw: &str) -> Option<(Self, serde_json::Value)> {
-        let value = raw.parse::<Self>().ok()?;
-        Some((value, serde_json::Number::from_f64(value)?.into()))
+    fn read(raw: &str) -> Result<(Self, serde_json::Value), ScalarError> {
+        let kind = || ScalarError::kind(raw, Self::KIND);
+        let value = raw.parse::<Self>().map_err(|_| kind())?;
+        if value.is_infinite() && has_only_number_characters(raw) {
+            return Err(ScalarError::rule(
+                raw,
+                format!(
+                    "is out of range: a number here is between {:e} and {:e}",
+                    Self::MIN,
+                    Self::MAX
+                ),
+            ));
+        }
+        let json = serde_json::Number::from_f64(value).ok_or_else(kind)?;
+        if !exact(raw, value) {
+            return Err(ScalarError::rule(
+                raw,
+                format!(
+                    "does not survive the round trip through a 64-bit float, which would send \
+                     {value}"
+                ),
+            ));
+        }
+        Ok((value, json.into()))
     }
 
     // `multipleOf` is exact division by definition, so the comparison is the
@@ -409,6 +559,14 @@ mod tests {
             pattern: Some(pattern.to_owned()),
             ..Text::default()
         })
+    }
+
+    /// Why `scalar` refuses `raw`.
+    fn refusal(scalar: &Scalar, raw: &str) -> ScalarError {
+        let Err(refused) = scalar.parse(raw) else {
+            panic!("`{raw}` was accepted");
+        };
+        refused
     }
 
     #[test]
@@ -591,6 +749,197 @@ mod tests {
                 "{raw}"
             );
         }
+    }
+
+    /// `probes/A3b/scalars` (`integer`): `typify` writes a `u64` for `minimum: 0`,
+    /// so an integer past `i64` is a number, and "not an integer" is false of it.
+    #[test]
+    fn an_integer_past_i64_is_out_of_range_and_not_a_non_integer() {
+        let plain = Scalar::Integer(Bounds::default());
+        for raw in [
+            "9223372036854775808",
+            "-9223372036854775809",
+            "+18446744073709551615",
+        ] {
+            let refused = refusal(&plain, raw);
+            assert!(
+                matches!(&refused, ScalarError::Rule { raw: given, rule }
+                    if given == raw && rule.starts_with("is out of range")),
+                "{refused:?}"
+            );
+            assert_eq!(plain.wire(raw), Err(refused), "{raw}");
+        }
+        assert_eq!(
+            plain.parse("9223372036854775807"),
+            Ok(serde_json::json!(i64::MAX))
+        );
+        assert_eq!(
+            plain.parse("-9223372036854775808"),
+            Ok(serde_json::json!(i64::MIN))
+        );
+        // What is no integer at all is still said to be none.
+        for raw in ["5.0", "1e3", "", "five", "9223372036854775808.0"] {
+            assert!(
+                matches!(
+                    plain.parse(raw),
+                    Err(ScalarError::Kind {
+                        wanted: "an integer",
+                        ..
+                    })
+                ),
+                "{raw}"
+            );
+        }
+    }
+
+    /// `probes/A3b/scalars` (`number`): `9007199254740993` goes out as
+    /// `9007199254740992.0` and `1e-400` as `0.0` unless it is refused.
+    #[test]
+    fn a_number_that_does_not_survive_the_round_trip_through_f64_is_refused() {
+        let plain = Scalar::Number(Bounds::default());
+        for raw in [
+            "9007199254740993",
+            "1e-400",
+            "123456789012345678",
+            "0.1000000000000000055511151231257827",
+            "-9007199254740993",
+            "4.9e-325",
+            "1e-99999999999999999999",
+        ] {
+            let refused = refusal(&plain, raw);
+            assert!(
+                matches!(&refused, ScalarError::Rule { raw: given, rule }
+                    if given == raw && rule.starts_with("does not survive the round trip")),
+                "{raw}: {refused:?}"
+            );
+            assert_eq!(plain.wire(raw), Err(refused), "{raw}");
+        }
+        // The refusal says what would have been sent.
+        assert_eq!(
+            refusal(&plain, "9007199254740993").to_string(),
+            "`9007199254740993` does not survive the round trip through a 64-bit float, \
+             which would send 9007199254740992"
+        );
+    }
+
+    #[test]
+    fn a_number_that_is_the_shortest_text_of_its_float_is_accepted_however_it_is_spelled() {
+        let plain = Scalar::Number(Bounds::default());
+        for raw in [
+            "0.1",
+            "19.99",
+            "+5",
+            "007",
+            "1.0",
+            "1e3",
+            "1E3",
+            "-0",
+            ".5",
+            "5.",
+            "0.30000000000000004",
+            "9007199254740992",
+            "1.7976931348623157e308",
+            "5e-324",
+            "100000000000000000000000",
+            "0.00000000000000000000000000000000000000000000000001",
+            "0e99999999999999999999",
+            "-0.000E-99999999999999999999",
+        ] {
+            assert!(plain.parse(raw).is_ok(), "{raw}");
+        }
+    }
+
+    /// Zero is zero whatever its exponent says, and any other number needs an
+    /// exponent that an `i64` holds.
+    #[test]
+    fn a_decimal_reads_zero_before_it_reads_the_exponent() {
+        let zero = Decimal::of("0");
+        assert!(zero.is_some());
+        for text in [
+            "0e99999999999999999999",
+            "-0.00E-99999999999999999999",
+            "0e0",
+        ] {
+            assert_eq!(Decimal::of(text), zero, "{text}");
+        }
+        for text in ["1e99999999999999999999", "1e-99999999999999999999"] {
+            assert_eq!(Decimal::of(text), None, "{text}");
+        }
+        // What `f64::from_str` refuses has no reading, zero or not.
+        for text in ["0e", "0ex", "0e+", "1e", "e5", "", "0.0.0"] {
+            assert_eq!(Decimal::of(text), None, "{text:?}");
+        }
+    }
+
+    /// What is no finite number is "not a number", and a spelling that is a
+    /// number past what a float holds is "out of range".
+    #[test]
+    fn a_number_past_what_a_float_holds_is_out_of_range() {
+        let plain = Scalar::Number(Bounds::default());
+        for raw in ["1e400", "-1e400", "1e99999999999999999999"] {
+            let refused = refusal(&plain, raw);
+            assert!(
+                matches!(&refused, ScalarError::Rule { rule, .. }
+                    if rule.starts_with("is out of range")),
+                "{raw}: {refused:?}"
+            );
+        }
+        for raw in ["inf", "-Infinity", "NaN", "1e", "e5", ".", "1_0", " 1"] {
+            assert!(
+                matches!(
+                    plain.parse(raw),
+                    Err(ScalarError::Kind {
+                        wanted: "a number",
+                        ..
+                    })
+                ),
+                "{raw}"
+            );
+        }
+    }
+
+    /// The text of a parameter on the wire is the parsed value: the sign of a
+    /// positive number and the zeros before a number are not part of it, and
+    /// what the typed call sends for a number is what the command line sends.
+    #[test]
+    fn the_wire_text_is_the_parsed_value() {
+        let integer = Scalar::Integer(Bounds::default());
+        for (raw, sent) in [("+5", "5"), ("007", "7"), ("-0", "0"), ("-12", "-12")] {
+            assert_eq!(integer.wire(raw).as_deref(), Ok(sent), "{raw}");
+        }
+        let number = Scalar::Number(Bounds::default());
+        for (raw, sent) in [
+            ("1.0", "1"),
+            ("1e3", "1000"),
+            ("+0.50", "0.5"),
+            ("007.25", "7.25"),
+            ("1e-7", "0.0000001"),
+        ] {
+            assert_eq!(number.wire(raw).as_deref(), Ok(sent), "{raw}");
+        }
+        // The typed call writes a number with `ToString`, and what it wrote
+        // is sent as it is.
+        for typed in [0.1_f64, 19.99, 1e21, 1.5e-7, 123.0, f64::MAX, 5e-324] {
+            let text = typed.to_string();
+            assert_eq!(number.wire(&text), Ok(text), "{typed}");
+        }
+        assert_eq!(Scalar::Boolean.wire("true").as_deref(), Ok("true"));
+        assert_eq!(
+            Scalar::Text(Text::default()).wire("+5 ").as_deref(),
+            Ok("+5 ")
+        );
+        assert_eq!(
+            Scalar::Choice(vec!["007".to_owned()])
+                .wire("007")
+                .as_deref(),
+            Ok("007")
+        );
+        // Every rule still runs, and the one refusal is `parse`'s.
+        let bounded = Scalar::Integer(Bounds {
+            low: Some(Limit::Inclusive(1)),
+            ..Bounds::default()
+        });
+        assert_eq!(bounded.wire("0"), Err(refusal(&bounded, "0")));
     }
 
     /// The help line and the refusal are one rendering, so what `--help`

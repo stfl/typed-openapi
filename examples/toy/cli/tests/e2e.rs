@@ -11,8 +11,8 @@ use api::{Api, OperationId};
 use cli::app;
 use cli::output::Output;
 use http::StatusCode;
-use typed_openapi::Recorder;
-use typed_openapi::tree::{ArgError, DispatchError};
+use typed_openapi::tree::{self, ArgError, Asked, DispatchError};
+use typed_openapi::{BaseUrlError, Document, PlanError, Recorder, RequestError, ValueError};
 
 /// The write the report quotes. Every field the document marks required is
 /// required on the command line too, so an incomplete PUT is refused here
@@ -128,6 +128,194 @@ fn a_base_url_that_is_not_a_url_stops_the_invocation() {
     let shown = error.to_string();
     assert!(shown.contains("not a url"), "{shown}");
     assert!(shown.contains("--base-url"), "{shown}");
+}
+
+/// What an operator's terminal shows for `error`, the way `main` prints it: the
+/// error, then each cause under it.
+fn shown(error: &app::Error) -> String {
+    let causes = std::iter::successors(std::error::Error::source(error), |cause| cause.source())
+        .map(|cause| format!("  caused by: {cause}"));
+    std::iter::once(format!("toy: {error}"))
+        .chain(causes)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `--base-url` with a credential or a key in it. Unrefused, a dry run prints the
+/// userinfo in its `host:` line, a confirmed run sends it as a `Basic` header, and
+/// the query is dropped in silence. The refusal says which part of the URL it is
+/// and prints none of it, and it is the same for every verb and for a dry run.
+#[test]
+fn a_base_url_that_carries_a_credential_stops_the_invocation_and_prints_none_of_it() {
+    for (base, variant, part, secrets) in [
+        (
+            "http://alice:s3cret@127.0.0.1:18473/",
+            BaseUrlError::Userinfo,
+            "userinfo",
+            &["alice", "s3cret"][..],
+        ),
+        // The `http` crate reads this one as a path, and a dry run would print it.
+        (
+            "//alice:s3cret@127.0.0.1:18473/",
+            BaseUrlError::Userinfo,
+            "userinfo",
+            &["alice", "s3cret"][..],
+        ),
+        (
+            "http://127.0.0.1:18471/api?key=secret",
+            BaseUrlError::Query,
+            "query",
+            &["key", "secret"][..],
+        ),
+    ] {
+        for verb in [
+            &["raw", "vouchers", "render", "--id", "5"][..],
+            &["raw", "vouchers", "render", "--id", "5", "--commit"][..],
+            &["raw", "vouchers", "list"][..],
+            &["finalize-voucher", "--id", "5", "--enshrine"][..],
+        ] {
+            let client = Recorder::new();
+            let api = api();
+            let matches = app::root(&api).get_matches_from(
+                ["toy", "--base-url", base]
+                    .into_iter()
+                    .chain(verb.iter().copied()),
+            );
+
+            let error = app::run(api, &client, &matches).expect_err("the base URL is refused");
+
+            // Under `raw` the tree refuses it, and the hand-written verb's typed
+            // calls refuse it through the client: one refusal, two doors.
+            let (app::Error::Dispatch(DispatchError::Plan(PlanError::Request(
+                RequestError::Base(refused),
+            )))
+            | app::Error::Api(typed_openapi::client::Error::Request(RequestError::Base(
+                refused,
+            )))) = &error
+            else {
+                panic!("{base} {verb:?}: {error:?}");
+            };
+            assert_eq!(*refused, variant, "{base} {verb:?}");
+            let stderr = shown(&error);
+            assert!(stderr.contains(part), "{base} {verb:?}: {stderr}");
+            for secret in secrets {
+                assert!(
+                    !stderr.contains(secret),
+                    "{base} {verb:?}: `{secret}` in {stderr}"
+                );
+            }
+            assert!(client.take().is_empty(), "nothing reached the transport");
+        }
+    }
+}
+
+/// A value that starts with a dash is a value. clap reads `-5` as a flag of its
+/// own unless the flag is told what it is for, and in an accounting API a negative
+/// amount or an offset is ordinary.
+#[test]
+fn a_negative_number_and_a_text_with_a_leading_dash_are_separate_words() {
+    let client = Recorder::new().answering(StatusCode::OK, &serde_json::json!([]));
+    run(
+        &client,
+        &[
+            "toy", "raw", "vouchers", "list", "--limit", "-5", "--type", "-x",
+        ],
+    );
+    let sent = client.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].uri().path_and_query().map(ToString::to_string),
+        Some("/vouchers?limit=-5&type=-x".to_owned())
+    );
+
+    // A body field too, and a credit note is an amount with a sign.
+    let credit: Vec<&str> = UPDATE
+        .iter()
+        .copied()
+        .map(|word| if word == "12.50" { "-12.50" } else { word })
+        .collect();
+    let out = run(&Recorder::new(), &credit);
+    assert!(
+        out.stdout
+            .contains(r#"{"total":"-12.50","currency":"EUR","status":"draft"}"#),
+        "{}",
+        out.stdout
+    );
+
+    // The separate word is checked like the joined one.
+    let api = api();
+    let refused = app::root(&api)
+        .try_get_matches_from(["toy", "raw", "vouchers", "list", "--limit", "-5.5"])
+        .expect_err("`-5.5` is not an integer");
+    assert_eq!(refused.kind(), clap::error::ErrorKind::ValueValidation);
+}
+
+/// The number that is checked is the number that is sent: `+5` is `5` on the wire,
+/// and the raw text `%2B5` never is.
+#[test]
+fn a_number_is_sent_as_it_was_parsed() {
+    let client = Recorder::new().answering(StatusCode::OK, &voucher("draft"));
+    run(&client, &["toy", "raw", "vouchers", "get", "--id", "+005"]);
+    run(
+        &client,
+        &["toy", "raw", "vouchers", "list", "--limit", "+007"],
+    );
+    let sent: Vec<String> = client
+        .take()
+        .iter()
+        .filter_map(|request| request.uri().path_and_query().map(ToString::to_string))
+        .collect();
+    assert_eq!(sent, ["/vouchers/5", "/vouchers?limit=7"]);
+}
+
+/// The toy's ids are integers, which refuse `..` as "not an integer" already, so
+/// this runs the toy's shape of document with a free-text path parameter through
+/// the same tree and the same recorder. `DELETE /things/..` is a request that a
+/// server or a proxy reads as the collection above, so it is never built.
+#[test]
+fn a_path_value_that_is_a_dot_segment_stops_the_invocation_and_sends_nothing() {
+    let document = Document::load(
+        "openapi: 3.0.3\n\
+         info: { title: Things, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+         \x20 /things/{name}:\n\
+         \x20   delete:\n\
+         \x20     operationId: deleteThing\n\
+         \x20     parameters:\n\
+         \x20       - { name: name, in: path, required: true, schema: { type: string } }\n\
+         \x20     responses: { '204': { description: Deleted } }\n",
+        &[],
+    )
+    .expect("a document with a free-text path parameter");
+    let root = clap::Command::new("toy")
+        .subcommand_required(true)
+        .subcommands(tree::commands(&document));
+
+    for value in ["..", ".", ""] {
+        let client = Recorder::new();
+        let matches = root
+            .clone()
+            .get_matches_from(["toy", "things", "delete", "--name", value, "--commit"]);
+        let Asked::Run(selection) = tree::select(&document, &matches).expect("an operation") else {
+            panic!("this command line runs the operation");
+        };
+
+        let error = selection
+            .send(&client, document.base())
+            .expect_err("the segment is refused");
+
+        assert!(
+            matches!(
+                &error,
+                DispatchError::Plan(PlanError::Value(ValueError::PathSegment { name, .. }))
+                    if name == "name"
+            ),
+            "`{value}`: {error:?}"
+        );
+        assert!(error.to_string().contains("`name`"), "{error}");
+        assert!(client.take().is_empty(), "nothing reached the transport");
+    }
 }
 
 /// A request, as the dry run prints it and as the transport receives it — the
