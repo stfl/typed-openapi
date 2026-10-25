@@ -626,59 +626,68 @@ fn a_required_namesake_off_the_path_is_given_its_flag_by_removing_the_other() {
     }
 }
 
-/// Two required entries of one name and place. The place does not say which of
-/// them a repair acts on, so the words say "earlier" and "later". Removing the
-/// earlier one loads, and so does dropping the `required` of the later one;
-/// dropping the `required` of the earlier one leaves the later one refused.
+/// Two required entries of one name and place, in a query or a header (a cookie
+/// has a reason of its own, which wins over a shared name). The place does not
+/// say which of them a repair acts on, so the words say "earlier" and "later".
+/// Removing the earlier one loads, and so does dropping the `required` of the
+/// later one; dropping the `required` of the earlier one leaves the later one
+/// refused.
 #[test]
 fn two_required_entries_of_one_name_and_place_are_told_apart_by_their_order() {
     const PATHS: &str = "  /things:
     get:
       operationId: listThings
       parameters:
-        - { name: q, in: query, required: true, schema: { type: string } }
-        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: q, in: SLOT, required: true, schema: { type: string } }
+        - { name: q, in: SLOT, required: true, schema: { type: string } }
       responses: { \"200\": { description: OK } }
 ";
 
-    let error = refused(PATHS);
+    for (spelled, in_place) in [("query", Place::Query), ("header", Place::Header)] {
+        let paths = PATHS.replace("SLOT", spelled);
 
-    assert!(
-        matches!(&error, LoadError::Parameter { op, name, place: Place::Query, why: Unsupported::Shared(Place::Query) }
-            if op == "listThings" && name == "q"),
-        "{error:?}"
-    );
-    assert_eq!(
-        error.to_string(),
-        "listThings: parameter `q` is sharing its name with the `query` parameter, and the \
-         document requires it; remove the earlier `query` parameter `q` in an Overlay, or drop \
-         the `required` of the later one"
-    );
-    Document::load(
-        &document(PATHS),
-        &[&removing("$.paths['/things'].get.parameters[0]")],
-    )
-    .expect("the Overlay removes the earlier entry");
-    Document::load(
-        &document(PATHS),
-        &[&updating(
-            "$.paths['/things'].get.parameters[1]",
-            "{ required: false }",
-        )],
-    )
-    .expect("the Overlay drops the `required` of the later entry");
-    let earlier = Document::load(
-        &document(PATHS),
-        &[&updating(
-            "$.paths['/things'].get.parameters[0]",
-            "{ required: false }",
-        )],
-    )
-    .expect_err("the later entry is still required");
-    assert!(
-        matches!(earlier, LoadError::Parameter { .. }),
-        "{earlier:?}"
-    );
+        let error = refused(&paths);
+
+        assert!(
+            matches!(&error, LoadError::Parameter { op, name, place, why }
+                if op == "listThings" && name == "q" && *place == in_place
+                    && *why == Unsupported::Shared(in_place)),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "listThings: parameter `q` is sharing its name with the `{spelled}` parameter, \
+                 and the document requires it; remove the earlier `{spelled}` parameter `q` in \
+                 an Overlay, or drop the `required` of the later one"
+            )
+        );
+        Document::load(
+            &document(&paths),
+            &[&removing("$.paths['/things'].get.parameters[0]")],
+        )
+        .unwrap_or_else(|error| panic!("the Overlay removes the earlier {spelled}: {error}"));
+        Document::load(
+            &document(&paths),
+            &[&updating(
+                "$.paths['/things'].get.parameters[1]",
+                "{ required: false }",
+            )],
+        )
+        .unwrap_or_else(|error| panic!("the Overlay drops the `required` of the later: {error}"));
+        let earlier = Document::load(
+            &document(&paths),
+            &[&updating(
+                "$.paths['/things'].get.parameters[0]",
+                "{ required: false }",
+            )],
+        )
+        .expect_err("the later entry is still required");
+        assert!(
+            matches!(earlier, LoadError::Parameter { .. }),
+            "{earlier:?}"
+        );
+    }
 }
 
 /// A path parameter `ref`, then a required parameter `ref` in `spelled`.
