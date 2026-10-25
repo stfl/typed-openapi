@@ -14,7 +14,9 @@ use thiserror::Error;
 #[error("the {origin} `{raw}` does not kebab-case into [a-z0-9-]")]
 pub struct NameError {
     /// What the name was read off, so the message says where to go and look:
-    /// a path segment, or the `x-cli-` marker that overrode it.
+    /// a path segment, the whole path where it has no segment to read, the
+    /// `x-cli-` marker that overrode it, or the word an adopter gave for the
+    /// confirmation flag.
     pub origin: &'static str,
     /// The name, as the document spells it.
     pub raw: String,
@@ -105,11 +107,14 @@ impl Grouping {
     }
 
     /// The group `path` belongs to.
+    ///
+    /// A path with no segment at the depth, such as the root `/`, is named
+    /// whole, so the refusal says `path` and not a segment it does not have.
     pub(crate) fn group(self, path: &str) -> Result<CommandName, NameError> {
-        CommandName::new(
-            "path segment",
-            segments(path).nth(self.depth).unwrap_or(path),
-        )
+        match segments(path).nth(self.depth) {
+            Some(segment) => CommandName::new("path segment", segment),
+            None => CommandName::new("path", path),
+        }
     }
 
     /// What one operation is called under its group: the last literal segment

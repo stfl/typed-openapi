@@ -32,6 +32,7 @@ use super::{
     TRANSPORT, Unmet, Unsupported, first_collision, gate_on_read, spends, unmet,
 };
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
+use crate::openapi::Misfit;
 use crate::scalar::Scalar;
 use crate::schema::{
     RefError, description_of, format_of, is_json, is_media_type, is_multipart, resolve,
@@ -75,15 +76,34 @@ const BODY: &str = "requestBody";
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum LoadError {
-    /// The vendor's document or an Overlay could not be read, or an Overlay
-    /// could not be applied. The message says which, and the cause holds the
-    /// line of the text or the index of the action where there is one.
+    /// The vendor's document could not be read as YAML or JSON. The cause
+    /// holds the line and the column of the text where the reader stopped.
     #[error(transparent)]
-    Overlay(#[from] crate::overlay::OverlayError),
-    /// The overlaid document is not an OpenAPI 3 document. The cause is
-    /// `serde_json`'s message.
-    #[error("the overlaid document is not an OpenAPI 3 document")]
-    Shape(#[source] serde_json::Error),
+    Overlay(crate::overlay::OverlayError),
+    /// An Overlay layer could not be read or could not be applied. The message
+    /// of the cause says which, and holds the line of the text or the index of
+    /// the action where there is one.
+    #[error("cannot use `overlays[{layer}]`")]
+    Layer {
+        /// The index of the layer in the `overlays` argument of
+        /// [`Document::load`], counted from 0.
+        layer: usize,
+        /// What stopped the layer.
+        #[source]
+        source: crate::overlay::OverlayError,
+    },
+    /// The overlaid document is not an OpenAPI 3 document.
+    #[error("the overlaid document is not an OpenAPI 3 document: refused at `{at}`")]
+    Shape {
+        /// The first node that the OpenAPI model refuses, from the root of the
+        /// document: `info.title`, `components.schemas.Voucher`, or a node
+        /// inside a path item as `paths[/vouchers].get.deprecated`. `.` is the
+        /// document itself.
+        at: String,
+        /// `serde_json`'s message.
+        #[source]
+        source: serde_json::Error,
+    },
     /// The document lists no server, so a request has nowhere to go.
     #[error("no `servers` entry to send requests to")]
     NoServer,
@@ -105,10 +125,31 @@ pub enum LoadError {
         /// The path template that holds the operation.
         path: String,
     },
-    /// A name the document offers for a group, a command or a gate that cannot
-    /// be spelled as a flag.
-    #[error(transparent)]
-    Name(#[from] NameError),
+    /// A group or a command that cannot be spelled as a word on the command
+    /// line: a path segment, or the `x-cli-group` or `x-cli-command` that was
+    /// meant to replace it. The two markers are the repair.
+    #[error(
+        "{op}: no command name can be read off this operation; \
+         name it with `x-cli-group` and `x-cli-command` in an Overlay"
+    )]
+    Name {
+        /// The `operationId` of the operation that cannot be placed.
+        op: String,
+        /// The word that cannot be spelled, and what it was read off.
+        #[source]
+        source: NameError,
+    },
+    /// A gate in `x-cli-gates` that cannot be spelled as a flag.
+    #[error(
+        "{op}: a gate in `x-cli-gates` is not a word that can be a flag; correct it in an Overlay"
+    )]
+    GateName {
+        /// The `operationId` of the operation that names the gate.
+        op: String,
+        /// The word that cannot be spelled.
+        #[source]
+        source: NameError,
+    },
     /// An `x-cli-command` or an `x-cli-group` that is not a string.
     #[error("{op}: `{key}` is not a string")]
     Override {
@@ -236,10 +277,27 @@ pub enum LoadError {
     /// an Overlay a reviewer can read.
     #[error(transparent)]
     Phantom(#[from] crate::required::PhantomKeys),
-    /// A `$ref` met where there is no value yet to name it beside: one standing
-    /// in for a whole path item, or for a whole parameter object.
-    #[error(transparent)]
-    Reference(#[from] RefError),
+    /// A path item that is a `$ref`. This crate follows none, whether the
+    /// reference leads anywhere or not, so the item is refused with its path
+    /// and the reference it holds, and no cause is given: the reference was
+    /// never tried.
+    #[error("{path}: the path item is the `$ref` `{reference}`, which this crate does not follow")]
+    PathItem {
+        /// The path template, as the document spells it.
+        path: String,
+        /// The reference, as the document spells it.
+        reference: String,
+    },
+    /// A parameter whose `$ref` cannot be followed. There is no parameter yet to
+    /// name it by, so the operation that lists it is named.
+    #[error("{op}: a parameter is a `$ref` that cannot be followed")]
+    ParameterRef {
+        /// The `operationId` of the operation that lists the parameter.
+        op: String,
+        /// The reference that could not be followed.
+        #[source]
+        source: RefError,
+    },
     /// The same failure met under one value of one operation, which is where
     /// almost all of them are met.
     ///
@@ -474,16 +532,18 @@ impl Document {
         overlays: &[&str],
         loading: &Loading,
     ) -> Result<Self, LoadError> {
-        let mut doc = crate::overlay::parse(document)?;
-        for overlay in overlays {
-            doc = crate::overlay::apply(doc, overlay)?;
+        let mut doc = crate::overlay::parse(document).map_err(LoadError::Overlay)?;
+        for (layer, overlay) in overlays.iter().enumerate() {
+            doc = crate::overlay::apply(doc, overlay)
+                .map_err(|source| LoadError::Layer { layer, source })?;
         }
         // Against the corrected document, so that an adopter's own Overlay is
         // what repairs a contradiction, and while it is still the text the
         // vendor wrote: the object model below normalises away shapes — an
         // inline body's schema among them — that this reading needs to see.
         crate::required::check(&doc)?;
-        let doc: OpenAPI = serde_json::from_value(doc).map_err(LoadError::Shape)?;
+        let doc = crate::openapi::model_of(&doc)
+            .map_err(|Misfit { at, source }| LoadError::Shape { at, source })?;
         Self::from_openapi(&doc, &loading.commit)
     }
 
@@ -505,9 +565,15 @@ impl Document {
 
         let mut ops: Vec<Operation> = Vec::new();
         for (path, item) in &doc.paths.paths {
-            let item = item.as_item().ok_or_else(|| RefError::Missing {
-                reference: format!("paths[{path}]"),
-            })?;
+            let item = match item {
+                ReferenceOr::Item(item) => item,
+                ReferenceOr::Reference { reference } => {
+                    return Err(LoadError::PathItem {
+                        path: path.clone(),
+                        reference: reference.clone(),
+                    });
+                }
+            };
             for (method, op) in item.iter() {
                 let params = item.parameters.iter().chain(op.parameters.iter());
                 ops.push(Operation::build(path, method, op, params, whole)?);
@@ -617,14 +683,20 @@ fn placement(
     method: &Method,
     grouping: Grouping,
 ) -> Result<(CommandName, CommandName), LoadError> {
+    let unplaced = |source| LoadError::Name {
+        op: id.to_owned(),
+        source,
+    };
     let group = match named(op, id, GROUP)? {
-        Some(raw) => CommandName::new(GROUP, raw)?,
-        None => grouping.group(path)?,
-    };
+        Some(raw) => CommandName::new(GROUP, raw),
+        None => grouping.group(path),
+    }
+    .map_err(unplaced)?;
     let command = match named(op, id, COMMAND)? {
-        Some(raw) => CommandName::new(COMMAND, raw)?,
-        None => grouping.leaf(path, method)?,
-    };
+        Some(raw) => CommandName::new(COMMAND, raw),
+        None => grouping.leaf(path, method),
+    }
+    .map_err(unplaced)?;
     Ok((group, command))
 }
 
@@ -665,7 +737,10 @@ fn gates_of(
 ) -> Result<Vec<Gate>, LoadError> {
     let mut gates: Vec<Gate> = Vec::new();
     for raw in listed(op, id, GATES)? {
-        let gate = Gate::new(GATES, raw)?;
+        let gate = Gate::new(GATES, raw).map_err(|source| LoadError::GateName {
+            op: id.to_owned(),
+            source,
+        })?;
         if gate.as_str() == commit {
             return Err(LoadError::GateIsTheConfirmation {
                 op: id.to_owned(),
@@ -763,7 +838,12 @@ impl Param {
         components: &Components,
         flags: &mut Namespace,
     ) -> Result<Self, LoadError> {
-        let param = resolve(param, |key| components.parameters.get(key), "parameters")?;
+        let param = resolve(param, |key| components.parameters.get(key), "parameters").map_err(
+            |source| LoadError::ParameterRef {
+                op: op.to_owned(),
+                source,
+            },
+        )?;
         let data = param.parameter_data_ref();
         let shape = shape_of(op, param, data, components, flags)?;
         if let Shape::Unreachable(why) = &shape
@@ -988,7 +1068,7 @@ impl Body {
         }
         if is_multipart(media_type) {
             return Ok(Self::Multipart {
-                names: part_names(media, components),
+                names: under(part_names(media, components), id, BODY)?,
                 required,
             });
         }
@@ -1125,15 +1205,20 @@ fn runnable(scalar: &Scalar, op: &str, name: &str) -> Result<(), LoadError> {
 }
 
 /// The part names a multipart schema declares, in document order.
-fn part_names(media: &openapiv3::MediaType, components: &Components) -> Vec<String> {
+///
+/// A schema that cannot be followed is the refusal any other body schema gets.
+/// Reading it as a body with no parts would load a document whose upload names
+/// nothing, and the loss would show only when a caller sent a file.
+fn part_names(
+    media: &openapiv3::MediaType,
+    components: &Components,
+) -> Result<Vec<String>, RefError> {
     let Some(schema) = &media.schema else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let Ok(schema) = resolve_schema(schema, components) else {
-        return Vec::new();
-    };
+    let schema = resolve_schema(schema, components)?;
     let SchemaKind::Type(openapiv3::Type::Object(object)) = &schema.schema_kind else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    object.properties.keys().cloned().collect()
+    Ok(object.properties.keys().cloned().collect())
 }

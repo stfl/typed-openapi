@@ -74,6 +74,7 @@ use syn::visit_mut::VisitMut;
 use thiserror::Error;
 
 use crate::model::DocumentError;
+use crate::openapi::Misfit;
 use crate::overlay::OverlayError;
 use crate::{ConfirmationError, Document, LoadError, Loading, overlay};
 
@@ -329,7 +330,8 @@ impl Settings {
         // Everything below trusts that this succeeded.
         let model =
             Document::load_with(&yaml, &[], &self.loading).map_err(GenerateError::Unusable)?;
-        let api = serde_json::from_value(overlaid).map_err(GenerateError::NotOpenApi)?;
+        let api = crate::openapi::model_of(&overlaid)
+            .map_err(|Misfit { at, source }| GenerateError::NotOpenApi { at, source })?;
 
         Ok(Corrected { yaml, model, api })
     }
@@ -868,9 +870,18 @@ pub enum GenerateError {
     #[error("the overlaid document does not describe a usable CLI")]
     Unusable(#[source] LoadError),
     /// The corrected document is not an OpenAPI 3 document, so the generator
-    /// has no object model of it. The cause is `serde_json`'s message.
-    #[error("the overlaid document is not an OpenAPI 3 document")]
-    NotOpenApi(#[source] serde_json::Error),
+    /// has no object model of it.
+    #[error("the overlaid document is not an OpenAPI 3 document: refused at `{at}`")]
+    NotOpenApi {
+        /// The first node that the OpenAPI model refuses, from the root of the
+        /// document: `info.title`, `components.schemas.Voucher`, or a node
+        /// inside a path item as `paths[/vouchers].get.deprecated`. `.` is the
+        /// document itself.
+        at: String,
+        /// `serde_json`'s message.
+        #[source]
+        source: serde_json::Error,
+    },
     /// A schema that cannot be written as the JSON typify takes in.
     #[error("schema `{name}` is not representable as JSON")]
     Schema {

@@ -116,6 +116,36 @@ the document saying something this crate has no reading for, so both are a
 what the vendor meant is a correction, and a correction is the adopter's to
 write in an Overlay where a reviewer can see it.
 
+**A refusal names its operation and the place it stopped, and its repair only
+where the repair is true.** A `LoadError` from one operation carries the
+`operationId`; one from a path item carries the path (`PathItem`), and one from
+an Overlay carries the index of the layer in the list `Document::load` was given
+(`Layer`). A name that cannot be spelled is `Name` for a group or a command,
+whose repair is `x-cli-group` and `x-cli-command`, and `GateName` for a gate,
+whose repair is `x-cli-gates`, because the first repair mends nothing in a gate.
+A path with no segment to name a group after, the root `/`, is named whole.
+A path item that is a `$ref` is `PathItem`: the path and the reference, and no
+`RefError`, because this crate follows no path item's `$ref` and never tried
+this one, so it cannot say the reference does not resolve.
+`Shape` is the OpenAPI model refusing the document, and the model's message has
+no place for a fault in `paths`: `openapiv3` reads `paths` through a
+deserialiser that drops the path inside it, so serde stops at `paths` for a
+fault in the deepest operation. `model_of` in `src/openapi.rs` reads the
+overlaid value once, and where serde stopped at `paths` it reads the value again
+one path item at a time, in document order, and names the first item that fails
+and the node inside it (`paths[/b].get.deprecated`). The re-read refuses only
+what the model refuses, with the model's cause: it tries the keys that start
+with `/` and no others, as `openapiv3` does, and reads each item as a
+`PathItem`, which reads the item's keys in the order it lists them, as the model
+does. Anywhere else serde's own place is kept. The bless step's `NotOpenApi`
+calls the same function. A read that returns a `RefError` passes it on through
+`under`, a body's multipart schema included: a schema that cannot be followed is
+never a body with no parts. `ParameterRef` and `PathItem` are the two variants
+that do not go through `under`: `ParameterRef` names the operation that lists
+the parameter itself, and `PathItem` has no `RefError` to pass on.
+`tests/refusals.rs` holds a case for each, from the input of the probe or the
+review finding that found it.
+
 **A document that requires a key nothing describes is refused, and the
 exemptions are measured against the generator.** `required::check` in
 `src/required.rs` reads the *overlaid* document, before the OpenAPI object model

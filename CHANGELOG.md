@@ -14,10 +14,10 @@ the crate follows [Semantic Versioning][semver].
 - **A stamp on the model blob, and `Document::MODEL_LAYOUT`.** `to_blob` writes
   a header before the encoding: a magic of 8 bytes, the layout number as a
   `u32`, and the version of typed-openapi that wrote it. `MODEL_LAYOUT` is the
-  layout this build reads, 1 in this release, and it moves with any change to
-  what the blob holds. `from_blob` reads the header first, so a blob from
-  another build fails with a message that says what to do and never decodes into
-  a wrong model. All of its errors say to run the bless step again:
+  layout this build reads, and it moves with any change to what the blob holds.
+  `from_blob` reads the header first, so a blob from another build fails with a
+  message that says what to do and never decodes into a wrong model. All of its
+  errors say to run the bless step again:
   - `DocumentError::Unstamped { reads }`: the bytes carry no stamp, so they are
     an empty file, a blob of typed-openapi 0.0.2 or older, or no model blob. It
     names the layout this build reads.
@@ -178,8 +178,8 @@ the crate follows [Semantic Versioning][semver].
   longer shows it. Most messages lose only the `: <cause>` they ended with:
   `OverlayError`, `PlanError::Request`, `ArgError`,
   `client::Error::{Document, Request, Encode, Decode}`,
-  `LoadError::{Shape, ServerUrl}` and `GenerateError::{Yaml, Unusable,
-  NotOpenApi, Schema, Typify, NotRust, Blob}`. These are worded anew:
+  `LoadError::ServerUrl` and `GenerateError::{Yaml, Unusable, Schema, Typify,
+  NotRust, Blob}`. These are worded anew:
   - `ValueError::BadValue`: ``<op>: `<name>` was given a value the document
     refuses``
   - `LoadError::Unresolvable`: ``<op>: `<name>` has a `$ref` that cannot be
@@ -191,6 +191,53 @@ the crate follows [Semantic Versioning][semver].
     `cannot write <path>` and `cannot run rustfmt on <path>`
   - `GenerateError::Overlay`: `cannot use <path>`
   - `GenerateError::Operation`: `the wrapper for <op> cannot be generated`
+- **A refusal names its operation and the place it stopped.** A document of tens
+  of thousands of lines gave a message with no pointer to where to look. These
+  payloads and messages change:
+  - `LoadError::Shape` is `Shape { at, source }`, and `GenerateError::NotOpenApi`
+    is `NotOpenApi { at, source }`. At 0.0.2 each held a `serde_json::Error` and
+    said nothing of a place, because the OpenAPI model drops the path inside
+    `paths`. `at` is the first node that the model refuses, found by reading
+    each path item alone, in the order the document lists them, and the node
+    inside it: `paths[/b].get.deprecated`, `paths[/b].parameters[0]`,
+    `info.title`, or `.` for the document itself. The message is
+    ``the overlaid document is not an OpenAPI 3 document: refused at `<at>` ``,
+    and serde's reason is the cause. Repair: match `Shape { .. }` and
+    `NotOpenApi { .. }`, and print `at`.
+  - `LoadError::Overlay` is the failure to read the vendor's document. An Overlay
+    layer that fails is `LoadError::Layer { layer, source }`, with the index of
+    the layer in the `overlays` you gave `Document::load`, counted from 0. Its
+    message is ``cannot use `overlays[<layer>]` ``. Repair: match `Layer` where
+    you matched `Overlay` for a layer that did not apply.
+  - `LoadError::Name(NameError)` is `Name { op, source }` for a group or a
+    command. Its message names the operation and the repair:
+    ``<op>: no command name can be read off this operation; name it with
+    `x-cli-group` and `x-cli-command` in an Overlay``. A gate that cannot be
+    spelled as a flag is the new `GateName { op, source }`, whose repair is
+    `x-cli-gates`. The root path `/` has no segment, so its cause reads
+    ``the path `/` does not kebab-case into [a-z0-9-]`` and not "the path
+    segment". Repair: match `Name { .. }` and `GateName { .. }` where you
+    matched `Name(_)`. To mend the document, write the two markers on the
+    operation, or correct the gate, in an Overlay.
+  - `LoadError::Reference(RefError)` is gone. A path item that is a `$ref` is
+    `PathItem { path, reference }`, and a parameter whose `$ref` cannot be
+    followed is `ParameterRef { op, source }`. A path item said
+    `` `paths[/a]` does not resolve ``, a place the document does not spell,
+    and said it of a reference that resolves as well. This crate follows no
+    path item's `$ref`, so `PathItem` holds the reference and no cause. Repair:
+    match the two new variants.
+  - `LoadError` no longer implements `From<OverlayError>`, `From<NameError>` or
+    `From<RefError>`. A `?` that turned one of them into a `LoadError` does not
+    compile. Each of the three is now one variant among several, and the
+    variant says which operation or layer it came from. Repair: build the
+    variant with `map_err`: `LoadError::Overlay` for the vendor's document,
+    `Layer { layer, source }` for an Overlay layer, `Name { op, source }` or
+    `GateName { op, source }` for a name, and `ParameterRef { op, source }` or
+    `Unresolvable { op, name, source }` for a reference.
+  - **A document that loaded is refused.** A multipart body whose schema is a
+    `$ref` that cannot be followed loaded with no part names. It is
+    `LoadError::Unresolvable { op, name: "requestBody", source }`, as for any
+    other body schema. Repair: correct the `$ref` in an Overlay.
 - **Eight error enums are `#[non_exhaustive]`:** `LoadError`, `ValueError`,
   `client::Error`, `DispatchError`, `ArgError`, `PlanError`, `OverlayError` and
   `DocumentError`. A `match` on one needs a `_` arm, and a refusal added later

@@ -19,9 +19,9 @@ use std::error::Error as _;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use typed_openapi::Document;
 use typed_openapi::generate::{GenerateError, Settings};
 use typed_openapi::overlay::{self, OverlayError, Place};
+use typed_openapi::{Document, LoadError};
 
 const TOY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml");
 const CORRECTIONS: &str = concat!(
@@ -584,6 +584,49 @@ fn a_document_that_is_not_yaml_is_named_with_its_line_and_column() {
     let reported = reported(&error);
     assert!(reported.contains("toy.yaml"), "{reported}");
     assert!(reported.contains("at line 4"), "{reported}");
+}
+
+/// A document whose second operation breaks the OpenAPI model, read by the bless
+/// step. The model says "expected a boolean" and stops at `paths`, so the report
+/// is the node the reduction found by reading the path items one at a time.
+#[test]
+fn a_document_the_openapi_model_refuses_is_named_by_its_operation() {
+    let dir = out("not-openapi");
+    let document = wrote(
+        &dir,
+        "vendor.yaml",
+        r#"openapi: 3.0.3
+info: { title: Vendor, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /a:
+    get: { operationId: a, responses: { "200": { description: OK } } }
+  /b:
+    get:
+      operationId: b
+      deprecated: "yes"
+      responses: { "200": { description: OK } }
+"#,
+    );
+
+    let error = Settings::new(&document)
+        .write_to(&dir)
+        .expect_err("the OpenAPI model refuses the second operation");
+
+    assert!(
+        matches!(&error, GenerateError::Unusable(LoadError::Shape { at, .. })
+            if at == "paths[/b].get.deprecated"),
+        "{error:?}"
+    );
+    let reported = reported(&error);
+    assert!(
+        reported.contains("`paths[/b].get.deprecated`"),
+        "{reported}"
+    );
+    assert!(
+        reported.contains("invalid type: string \"yes\", expected a boolean"),
+        "{reported}"
+    );
 }
 
 /// Every string a YAML 1.1 reader would misread, as the vendor writes them.

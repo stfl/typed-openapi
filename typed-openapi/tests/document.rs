@@ -1894,7 +1894,7 @@ fn a_marker_that_is_not_a_name_is_refused() {
 /// user's at the prompt.
 #[test]
 fn a_gate_the_command_line_cannot_offer_is_refused_by_name() {
-    let refused = |method: &str, marker: &str| {
+    let refusal = |method: &str, marker: &str| {
         let paths = format!(
             "  /vouchers/{{id}}/enshrine:\n\
              \x20   {method}:\n\
@@ -1904,8 +1904,8 @@ fn a_gate_the_command_line_cannot_offer_is_refused_by_name() {
         );
         Document::load(&synthetic(&paths), &[])
             .expect_err("the document names a gate it cannot offer")
-            .to_string()
     };
+    let refused = |method: &str, marker: &str| refusal(method, marker).to_string();
 
     // One word where a list goes would otherwise be no gate at all, which is
     // the one outcome a default-closed gate must never reach by accident.
@@ -1917,8 +1917,18 @@ fn a_gate_the_command_line_cannot_offer_is_refused_by_name() {
         refused("post", "[3]"),
         "enshrineVoucher: `x-cli-gates` is not a list of names"
     );
+    let unspellable = refusal("post", "[\"???\"]");
+    assert!(
+        matches!(&unspellable, LoadError::GateName { op, .. } if op == "enshrineVoucher"),
+        "{unspellable:?}"
+    );
     assert_eq!(
-        refused("post", "[\"???\"]"),
+        unspellable.to_string(),
+        "enshrineVoucher: a gate in `x-cli-gates` is not a word that can be a flag; \
+         correct it in an Overlay"
+    );
+    assert_eq!(
+        cause(&unspellable),
         "the x-cli-gates `???` does not kebab-case into [a-z0-9-]"
     );
     // A gate spelled like the confirmation, and a gate spelled like a body
@@ -2162,8 +2172,18 @@ fn an_override_that_is_not_spellable_names_itself() {
         &[],
     )
     .expect_err("`???` is not a name");
+    assert!(
+        matches!(&error, LoadError::Name { op, source }
+            if op == "listVouchers" && source.origin == "x-cli-group"),
+        "{error:?}"
+    );
     assert_eq!(
         error.to_string(),
+        "listVouchers: no command name can be read off this operation; \
+         name it with `x-cli-group` and `x-cli-command` in an Overlay"
+    );
+    assert_eq!(
+        cause(&error),
         "the x-cli-group `???` does not kebab-case into [a-z0-9-]"
     );
 }
