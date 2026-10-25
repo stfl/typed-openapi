@@ -420,6 +420,69 @@ the crate follows [Semantic Versioning][semver].
   it can be written as JSON. A type that cannot is
   `BodyError::Unwritable { op, source }`. Repair: derive or implement
   `Serialize` on a type of yours that a body reaches.
+- **A parameter that an operation overrides is one parameter, and the operation
+  can be sent.** OpenAPI identifies a parameter by its name and its place, and
+  the operation's entry replaces the path item's. The model listed both, so the
+  operation had two required flags (`--id` and `--param-id`) and the typed
+  wrapper two arguments (`get_thing(id, id_2)`), both filed under `id`: a
+  request that gave one lacked the other flag, and one that gave both failed
+  `Invocation::new` with "given 2". It is one parameter now, in the place the
+  path item lists it, held to the rules the operation's entry states, so
+  `Operation::params()` lists it once, the command line has `--id`, and the
+  wrapper is `get_thing(id)` with the type of the operation's entry. A parameter
+  of the operation that overrides nothing follows the path item's. The same name
+  in another place does not override: it is the next entry. Repair: run the
+  bless step again, and drop the extra argument at a call of such a wrapper. A
+  script that typed `--param-id` loses the flag.
+- **A second parameter with one name is carried with no flag.** `Values` and
+  `Operation::param` find a parameter by its name, so of `ref` in the path and
+  `ref` in the query only the first can be given a value. The second had a flag
+  (`--param-ref`) and a wrapper argument (`ref_2`) that could never send,
+  because every value was filed under the first. The one the document lists
+  later is now `Shape::Unreachable(Unsupported::Shared(place))`, and its long
+  help and the documentation of the wrapper say it is sharing its name with the
+  `path` parameter. `Unsupported::Shared(String)` is a new variant of
+  `Unsupported`, which is not `#[non_exhaustive]`, so a `match` on it with no
+  `_` arm stops compiling; `place` is `path`, `query`, `header` or `cookie`. The
+  variant is in the blob, so `Document::MODEL_LAYOUT` is 5. A document that
+  loaded is refused where the later parameter is `required`
+  (`LoadError::Parameter`, with the new reason). Repair: run the bless step
+  again; for a document that is refused, drop the `required` of the later
+  parameter in an Overlay. A script that typed `--param-ref` loses the flag.
+- **A path template and its path parameters must agree.** A request went out
+  with `{id}` in its path, or with a required flag whose value was thrown away,
+  and `http::Uri` accepted the braces, so a confirmed write was sent too. Each
+  of these is a `LoadError` that names the operation, the path and the
+  parameter, and each is mended by an Overlay:
+  - `UnboundVariable { op, path, name }`: a variable in the path with no path
+    parameter of that name. Repair: add the parameter. A parameter in the query
+    or a header with the name does not answer it.
+  - `UnusedPathParameter { op, path, name }`: a path parameter with no variable
+    of its name in the path. Repair: remove the parameter.
+  - `OptionalPathParameter { op, name }`: a path parameter that is not
+    `required: true`. Repair: set `required: true`.
+  `LoadError` is `#[non_exhaustive]`, so the three variants are no break.
+- **A `servers` on a path item or on an operation is refused.** A request goes
+  to the first server of the document, so an upload endpoint on another host was
+  sent to the wrong one, in silence. `LoadError::Servers { op, at }` names the
+  operation and spells the list as an Overlay names a target, such as
+  `$.paths['/upload'].post.servers`. A path item's list is refused at the first
+  operation under it, and a path item with no operation is not refused. An empty
+  list is no list. Repair: an Overlay `remove` action with that target
+  (`docs/overlay.md`), after which the request goes to the first server of the
+  document or to the base URL the caller passes.
+- **The header parameters `Accept`, `Content-Type` and `Authorization` are
+  dropped.** OpenAPI 3.0.3 says such a definition "SHALL be ignored". The names
+  are compared without case, and only in a header. They became flags, so a
+  `Content-Type` parameter put a second `content-type` on a request that had a
+  body, and an `Authorization` parameter was a required `--authorization` flag,
+  which put the credential in argv, in shell history and in every dry run. They
+  are not parameters of the operation now: no flag, no wrapper argument, no
+  `Shape::Unreachable`, and no refusal of a document that declares one as
+  `required`. A value given for one is `ValueError::UnknownParam`. Repair: set
+  the header in the client adapter (`docs/client.md`), where a credential
+  belongs, and drop the argument at a call of a wrapper that took one. A script
+  that typed `--authorization` loses the flag.
 
 ### Removed
 

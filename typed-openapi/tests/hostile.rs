@@ -290,7 +290,7 @@ fn parameters_named_after_rust_words_keep_the_documents_word_on_the_flag() {
 
 /// Two parameters whose names snake-case onto one word bind two arguments.
 ///
-/// `self` and `Self` both want `self_`, and the `ref` in a path and the `ref` in
+/// `self` and `Self` both want `self_`, and the `ref` in a path and the `Ref` in
 /// a query both want `r#ref`. Two arguments under one identifier is `E0415` —
 /// and `syn` parses such a signature without complaint, so a bless step would
 /// report success over a crate that does not compile. The later claimant moves
@@ -298,7 +298,7 @@ fn parameters_named_after_rust_words_keep_the_documents_word_on_the_flag() {
 ///
 /// What each argument *sends* is the half that has to survive the move: the wire
 /// name travels beside the argument as a literal, so `ref_2` still reaches the
-/// request under `ref`. Sending the first argument's value under the second's
+/// request under `Ref`. Sending the first argument's value under the second's
 /// wire name is the failure the collision threatened, and the builder chain is
 /// where it would show.
 #[test]
@@ -326,9 +326,9 @@ fn two_parameters_that_spell_one_identifier_bind_two_arguments() {
     assert_eq!(
         arguments(&ops, "append_log_entry"),
         ["r#ref", "ref_2", "body"],
-        "the query `ref` moves aside from the path `ref`"
+        "the query `Ref` moves aside from the path `ref`"
     );
-    for pairing in [r#".param("ref", r#ref)"#, r#".maybe("ref", ref_2)"#] {
+    for pairing in [r#".param("ref", r#ref)"#, r#".maybe("Ref", ref_2)"#] {
         assert!(
             ops.contains(pairing),
             "`{pairing}` is not how the request is built:\n{ops}"
@@ -369,7 +369,7 @@ fn no_generated_wrapper_binds_one_identifier_twice() {
 /// `self_2` and `ref_2` are nowhere in the document, and under the `builder`
 /// feature they are setters an adopter types — so a signature carrying one is a
 /// name they cannot look up. The command line meets the same collision and
-/// answers it, with `(sends `ref`)` on the flag that moved; a wrapper that said
+/// answers it, with `(sends `Ref`)` on the flag that moved; a wrapper that said
 /// nothing would leave the two consumers disagreeing about whether a rename is
 /// worth mentioning, which is the asymmetry the renaming rule exists to end.
 ///
@@ -380,7 +380,7 @@ fn a_wrapper_argument_that_moved_aside_says_what_it_sends() {
     let ops = read(&blessed("hostile-moved").join("src/ops.rs"));
     for said in [
         "`self_2` sends the document's `Self`, under a name of its own",
-        "`ref_2` sends the document's `ref`, under a name of its own",
+        "`ref_2` sends the document's `Ref`, under a name of its own",
     ] {
         assert!(
             ops.contains(said),
@@ -441,11 +441,11 @@ paths:
     );
 }
 
-/// One wire name in two places is two flags, and the one that moved says which
-/// wire name it carries — the only thing left to go by once the document is
-/// gone.
+/// Two wire names that spell one flag are two flags, and the one that moved says
+/// which wire name it carries — the only thing left to go by once the document
+/// is gone.
 #[test]
-fn one_wire_name_in_two_places_is_two_flags_and_the_second_says_so() {
+fn two_names_that_spell_one_flag_are_two_flags_and_the_second_says_so() {
     let doc = document();
     let op = operation(&doc, "appendLogEntry");
     let flags: Vec<Option<String>> = op
@@ -462,7 +462,7 @@ fn one_wire_name_in_two_places_is_two_flags_and_the_second_says_so() {
         "the path parameter claims the plain name and the query parameter moves aside"
     );
     assert!(
-        long_help(&op).contains("(sends `ref`)"),
+        long_help(&op).contains("(sends `Ref`)"),
         "the flag that moved has to name the wire name it carries:\n{}",
         long_help(&op)
     );

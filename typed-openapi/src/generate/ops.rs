@@ -14,14 +14,14 @@
 //! `--json-body` file is held to the same schema a Rust caller is.
 
 use heck::{ToPascalCase, ToSnakeCase};
-use openapiv3::{OpenAPI, ReferenceOr, Schema, SchemaKind, Type};
+use openapiv3::{OpenAPI, Parameter, ReferenceOr, Schema, SchemaKind, Type};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use syn::visit_mut::VisitMut as _;
 
 use super::GenerateError;
 use super::names::{JsonBody, Names, Site};
-use crate::model::{Body, Shape};
+use crate::model::{Body, Location, Shape};
 use crate::{Document, Operation};
 
 /// What one operation contributes to the generated file.
@@ -594,8 +594,8 @@ fn add_param(
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<(), GenerateError> {
-    let join = match param.shape() {
-        Shape::Flag { join, .. } => join,
+    let (join, location) = match param.shape() {
+        Shape::Flag { join, location, .. } => (join, *location),
         Shape::Unreachable(why) => {
             out.notes.push(format!(
                 "The document's `{}` parameter is not an argument: it is {why}. \
@@ -617,7 +617,7 @@ fn add_param(
         &word,
         &format!("sends the document's `{}`", param.name()),
     );
-    let schema = param_schema(item, operation, param.name())?;
+    let schema = param_schema(item, operation, param.name(), location)?;
     let wire = param.name();
     if join.is_some() {
         // A list parameter is the wire name given once per value, which is the
@@ -646,19 +646,24 @@ fn multipart_note(parts: &Ident, names: &[String]) -> String {
     }
 }
 
-/// The schema one parameter declares, keyed on the document's own name.
+/// The schema one parameter declares, keyed on the document's own name and on
+/// where the parameter goes.
+///
+/// The operation's entry is looked for first: it replaces the path item's of the
+/// same name and place, so the type of the argument is the one it states.
 fn param_schema<'d>(
     item: &'d openapiv3::PathItem,
     operation: &'d openapiv3::Operation,
     name: &str,
+    location: Location,
 ) -> Result<&'d ReferenceOr<Schema>, GenerateError> {
-    let declared = item
+    let declared = operation
         .parameters
         .iter()
-        .chain(&operation.parameters)
+        .chain(&item.parameters)
         .find_map(|p| {
             let ReferenceOr::Item(p) = p else { return None };
-            (p.parameter_data_ref().name == name).then_some(p)
+            (p.parameter_data_ref().name == name && goes_in(p, location)).then_some(p)
         })
         .ok_or_else(|| unsupported(format!("`{name}` is not declared on this operation")))?;
     let openapiv3::ParameterSchemaOrContent::Schema(schema) = &declared.parameter_data_ref().format
@@ -668,6 +673,16 @@ fn param_schema<'d>(
         )));
     };
     Ok(schema)
+}
+
+/// Whether the document puts this parameter where the reduction says it goes.
+fn goes_in(param: &Parameter, location: Location) -> bool {
+    matches!(
+        (param, location),
+        (Parameter::Path { .. }, Location::Path)
+            | (Parameter::Query { .. }, Location::Query)
+            | (Parameter::Header { .. }, Location::Header)
+    )
 }
 
 /// The Rust spelling of a list parameter's items.

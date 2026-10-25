@@ -1838,8 +1838,10 @@ fn a_prefix_every_path_shares_is_not_the_group() {
 #[test]
 fn two_operations_under_one_name_are_refused_by_both_ids() {
     const COLLIDING: &str = "  /vouchers/{id}/render:\n\
+         \x20   parameters: [{ name: id, in: path, required: true, schema: { type: string } }]\n\
          \x20   get: { operationId: renderVoucher, responses: { \"200\": { description: OK } } }\n\
          \x20 /vouchers/{id}/pdf/render:\n\
+         \x20   parameters: [{ name: id, in: path, required: true, schema: { type: string } }]\n\
          \x20   get: { operationId: renderVoucherPdf, responses: { \"200\": { description: OK } } }\n";
 
     let error = Document::load(&synthetic(COLLIDING), &[]).expect_err("both are `vouchers render`");
@@ -1868,6 +1870,7 @@ fn two_operations_under_one_name_are_refused_by_both_ids() {
 fn the_document_may_name_its_own_group_and_command() {
     let placed = placements(&synthetic(
         "  /vouchers/{id}/render:\n\
+         \x20   parameters: [{ name: id, in: path, required: true, schema: { type: string } }]\n\
          \x20   get:\n\
          \x20     operationId: renderVoucher\n\
          \x20     x-cli-group: reports\n\
@@ -1986,6 +1989,7 @@ fn a_body_field_that_collides_with_a_gate_refuses_the_document() {
     let error = Document::load(
         &synthetic(
             "  /vouchers/{id}/enshrine:\n\
+             \x20   parameters: [{ name: id, in: path, required: true, schema: { type: string } }]\n\
              \x20   post:\n\
              \x20     operationId: enshrineVoucher\n\
              \x20     x-cli-gates: [enshrine]\n\
@@ -2016,6 +2020,7 @@ fn a_body_field_that_collides_with_the_confirmation_refuses_the_document() {
     let error = Document::load(
         &synthetic(
             "  /vouchers/{id}:\n\
+             \x20   parameters: [{ name: id, in: path, required: true, schema: { type: string } }]\n\
              \x20   put:\n\
              \x20     operationId: updateVoucher\n\
              \x20     requestBody:\n\
@@ -2045,6 +2050,7 @@ fn a_body_field_that_collides_with_the_confirmation_refuses_the_document() {
 #[test]
 fn each_word_moves_on_the_side_that_owns_it() {
     const BOTH: &str = "  /vouchers/{id}/enshrine:\n\
+         \x20   parameters: [{ name: id, in: path, required: true, schema: { type: string } }]\n\
          \x20   post:\n\
          \x20     operationId: enshrineVoucher\n\
          \x20     x-cli-gates: [gate-enshrine]\n\
@@ -2213,6 +2219,7 @@ fn a_parameter_that_collides_with_a_gate_refuses_the_document() {
         let error = Document::load(
             &synthetic(&format!(
                 "  /vouchers/{{id}}/enshrine:\n\
+                 \x20   parameters: [{{ name: id, in: path, required: true, schema: {{ type: string }} }}]\n\
                  \x20   post:\n\
                  \x20     operationId: enshrineVoucher\n\
                  \x20     x-cli-gates: [enshrine]\n\
@@ -2248,6 +2255,7 @@ fn a_parameter_that_collides_with_the_confirmation_refuses_the_document() {
         let error = Document::load_with(
             &synthetic(&format!(
                 "  /vouchers/{{id}}:\n\
+                 \x20   parameters: [{{ name: id, in: path, required: true, schema: {{ type: string }} }}]\n\
                  \x20   put:\n\
                  \x20     operationId: updateVoucher\n\
                  \x20     parameters:\n\
@@ -2546,6 +2554,7 @@ fn an_x_cli_writes_that_is_not_the_boolean_true_is_refused() {
         Document::load(
             &synthetic(&format!(
                 "  /render/{{id}}:\n\
+                 \x20   parameters: [{{ name: id, in: path, required: true, schema: {{ type: string }} }}]\n\
                  \x20   {method}:\n\
                  \x20     operationId: renderIt\n\
                  \x20     x-cli-writes: {marker}\n\

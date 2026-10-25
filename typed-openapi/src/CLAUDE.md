@@ -298,14 +298,15 @@ adds no recursion to either walk.
 
 **A shape this crate cannot spell stops at the operation, not at the document.**
 A parameter that is `in: cookie`, described by `content`, neither a value nor a
-list of values, declaring a `style` this crate does not serialise, or *named* in
-a way `names::spelled` refuses, is carried as `Shape::Unreachable` — named on
-the subcommand's long help and in the wrapper's documentation, and given no
-flag, no argument and no place in the request — and only a *required* one is a
-`LoadError`, because an operation that could never build a correct request is
-worth refusing by name. It is the rule a body already follows, where one nested
-property sends the whole body through `--json-body` rather than refusing the
-document that holds it.
+list of values, declaring a `style` this crate does not serialise, *named* in a
+way `names::spelled` refuses, or sharing its name with an earlier parameter of
+the operation (`Unsupported::Shared`), is carried as `Shape::Unreachable` —
+named on the subcommand's long help and in the wrapper's documentation, and
+given no flag, no argument and no place in the request — and only a *required*
+one is a `LoadError`, because an operation that could never build a correct
+request is worth refusing by name. It is the rule a body already follows, where
+one nested property sends the whole body through `--json-body` rather than
+refusing the document that holds it.
 
 Every flag a user types passes `names::spelled`, which is why a body property
 spelled `*` sends its body whole rather than claiming a flag called `""`. The
@@ -328,6 +329,42 @@ said "does not kebab-case" would look right. A path segment that holds one needs
 `x-cli-group` or `x-cli-command`, and `Name` says so; a gate or the confirmation
 word is refused; a parameter is `Unreachable`, and only a required one refuses
 the document; a body property sends the body whole.
+
+**An operation's parameters are the ones OpenAPI defines, and the request goes
+where the document says.** A parameter is its name and its place. `declared` in
+`src/model/reduce.rs` follows the `$ref` of each parameter and lets the
+operation's entry take the place of the path item's of the same pair, in the
+order the path item lists them; an entry of the operation with a pair that no
+slot is left for is another parameter, which is how two entries of one pair stay
+two. It drops the header parameters `Accept`, `Content-Type` and
+`Authorization`, compared without case and in a header only, because OpenAPI
+3.0.3 says they "SHALL be ignored". They are dropped and not carried as
+`Unreachable`, because a required one would then refuse a document that is
+right, and a flag for one puts a credential in argv, in shell history and in
+every dry run.
+
+`Values` is keyed by the name alone, and so is `Operation::param`, which finds
+the first. So of two parameters left with one name the later is
+`Unsupported::Shared` whatever its place and unless it has a reason of its own,
+and it claims no flag; a required one is `LoadError::Parameter`. The values
+under a name are the first parameter's, so `Invocation::new` counts the given
+values of a parameter with a flag only. The generator finds the schema of a
+wrapper's argument by the same pair, the operation's entry first
+(`param_schema`), because the argument is typed by the entry that won.
+
+`reconcile` holds the path template to the path parameters, and refuses a
+variable with no path parameter, a path parameter with no variable and a path
+parameter that is not required, so `{id}` is never on the wire. A `{` that
+nothing closes is text and not a variable. `no_servers` refuses a `servers` on a
+path item or on an operation (`Servers`), because a request goes to
+`Document::base` and the model holds no host per operation; it spells the list
+as an Overlay names a target, so the repair is a line to paste.
+
+None of these rules is repeated by `Document::check`. The model holds no
+`servers`, and a blob that breaks one of the others sends a request that is
+wrong, which costs the run that meets it. A write is still held by
+`Plan::decide`, and the flags of an operation are distinct by their own names,
+so clap does not panic.
 
 **A body template is read from the model and reaches no request.** The body with
 no per-field flags is the body `--help` cannot describe, so `Body::JsonWhole`

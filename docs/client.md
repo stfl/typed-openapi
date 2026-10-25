@@ -80,6 +80,15 @@ carrying the response, status and all. ureq turns a 4xx into an error and
 discards the body unless it is built with `http_status_as_error(false)`, which
 is why the example's adapter sets it.
 
+**A credential is set in the adapter.** The request that `Invocation::request`
+builds carries no `Authorization` header, whatever the document declares: a
+header parameter named `Authorization`, `Accept` or `Content-Type` is dropped
+while the document is reduced, as OpenAPI says it should be
+([`docs/cli.md`](cli.md#headers-openapi-says-to-ignore)). The adapter adds the
+header to the request it is handed, from wherever the adopter keeps the secret,
+so the secret is in no flag and no shell history, and a dry run, which prints
+the request before the adapter sees it, prints no secret.
+
 ## Classifying a transport failure
 
 `DispatchError::Transport` and `client::Error::Transport` carry the client's

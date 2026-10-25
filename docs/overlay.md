@@ -366,6 +366,44 @@ get /vouchers has no operationId; add one in an Overlay
       operationId: listVouchers
 ```
 
+A `servers` on a path item or on an operation. A request goes to the first
+server of the document, and the caller may replace it, so a host that one
+operation names for itself has no place in the model. `typed-openapi` refuses the
+document rather than send the request to another host than the document means,
+and the refusal spells the target of the action that removes the list:
+
+```
+upload: `servers` stands on `$.paths['/upload'].post.servers`, and this crate sends every request to the first server of the document; remove it in an Overlay
+```
+
+```yaml
+  - target: "$.paths['/upload'].post.servers"
+    description: Send the upload to the host the caller chose.
+    remove: true
+```
+
+Whether that is right is a judgement about the API, which is why the crate
+leaves it to you: after the action the upload goes to the document's first
+server, or to the base URL that the caller passes in its place.
+
+A path template that does not match its path parameters. Every variable in the
+path wants a path parameter of its name, every path parameter wants its variable,
+and a path parameter is `required: true`. Each break is refused with the
+operation and the name, because the request would otherwise go out with `{id}`
+in it or with a value thrown away:
+
+```
+getVoucher: `/vouchers/{id}` has the variable `{id}`, and the operation declares no path parameter of that name; add one in an Overlay
+```
+
+```yaml
+  - target: "$.paths['/vouchers/{id}'].get"
+    description: The id the path names.
+    update:
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+```
+
 A content type that is not one. A media type is `type/subtype`, so a body
 declared under the bare key `form-data` names none, and there is nothing to
 send that body under. `typed-openapi` refuses the document while it reduces it

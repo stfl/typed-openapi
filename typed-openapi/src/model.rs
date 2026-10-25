@@ -352,16 +352,18 @@ pub enum Join {
 
 /// Why a parameter carries no flag.
 ///
-/// Five shapes, one answer, because they cost a document the same thing: an
+/// Six shapes, one answer, because they cost a document the same thing: an
 /// operation nobody can express sits beside a hundred that are expressible, and
 /// refusing the document for it makes those hundred unreachable too. So an
 /// unsupported parameter is carried rather than refused, and only a *required*
 /// one — an operation that could never be invoked correctly — is named as a
 /// `LoadError` while the document is reduced.
 ///
-/// Four of the five are the document describing a value this CLI cannot put on
-/// a flag. [`Unsupported::Unspellable`] is the other half of the same question:
-/// the value is ordinary and it is the *name* that no flag can carry.
+/// Four of the six are the document describing a value this CLI cannot put on
+/// a flag. [`Unsupported::Unspellable`] and [`Unsupported::Shared`] are the other
+/// half of the same question: the value is ordinary and it is the *name* that no
+/// flag can carry, because the CLI cannot spell it or because another parameter
+/// already has it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Unsupported {
     /// `in: cookie`. This CLI sends no cookies.
@@ -397,6 +399,16 @@ pub enum Unsupported {
     /// command line cannot spell, spelled anyway, and discoverable only by
     /// accident.
     Unspellable,
+    /// A name that an earlier parameter of the operation already has, in the
+    /// place this string names: `path`, `query`, `header` or `cookie`, as the
+    /// document spells `in`.
+    ///
+    /// OpenAPI tells two parameters apart by their name and their place, and
+    /// [`Values`](crate::Values) tells them apart by their name alone, so a value
+    /// for the name reaches the first parameter that has it and never the
+    /// second. The one the document lists later has no flag, so no flag is left
+    /// that could never send.
+    Shared(String),
 }
 
 impl std::fmt::Display for Unsupported {
@@ -419,6 +431,7 @@ impl std::fmt::Display for Unsupported {
                 "named with a character outside ASCII, or in a way that does not kebab-case into \
                  [a-z0-9-]",
             ),
+            Self::Shared(place) => write!(out, "sharing its name with the `{place}` parameter"),
         }
     }
 }
@@ -819,7 +832,7 @@ impl Document {
     /// for the same document and no type changed. The crate's own tests trace
     /// the layout and fail on a change to a type that left the number where it
     /// was.
-    pub const MODEL_LAYOUT: u32 = 4;
+    pub const MODEL_LAYOUT: u32 = 5;
 
     /// The same reduction, already done and written down.
     ///
@@ -1058,9 +1071,12 @@ impl Operation {
         self.description.as_deref()
     }
 
-    /// Every parameter the document declares for the operation, the path
-    /// item's first and then the operation's own, the ones with no flag
-    /// included.
+    /// Every parameter the document declares for the operation, the ones with
+    /// no flag included: the path item's in the order it lists them, then the
+    /// operation's own. A parameter of the operation takes the place of the
+    /// path item's with the same name and place, as OpenAPI says. The three
+    /// headers it says to ignore (`Accept`, `Content-Type` and `Authorization`)
+    /// are not listed.
     #[must_use]
     pub fn params(&self) -> &[Param] {
         &self.params
@@ -1100,7 +1116,9 @@ impl Operation {
         &self.commit
     }
 
-    /// The parameter the document spells `name`, if there is one.
+    /// The first parameter the document spells `name`, if there is one: the one
+    /// that a value given under that name reaches. Another parameter with the
+    /// name has no flag ([`Unsupported::Shared`]).
     #[must_use]
     pub fn param(&self, name: &str) -> Option<&Param> {
         self.params.iter().find(|p| p.name == name)

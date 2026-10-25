@@ -1,5 +1,5 @@
 {
-  "model_layout": 4,
+  "model_layout": 5,
   "traces": {
     "Bounds<f64>": {
       "Bounds": {
@@ -405,6 +405,11 @@
           },
           "4": {
             "Unspellable": "UNIT"
+          },
+          "5": {
+            "Shared": {
+              "NEWTYPE": "STR"
+            }
           }
         }
       }

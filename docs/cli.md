@@ -180,7 +180,7 @@ own type rather than the box `DispatchError::Transport` carries.
 
 | what the document says | what the subcommand grows |
 |---|---|
-| a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is |
+| a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is; none for the three headers [OpenAPI ignores](#headers-openapi-says-to-ignore) |
 | the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode` |
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
 | a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE` |
@@ -319,19 +319,30 @@ nothing lands on them.
 
 ### Parameters with no flag
 
-Five shapes have no command-line spelling: `in: cookie`, a parameter described
+Six shapes have no command-line spelling: `in: cookie`, a parameter described
 by `content` instead of `schema`, one whose schema is neither a value nor a list
 of values, one declaring a `style` this CLI does not write — `spaceDelimited`,
-`pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — and
-one whose *name* has no kebab-case spelling. The style is read whatever the
-schema is, because it is not only about delimiters: `matrix` puts a `;name=` in
-front of a single value too.
+`pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — one
+whose *name* has no kebab-case spelling, and one whose name an earlier parameter
+of the operation has. The style is read whatever the schema is, because it is
+not only about delimiters: `matrix` puts a `;name=` in front of a single value
+too.
 
-The last of the five is the only one that is about the name rather than the
-value. A flag is `[a-z0-9-]` once kebab-cased, the rule a command name and a
-gate also pass, and a parameter named `*` or `()` reduces to nothing under it.
-A name with a character outside ASCII, such as `straße`, has no spelling
-either: it is not kebab-cased to `stra-e`, and nothing is transliterated.
+The last two are about the name rather than the value. A flag is `[a-z0-9-]`
+once kebab-cased, the rule a command name and a gate also pass, and a parameter
+named `*` or `()` reduces to nothing under it. A name with a character outside
+ASCII, such as `straße`, has no spelling either: it is not kebab-cased to
+`stra-e`, and nothing is transliterated.
+
+OpenAPI tells two parameters apart by their name and their place, so `ref` in
+the path and `ref` in the query are two parameters. A value reaches a parameter
+by its name alone, on the command line and in the typed wrapper alike, so the
+one the document lists first has the flag and the one it lists later has none.
+
+An operation's parameter that has the name and the place of its path item's
+replaces it, in the place the path item lists it. A path-level `id` that an
+operation overrides is one `--id`, held to the rules the operation's entry
+states, and the operation's other parameters follow the path item's.
 
 None of them refuses the document. The parameter stays in the reduction, the
 subcommand grows nothing for it, and its long help carries a line of its own
@@ -341,6 +352,9 @@ below the method, the path and the `operationId`:
 `filter` has no flag: it is neither a value nor a list of values. The request
 goes out without it.
 ```
+
+The line for the `ref` in the query gives its reason as sharing its name with
+the `path` parameter.
 
 The one exception is a parameter the document marks `required: true`. That
 operation could never build a correct request, so it is a `LoadError::Parameter`
@@ -359,6 +373,36 @@ all — `form-data` where `multipart/form-data` was meant is a
 `LoadError::MediaType`, not a `--raw-body` sent under a `Content-Type` no server
 parses. [docs/overlay.md](overlay.md#1-plain-corrections) has the action that
 repairs one.
+
+### The path and its parameters
+
+The path template and the path parameters are held to each other while the
+document is reduced. A request that went out with `{id}` in it, or with a value
+thrown away, looks sent and is not read. Each of these is a `LoadError` that
+names the operation and the parameter, and each names the Overlay that mends it:
+
+| the document has | the repair |
+|---|---|
+| a variable in the path and no path parameter of that name (`UnboundVariable`) | add the parameter |
+| a path parameter and no variable of its name in the path (`UnusedPathParameter`) | remove the parameter |
+| a path parameter that is not `required: true` (`OptionalPathParameter`) | set `required: true` |
+
+A parameter in the query or in a header does not answer a variable, whatever
+its name. A variable that the path repeats is one variable.
+
+### Headers OpenAPI says to ignore
+
+A header parameter named `Accept`, `Content-Type` or `Authorization`, compared
+without case, is not a parameter of the operation. OpenAPI 3.0.3 says its
+definition "SHALL be ignored": the media type of a request comes from its body,
+what it accepts is the client's, and a credential is a security scheme. The
+reduction drops the three, so none of them grows a flag, none is carried as a
+parameter with no flag, and a required one does not refuse the document, which
+a parameter with no flag would. A converted Swagger 2 document often declares
+them. So a credential never lands in a shell's history or in the output of a
+dry run, and a request carries one `content-type`, the body's. A parameter
+named `authorization` in the query is not a header, and is a flag like any
+other.
 
 ### Per-field flags are merged over `--json-body`
 

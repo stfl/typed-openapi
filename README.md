@@ -120,9 +120,11 @@ answers a test from a script instead, are in [docs/client.md][client].
   further — holding its *content* to a schema needs the generated `struct`,
   which only your crate can name. The typed wrapper takes that type either way.
 - **No object parameters.** An object, an `in: cookie`, a `content`-described
-  parameter, an unserialisable `style` and a name that will not kebab-case
-  carry no flag: each is named on its subcommand's help, and refuses the
-  document only where it is `required`.
+  parameter, an unserialisable `style`, a name that will not kebab-case and a
+  name that an earlier parameter of the operation has carry no flag: each is
+  named on its subcommand's help, and refuses the document only where it is
+  `required`. The headers `Accept`, `Content-Type` and `Authorization` are not
+  parameters at all, as OpenAPI says, so a credential is never a flag.
 - **No OpenAPI 3.1.** The crate reads OpenAPI 3.0. A document whose `openapi`
   says another version is refused, and the refusal names it: 3.1 spells some
   rules another way and means others that 3.0 does not have, so a reading as
@@ -132,7 +134,11 @@ answers a test from a script instead, are in [docs/client.md][client].
   refused, where OpenAPI would send to `/`, and so is an operation with no
   `operationId`. Each refusal names the repair, an Overlay that adds the server
   or the id ([docs/overlay.md][ov]). A server URL with variables uses the
-  `default` of each.
+  `default` of each. A path template whose variables and path parameters do not
+  match is refused too, so `{id}` never goes on the wire.
+- **One host for every request.** A request goes to the first of the document's
+  `servers`, which the caller may replace. A `servers` on a path item or on an
+  operation is refused, and an Overlay that removes it is the repair.
 - **No characters outside ASCII in a name.** A command is `[a-z0-9-]`. A path
   segment, a gate or a parameter that holds a character outside ASCII is
   refused or carried with no flag, and never dropped from the word or
