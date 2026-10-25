@@ -42,14 +42,15 @@ the crate follows [Semantic Versioning][semver].
   flag or a confirmation word that begins with `-`, on `help` or a body flag
   that the subcommand declares already, on two operations under one name, on a
   group or command called `help` and on a parameter that requires itself; in a
-  release build one declaration took the place of the other. A write held as a read, a `GET` that names a gate among them, was
-  sent without `--commit`. The other refusals stopped no build.
-  Twelve variants carry these refusals: `DocumentError::{Confirmation,
-  OperationConfirmation, Flag, FlagSpent, FlagTwice, GatedRead, WriteAsRead,
-  NameSpent, DuplicateCommand, RequiresItself, RequiresUnknown,
-  RequiresUnreachable}`. Ten name the operation, `DuplicateCommand` names both
-  of two, and `Confirmation` names the document's confirmation word. Repair: run the bless step again. A blob that
-  a load wrote never meets them. Only `from_blob` applies these rules; a
+  release build one declaration took the place of the other. A write held as a
+  read, a `GET` that names a gate among them, was sent without `--commit`. The
+  other refusals stopped no build. Twelve variants carry these refusals:
+  `DocumentError::{Confirmation, OperationConfirmation, Flag, FlagSpent,
+  FlagTwice, GatedRead, WriteAsRead, NameSpent, DuplicateCommand,
+  RequiresItself, RequiresUnknown, RequiresUnreachable}`. Ten name the
+  operation, `DuplicateCommand` names both of two, and `Confirmation` names the
+  document's confirmation word. Repair: run the bless step again. A blob that a
+  load wrote never meets them. Only `from_blob` applies these rules; a
   `Document` read through `Deserialize` in another format is not held to them.
 - **`OverlayError::Shape`.** An Overlay that is YAML or JSON and has the wrong
   shape (no `actions`, an action with no `target`, a version other than 1.1) is

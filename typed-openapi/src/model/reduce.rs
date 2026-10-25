@@ -28,8 +28,8 @@ use openapiv3::{
 use thiserror::Error;
 
 use super::{
-    Body, COMMIT, Document, Effect, Field, Gate, HELP, Join, Location, Operation, Param, Shape,
-    TRANSPORT, Unmet, Unsupported, first_collision, gate_on_read, spends, spends_command, unmet,
+    Body, COMMIT, Document, Effect, Field, Gate, Join, Location, Operation, Param, SPENT, Shape,
+    Unmet, Unsupported, first_collision, gate_on_read, spends, spends_command, unmet,
 };
 use crate::markers::{COMMAND, GATES, GROUP, REQUIRES, WRITES};
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
@@ -209,7 +209,8 @@ pub enum LoadError {
         /// The marker, `x-cli-gates`.
         key: &'static str,
     },
-    /// A gate spelled like a flag that every subcommand spends on the body.
+    /// A gate spelled like one of the six words every subcommand spends: a flag
+    /// that carries the body, or `--help`.
     #[error("{op}: the gate `{gate}` is one of the flags every subcommand already spends")]
     ReservedGate {
         /// The `operationId` of the operation that names the gate.
@@ -305,10 +306,17 @@ pub enum LoadError {
     /// an Overlay a reviewer can read.
     #[error(transparent)]
     Phantom(#[from] crate::required::PhantomKeys),
-    /// An `x-cli-` key that this crate reads, standing where it does not read
-    /// it: an `x-cli-writes` on a path item, or an `x-cli-requires` beside a
-    /// `$ref`. The object model drops such a key without a word, so the gate the
-    /// adopter wrote is not there, and nothing says so.
+    /// An `x-cli-` key that this crate reads, standing on an object where it
+    /// does not read it: an `x-cli-writes` on a path item, or an
+    /// `x-cli-requires` beside a `$ref`. Nothing reads the key there, whether
+    /// the object model keeps it (the extensions of a path item) or drops it
+    /// (a key beside a `$ref`), so the gate, the name or the requirement the
+    /// adopter wrote has no effect, and nothing says so.
+    ///
+    /// The scan asks the extensions of the objects the specification gives
+    /// fixed fields, and reads nothing inside a value of the vendor's own: an
+    /// `example`, the `parameters` and the `requestBody` of a Link Object, or an
+    /// extension holds JSON, and a key spelled like a marker in it is not one.
     #[error(
         "`{key}` stands on `{at}`, where this crate does not read it; {}",
         crate::markers::reading(.key)
@@ -760,7 +768,7 @@ impl Operation {
                 .iter()
                 .map(|gate| (gate.as_str(), Protected::Gate))
                 .chain(confirmation),
-            TRANSPORT.into_iter().chain([HELP]),
+            SPENT,
         );
         let params = params
             .map(|p| Param::build(id, p, whole.components, &mut flags))
@@ -1025,13 +1033,15 @@ fn requires_of(op: &str, data: &ParameterData) -> Result<Vec<String>, LoadError>
     }
 }
 
-/// Every requirement one operation's parameters state names a parameter of the
-/// same operation that a request can carry.
+/// Every requirement one operation's parameters state names another parameter of
+/// the same operation that a request can carry.
 ///
 /// Checked once every parameter is read, because a requirement may name one the
-/// document lists after it. A name that is not there, or one this crate cannot
-/// send, is a requirement no run could meet, so it is refused here rather than
-/// mounted as a flag that refuses everyone who gives it.
+/// document lists after it. A parameter that lists its own name asks for
+/// nothing, and clap refuses an argument that requires itself. A name that is
+/// not there, or one this crate cannot send, is a requirement no run could meet.
+/// Each is refused here rather than mounted: the first would stop clap, and the
+/// others would make a flag that refuses everyone who gives it.
 fn companions(op: &str, params: &[Param]) -> Result<(), LoadError> {
     match unmet(params) {
         None => Ok(()),

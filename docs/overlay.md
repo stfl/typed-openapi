@@ -571,10 +571,10 @@ An extension of your own goes under another prefix. A name or a value that
 happens to be spelled like a marker, such as a property called `x-cli-writes` or
 an `example`, is no marker and is not read.
 
-`x-cli-group` and `x-cli-command` are also the only way out of a name
-collision — two operations reducing to one `<group> <command>` is a `LoadError` at bless time naming both
-`operationId`s, never a silent rename. [docs/cli.md](cli.md#the-shape-of-the-tree)
-has the rule they overrule.
+`x-cli-group` and `x-cli-command` are also the only way out of a name collision
+— two operations reducing to one `<group> <command>` is a `LoadError` at bless
+time naming both `operationId`s, never a silent rename.
+[docs/cli.md](cli.md#the-shape-of-the-tree) has the rule they overrule.
 
 ```yaml
   - target: $.paths['/vouchers/{id}/enshrine'].post

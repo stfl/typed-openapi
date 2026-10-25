@@ -70,6 +70,8 @@ pub mod overlay;
 pub mod required;
 #[cfg(feature = "document")]
 mod schema;
+#[cfg(feature = "document")]
+mod shape;
 
 #[cfg(feature = "generate")]
 pub mod generate;

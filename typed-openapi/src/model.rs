@@ -60,46 +60,45 @@ pub const COMMIT: &str = "commit";
 /// a generated subcommand.
 pub const COMMIT_ID: &str = "cli:commit";
 
-/// The five flags that carry a request's body, spent by every subcommand
-/// before the document has a say.
+/// The six words that no flag of a subcommand may take: the five flags that
+/// carry a request's body, which the tree declares itself, and `--help`, which
+/// clap declares on every subcommand whether or not anyone asked.
 ///
-/// A parameter or a body field that wants one of these moves aside for it, and
-/// a gate that names one is refused. Nothing here is a person saying yes, which
-/// is why these yield where a gate and the confirmation do not: a
-/// `--body-json-body` is ugly and harmless, where a confirmation nobody typed
-/// is neither.
+/// A parameter or a body field that wants one moves aside for it, and a gate or
+/// the confirmation that wants one is refused. Nothing here is a person saying
+/// yes, which is why a parameter yields where a gate and the confirmation do
+/// not: a `--body-json-body` is ugly and harmless, where a confirmation nobody
+/// typed is neither. `--help` is the plainest case, because somebody types it to
+/// read, so a word that answers it would be answered by a person who asked for
+/// no more than a help page.
 ///
 /// Spending a word here changes the reduced model of any document that declares
 /// a field spelled the same way, which is the point: the field moves aside at
 /// bless time, where a reviewer sees it, rather than shadowing a flag the CLI
-/// needs.
-pub(crate) const TRANSPORT: [&str; 5] = [
+/// needs. The six are written once: the load puts them in every `Namespace`,
+/// and [`spends`] asks them of a decoded blob.
+pub(crate) const SPENT: [&str; 6] = [
     JSON_BODY,
     JSON_BODY_TEMPLATE,
     RAW_BODY,
     FILE_PART,
     FIELD_PART,
+    HELP,
 ];
 
-/// `--help`, which clap declares on every subcommand whether or not anyone
-/// asked, beside the five flags in [`TRANSPORT`].
-///
-/// A parameter or a body field that wants it moves aside, as it does for those
-/// five. A gate or the confirmation that wants it is refused: `--help` is a
-/// flag that somebody types to read, so a word that answers it would be
-/// answered by a person who asked for no more than a help page.
+/// The word clap spends twice: `--help` on every subcommand, and the `help`
+/// subcommand that it adds to every command that has subcommands.
 pub(crate) const HELP: &str = "help";
 
-/// Whether a word is one that no flag of a subcommand may take: the five flags
-/// that carry a body, and `--help`.
+/// Whether a word is one that no flag of a subcommand may take, one of the
+/// [`SPENT`] six.
 ///
-/// clap declares `--help` on every subcommand, and the tree declares each body
-/// flag on the subcommands whose body takes it. None of them can move, so a
-/// gate or the confirmation is refused when it wants one, and a parameter or a
-/// property moves aside. The reduction asks here for the first, a decoded blob
-/// is refused for holding any of them, and both ask here.
+/// None of them can move, so a gate or the confirmation is refused when it wants
+/// one, and a parameter or a property moves aside. The reduction asks here for
+/// the first, a decoded blob is refused for holding any of them, and both ask
+/// here.
 pub(crate) fn spends(word: &str) -> bool {
-    TRANSPORT.contains(&word) || word == HELP
+    SPENT.contains(&word)
 }
 
 /// Whether clap declares a subcommand of this name itself, on every command
@@ -820,7 +819,7 @@ impl Document {
     /// for the same document and no type changed. The crate's own tests trace
     /// the layout and fail on a change to a type that left the number where it
     /// was.
-    pub const MODEL_LAYOUT: u32 = 3;
+    pub const MODEL_LAYOUT: u32 = 4;
 
     /// The same reduction, already done and written down.
     ///
@@ -1206,8 +1205,9 @@ impl Param {
     }
 }
 
-/// A requirement among the parameters of one operation that no request could
-/// meet.
+/// A requirement among the parameters of one operation that cannot be mounted:
+/// it names the parameter itself, a parameter the operation does not declare, or
+/// one that has no flag.
 ///
 /// The load and the decode of a blob both refuse such a requirement, each in
 /// its own error, so the question is asked here once and each caller words the
@@ -1227,8 +1227,8 @@ pub(crate) enum Unmet<'p> {
     },
 }
 
-/// The first requirement among `params` that no request could meet, in the
-/// order the parameters are listed.
+/// The first requirement among `params` that cannot be mounted, in the order the
+/// parameters are listed.
 pub(crate) fn unmet(params: &[Param]) -> Option<Unmet<'_>> {
     params.iter().find_map(|param| {
         param.requires().iter().find_map(|requires| {

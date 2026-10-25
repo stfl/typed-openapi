@@ -19,34 +19,44 @@
 //!
 //! Those are the places the reduction reads, so a key anywhere else is read by
 //! nothing. An operation under `callbacks` or `webhooks` is never reduced, and
-//! the marker on it is refused with the others.
+//! the marker on it is refused with the others. A parameter under
+//! `components.parameters` is a place the key is read whether or not the
+//! `$ref` of an operation names it, because a component is where the adopter
+//! writes it once.
 //!
 //! # What the walk reads
 //!
 //! The walk is over the *overlaid* document before the object model reads it,
-//! because the model drops a key beside a `$ref` without a word. It enters every
-//! object the specification gives fixed fields, and it reads the keys of such an
-//! object as the specification's own: an `x-…` key is an extension there.
+//! because the model drops a key beside a `$ref` without a word. It enters a
+//! value only where [`shape`](crate::shape) says that OpenAPI gives the field
+//! the type of one of its objects, or of a list or a map of them, for the kind
+//! of object that holds the field. An `x-…` key of an object it enters is an
+//! extension, and the walk asks about it by its name.
+//!
+//! It reads nothing under any other key. That is a field of type Any (an
+//! `example`, a `default`, an `enum`, the `value` of an Example Object, and the
+//! `parameters` values and the `requestBody` of a Link Object), the value of an
+//! extension, and a key that the object does not define (`examples` and
+//! `dependencies` on a 3.0 schema). It is the vendor's own JSON, and a key in
+//! it that is spelled like a marker is not one.
 //!
 //! Position is what tells an extension from a name. A map keyed by names
 //! somebody chose holds a property, a component, a media type or a response
 //! header under any spelling, `x-cli-writes` among them, and the same spelling
-//! is an extension on an Operation Object. The walk therefore knows which keys
-//! lead to such a map, and it reads no key of the map itself. The Paths Object
-//! and the Responses Object are the two maps that the specification also lets a
-//! vendor extend, so an `x-…` key stands for an extension there and for a name
-//! nowhere else. The value of an extension is the vendor's own JSON, and so is
-//! an `example`, a `default`, an `enum`, a `const` and the `value` of an
-//! Example Object: nothing under them is read.
+//! is an extension on an Operation Object. The walk reads no key of such a map
+//! itself. The Paths Object and the Responses Object are the two maps that the
+//! specification also lets a vendor extend, so an `x-…` key stands for an
+//! extension there and for a name nowhere else.
 //!
-//! What the rule costs is a place the walk takes for a name or for data and
-//! that the specification gives fixed fields: a marker standing there is a
-//! marker missed, never a document wrongly refused.
+//! What the rule costs is an object that the table leaves out and that the
+//! specification gives fixed fields: a marker standing there is a marker
+//! missed, never a document wrongly refused.
 
 use serde_json::{Map, Value};
 
 use crate::model::LoadError;
 use crate::required::{Step, spelled};
+use crate::shape::{Keys, Kind, Route, is_extension};
 
 /// The prefix this crate owns.
 const PREFIX: &str = "x-cli-";
@@ -72,127 +82,84 @@ pub(crate) const GATES: &str = "x-cli-gates";
 /// sits on the parameter that needs the other.
 pub(crate) const REQUIRES: &str = "x-cli-requires";
 
-/// Every key this crate reads. A key under the prefix that is not one of these
-/// is read by nothing.
-const READ: [&str; 5] = [COMMAND, GATES, GROUP, WRITES, REQUIRES];
+/// The thing a request is built from that a marker is read off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Subject {
+    /// An operation of a path item under `paths`.
+    Operation,
+    /// A parameter that is not a `$ref`: a path item's, an operation's, or one
+    /// under `components.parameters`.
+    Parameter,
+}
 
-/// The keys under which the specification keeps instance data or the vendor's
-/// own JSON, and nothing under them is a part of the document.
+/// Every key this crate reads, and what it reads the key off. A key under the
+/// prefix that is not one of these is read by nothing, and one of these
+/// standing on anything but its subject is read by nothing either.
 ///
-/// `security` is here for another reason: its entries are keyed by the names of
-/// security schemes, and their values are lists of scopes.
-const OPAQUE: [&str; 6] = ["example", "default", "enum", "const", "value", "security"];
-
-/// The keys whose object is a map from names somebody chose to the objects that
-/// carry them: properties, components, media types, headers.
-///
-/// A key of the same spelling over a list leads to the list's members instead,
-/// as `parameters` does on an operation and under `components`.
-const NAMED: [&str; 20] = [
-    "properties",
-    "patternProperties",
-    "$defs",
-    "definitions",
-    "dependentSchemas",
-    "schemas",
-    "parameters",
-    "examples",
-    "requestBodies",
-    "headers",
-    "securitySchemes",
-    "links",
-    "callbacks",
-    "pathItems",
-    "webhooks",
-    "content",
-    "encoding",
-    "variables",
-    "mapping",
-    "scopes",
+/// A new key joins this table, and the wording of a refusal follows from it.
+const READ: [(&str, Subject); 5] = [
+    (COMMAND, Subject::Operation),
+    (GATES, Subject::Operation),
+    (GROUP, Subject::Operation),
+    (WRITES, Subject::Operation),
+    (REQUIRES, Subject::Parameter),
 ];
 
-/// The methods a path item names an operation under.
-const METHODS: [&str; 8] = [
-    "get", "put", "post", "delete", "options", "head", "patch", "trace",
-];
+impl Subject {
+    /// What the object `holder` is as far as the reduction goes, read off its
+    /// kind and the way down to it: the subject of a marker, or `None` for an
+    /// object that nothing is built from.
+    ///
+    /// The position tells a path item that the reduction reads from one that it
+    /// never does. An operation under `callbacks` or `webhooks` is of the kind
+    /// of an operation and is not read, and a path key without a `/` is no
+    /// path.
+    fn of(kind: Kind, at: &[Step<'_>], holder: &Map<String, Value>) -> Option<Self> {
+        use Step::{Index, Key};
+        match (kind, at) {
+            (Kind::Operation, [Key("paths"), Key(path), Key(_)]) if path.starts_with('/') => {
+                Some(Self::Operation)
+            }
+            // A `$ref` stands for the parameter it names, and the model keeps
+            // nothing beside it.
+            (Kind::Parameter, _) if holder.contains_key("$ref") => None,
+            (
+                Kind::Parameter,
+                [Key("paths"), Key(path), Key("parameters"), Index(_)]
+                | [Key("paths"), Key(path), Key(_), Key("parameters"), Index(_)],
+            ) if path.starts_with('/') => Some(Self::Parameter),
+            (Kind::Parameter, [Key("components"), Key("parameters"), Key(_)]) => {
+                Some(Self::Parameter)
+            }
+            _ => None,
+        }
+    }
+}
 
 /// What the reasons of a refusal say about where `key` is read.
 ///
-/// The message of `LoadError::MisplacedMarker` ends with it.
-pub(crate) fn reading(key: &str) -> &'static str {
-    if key == REQUIRES {
-        "it reads `x-cli-requires` on a parameter, and not beside a `$ref`"
-    } else {
-        "it reads that key on an operation"
+/// The message of `LoadError::MisplacedMarker` ends with it. A key that nothing
+/// reads gets the plainer sentence.
+pub(crate) fn reading(key: &str) -> String {
+    match READ.iter().find(|(read, _)| *read == key) {
+        Some((read, Subject::Parameter)) => {
+            format!("it reads `{read}` on a parameter, and not beside a `$ref`")
+        }
+        Some((_, Subject::Operation)) | None => "it reads that key on an operation".to_owned(),
     }
 }
 
 /// The keys this crate reads, spelled for a message.
-pub(crate) fn vocabulary() -> &'static str {
-    "`x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes` and `x-cli-requires`"
+pub(crate) fn vocabulary() -> String {
+    let spelled = READ.map(|(key, _)| format!("`{key}`"));
+    let [first @ .., last] = &spelled;
+    format!("{} and {last}", first.join(", "))
 }
 
 /// Refuse the first `x-cli-` key of the document that this crate reads nowhere
 /// or does not read where it stands, in the order the document lists them.
 pub(crate) fn check(document: &Value) -> Result<(), LoadError> {
-    Walk { at: Vec::new() }.read(Level::Fixed, document)
-}
-
-/// What the keys of an object are.
-#[derive(Debug, Clone, Copy)]
-enum Level {
-    /// An object the specification gives fixed fields. An `x-…` key is an
-    /// extension, and any other key is a field.
-    Fixed,
-    /// A map from names somebody chose. Every key is a name, `x-cli-writes`
-    /// among them.
-    Names,
-    /// A map of names that the specification also lets a vendor extend: the
-    /// Paths Object and the Responses Object. An `x-…` key is an extension, and
-    /// any other key is a name.
-    NamesAndExtensions,
-}
-
-/// Where an `x-cli-` key stands, as far as the question of who reads it goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Place {
-    /// An operation of a path item under `paths`.
-    Operation,
-    /// A parameter a request is built from: a path item's, an operation's, or
-    /// one that a `$ref` can name under `components.parameters`.
-    Parameter,
-    /// Anywhere else.
-    Elsewhere,
-}
-
-impl Place {
-    /// Where the object holding a key stands, read off the way down to it.
-    fn of(at: &[Step<'_>]) -> Self {
-        use Step::{Index, Key};
-        match at {
-            [Key("paths"), Key(path), Key(method)]
-                if path.starts_with('/') && is_method(method) =>
-            {
-                Self::Operation
-            }
-            [Key("paths"), Key(path), Key("parameters"), Index(_)] if path.starts_with('/') => {
-                Self::Parameter
-            }
-            [
-                Key("paths"),
-                Key(path),
-                Key(method),
-                Key("parameters"),
-                Index(_),
-            ] if path.starts_with('/') && is_method(method) => Self::Parameter,
-            [Key("components"), Key("parameters"), Key(_)] => Self::Parameter,
-            _ => Self::Elsewhere,
-        }
-    }
-}
-
-fn is_method(name: &str) -> bool {
-    METHODS.contains(&name)
+    Walk { at: Vec::new() }.read(Kind::Root, document)
 }
 
 /// The descent, with the way down to the object being read.
@@ -201,16 +168,16 @@ struct Walk<'d> {
 }
 
 impl<'d> Walk<'d> {
-    /// This node, then everything under it that the document gives fixed
-    /// fields. A list stands for each of its members.
-    fn read(&mut self, level: Level, node: &'d Value) -> Result<(), LoadError> {
+    /// This node, then everything under it that the table leads to. A list
+    /// stands for each of its members.
+    fn read(&mut self, kind: Kind, node: &'d Value) -> Result<(), LoadError> {
         match node {
             Value::Object(fields) => fields
                 .iter()
-                .try_for_each(|(key, value)| self.field(level, fields, key, value)),
+                .try_for_each(|(key, value)| self.field(kind, fields, key, value)),
             Value::Array(members) => members.iter().enumerate().try_for_each(|(index, member)| {
                 self.at.push(Step::Index(index));
-                let read = self.read(level, member);
+                let read = self.read(kind, member);
                 self.at.pop();
                 read
             }),
@@ -218,53 +185,71 @@ impl<'d> Walk<'d> {
         }
     }
 
-    /// One field of `holder`: an extension, which is asked whether this crate
-    /// reads it, or a key whose value is read with the right notion of what
-    /// stands under it.
+    /// One field of `holder`, an object of this kind: an extension, which is
+    /// asked whether this crate reads it, or a key whose value is entered where
+    /// the table leads there and nowhere else.
     fn field(
         &mut self,
-        level: Level,
+        kind: Kind,
         holder: &'d Map<String, Value>,
         key: &'d str,
         value: &'d Value,
     ) -> Result<(), LoadError> {
-        if !matches!(level, Level::Names) && key.starts_with("x-") {
-            // The value of an extension is the vendor's own JSON.
-            return if key.starts_with(PREFIX) {
-                self.marker(key, holder)
-            } else {
-                Ok(())
-            };
+        if is_extension(key) {
+            return self.extension(Subject::of(kind, &self.at, holder), key);
         }
-        let below = match level {
-            Level::Fixed => below(self.at.last().copied(), key, value),
-            Level::Names | Level::NamesAndExtensions => Some(Level::Fixed),
-        };
-        let Some(below) = below else {
+        let Some(route) = kind.route(key) else {
             return Ok(());
         };
         self.at.push(Step::Key(key));
-        let read = self.read(below, value);
+        let read = self.follow(route, value);
         self.at.pop();
         read
     }
 
-    /// An `x-cli-` key of `holder`: one this crate reads, standing where it is
-    /// read, or a refusal that names the key and the object it stands on.
-    fn marker(&self, key: &str, holder: &Map<String, Value>) -> Result<(), LoadError> {
+    /// What the route says stands under the key.
+    fn follow(&mut self, route: Route, value: &'d Value) -> Result<(), LoadError> {
+        match route {
+            Route::Node(kind) => self.read(kind, value),
+            Route::Map(kind, keys) => self.entries(kind, keys, value),
+        }
+    }
+
+    /// Every entry of a map of nodes of one kind. The keys of the map are
+    /// names, and are not read, unless the route says the specification lets a
+    /// vendor extend the map: the Paths Object and the Responses Object, whose
+    /// `x-…` keys are asked and stand on no subject.
+    fn entries(&mut self, kind: Kind, keys: Keys, map: &'d Value) -> Result<(), LoadError> {
+        let Some(entries) = map.as_object() else {
+            return Ok(());
+        };
+        entries.iter().try_for_each(|(key, entry)| {
+            if matches!(keys, Keys::NamesAndExtensions) && is_extension(key) {
+                return self.extension(None, key);
+            }
+            self.at.push(Step::Key(key));
+            let read = self.read(kind, entry);
+            self.at.pop();
+            read
+        })
+    }
+
+    /// An extension standing on `subject`. The value of one is the vendor's own
+    /// JSON and is not read, and a key under this crate's prefix is one this
+    /// crate reads off that subject, or a refusal that names the key and the
+    /// object it stands on.
+    fn extension(&self, subject: Option<Subject>, key: &str) -> Result<(), LoadError> {
+        if !key.starts_with(PREFIX) {
+            return Ok(());
+        }
         let at = || spelled(&self.at);
-        if !READ.contains(&key) {
+        let Some((_, read)) = READ.iter().find(|(known, _)| *known == key) else {
             return Err(LoadError::UnknownMarker {
                 key: key.to_owned(),
                 at: at(),
             });
-        }
-        let place = Place::of(&self.at);
-        let read = match key {
-            REQUIRES => place == Place::Parameter && !holder.contains_key("$ref"),
-            _ => place == Place::Operation,
         };
-        if read {
+        if subject == Some(*read) {
             return Ok(());
         }
         Err(LoadError::MisplacedMarker {
@@ -272,27 +257,6 @@ impl<'d> Walk<'d> {
             at: at(),
         })
     }
-}
-
-/// What stands under a field of a [`Level::Fixed`] object, and `None` where
-/// nothing under it is a part of the document.
-///
-/// `parent` is the key the object itself stands under. It tells the Responses
-/// Object of an operation from `components.responses`, which is a plain map of
-/// names.
-fn below(parent: Option<Step<'_>>, key: &str, value: &Value) -> Option<Level> {
-    if OPAQUE.contains(&key) {
-        return None;
-    }
-    if !value.is_object() {
-        return Some(Level::Fixed);
-    }
-    Some(match (parent, key) {
-        (Some(Step::Key("components")), "responses") => Level::Names,
-        (_, "paths" | "responses") => Level::NamesAndExtensions,
-        _ if NAMED.contains(&key) => Level::Names,
-        _ => Level::Fixed,
-    })
 }
 
 #[cfg(test)]
@@ -379,9 +343,148 @@ mod tests {
                 "$.components.schemas.A",
             ),
             ("paths:\n  x-cli-writes: true\n", "x-cli-writes", "$.paths"),
+            // A key of `paths` that does not start with `/` is no path, so the
+            // reduction reads no operation under it.
+            (
+                "paths:\n  a:\n    get: { x-cli-writes: true }\n",
+                "x-cli-writes",
+                "$.paths.a.get",
+            ),
+            // A Link Object and an Example Object are objects the walk enters:
+            // their fields are fixed, and what they hold of the vendor's own
+            // is the value of a field that is of type Any.
+            (
+                &format!(
+                    "{get}      responses:\n        '200': {{ description: d, links: {{ next: {{ x-cli-writes: true }} }} }}\n"
+                ),
+                "x-cli-writes",
+                "$.paths['/a'].get.responses['200'].links.next",
+            ),
+            (
+                "components:\n  examples:\n    E: { x-cli-writes: true }\n",
+                "x-cli-writes",
+                "$.components.examples.E",
+            ),
         ] {
             assert_eq!(verdict(document), misplaced(key, at), "{document}");
         }
+    }
+
+    /// Each row is a document with an `x-cli-writes` on one object, and the
+    /// node that holds the key. Every one is refused as misplaced.
+    fn refused_on(rows: &[(&str, &str)]) {
+        for (document, at) in rows {
+            assert_eq!(
+                verdict(document),
+                misplaced("x-cli-writes", at),
+                "{document}"
+            );
+        }
+    }
+
+    /// Every object the table leads to is entered, and a marker on it is
+    /// refused. A route that the table loses takes its row with it, and the
+    /// walk then reads nothing there.
+    #[test]
+    fn a_key_is_refused_on_the_objects_that_describe_the_api() {
+        let item = "paths:\n  /a:\n";
+        let get = "paths:\n  /a:\n    get:\n";
+        refused_on(&[
+            ("externalDocs: { x-cli-writes: true }\n", "$.externalDocs"),
+            (
+                "info: { contact: { x-cli-writes: true } }\n",
+                "$.info.contact",
+            ),
+            (
+                "info: { license: { x-cli-writes: true } }\n",
+                "$.info.license",
+            ),
+            (
+                "servers: [{ url: u, x-cli-writes: true }]\n",
+                "$.servers[0]",
+            ),
+            (
+                "servers: [{ url: u, variables: { v: { x-cli-writes: true } } }]\n",
+                "$.servers[0].variables.v",
+            ),
+            ("tags: [{ name: t, x-cli-writes: true }]\n", "$.tags[0]"),
+            (
+                "tags: [{ name: t, externalDocs: { x-cli-writes: true } }]\n",
+                "$.tags[0].externalDocs",
+            ),
+            (
+                &format!("{item}    servers: [{{ x-cli-writes: true }}]\n"),
+                "$.paths['/a'].servers[0]",
+            ),
+            (
+                &format!("{get}      servers: [{{ x-cli-writes: true }}]\n"),
+                "$.paths['/a'].get.servers[0]",
+            ),
+            (
+                &format!("{get}      externalDocs: {{ x-cli-writes: true }}\n"),
+                "$.paths['/a'].get.externalDocs",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_key_is_refused_on_a_link_and_on_an_example_wherever_one_stands() {
+        let get = "paths:\n  /a:\n    get:\n";
+        let ok = "      responses:\n        '200': { description: d, ";
+        refused_on(&[
+            (
+                &format!("{get}{ok}links: {{ next: {{ server: {{ x-cli-writes: true }} }} }} }}\n"),
+                "$.paths['/a'].get.responses['200'].links.next.server",
+            ),
+            (
+                "components:\n  links:\n    L: { x-cli-writes: true }\n",
+                "$.components.links.L",
+            ),
+            (
+                &format!(
+                    "{get}      parameters: [{{ name: n, examples: {{ E: {{ x-cli-writes: true }} }} }}]\n"
+                ),
+                "$.paths['/a'].get.parameters[0].examples.E",
+            ),
+            (
+                &format!(
+                    "{get}{ok}content: {{ application/json: {{ examples: {{ E: {{ x-cli-writes: true }} }} }} }} }}\n"
+                ),
+                "$.paths['/a'].get.responses['200'].content['application/json'].examples.E",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_key_is_refused_on_a_security_scheme_and_on_the_small_objects_of_a_schema() {
+        let secured = "components:\n  securitySchemes:\n    S: ";
+        let shaped = "components:\n  schemas:\n    A: ";
+        refused_on(&[
+            (
+                &format!("{secured}{{ x-cli-writes: true }}\n"),
+                "$.components.securitySchemes.S",
+            ),
+            (
+                &format!("{secured}{{ flows: {{ x-cli-writes: true }} }}\n"),
+                "$.components.securitySchemes.S.flows",
+            ),
+            (
+                &format!("{secured}{{ flows: {{ implicit: {{ x-cli-writes: true }} }} }}\n"),
+                "$.components.securitySchemes.S.flows.implicit",
+            ),
+            (
+                &format!("{shaped}{{ discriminator: {{ x-cli-writes: true }} }}\n"),
+                "$.components.schemas.A.discriminator",
+            ),
+            (
+                &format!("{shaped}{{ xml: {{ x-cli-writes: true }} }}\n"),
+                "$.components.schemas.A.xml",
+            ),
+            (
+                &format!("{shaped}{{ externalDocs: {{ x-cli-writes: true }} }}\n"),
+                "$.components.schemas.A.externalDocs",
+            ),
+        ]);
     }
 
     #[test]
@@ -438,6 +541,40 @@ mod tests {
             "components:\n  examples:\n    E: { value: { x-cli-writes: yes } }\n",
             "x-vendor: { x-cli-writes: yes }\npaths:\n  /a:\n    x-total: { x-cli-gates: [g] }\n",
             "paths:\n  /a:\n    get:\n      responses:\n        default: { description: d }\n",
+        ] {
+            assert_eq!(verdict(document), "read", "{document}");
+        }
+    }
+
+    /// A value that OpenAPI 3.0.3 gives the type Any, and a key that an object
+    /// does not define, are the vendor's data and no part of the document. A
+    /// walk that entered them would refuse a document with no marker in it.
+    #[test]
+    fn a_field_of_type_any_and_a_key_the_object_does_not_define_are_not_entered() {
+        let response = "paths:\n  /a:\n    get:\n      responses:\n        '200': ";
+        for document in [
+            // The `parameters` values and the `requestBody` of a Link Object.
+            &format!(
+                "{response}{{ description: d, links: {{ next: {{ operationId: o, parameters: {{ filter: {{ x-cli-writes: true }} }} }} }} }}\n"
+            ),
+            &format!(
+                "{response}{{ description: d, links: {{ next: {{ operationId: o, requestBody: {{ x-cli-gates: [a] }} }} }} }}\n"
+            ),
+            // Keywords that a 3.0 schema does not have.
+            &format!(
+                "{response}{{ description: d, content: {{ application/json: {{ schema: {{ examples: [{{ x-cli-mode: fast }}] }} }} }} }}\n"
+            ),
+            &format!(
+                "{response}{{ description: d, content: {{ application/json: {{ schema: {{ dependencies: {{ x-cli-mode: [b] }} }} }} }} }}\n"
+            ),
+            // The `value` of an Example Object, under each place one stands.
+            &format!(
+                "{response}{{ description: d, content: {{ application/json: {{ examples: {{ E: {{ value: {{ x-cli-writes: true }} }} }} }} }} }}\n"
+            ),
+            // The `default` and the `enum` of a Server Variable.
+            "servers: [{ url: u, variables: { v: { default: d, enum: [{ x-cli-writes: true }] } } }]\n",
+            // A field that is not a field of the object holding it.
+            "info: { title: t, version: v, contact: { name: n }, license: { name: l }, summary: { x-cli-writes: true } }\n",
         ] {
             assert_eq!(verdict(document), "read", "{document}");
         }

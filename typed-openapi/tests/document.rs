@@ -2783,7 +2783,8 @@ fn an_x_cli_key_in_a_schema_or_at_the_root_is_refused_by_key_and_place() {
 
 /// Position is what tells a marker from a name or from data. The same spelling
 /// is a property, a component, a media type, a response header, a value of the
-/// vendor's own and an example, and none of them is a marker, so none of them
+/// vendor's own and an example, the arguments and the body of a link, and a key
+/// that a 3.0 schema does not define. None of them is a marker, so none of them
 /// is refused. A vendor's extension under a prefix of its own is the vendor's.
 #[test]
 fn an_x_cli_spelling_that_is_a_name_or_data_is_no_marker() {
@@ -2797,6 +2798,11 @@ fn an_x_cli_spelling_that_is_a_name_or_data_is_no_marker() {
              \x20     responses:\n\
              \x20       \"200\":\n\
              \x20         description: OK\n\
+             \x20         links:\n\
+             \x20           next:\n\
+             \x20             operationId: listVouchers\n\
+             \x20             parameters: { filter: { x-cli-writes: true } }\n\
+             \x20             requestBody: { x-cli-gates: [a] }\n\
              \x20         headers:\n\
              \x20           x-cli-writes: { schema: { type: string } }\n\
              \x20         content:\n\
@@ -2809,6 +2815,8 @@ fn an_x_cli_spelling_that_is_a_name_or_data_is_no_marker() {
              \x20   x-cli-writes:\n\
              \x20     type: object\n\
              \x20     default: { x-cli-writes: no }\n\
+             \x20     examples: [{ x-cli-mode: fast }]\n\
+             \x20     dependencies: { x-cli-mode: [b] }\n\
              \x20     properties:\n\
              \x20       x-cli-writes: { type: boolean }\n\
              \x20       properties: { type: object, properties: { x-cli-gates: { type: string } } }\n\
