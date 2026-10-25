@@ -116,6 +116,26 @@ the document saying something this crate has no reading for, so both are a
 what the vendor meant is a correction, and a correction is the adopter's to
 write in an Overlay where a reviewer can see it.
 
+**A refusal names its operation and the place it stopped, and its repair only
+where the repair is true.** A `LoadError` from one operation carries the
+`operationId`; one from a path item carries the path (`PathItem`), and one from
+an Overlay carries the index of the layer in the list `Document::load` was given
+(`Layer`). A name that cannot be spelled is `Name` for a group or a command,
+whose repair is `x-cli-group` and `x-cli-command`, and `GateName` for a gate,
+whose repair is `x-cli-gates`, because the first repair mends nothing in a gate.
+A path with no segment to name a group after, the root `/`, is named whole.
+`Shape` is the OpenAPI model refusing the document, and its message has no
+place: `openapiv3` reads `paths` through a deserialiser that drops the path
+inside it, so serde stops at `paths` for a fault in the deepest operation.
+`model_of` in `src/openapi.rs` reads the overlaid value once, and where serde
+stopped at `paths` it reads the value again one path item and one operation at a
+time and names the first node that fails (`paths[/b].get.deprecated`). Anywhere
+else serde's own place is kept. The bless step's `NotOpenApi` calls the same
+function. A read that returns a `RefError` passes it on through `under`, a
+body's multipart schema included: a schema that cannot be followed is never a
+body with no parts. `tests/refusals.rs` holds a case for each, from the input of
+the probe that found it.
+
 **A document that requires a key nothing describes is refused, and the
 exemptions are measured against the generator.** `required::check` in
 `src/required.rs` reads the *overlaid* document, before the OpenAPI object model

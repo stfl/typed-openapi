@@ -49,6 +49,30 @@ fn document(url: &str, parameter: &str) -> String {
     )
 }
 
+/// An OpenAPI document with `marker` on its one operation, which is how a case
+/// puts a word the command line cannot spell where the reduction reads it.
+fn marked(marker: &str) -> String {
+    format!(
+        "openapi: 3.0.3\n\
+         info: {{ title: Errors, version: \"1.0\" }}\n\
+         servers: [{{ url: \"{URL}\" }}]\n\
+         paths:\n\
+         \x20 /things:\n\
+         \x20   post:\n\
+         \x20     operationId: createThing\n\
+         \x20     {marker}\n\
+         \x20     responses: {{ \"200\": {{ description: OK }} }}\n"
+    )
+}
+
+/// An OpenAPI document whose one path item is a `$ref`.
+const PATH_ITEM_REF: &str = "openapi: 3.0.3\n\
+     info: { title: Errors, version: \"1.0\" }\n\
+     servers: [{ url: \"http://localhost\" }]\n\
+     paths:\n\
+     \x20 /things:\n\
+     \x20   $ref: \"other.yaml#/paths/~1things\"\n";
+
 const URL: &str = "http://localhost";
 const SOUND: &str = "{ name: n, in: query, schema: { type: integer } }";
 const UNRESOLVABLE: &str = "{ name: n, in: query, schema: { $ref: '#/components/schemas/Nope' } }";
@@ -138,7 +162,7 @@ fn overlay_error(overlay: &str) -> OverlayError {
     overlay::apply(serde_json::json!({}), overlay).expect_err("the Overlay is refused")
 }
 
-/// Reading a document and its Overlays.
+/// Reading a document and its Overlays, and decoding the blob.
 fn reading() -> Vec<Case> {
     vec![
         from_input(
@@ -167,14 +191,44 @@ fn reading() -> Vec<Case> {
             "DocumentError::Encode",
             DocumentError::Encode(postcard::Error::SerializeBufferFull),
         ),
+    ]
+}
+
+/// Reducing a document to operations.
+fn loading() -> Vec<Case> {
+    vec![
+        from_input("LoadError::Overlay", load(": [", &[]), |e| {
+            matches!(e, LoadError::Overlay(_))
+        }),
         from_input(
-            "LoadError::Overlay",
+            "LoadError::Layer",
             load("openapi: 3.0.3", &[MATCHES_NOTHING]),
-            |e| matches!(e, LoadError::Overlay(_)),
+            |e| matches!(e, LoadError::Layer { .. }),
         ),
         from_input("LoadError::Shape", load("{}", &[]), |e| {
-            matches!(e, LoadError::Shape(_))
+            matches!(e, LoadError::Shape { .. })
         }),
+        from_input(
+            "LoadError::Name",
+            load(&marked("x-cli-command: '___'"), &[]),
+            |e| matches!(e, LoadError::Name { .. }),
+        ),
+        from_input(
+            "LoadError::GateName",
+            load(&marked("x-cli-gates: ['???']"), &[]),
+            |e| matches!(e, LoadError::GateName { .. }),
+        ),
+        from_input("LoadError::PathItem", load(PATH_ITEM_REF, &[]), |e| {
+            matches!(e, LoadError::PathItem { .. })
+        }),
+        from_input(
+            "LoadError::ParameterRef",
+            load(
+                &document(URL, "{ $ref: '#/components/parameters/Nope' }"),
+                &[],
+            ),
+            |e| matches!(e, LoadError::ParameterRef { .. }),
+        ),
         from_input(
             "LoadError::ServerUrl",
             load(&document("not a url", SOUND), &[]),
@@ -313,7 +367,10 @@ fn blessing() -> Vec<Case> {
         ),
         case(
             "GenerateError::NotOpenApi",
-            GenerateError::NotOpenApi(json_error()),
+            GenerateError::NotOpenApi {
+                at: "paths[/things].get".to_owned(),
+                source: json_error(),
+            },
         ),
         case(
             "GenerateError::RustfmtSpawn",
@@ -414,7 +471,13 @@ fn assert_say_their_own_layer_once(cases: impl IntoIterator<Item = Case>) {
 
 #[test]
 fn every_error_enum_of_the_library_prints_a_cause_once_down_one_chain() {
-    assert_say_their_own_layer_once(reading().into_iter().chain(requesting()).chain(calling()));
+    assert_say_their_own_layer_once(
+        reading()
+            .into_iter()
+            .chain(loading())
+            .chain(requesting())
+            .chain(calling()),
+    );
 }
 
 #[test]

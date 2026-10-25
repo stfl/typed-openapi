@@ -797,7 +797,7 @@ impl Document {
     /// removed, reordered or retyped, or a variant added, removed or moved,
     /// needs a new number. The crate's own tests trace the layout and fail on a
     /// change that left the number where it was.
-    pub const MODEL_LAYOUT: u32 = 1;
+    pub const MODEL_LAYOUT: u32 = 2;
 
     /// The same reduction, already done and written down.
     ///
