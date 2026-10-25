@@ -53,20 +53,88 @@ fn updating(target: &str, update: &str) -> String {
     )
 }
 
-/// The URI of the request that `values` make of `id`.
-fn uri(doc: &Document, id: &str, values: Values) -> String {
+/// The request that `values` make of `id`.
+fn request(doc: &Document, id: &str, values: Values) -> http::Request<Vec<u8>> {
     let op = doc.get(id).expect("the operation");
     Invocation::new(op, values)
         .expect("the values satisfy the operation")
         .request(doc.base())
         .expect("a request")
-        .uri()
-        .to_string()
+}
+
+/// The URI of the request that `values` make of `id`.
+fn uri(doc: &Document, id: &str, values: Values) -> String {
+    request(doc, id, values).uri().to_string()
 }
 
 fn names(doc: &Document, id: &str) -> Vec<String> {
     let op = doc.get(id).expect("the operation");
     op.params().iter().map(|p| p.name().to_owned()).collect()
+}
+
+/// A parameter `ref` that is not in the path, and the request that carries it
+/// beside a path parameter once that has another name.
+struct Beside {
+    /// The `in` of the document.
+    spelled: &'static str,
+    /// The same, as a place.
+    place: Place,
+    /// Whether `ref` has a flag. A cookie has none.
+    flagged: bool,
+    /// Where the request goes when `entry` is `a` and `ref` is `b`.
+    uri: &'static str,
+    /// The `ref` header of that request.
+    header: Option<&'static str>,
+}
+
+const QUERY: Beside = Beside {
+    spelled: "query",
+    place: Place::Query,
+    flagged: true,
+    uri: "http://localhost:9999/logs/a?ref=b",
+    header: None,
+};
+const HEADER: Beside = Beside {
+    spelled: "header",
+    place: Place::Header,
+    flagged: true,
+    uri: "http://localhost:9999/logs/a",
+    header: Some("b"),
+};
+const COOKIE: Beside = Beside {
+    spelled: "cookie",
+    place: Place::Cookie,
+    flagged: false,
+    uri: "http://localhost:9999/logs/a",
+    header: None,
+};
+
+/// `appendLogEntry` of `doc` has the flag `--entry` and, where `case` has a flag,
+/// `--ref`, and the request they make is the one that `case` says.
+fn assert_sent(doc: &Document, case: &Beside) {
+    let op = doc.get("appendLogEntry").expect("the operation");
+    let (args, values) = if case.flagged {
+        (
+            vec!["post", "--entry", "a", "--ref", "b"],
+            Values::new().param("entry", "a").param("ref", "b"),
+        )
+    } else {
+        (
+            vec!["post", "--entry", "a"],
+            Values::new().param("entry", "a"),
+        )
+    };
+    tree::command(op)
+        .try_get_matches_from(args)
+        .expect("the flags of the operation");
+
+    let sent = request(doc, "appendLogEntry", values);
+
+    assert_eq!(sent.uri().to_string(), case.uri);
+    assert_eq!(
+        sent.headers().get("ref").map(http::HeaderValue::as_bytes),
+        case.header.map(str::as_bytes)
+    );
 }
 
 // ------------------------------------------------------------------ F-10
@@ -508,8 +576,10 @@ const NAMESAKES: [Namesakes; 3] = [
 ];
 
 /// The parameter that the document lists later is the one that has no flag, so
-/// removing the one before it gives it the flag, wherever either of them is, and
-/// off the path dropping the `required` of the later one loads as well.
+/// removing the one before it gives it the flag when the one before it is not a
+/// path parameter, and dropping the `required` of the later one loads as well.
+/// Both are off the path and both names go on the wire, so the words offer no
+/// rename: it would change the request.
 #[test]
 fn a_required_namesake_off_the_path_is_given_its_flag_by_removing_the_other() {
     for case in NAMESAKES {
@@ -555,14 +625,10 @@ fn a_required_namesake_off_the_path_is_given_its_flag_by_removing_the_other() {
     }
 }
 
-/// The template names a path parameter, so the words offer no removal of one:
-/// the document would then be refused for the variable. A parameter in the query
-/// and one in a header are told the same.
-#[test]
-fn a_required_namesake_of_a_path_parameter_drops_its_required() {
-    for (spelled, in_place) in [("query", Place::Query), ("header", Place::Header)] {
-        let paths = format!(
-            "  /logs/{{ref}}:
+/// A path parameter `ref`, then a required parameter `ref` in `spelled`.
+fn path_then(spelled: &str) -> String {
+    format!(
+        "  /logs/{{ref}}:
     post:
       operationId: appendLogEntry
       parameters:
@@ -570,21 +636,69 @@ fn a_required_namesake_of_a_path_parameter_drops_its_required() {
         - {{ name: ref, in: {spelled}, required: true, schema: {{ type: string }} }}
       responses: {{ \"201\": {{ description: OK }} }}
 "
-        );
+    )
+}
+
+/// The Overlay that renames the path parameter of `path_then` and its variable.
+fn path_then_renamed(spelled: &str) -> String {
+    format!(
+        "overlay: 1.1.0
+info: {{ title: t, version: \"1\" }}
+actions:
+  - target: $.paths
+    update:
+      /logs/{{entry}}:
+        post:
+          operationId: appendLogEntry
+          parameters:
+            - {{ name: entry, in: path, required: true, schema: {{ type: string }} }}
+            - {{ name: ref, in: {spelled}, required: true, schema: {{ type: string }} }}
+          responses: {{ \"201\": {{ description: OK }} }}
+  - target: \"$.paths['/logs/{{ref}}']\"
+    remove: true
+"
+    )
+}
+
+/// A path parameter and a required parameter off the path of one name. The words
+/// name the rename of the path parameter first: it gives up nothing, both
+/// parameters keep their flags, and the name of a path parameter does not go on
+/// the wire, so the request carries the other parameter as it was declared.
+#[test]
+fn a_required_namesake_of_a_path_parameter_is_mended_by_renaming_the_path_parameter() {
+    for case in [QUERY, HEADER] {
+        let paths = path_then(case.spelled);
 
         let error = refused(&paths);
 
         assert!(
             matches!(&error, LoadError::Parameter { op, name, place, why: Unsupported::Shared(Place::Path) }
-                if op == "appendLogEntry" && name == "ref" && *place == in_place),
+                if op == "appendLogEntry" && name == "ref" && *place == case.place),
             "{error:?}"
         );
         assert_eq!(
             error.to_string(),
             "appendLogEntry: parameter `ref` is sharing its name with the `path` parameter, and \
-             the document requires it; drop its `required` in an Overlay"
+             the document requires it; rename the `path` parameter `ref` and its variable in the \
+             path together, in an Overlay that writes the path item again under the new path and \
+             removes the old one, or drop its `required` in an Overlay"
         );
-        let mended = Document::load(
+        let mended = Document::load(&document(&paths), &[&path_then_renamed(case.spelled)])
+            .expect("the Overlay renames the path parameter and its variable");
+        assert_eq!(names(&mended, "appendLogEntry"), ["entry", "ref"]);
+        assert_sent(&mended, &case);
+    }
+}
+
+/// The drop of the `required` follows the rename in the words and loads too. The
+/// template names the path parameter, so the words offer no removal of it: the
+/// document would then be refused for the variable.
+#[test]
+fn a_required_namesake_of_a_path_parameter_may_drop_its_required_but_not_remove_it() {
+    for case in [QUERY, HEADER] {
+        let paths = path_then(case.spelled);
+
+        let optional = Document::load(
             &document(&paths),
             &[&updating(
                 "$.paths['/logs/{ref}'].post.parameters[1]",
@@ -592,12 +706,13 @@ fn a_required_namesake_of_a_path_parameter_drops_its_required() {
             )],
         )
         .expect("the Overlay drops the `required`");
-        assert!(mended.get("appendLogEntry").is_some());
         let unbound = Document::load(
             &document(&paths),
             &[&removing("$.paths['/logs/{ref}'].post.parameters[0]")],
         )
         .expect_err("the template needs the path parameter");
+
+        assert!(optional.get("appendLogEntry").is_some());
         assert!(
             matches!(unbound, LoadError::UnboundVariable { .. }),
             "{unbound:?}"
@@ -606,7 +721,8 @@ fn a_required_namesake_of_a_path_parameter_drops_its_required() {
 }
 
 /// Two path entries of one name: the second shares its name with the first, a
-/// path parameter has no `required` to drop, and removing the first loads.
+/// path parameter has no `required` to drop, and the template has one variable
+/// for both, so no rename parts them. Removing the first loads.
 #[test]
 fn a_second_path_entry_of_one_name_is_given_its_flag_by_removing_the_first() {
     const PATHS: &str = "  /things/{id}:
@@ -638,59 +754,120 @@ fn a_second_path_entry_of_one_name_is_given_its_flag_by_removing_the_first() {
     assert_eq!(names(&mended, "getThing"), ["id"]);
 }
 
-const PATH_LEVEL_QUERY: &str = "  /logs/{ref}:
+/// A path item's parameter `ref` in `spelled`, beside the operation's required
+/// path parameter of that name.
+fn path_level(spelled: &str) -> String {
+    format!(
+        "  /logs/{{ref}}:
     parameters:
-      - { name: ref, in: query, schema: { type: string } }
+      - {{ name: ref, in: {spelled}, schema: {{ type: string }} }}
     post:
       operationId: appendLogEntry
       parameters:
-        - { name: ref, in: path, required: true, schema: { type: string } }
-      responses: { \"201\": { description: OK } }
-";
+        - {{ name: ref, in: path, required: true, schema: {{ type: string }} }}
+      responses: {{ \"201\": {{ description: OK }} }}
+"
+    )
+}
 
-/// A path parameter has no `required` to drop, so the only repair that loads is
-/// the removal of the parameter it shares the name with.
+/// The Overlay that renames the path parameter of `path_level` and its variable.
+fn path_level_renamed(spelled: &str) -> String {
+    format!(
+        "overlay: 1.1.0
+info: {{ title: t, version: \"1\" }}
+actions:
+  - target: $.paths
+    update:
+      /logs/{{entry}}:
+        parameters:
+          - {{ name: ref, in: {spelled}, schema: {{ type: string }} }}
+        post:
+          operationId: appendLogEntry
+          parameters:
+            - {{ name: entry, in: path, required: true, schema: {{ type: string }} }}
+          responses: {{ \"201\": {{ description: OK }} }}
+  - target: \"$.paths['/logs/{{ref}}']\"
+    remove: true
+"
+    )
+}
+
+/// A path parameter has no `required` to drop. Its namesake is not in the path,
+/// so the words name the rename of the path parameter and its variable first,
+/// which gives up nothing, and the removal of the namesake after it. The
+/// namesake keeps its flag after the rename, except a cookie, which has none,
+/// and the request is what the document declares.
 #[test]
-fn a_path_parameter_that_shares_its_name_is_given_its_flag_by_removing_the_other() {
-    let error = refused(PATH_LEVEL_QUERY);
+fn a_path_parameter_that_shares_its_name_is_mended_by_renaming_it() {
+    for case in [QUERY, HEADER, COOKIE] {
+        let paths = path_level(case.spelled);
 
-    assert!(
-        matches!(&error, LoadError::Parameter { op, name, place: Place::Path, why: Unsupported::Shared(Place::Query) }
-            if op == "appendLogEntry" && name == "ref"),
-        "{error:?}"
-    );
-    assert_eq!(
-        error.to_string(),
-        "appendLogEntry: parameter `ref` is sharing its name with the `query` parameter, and the \
-         document requires it; remove the `query` parameter `ref` in an Overlay"
-    );
-    let mended = Document::load(
-        &document(PATH_LEVEL_QUERY),
-        &[&removing("$.paths['/logs/{ref}'].parameters[0]")],
-    )
-    .expect("the Overlay removes the query parameter");
-    assert!(matches!(
-        mended
-            .get("appendLogEntry")
-            .and_then(|op| op.param("ref"))
-            .map(typed_openapi::Param::shape),
-        Some(Shape::Flag {
-            location: Location::Path,
-            ..
-        })
-    ));
-    let optional = Document::load(
-        &document(PATH_LEVEL_QUERY),
-        &[&updating(
-            "$.paths['/logs/{ref}'].post.parameters[0]",
-            "{ required: false }",
-        )],
-    )
-    .expect_err("a path parameter that is not required is refused");
-    assert!(
-        matches!(optional, LoadError::OptionalPathParameter { .. }),
-        "{optional:?}"
-    );
+        let error = refused(&paths);
+
+        assert!(
+            matches!(&error, LoadError::Parameter { op, name, place: Place::Path, why }
+                if op == "appendLogEntry" && name == "ref" && *why == Unsupported::Shared(case.place)),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "appendLogEntry: parameter `ref` is sharing its name with the `{0}` parameter, \
+                 and the document requires it; rename the `path` parameter `ref` and its \
+                 variable in the path together, in an Overlay that writes the path item again \
+                 under the new path and removes the old one, or remove the `{0}` parameter \
+                 `ref` in an Overlay",
+                case.spelled
+            )
+        );
+        let mended = Document::load(&document(&paths), &[&path_level_renamed(case.spelled)])
+            .expect("the Overlay renames the path parameter and its variable");
+        assert_eq!(names(&mended, "appendLogEntry"), ["ref", "entry"]);
+        assert_sent(&mended, &case);
+    }
+}
+
+/// The removal of the namesake follows the rename in the words and loads too. It
+/// leaves the path parameter, which keeps its flag. Dropping the `required` of a
+/// path parameter is no repair.
+#[test]
+fn a_path_parameter_that_shares_its_name_is_also_mended_by_removing_the_other() {
+    for case in [QUERY, HEADER, COOKIE] {
+        let paths = path_level(case.spelled);
+
+        let removed = Document::load(
+            &document(&paths),
+            &[&removing("$.paths['/logs/{ref}'].parameters[0]")],
+        )
+        .expect("the Overlay removes the namesake");
+        let optional = Document::load(
+            &document(&paths),
+            &[&updating(
+                "$.paths['/logs/{ref}'].post.parameters[0]",
+                "{ required: false }",
+            )],
+        )
+        .expect_err("a path parameter that is not required is refused");
+
+        assert!(
+            matches!(
+                removed
+                    .get("appendLogEntry")
+                    .and_then(|op| op.param("ref"))
+                    .map(typed_openapi::Param::shape),
+                Some(Shape::Flag {
+                    location: Location::Path,
+                    ..
+                })
+            ),
+            "{}",
+            case.spelled
+        );
+        assert!(
+            matches!(optional, LoadError::OptionalPathParameter { .. }),
+            "{optional:?}"
+        );
+    }
 }
 
 /// "Later" reads the list the reduction builds: the path item's entries in its
@@ -728,7 +905,9 @@ fn an_override_that_takes_the_slot_of_a_path_level_entry_comes_before_the_entrie
     assert_eq!(
         error.to_string(),
         "appendLogEntry: parameter `ref` is sharing its name with the `query` parameter, and the \
-         document requires it; remove the `query` parameter `ref` in an Overlay"
+         document requires it; rename the `path` parameter `ref` and its variable in the path \
+         together, in an Overlay that writes the path item again under the new path and removes \
+         the old one, or remove the `query` parameter `ref` in an Overlay"
     );
     let mended = Document::load(
         &document(PATHS),

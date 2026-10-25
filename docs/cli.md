@@ -371,20 +371,38 @@ an [Overlay](overlay.md) is the way out. The error names a repair that loads:
   corrected by renaming the parameter and its variable in the path together,
   because the template names the parameter: an Overlay writes the path item again
   under the new path and removes the old one, and
-  [docs/overlay.md](overlay.md#1-plain-corrections) shows the actions. The name
-  of a path parameter never goes on the wire, only its value in place of the
-  variable, so the request does not change.
-- A name that another parameter has is mended by removing that parameter from
-  wherever the document declares it, which also gives this one its flag. When
-  the other is a path parameter the template needs it, so a required query or
-  header parameter with that name can only drop its `required`.
+  [docs/overlay.md](overlay.md#1-plain-corrections) shows the actions. In the
+  `simple` style, the only one this CLI writes in a path, the name of a path
+  parameter never goes on the wire, only its value in place of the variable, so
+  the request does not change.
+- A name that two parameters share is mended in one of three ways. The rename
+  comes first where it applies, because it gives nothing up, and the message
+  names it before the others:
+  - When one of the two is a path parameter and the other is not, rename the path
+    parameter and its variable together, as above. The request still carries
+    every parameter the document declares, and the parameter that was refused has
+    its flag.
+  - Remove the other parameter from wherever the document declares it. That gives
+    the refused one its flag, and the document no longer declares the removed
+    one. The template needs a path parameter, so a required query or header
+    parameter whose namesake is a path parameter is not told to remove it.
+  - Drop the `required` of the refused parameter, when it is off the path. That
+    gives up the requirement.
+
+  The message names the last two after the rename because each gives up a part of
+  the document, and only you know if that part is the vendor's mistake. Where no
+  rename applies, the message names these two without it: two path parameters are
+  not parted by a rename, because the template has one variable for both, and two
+  parameters off the path both go on the wire, so a rename would change the
+  request.
 
 The rule for a shared name has two costs. A required path parameter that comes
 after its namesake refuses the document, because it is required and has no flag.
-And a parameter that can have no flag, an `in: cookie` or a `content` one, still
-holds its name, so a later query or header parameter with that name has none
-either. The repair of both is an Overlay that removes the namesake that comes
-first.
+It is mended by the rename, or by removing the namesake that comes first, and
+only by the removal when the namesake is a path parameter too. And a parameter
+that can have no flag, an `in: cookie` or a `content` one, still holds its name,
+so a later query or header parameter with that name has none either. The repair
+of that cost is an Overlay that removes the namesake that comes first.
 
 An object is refused a spelling rather than given a guessed one. OpenAPI says
 how a *flat* object serialises under `deepObject` and says nothing about a

@@ -462,13 +462,26 @@ pub enum LoadError {
     /// is and why it has no flag. A parameter that is not in the path can drop
     /// its `required`. A path parameter cannot, because
     /// [`LoadError::OptionalPathParameter`] refuses it then, so its shape is
-    /// corrected, and a name with no spelling is renamed together with its
-    /// variable in the path: an Overlay moves the path item to the new path, and
-    /// the request is the same, because the name of a path parameter never goes
-    /// on the wire. A name that another parameter has is mended by removing that
-    /// parameter, which gives this one its flag. The exception is a parameter
-    /// off the path whose namesake is a path parameter: the template needs the
-    /// namesake, so this one drops its `required`.
+    /// corrected.
+    ///
+    /// A path parameter is renamed together with its variable in the path when
+    /// its name has no spelling, and when its namesake is not in the path: an
+    /// Overlay moves the path item to the new path, and the request is the same,
+    /// because in the `simple` style, the only one this CLI writes in a path, the
+    /// name of a path parameter does not go on the wire. The same rename mends a
+    /// parameter off the path whose namesake is a path parameter, with the
+    /// namesake renamed.
+    ///
+    /// A rename gives up no parameter, so the message names it first. Where the
+    /// fault also ends when a part of the document is given up, the message names
+    /// that after it, because only the adopter knows if that part is the vendor's
+    /// mistake: the namesake is removed, which gives this parameter its flag, or
+    /// the `required` of a parameter off the path is dropped. A namesake that is
+    /// a path parameter is not removed, because the template needs it. A rename
+    /// does not part two parameters that are both off the path, because both
+    /// names go on the wire and the request would change. It does not part two
+    /// path parameters either, because the template has one variable for both,
+    /// and the later one is mended by removing the earlier.
     #[error(
         "{op}: parameter `{name}` is {why}, and the document requires it; {}",
         repair(*.place, .name, .why)
@@ -566,27 +579,40 @@ pub enum LoadError {
 /// than one fault is refused for one at a time, and each repair ends its own
 /// refusal without bringing back one that an earlier repair ended.
 ///
-/// One arm for each case of the place and the reason:
+/// One arm for each case of the place and the reason. A repair that keeps every
+/// parameter the operation declares comes first. A repair that ends the fault by
+/// giving up a part of the document follows it, because only the adopter knows
+/// if that part is the vendor's mistake.
 /// - Dropping `required` mends a parameter off the path only: for a path
-///   parameter it gives [`LoadError::OptionalPathParameter`].
-/// - A path parameter whose name has no spelling is renamed together with its
-///   variable, because the template names it and no correction of the parameter
-///   alone loads. No Overlay action renames a key, so the path item is written
-///   again under the new path and the old one is removed.
-/// - A name that another parameter has is mended by removing that parameter,
-///   which is also the one repair that gives this one its flag. The exception is
-///   a parameter off the path whose namesake is a path parameter: the template
-///   names the namesake, and without it the document is refused for the
-///   variable ([`LoadError::UnboundVariable`]).
+///   parameter it gives [`LoadError::OptionalPathParameter`]. It gives up the
+///   requirement.
+/// - A path parameter is renamed together with its variable ([`rename`]) when
+///   its name has no spelling, and when its namesake is not in the path. A
+///   parameter off the path whose namesake is a path parameter is mended by the
+///   same rename of the namesake. The rename gives up nothing: the name of a
+///   path parameter does not go on the wire.
+/// - A name that another parameter has is also mended by removing that
+///   parameter, which gives this one its flag and gives the namesake up. The
+///   exception is a parameter off the path whose namesake is a path parameter:
+///   the template names the namesake, and without it the document is refused for
+///   the variable ([`LoadError::UnboundVariable`]).
+/// - Two path parameters of one name are not parted by a rename, because the
+///   template has one variable for both. Two parameters off the path are not
+///   either, because both names go on the wire and a rename would change the
+///   request.
 fn repair(place: Place, name: &str, why: &Unsupported) -> String {
+    let path_parameter = format!("the `path` parameter `{name}`");
     match (place, why) {
-        (Place::Path, Unsupported::Shared(other)) => {
-            format!("remove the `{other}` parameter `{name}` in an Overlay")
+        (Place::Path, Unsupported::Shared(Place::Path)) => {
+            format!("remove the `path` parameter `{name}` in an Overlay")
         }
-        (Place::Path, Unsupported::Unspellable) => "rename the parameter and its variable in the \
-             path together, in an Overlay that writes the path item again under the new path and \
-             removes the old one"
-            .to_owned(),
+        (Place::Path, Unsupported::Shared(other)) => {
+            format!(
+                "{}, or remove the `{other}` parameter `{name}` in an Overlay",
+                rename(&path_parameter)
+            )
+        }
+        (Place::Path, Unsupported::Unspellable) => rename("the parameter"),
         (
             Place::Path,
             Unsupported::Cookie
@@ -594,7 +620,12 @@ fn repair(place: Place, name: &str, why: &Unsupported) -> String {
             | Unsupported::Structured
             | Unsupported::Style(_),
         ) => "correct the parameter in an Overlay".to_owned(),
-        (_, Unsupported::Shared(Place::Path)) => "drop its `required` in an Overlay".to_owned(),
+        (_, Unsupported::Shared(Place::Path)) => {
+            format!(
+                "{}, or drop its `required` in an Overlay",
+                rename(&path_parameter)
+            )
+        }
         (_, Unsupported::Shared(other)) => {
             format!("remove the `{other}` parameter `{name}` in an Overlay, or drop its `required`")
         }
@@ -607,6 +638,18 @@ fn repair(place: Place, name: &str, why: &Unsupported) -> String {
             | Unsupported::Unspellable,
         ) => "correct the parameter in an Overlay, or drop its `required`".to_owned(),
     }
+}
+
+/// The repair that renames a path parameter together with its variable. The
+/// template names the parameter, so no `update` of the parameter alone loads,
+/// and no Overlay action renames a key: the path item is written again under the
+/// new path and the old one is removed. Every message that names the rename uses
+/// these words, and `parameter` says which one is renamed.
+fn rename(parameter: &str) -> String {
+    format!(
+        "rename {parameter} and its variable in the path together, in an Overlay that writes \
+         the path item again under the new path and removes the old one"
+    )
 }
 
 /// The first server's URL as a refusal shows it: as the document spells it, and

@@ -357,12 +357,11 @@ shape or the place of either, and unless it has a reason of its own: a reason of
 its own wins over `Shared`. It claims no flag, and a required one is
 `LoadError::Parameter`. The earlier one keeps the name even when it has no flag
 itself (`in: cookie`, `content`), and a required path parameter that comes
-later refuses the document. The repair of both is the removal of the earlier
-parameter, which `docs/cli.md` says. A rule by reachability would make
-`Operation::param` "the first parameter with a flag", and a rule by place would
-add a second order beside the list. Both would widen a public seam for a rare
-document, and both would contradict spec F-10 ("the one the document lists
-later"). The values under a name are the first parameter's, so
+later refuses the document. `docs/cli.md` says the repairs of both costs. A
+rule by reachability would make `Operation::param` "the first parameter with a
+flag", and a rule by place would add a second order beside the list. Both would
+widen a public seam for a rare document, and both would contradict spec F-10
+("the one the document lists later"). The values under a name are the first parameter's, so
 `Invocation::new` counts the given values of a parameter with a flag only. The
 generator reads the same list: `entry_of_flag` finds the entry that a flag was
 read from in what `declared` returns, which is the first entry with the flag's
@@ -375,17 +374,28 @@ the repair depends on it. `repair` names a repair that loads the document when
 the parameter is the one fault in it. A document with more faults is refused for
 one at a time, and each repair ends its own refusal and brings back none that an
 earlier repair ended. A path parameter that is not `required` is refused
-(`OptionalPathParameter`), so dropping the `required` of one is never named. A
-path parameter whose name has no spelling is renamed together with its
-variable, because the template names it and no `update` of the parameter alone
-loads; no Overlay action renames a key, so the Overlay writes the path item
-again under the new path and removes the old one, and the request is the same,
-because the name of a path parameter never goes on the wire. A namesake is
-mended by removing the other parameter, unless the refused parameter is off the
-path and the other is a path parameter, which the template needs: the refused
-one drops its `required`. Each repair that `repair` names has a test in
-`tests/wire.rs` that loads the document with the Overlay the words name, and a
-new reason or place adds one.
+(`OptionalPathParameter`), so dropping the `required` of one is never named.
+A path parameter is renamed together with its variable (`rename`), because the
+template names it and no `update` of the parameter alone loads; no Overlay
+action renames a key, so the Overlay writes the path item again under the new
+path and removes the old one. The request is the same, because in the `simple`
+style, the only one this CLI writes in a path, the name of a path parameter does
+not go on the wire. So the rename gives up no parameter, and it is the repair
+for a name with no spelling and for a shared name when one of the two is a path
+parameter and the other is not, whichever of them was refused.
+
+The words follow one rule. A repair that keeps every parameter the operation
+declares is named first. A repair that also ends the fault by giving up a part
+of the document is named after it, because only the adopter knows if that part
+is the vendor's mistake: removing the namesake, which gives the refused
+parameter its flag, or dropping the `required` of a parameter off the path. No
+repair is named that does not load, so a namesake that is a path parameter is
+never removed, because the template names it. Two cases get no rename. Both
+names go on the wire when neither parameter is in the path, so a rename changes
+the request and is no correction. Two path parameters of one name have one
+variable in the template, so no rename parts them. Each repair that `repair`
+names has a test in `tests/wire.rs` that loads the document with the Overlay the
+words name, and a new reason or place adds one.
 
 `reconcile` holds the path template to the path parameters, and refuses a
 variable with no path parameter, a path parameter with no variable and a path
