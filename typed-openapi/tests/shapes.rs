@@ -755,3 +755,39 @@ fn a_schema_that_shuts_the_rest_is_closed_by_serde() {
         mismatch("closed.extra"),
     )]);
 }
+
+/// typify writes an array whose `minItems` and `maxItems` are equal, and more than
+/// 0, as `[T; N]` (typify-impl's `convert_array`), so a typed call cannot hold
+/// another count, and `fits` refuses a body list that has one. The closure in
+/// the case does not compile if typify writes a `Vec` for the schema.
+#[test]
+fn equal_min_items_and_max_items_make_an_array_that_both_roads_hold() {
+    let fixed = |body: types::Pair| -> Option<[String; 2]> { body.pair };
+    assert_eq!(fixed(types::Pair::default()), None);
+    all::<types::Pair>(vec![
+        ("two values", json!({"pair": ["a", "b"]}), fits_ok()),
+        ("one value", json!({"pair": ["a"]}), mismatch("pair")),
+        (
+            "three values",
+            json!({"pair": ["a", "b", "c"]}),
+            mismatch("pair"),
+        ),
+    ]);
+}
+
+/// Any other pair of counts is a `Vec`, which holds no count at all: typify
+/// leaves `minItems` and `maxItems` as a TODO, so no road runs them.
+#[test]
+fn unequal_min_items_and_max_items_make_a_vec_that_no_road_holds() {
+    let free = |body: types::Spread| -> Vec<String> { body.spread };
+    assert_eq!(free(types::Spread::default()), Vec::<String>::new());
+    all::<types::Spread>(vec![
+        ("no value", json!({"spread": []}), fits_ok()),
+        ("two values", json!({"spread": ["a", "b"]}), fits_ok()),
+        (
+            "five values",
+            json!({"spread": ["a", "b", "c", "d", "e"]}),
+            fits_ok(),
+        ),
+    ]);
+}

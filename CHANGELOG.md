@@ -662,9 +662,10 @@ the crate follows [Semantic Versioning][semver].
   (`GET /Invoice`, `/Order` and `/Voucher` `status`, and
   `getTotalDataExportCount`'s required `status`): its CLI enforces them when it
   moves its rev. `--json-body-template` shows the first value that an `enum` of
-  integers, numbers or booleans lists, where it showed `0`, `0.0` or `false`;
-  repair: none, the template is a shape and not a request. The model changes, so
-  this is a break of three public shapes
+  integers or numbers lists, where it showed `0` or `0.0`, and the one value that
+  a boolean `enum` admits, where it showed `false`; an `enum` that lists both
+  booleans still shows `false`. Repair: none, the template is a shape and not a
+  request. The model changes, so this is a break of three public shapes
   and of the blob:
   - `Scalar::Boolean` is `Scalar::Boolean(Option<bool>)`, with the one value that
     an `enum` of `type: boolean` lists, and `None` where there is none or it
@@ -697,16 +698,17 @@ the crate follows [Semantic Versioning][semver].
   flag refused wrongly, which is accepted now; for a value that it admitted
   wrongly, send a multiple.
 - **A `pattern` with `\p{`, `\P{` or `\u{` is refused while the document is
-  reduced, in every schema the model reads.** Without the Unicode flag `\p{L}` is
+  loaded, in every schema the model reads.** Without the Unicode flag `\p{L}` is
   the text `p{L}`, and with it a letter. The command line and the generated type
   run a `pattern` without the flag, and each generated type that holds one
   refuses `Müller` and accepts `p{L}` where a vendor's server that runs it with
-  the flag does the opposite. On a value that becomes a flag the document is
+  the flag does the opposite. On a `pattern` that a flag carries the document is
   refused as `LoadError::Unrunnable { op, name, source }`. In any other schema
   (a response, a nested property, the items of an array body, a named schema) it
   is refused as the new `LoadError::UnrunnablePattern { op, at, source }`, which
   names the operation where one holds the schema and the schema as an Overlay
-  names a target. `LoadError` is `#[non_exhaustive]`, so the variant is no break.
+  names a target. A schema beside a `$ref` is not read, because the model keeps
+  the reference alone. `LoadError` is `#[non_exhaustive]`, so the variant is no break.
   The cause prints the pattern and the escape. A backslash takes the character
   after it, so `\\p{3}` loads. sevdesk-cli's 43 patterns use none. Repair: an
   Overlay that states the pattern another way, and the class is a choice. A
@@ -717,16 +719,27 @@ the crate follows [Semantic Versioning][semver].
   is reduced.** A flag cannot send `null`, so the `enum` left no rule and the
   flag admitted every value, where JSON Schema admits no integer under
   `{ type: integer, enum: [null] }`. The document is refused as
-  `LoadError::Unrunnable { op, name, source }` on a parameter and on a property
-  of a flat body. `null` beside a value stays the way OpenAPI 3.0 says that a
-  value may be absent. Repair: an Overlay that removes the `enum`, or lists the
-  values.
+  `LoadError::Unrunnable { op, name, source }` on a parameter, on the items of a
+  list and on a property of a body. `null` beside a value stays the way OpenAPI
+  3.0 says that a value may be `null`. Repair: an Overlay that removes the
+  `enum`, or lists the values.
 - **A `multipleOf` that is not more than 0 is refused while the document is
   reduced.** A step of 0 refused every value, and `multipleOf: -1` with the value
   `i64::MIN` made `Scalar::parse` panic. The document is refused as
   `LoadError::Unrunnable { op, name, source }`, as a `pattern` that no engine
   reads is. sevdesk-cli states no `multipleOf`. Repair: an Overlay that removes
   the keyword or states the step as a positive number.
+- **A property of a body is read for its rules wherever it stands among its
+  siblings.** A body goes whole through `--json-body` at its first nested
+  property, and the properties listed after it were not read for their rules, so
+  a `pattern` that no engine reads refused a document or not by the order of the
+  properties. Every property is read now, and the three refusals above hold
+  wherever it stands. A document that loaded and failed the bless is refused with
+  the property named: a `pattern` such as `[`, an `enum` of `null` alone
+  (`LoadError::Unrunnable`) and a `$ref` that does not resolve, which made
+  typify panic (`LoadError::Unresolvable`). A `multipleOf` that is not more than
+  0 after a nested property loaded, and is refused now. Repair: an Overlay that
+  states the rule another way or removes it, or makes the `$ref` resolve.
 
 ### Removed
 

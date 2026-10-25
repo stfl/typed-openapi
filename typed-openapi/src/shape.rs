@@ -23,9 +23,9 @@
 //!   3.0 schema.
 //!
 //! A list of what is entered fails toward a position unread. The schema walk
-//! misses a phantom there, and the marker walk misses a marker. A list of what is
-//! not entered fails toward a document wrongly refused at every field nobody put
-//! on it, and neither walk may do that.
+//! misses a phantom there, the marker walk a marker, and the pattern walk a
+//! `pattern`. A list of what is not entered fails toward a document wrongly
+//! refused at every field nobody put on it, and no walk may do that.
 //!
 //! An `x-…` key of an object that a walk enters is an extension, and the walk
 //! asks about it by its name. In a map of names somebody chose it is a name like
@@ -56,6 +56,10 @@
 use openapiv3::StatusCode;
 use serde::Deserialize as _;
 use serde::de::value::{Error, StrDeserializer};
+use serde_json::{Map, Value};
+
+/// The key that makes an object a reference to another object of the document.
+const REF: &str = "$ref";
 
 /// A specification extension: where the specification lets an object carry one,
 /// an `x-…` key holds the vendor's own arbitrary JSON rather than a part of the
@@ -258,6 +262,51 @@ impl Kind {
             Reach::Defined => None,
             Reach::Whole => self.undefined(key),
         })
+    }
+
+    /// Whether the object model reads this object as the reference it holds and
+    /// as nothing else: an object of a kind that can be a reference, with a
+    /// `$ref` that is text.
+    ///
+    /// `openapiv3` reads such a node as `ReferenceOr::Reference` and drops every
+    /// other key, as OpenAPI 3.0.3 says of the Reference Object: "any properties
+    /// added SHALL be ignored". So a walk that reaches what the model reads stops
+    /// at one, and what stands beside the `$ref` is no part of the document. A
+    /// `$ref` that is not text is no reference, and the node is the object it is.
+    ///
+    /// A path item is not in the list. The model reads one as a reference under
+    /// `paths` only, and the load refuses a path item that is a `$ref`
+    /// (`LoadError::PathItem`) before a walk that reads the model asks.
+    pub(crate) fn is_read_as_reference(self, fields: &Map<String, Value>) -> bool {
+        let referable = match self {
+            Self::Schema
+            | Self::Parameter
+            | Self::Header
+            | Self::RequestBody
+            | Self::Response
+            | Self::Link
+            | Self::Example
+            | Self::Callback
+            | Self::SecurityScheme => true,
+            Self::Root
+            | Self::Info
+            | Self::Contact
+            | Self::License
+            | Self::Server
+            | Self::ServerVariable
+            | Self::Tag
+            | Self::ExternalDocs
+            | Self::Components
+            | Self::PathItem
+            | Self::Operation
+            | Self::MediaType
+            | Self::Encoding
+            | Self::OAuthFlows
+            | Self::OAuthFlow
+            | Self::Discriminator
+            | Self::Xml => false,
+        };
+        referable && fields.get(REF).is_some_and(Value::is_string)
     }
 
     /// The routes that OpenAPI 3.0.3 defines.

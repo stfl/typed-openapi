@@ -1,8 +1,8 @@
 //! Refusing a `pattern` that the Unicode flag reads another way, wherever a
 //! schema states one.
 //!
-//! The reduction refuses it on a value that becomes a flag (`Scalar::runnable`),
-//! and a flag is one place out of many. typify builds a type from every named
+//! The reduction refuses it on a `pattern` that a flag carries
+//! (`Scalar::runnable`), and a flag is one place out of many. typify builds a type from every named
 //! schema, from an inline body and from an inline response, and writes
 //! `Regex::new("^\\p{L}+$")` into each `pattern` it meets: a type that decides
 //! `Müller` the other way from a vendor's server that runs the pattern with the
@@ -12,10 +12,11 @@
 //!
 //! It reaches what OpenAPI 3.0.3 defines, as the model does, and so as typify
 //! does: a schema stated under a key the model drops is no schema of the
-//! document. That reaches a few schemas that no type and no flag is made of, such
-//! as the schema of an error response. The pattern in one is the same
-//! disagreement, and the Overlay line that repairs it is the line that repairs
-//! the others.
+//! document, and neither is anything that stands beside a `$ref`, which the model
+//! reads as the reference alone. That reaches a few schemas that no type and no
+//! flag is made of, such as the schema of an error response. The pattern in one
+//! is the same disagreement, and the Overlay line that repairs it is the line
+//! that repairs the others.
 
 use serde_json::{Map, Value};
 
@@ -40,8 +41,7 @@ pub(crate) fn check(document: &Value) -> Result<(), LoadError> {
     .read(Kind::Root, document)
 }
 
-/// The head of a refusal: the operation, when the schema stands in one that has
-/// an id.
+/// The head of a refusal: the operation, when the schema stands in one.
 pub(crate) fn held_by(op: Option<&str>) -> String {
     op.map_or_else(String::new, |op| format!("{op}: "))
 }
@@ -54,10 +54,15 @@ struct Walk<'d> {
 
 impl<'d> Walk<'d> {
     /// This node, then everything under it that the table leads to. A list
-    /// stands for each of its members.
+    /// stands for each of its members. A node that the model reads as a
+    /// reference is read as one: it holds nothing to judge, and nothing beside
+    /// the `$ref` is entered.
     fn read(&mut self, kind: Kind, node: &'d Value) -> Result<(), LoadError> {
         match node {
             Value::Object(fields) => {
+                if kind.is_read_as_reference(fields) {
+                    return Ok(());
+                }
                 if matches!(kind, Kind::Schema) {
                     self.judge(fields)?;
                 }
@@ -125,8 +130,9 @@ impl<'d> Walk<'d> {
     }
 
     /// The `operationId` of the operation the schema stands in, when it stands in
-    /// one that has an id: under a method of a path item, a callback of that
-    /// operation included.
+    /// one and the document gives it an id: under a method of a path item, a
+    /// callback of that operation included. The load refuses an operation that
+    /// has no id before this walk runs.
     fn operation(&self) -> Option<String> {
         let [Step::Key("paths"), Step::Key(path), Step::Key(method), ..] = self.at.as_slice()
         else {
@@ -162,6 +168,16 @@ mod tests {
     }
 
     const HEAD: &str = "paths:\n  /a:\n    get:\n      operationId: getA\n";
+
+    /// The walk finds the pattern of `document` where and under the operation
+    /// that the case says.
+    fn assert_found(document: &str, op: Option<&str>, at: &str) {
+        assert_eq!(
+            found(document),
+            Some((op.map(str::to_owned), at.to_owned())),
+            "{document}"
+        );
+    }
 
     #[test]
     fn a_pattern_is_read_in_the_schema_that_holds_it() {
@@ -209,11 +225,41 @@ mod tests {
                 "$.components.schemas.Any.allOf[0]",
             ),
         ] {
-            assert_eq!(
-                found(&document),
-                Some((op.map(str::to_owned), at.to_owned())),
-                "{document}"
-            );
+            assert_found(&document, op, at);
+        }
+    }
+
+    /// A `$ref` stands for the node it names only in an object of a kind that
+    /// can be a reference, and only when it is text. Anywhere else it is a key
+    /// like any other, and the schema below it is a schema of the document.
+    #[test]
+    fn a_ref_that_is_no_reference_leaves_the_schema_beside_it_read() {
+        let schema = "{ type: string, pattern: '^\\p{L}+$' }";
+        for (document, op, at) in [
+            (
+                "components:\n  $ref: '#/nowhere'\n  schemas:\n    P: { type: string, pattern: '^\\p{L}+$' }\n"
+                    .to_owned(),
+                None,
+                "$.components.schemas.P",
+            ),
+            (
+                format!(
+                    "{HEAD}      responses:\n        '200':\n          description: ok\n          content:\n            \
+                     application/json:\n              $ref: '#/nowhere'\n              schema: {schema}\n"
+                ),
+                Some("getA"),
+                "$.paths['/a'].get.responses['200'].content['application/json'].schema",
+            ),
+            // A `$ref` that is not text is no reference: the model reads the
+            // node as the schema it is.
+            (
+                "components:\n  schemas:\n    Odd: { $ref: 7, type: string, pattern: '^\\p{L}+$' }\n"
+                    .to_owned(),
+                None,
+                "$.components.schemas.Odd",
+            ),
+        ] {
+            assert_found(&document, op, at);
         }
     }
 
@@ -235,6 +281,18 @@ mod tests {
             "components:\n  parameters:\n    N: { name: n, in: query, pattern: '\\p{L}' }\n",
             // A pattern that is not text states nothing here.
             "components:\n  schemas:\n    P: { type: string, pattern: 7 }\n",
+            // The model reads a node that holds a string `$ref` as the
+            // reference alone, so nothing beside it is a schema of the document:
+            // not a `pattern`, and not a `properties` map with one inside.
+            "components:\n  schemas:\n    P:\n      type: object\n      properties:\n        s: { $ref: '#/components/schemas/Plain', pattern: '\\p{L}' }\n",
+            "paths:\n  /a:\n    get:\n      responses:\n        '200':\n          description: ok\n          content: { application/json: { schema: { $ref: '#/components/schemas/Plain', pattern: '\\p{L}' } } }\n",
+            "paths:\n  /a:\n    get:\n      parameters:\n        - { name: n, in: query, schema: { $ref: '#/components/schemas/Plain', pattern: '\\p{L}' } }\n",
+            "components:\n  schemas:\n    P:\n      $ref: '#/components/schemas/Plain'\n      properties:\n        s: { type: string, pattern: '\\p{L}' }\n",
+            "paths:\n  /a:\n    get:\n      parameters:\n        - $ref: '#/components/parameters/N'\n          schema: { type: string, pattern: '\\p{L}' }\n",
+            "paths:\n  /a:\n    get:\n      responses:\n        '200':\n          $ref: '#/components/responses/R'\n          content: { application/json: { schema: { type: string, pattern: '\\p{L}' } } }\n",
+            "paths:\n  /a:\n    post:\n      requestBody:\n        $ref: '#/components/requestBodies/B'\n        content: { application/json: { schema: { type: string, pattern: '\\p{L}' } } }\n",
+            "paths:\n  /a:\n    get:\n      responses:\n        '200':\n          description: ok\n          headers:\n            X-Name:\n              $ref: '#/components/headers/H'\n              schema: { type: string, pattern: '\\p{L}' }\n",
+            "paths:\n  /a:\n    post:\n      callbacks:\n        cb:\n          $ref: '#/components/callbacks/C'\n          '{$request.body#/url}': { post: { parameters: [{ name: n, in: query, schema: { type: string, pattern: '\\p{L}' } }] } }\n",
         ] {
             assert_eq!(found(document), None, "{document}");
         }

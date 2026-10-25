@@ -23,8 +23,8 @@ use std::borrow::Cow;
 use http::header::HeaderName;
 use http::{Method, Uri};
 use openapiv3::{
-    Components, OpenAPI, Parameter, ParameterData, ParameterSchemaOrContent, PathItem, PathStyle,
-    QueryStyle, ReferenceOr, Schema, SchemaKind, Server,
+    Components, ObjectType, OpenAPI, Parameter, ParameterData, ParameterSchemaOrContent, PathItem,
+    PathStyle, QueryStyle, ReferenceOr, Schema, SchemaKind, Server,
 };
 use thiserror::Error;
 
@@ -574,18 +574,21 @@ pub enum LoadError {
         #[source]
         source: crate::scalar::ScalarError,
     },
-    /// A `pattern` of a schema that holds `\p{`, `\P{` or `\u{`, in a place a
-    /// flag is not made of. It means one thing with the Unicode flag and another
-    /// without it, and the generated type cannot be given the flag, so the type
-    /// refuses the vendor's own responses that a server running the pattern with
-    /// the flag accepts. The walk reads every schema that the object model reads,
-    /// and `Unrunnable` is the same refusal for the `pattern` of a value that
-    /// becomes a flag.
+    /// A `pattern` of a schema that holds `\p{`, `\P{` or `\u{`, in a place whose
+    /// flag does not carry the `pattern`: a response, a property of a nested
+    /// body, a named schema, or a value whose flag keeps its `enum` and drops the
+    /// `pattern`. It means one thing with the Unicode flag and another without
+    /// it, and the generated type cannot be given the flag, so the type refuses
+    /// the vendor's own responses that a server running the pattern with the
+    /// flag accepts. The walk reads every schema that the object model reads, and
+    /// the model reads nothing beside a `$ref`. `Unrunnable` is the same refusal
+    /// for the `pattern` that a flag carries.
     #[error("{}`{at}` states a rule that cannot run", crate::patterns::held_by(.op.as_deref()))]
     UnrunnablePattern {
         /// The `operationId` of the operation the schema stands in, and `None`
-        /// where it stands in no operation or in one with no id: a component,
-        /// or a parameter that a path item shares.
+        /// where it stands in no operation: a component, or a parameter that a
+        /// path item shares. One schema can serve many operations, so a
+        /// component names none, and `at` is where the repair is made.
         op: Option<String>,
         /// The schema, spelled as an Overlay names a target:
         /// `$.components.schemas.Person.properties.surname`.
@@ -906,9 +909,9 @@ impl Document {
         let model = crate::openapi::model_of(&doc)
             .map_err(|Misfit { at, source }| LoadError::Shape { at, source })?;
         let loaded = Self::from_openapi(&model, &loading.commit)?;
-        // After the reduction, so that a `pattern` which becomes a flag is
-        // refused there, with the parameter that holds it. This reads the rest:
-        // the schemas that types are made of and flags are not.
+        // After the reduction, so that a `pattern` which a flag carries is
+        // refused there, with the parameter that holds it. This reads every other
+        // schema the model reads.
         crate::patterns::check(&doc)?;
         Ok(loaded)
     }
@@ -1804,10 +1807,15 @@ fn json_body(
         return whole();
     };
 
-    let mut fields = Vec::with_capacity(object.properties.len());
-    for (name, property) in &object.properties {
-        let property = property.clone().unbox();
-        let Some(scalar) = runnable_scalar(&property, components, id, name)? else {
+    let properties = properties_of(object, components, id)?;
+    let mut fields = Vec::with_capacity(properties.len());
+    for Property {
+        name,
+        schema: property,
+        scalar,
+    } in properties
+    {
+        let Some(scalar) = scalar else {
             // One nested property is enough: the whole body goes through
             // `--json-body`, and no sibling gets a flag the request builder
             // would then throw away.
@@ -1833,6 +1841,41 @@ fn json_body(
         });
     }
     Ok(Body::JsonFields(fields))
+}
+
+/// A property of a body and the scalar its schema states, once every rule it
+/// carries is known to run. `None` is a property that does not fit on a flag.
+struct Property<'a> {
+    name: &'a String,
+    schema: ReferenceOr<Schema>,
+    scalar: Option<Scalar>,
+}
+
+/// Every property of the object, read for the rules it states.
+///
+/// All of them are asked before [`json_body`] decides whether the body is flat,
+/// because a rule that cannot run is a fault of the document and not of the
+/// flag it would have been. A nested property sends the body whole, and a
+/// property listed after it states the same rule all the same, so the verdict
+/// cannot depend on which one comes first.
+fn properties_of<'a>(
+    object: &'a ObjectType,
+    components: &Components,
+    id: &str,
+) -> Result<Vec<Property<'a>>, LoadError> {
+    object
+        .properties
+        .iter()
+        .map(|(name, property)| {
+            let schema = property.clone().unbox();
+            let scalar = runnable_scalar(&schema, components, id, name)?;
+            Ok(Property {
+                name,
+                schema,
+                scalar,
+            })
+        })
+        .collect()
 }
 
 /// A clash, said in the vocabulary of whoever can resolve it.

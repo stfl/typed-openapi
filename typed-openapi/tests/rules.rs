@@ -319,7 +319,7 @@ fn an_enum_of_null_alone_is_refused_while_the_document_is_reduced() {
 }
 
 /// `null` beside a value a flag can send is the way OpenAPI 3.0 says that a value
-/// may be absent, and the values the `enum` lists are the rule.
+/// may be `null`, and the values the `enum` lists are the rule.
 #[test]
 fn an_enum_of_null_beside_a_value_is_the_rule_of_that_value() {
     let doc = read(&[
@@ -357,8 +357,7 @@ const PLAIN: &str = "{ type: object, properties: { id: { type: integer } } }";
 type Site = (String, Option<&'static str>, String);
 
 /// The places a generated type is made of that no flag is: a response, a nested
-/// property, the items of an array, a flat property that comes after a nested one
-/// (the body then goes whole through `--json-body`), and a named schema.
+/// property, the items of an array, and a named schema.
 fn sites() -> Vec<Site> {
     let at = |place: &str| format!("$.paths['/people'].post.{place}");
     let body = |place: &str| {
@@ -375,9 +374,6 @@ fn sites() -> Vec<Site> {
         "{{ type: object, properties: {{ address: {{ type: object, properties: {{ city: {NAME} }} }} }} }}"
     );
     let items = format!("{{ type: array, items: {NAME} }}");
-    let after_a_nested = format!(
-        "{{ type: object, properties: {{ address: {{ type: object, properties: {{ line: {{ type: string }} }} }}, surname: {NAME} }} }}"
-    );
     let flat = format!("{{ type: object, properties: {{ surname: {NAME} }} }}");
     let named = format!("components:\n  schemas:\n    Surname: {NAME}\n");
     let op = Some("holdsPattern");
@@ -389,11 +385,6 @@ fn sites() -> Vec<Site> {
             body(".properties.address.properties.city"),
         ),
         (holding(&items, PLAIN, ""), op, body(".items")),
-        (
-            holding(&after_a_nested, PLAIN, ""),
-            op,
-            body(".properties.surname"),
-        ),
         (
             holding(PLAIN, PLAIN, &named),
             None,
@@ -438,6 +429,175 @@ fn a_unicode_pattern_that_becomes_a_flag_is_refused_with_its_property() {
             if op == "holdsPattern" && name == "surname"),
         "{error:?}"
     );
+}
+
+/// Four rules that cannot run, each as the schema of a body property: a step with
+/// no multiples, an `enum` that names no value a flag can send, a `pattern` that
+/// no engine reads, and a `pattern` that the Unicode flag reads another way.
+const UNRUNNABLE: &[&str] = &[
+    "{ type: integer, multipleOf: 0 }",
+    "{ type: integer, enum: [null] }",
+    "{ type: string, pattern: '[' }",
+    "{ type: string, pattern: '^\\p{L}+$' }",
+];
+
+/// A body with the properties as listed, `k` and a nested `o` among them.
+fn properties_in_order(first: &str, then: &str) -> String {
+    format!("{{ type: object, properties: {{ {first}, {then} }} }}")
+}
+
+/// Whether a property is refused for a rule that cannot run does not depend on
+/// whether a nested property comes before it. The body goes whole through
+/// `--json-body` at the first nested property, and the rules of a property
+/// listed after it are asked all the same.
+#[test]
+fn a_rule_that_cannot_run_refuses_a_body_whatever_the_order_of_its_properties() {
+    let nested = "o: { type: object, properties: { id: { type: integer } } }";
+    for schema in UNRUNNABLE {
+        let key = format!("k: {schema}");
+        for body in [
+            properties_in_order(&key, nested),
+            properties_in_order(nested, &key),
+        ] {
+            let error = Document::load(&holding(&body, PLAIN, ""), &[])
+                .expect_err("the rule cannot run, wherever the property stands");
+            assert!(
+                matches!(&error, LoadError::Unrunnable { op, name, .. }
+                    if op == "holdsPattern" && name == "k"),
+                "{body}: {error:?}"
+            );
+        }
+    }
+}
+
+/// A `$ref` that leads nowhere is refused by name wherever its property stands.
+/// typify panics on it at the bless, so a document that held it after a nested
+/// property used to load and then end the bless step.
+#[test]
+fn a_ref_that_does_not_resolve_is_refused_wherever_its_property_stands() {
+    let nested = "o: { type: object, properties: { id: { type: integer } } }";
+    let key = "k: { $ref: '#/components/schemas/Nope' }";
+    for body in [
+        properties_in_order(key, nested),
+        properties_in_order(nested, key),
+    ] {
+        let error = Document::load(&holding(&body, PLAIN, ""), &[])
+            .expect_err("the reference leads nowhere");
+        assert!(
+            matches!(&error, LoadError::Unresolvable { op, name, .. }
+                if op == "holdsPattern" && name == "k"),
+            "{body}: {error:?}"
+        );
+    }
+}
+
+/// The control of the case above: a rule that runs loads in either order, so the
+/// refusal is about the rule and not about the nested property.
+#[test]
+fn a_rule_that_runs_loads_wherever_the_property_stands() {
+    let nested = "o: { type: object, properties: { id: { type: integer } } }";
+    for schema in [
+        "{ type: integer, multipleOf: 5 }",
+        "{ type: integer, enum: [1, 2] }",
+        "{ type: integer, nullable: true, enum: [null, 1] }",
+        "{ type: string, pattern: '^[a-z]+$' }",
+    ] {
+        let key = format!("k: {schema}");
+        for body in [
+            properties_in_order(&key, nested),
+            properties_in_order(nested, &key),
+        ] {
+            Document::load(&holding(&body, PLAIN, ""), &[])
+                .unwrap_or_else(|error| panic!("{body}: {error:?}"));
+        }
+    }
+}
+
+/// The `Plain` schema, and the parameter and the response that the documents
+/// below refer to.
+const REFERRED_TO: &str = "components:\n  schemas:\n    Plain: { type: string }\n  parameters:\n    \
+     N: { name: n, in: query, schema: { type: string } }\n  responses:\n    R: { description: OK }\n";
+
+/// A `$ref` with a `pattern` or a `properties` map beside it.
+const REF_WITH_PATTERN: &str = "{ $ref: '#/components/schemas/Plain', pattern: '^\\p{L}+$' }";
+
+/// A read with one parameter and the answer it gives, and the components that
+/// the `$ref`s of the case name.
+fn reading(parameter: &str, answer: &str) -> String {
+    document(&format!(
+        "  /entries:\n    get:\n      operationId: listEntries\n      parameters:\n        - {parameter}\n      \
+         responses:\n        \"200\":\n          {answer}\n{REFERRED_TO}"
+    ))
+}
+
+/// The six places in which a `pattern` stands beside a `$ref`, each with a
+/// `^\p{L}+$` that the model never reads: it keeps a node that holds a string
+/// `$ref` as the reference alone, as OpenAPI 3.0.3 says of the Reference Object.
+fn beside_a_ref() -> Vec<(&'static str, String)> {
+    let plain_parameter = "{ name: n, in: query, schema: { type: string } }";
+    let plain_answer = "description: OK";
+    let holder = format!(
+        "components:\n  schemas:\n    Plain: {{ type: string }}\n    Holder:\n      type: object\n      \
+         properties:\n        s: {REF_WITH_PATTERN}\n"
+    );
+    vec![
+        ("a component property", holding(PLAIN, PLAIN, &holder)),
+        (
+            "a response schema",
+            holding(PLAIN, REF_WITH_PATTERN, REFERRED_TO),
+        ),
+        (
+            "the schema of a query parameter",
+            reading(
+                &format!("{{ name: n, in: query, schema: {REF_WITH_PATTERN} }}"),
+                plain_answer,
+            ),
+        ),
+        (
+            "a reference with properties beside it",
+            holding(
+                PLAIN,
+                &format!("{{ $ref: '#/components/schemas/Plain', properties: {{ s: {NAME} }} }}"),
+                REFERRED_TO,
+            ),
+        ),
+        (
+            "a parameter that is a reference",
+            reading(
+                &format!("{{ $ref: '#/components/parameters/N', schema: {NAME} }}"),
+                plain_answer,
+            ),
+        ),
+        (
+            "a response that is a reference",
+            reading(
+                plain_parameter,
+                &format!(
+                    "$ref: '#/components/responses/R'\n          content: {{ application/json: {{ schema: {NAME} }} }}"
+                ),
+            ),
+        ),
+    ]
+}
+
+#[test]
+fn a_pattern_beside_a_ref_is_no_schema_of_the_document() {
+    for (place, document) in beside_a_ref() {
+        Document::load(&document, &[]).unwrap_or_else(|error| panic!("{place}: {error:?}"));
+    }
+}
+
+/// The flag of a parameter that is a `$ref` is read from the parameter it names,
+/// and the `pattern` beside the reference is no part of it.
+#[test]
+fn a_parameter_that_is_a_ref_takes_the_rules_of_the_parameter_it_names() {
+    let document = reading(
+        &format!("{{ $ref: '#/components/parameters/N', schema: {NAME} }}"),
+        "description: OK",
+    );
+    let doc = Document::load(&document, &[]).expect("the document loads");
+    let op = doc.get("listEntries").expect("the operation");
+    Invocation::new(op, Values::new().param("n", "p{L}")).expect("the parameter is plain text");
 }
 
 /// A pattern that means the same with and without the flag is carried wherever a

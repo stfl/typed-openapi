@@ -133,18 +133,20 @@ pub enum ScalarError {
     /// What a rule the document states says is not so, in the document's own
     /// number: a value of the right kind that breaks the rule, a list that breaks
     /// the rules of its array, or a rule that has no meaning, such as a `pattern`
-    /// that cannot be run as the vendor means it. `rule` finishes the sentence and
-    /// carries the document's own number, which is the only part a user can act
+    /// that cannot be run as the vendor means it or an `enum` that lists no value
+    /// a flag can send. `rule` finishes the sentence and carries the document's
+    /// own number where the rule has one, which is the only part a user can act
     /// on; nothing branches on which keyword it came from.
     #[error("`{raw}` {rule}")]
     Rule {
         /// What the sentence is about. The argument as the operator typed it, for
         /// a value; the values given for a list parameter, joined with `, `; the
-        /// `pattern` or the `multipleOf` step as the document spells it, for a
-        /// rule that cannot be run.
+        /// `pattern` or the `multipleOf` step as the document spells it, or the
+        /// `null` that an `enum` lists alone, for a rule that cannot be run.
         raw: String,
-        /// The rest of the sentence: what `raw` is not, or what it holds, with the
-        /// document's own number in it.
+        /// The rest of the sentence: what `raw` is not, what it holds, or what it
+        /// is all of (the one value an `enum` lists), with the document's own
+        /// number in it where the rule has one.
         rule: String,
     },
     /// A `pattern` the engine cannot read. Every value is refused, because a
@@ -472,8 +474,8 @@ fn a_match_for(pattern: &str) -> String {
 }
 
 /// Refuse a `pattern` that means one thing with the Unicode flag and another
-/// without it, naming the escape. The reduction asks it of every `pattern` that
-/// becomes a flag, and `patterns` asks it of every schema the document states.
+/// without it, naming the escape. The reduction asks it of every `pattern` that a
+/// flag carries, and `patterns` asks it of every schema the model reads.
 pub(crate) fn unflagged(pattern: &str) -> Result<(), ScalarError> {
     match flagged_escape(pattern) {
         Some(escape) => Err(ScalarError::rule(

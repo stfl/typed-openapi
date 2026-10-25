@@ -141,6 +141,12 @@ listVouchers: `since` states a rule that cannot run
   caused by: `[unterminated` is not a regular expression: Unbalanced bracket
 ```
 
+A rule that cannot run refuses the document wherever its value stands: a
+parameter, the items of a list, and every property of a body. A body goes whole
+through `--json-body` at its first nested property and has no flag per property,
+and a property listed after the nested one is read for its rules all the same, so
+the verdict does not depend on the order of the properties.
+
 **A `pattern` with `\p{`, `\P{` or `\u{` is refused the same way.** Without the
 Unicode flag `\p{L}` is the text `p{L}` and `\u{41}` is the letter `u` forty-one
 times, and with it they are a property and a code point. The command line and the
@@ -160,9 +166,11 @@ listPeople: `surname` states a rule that cannot run
 A flag is one place out of many, because the generated types are made of every
 named schema, of an inline body and of an inline response, and each of them runs
 its `pattern` without the flag too. So the refusal reads every schema that the
-object model reads, and a schema that no flag is made of is refused as
-`LoadError::UnrunnablePattern`. It names the operation where the schema stands in
-one that has an id, and the schema as an Overlay names a target:
+object model reads, and a schema whose flag does not carry the `pattern` is
+refused as `LoadError::UnrunnablePattern`. It names the operation where the
+schema stands in one, and the schema as an Overlay names a target. A component
+that operations reach names none, because one schema serves many operations and
+the Overlay line is made at the component:
 
 ```
 getPerson: `$.paths['/people/{id}'].get.responses['200'].content['application/json'].schema.properties.surname` states a rule that cannot run
@@ -171,7 +179,9 @@ getPerson: `$.paths['/people/{id}'].get.responses['200'].content['application/js
 
 That reaches the schema of an error response and of a callback, which no type is
 made of; the `pattern` there is the same disagreement, and the Overlay line that
-repairs it is the one the others need.
+repairs it is the one the others need. A schema that stands beside a `$ref` is not
+read: the object model keeps the reference alone, as OpenAPI 3.0.3 says of the
+Reference Object, so a `pattern` there is no part of the document.
 
 ## Where each rule runs
 
@@ -201,7 +211,11 @@ rule `Scalar` carries. The generated type runs fewer, as typify 0.8 writes it:
   an `f64`. A typed call, and `client::fits` over a whole body, accept what the
   flag refuses, and the server is the one that refuses it.
 - **No road runs** `minItems`, `maxItems` and `uniqueItems` of an array in a
-  body: typify writes a `Vec`, and `Items` is read for parameters only.
+  body: typify writes a `Vec`, and `Items` is read for parameters only. The one
+  exception is an array whose `minItems` and `maxItems` are equal and more than
+  0, with a `uniqueItems` that is not true: typify writes a fixed-size array
+  (`minItems: 2, maxItems: 2` is `[String; 2]`), a typed call cannot hold another
+  count, and `client::fits` refuses a body list of another count as a `Mismatch`.
 
 The roads part where a field's reading lives in a Rust type rather than in the
 schema. **An integer format is one such place.** `format: int32` is a name and not

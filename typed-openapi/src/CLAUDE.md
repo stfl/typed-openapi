@@ -105,14 +105,23 @@ keys are extensions.
 
 A route is one that 3.0.3 defines or one that only the schema walk enters
 (`Reach::Defined` and `Reach::Whole`), and each has one place in the table. A
-map added for a route that 3.0.3 defines is added for both walks. The schema
-walk also enters the rest, because `required::check` judges a schema by what it
-holds and not by where it stands: wherever it can tell that a name is declared
-nowhere it refuses the phantom, although typify writes no type there (F-81), and
-the refusal names an Overlay. A marker is judged by where it stands, so the scan
-stops at what the model reads. A route that the table gains for the schema walk
-alone gets a row in `tests/required.rs` and one in the marker test of the keys
-that 3.0.3 does not define.
+map added for a route that 3.0.3 defines is added for all three walks. The
+schema walk also enters the rest, because `required::check` judges a schema by
+what it holds and not by where it stands: wherever it can tell that a name is
+declared nowhere it refuses the phantom, although typify writes no type there
+(F-81), and the refusal names an Overlay. A marker is judged by where it stands,
+so the scan stops at what the model reads. So does the walk of `src/patterns.rs`,
+because a generated type is made of nothing that the model drops. A route that
+the table gains for the schema walk alone gets a row in `tests/required.rs` and
+one in the marker test of the keys that 3.0.3 does not define.
+
+An object that holds a string `$ref` is, to the model, the reference alone, and
+OpenAPI 3.0.3 says of the Reference Object that "any properties added SHALL be
+ignored". `Kind::is_read_as_reference` answers it for the kinds the model reads
+as a `ReferenceOr`, and the walk of `src/patterns.rs` judges nothing in such an
+object and enters none of its other keys. A `pattern` beside a `$ref` is not a
+`pattern` of the document, and refusing it would refuse a document for data that
+nobody reads.
 
 A list of what is entered fails toward a marker missed, which the docs accept. A
 list of what is not entered fails toward a document wrongly refused at each
@@ -167,8 +176,11 @@ parameter given at least once, after every value has met the rules of `items`,
 so the command line and the typed call are refused alike
 (`ValueError::BadList`). `uniqueItems` compares what the items' rule reads, so
 `1` and `01` are one integer. `Items` is read for parameters only. A list rule
-that a body's array states is checked by no road: typify 0.8 enforces neither
-`minItems` nor `maxItems` and writes a `Vec`, and `docs/validation.md` says so.
+that a body's array states is checked by no road, bar one case. typify 0.8
+enforces neither `minItems` nor `maxItems` and writes a `Vec`, except for an
+array whose two are equal and more than 0 and whose `uniqueItems` is not true:
+that is a fixed-size array `[T; N]`, which both roads hold (`tests/shapes.rs`).
+`docs/validation.md` says so.
 
 `pattern` runs on `regress`, the engine typify puts inside a generated newtype's
 `FromStr`, so a value the command line accepts is a value the generated type
@@ -235,18 +247,29 @@ not one. Compiling both sides with the flag is the alternative that is out of
 scope, because it is a change to typify.
 
 The escape rule is asked of every schema the model reads, and not only of the
-values that become flags, because the generated types are made of the named
+`pattern` that a flag carries, because the generated types are made of the named
 schemas, the inline body and the inline response, and each of them runs its
 `pattern` without the flag. `src/patterns.rs` walks the overlaid document by the
 table of `src/shape.rs` at `Reach::Defined`, after the reduction, so that a
-value that becomes a flag keeps the refusal that names its parameter and every
-other schema is `LoadError::UnrunnablePattern`, which names the operation where
-the schema stands in one and the schema as an Overlay names a target. It reaches
-a few schemas that no type is made of, such as an error response's. Both ask
-`scalar::unflagged`, so the rule is written once. A rule of this kind that is
-added for a value is added for every schema, or a document that loads depends on
-which property comes first (`json_body` sends the whole body through
-`--json-body` at the first property that is not a scalar).
+`pattern` which a flag carries keeps the refusal that names its parameter and
+every other schema is `LoadError::UnrunnablePattern`: a place whose flag does
+not carry the `pattern`, because it has no flag or because the flag keeps the
+`enum` and drops the `pattern`. It names the operation where the schema stands in
+one and the schema as an Overlay names a target. A component that operations
+reach names none, because one schema serves many and the repair is made at the
+component. The walk reaches a few schemas that no type is made of, such as an
+error response's. Both ask `scalar::unflagged`, so the rule is written once.
+
+`runnable_scalar` in `src/model/reduce.rs` is where the rules of a value are
+asked, `Scalar::runnable` and the `enum` of `null` alone among them, and it is
+asked of every value that reads as a scalar: a parameter, the items of a list and
+each property of a body. `json_body` sends the whole body through `--json-body`
+at the first property that is not a scalar, so it reads every property
+(`properties_of`) before it decides whether the body is flat. A rule asked only
+of the properties listed before the nested one would make a document that loads
+depend on which property comes first. A rule of this kind that is added for a
+value is added in `runnable_scalar`, which the three places share, and a rule of
+every schema is added to the walk.
 
 **A document is read as the version it says, or refused by name.**
 `Document::load_with` asks the vendor's `openapi` right after it reads the
