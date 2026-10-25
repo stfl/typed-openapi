@@ -20,7 +20,7 @@ use thiserror::Error;
 
 use crate::body_reader::{Read, Step, read};
 use crate::model::{Document, DocumentError, DriftError, Operation};
-use crate::request::{Invocation, ValueError};
+use crate::request::{Invocation, RequestError, ValueError};
 use crate::transport::{AsyncClient, HttpRequest, HttpResponse, SyncClient};
 use crate::values::Values;
 
@@ -53,11 +53,11 @@ pub enum Error {
     /// parameter, or says the body is the problem.
     #[error(transparent)]
     Values(#[from] ValueError),
-    /// The values satisfied the operation and the `http` crate refused the
-    /// request they render to: a base URI, a header name or a header value it
-    /// cannot carry.
-    #[error("cannot build the request")]
-    Request(#[from] http::Error),
+    /// The values satisfied the operation and the request they render to could
+    /// not be built: the base URL holds userinfo or a query, or the `http` crate
+    /// refused what the document names, such as a header name.
+    #[error(transparent)]
+    Request(#[from] RequestError),
     /// A typed argument that does not serialise to JSON, so there is no body to
     /// send. The cause is `serde_json`'s reading of the value.
     #[error("cannot serialise the request body")]

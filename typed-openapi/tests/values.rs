@@ -1,0 +1,1059 @@
+//! A value the operator types is refused before a request exists, and is never
+//! sent changed.
+//!
+//! The command line and the typed call refuse the same values, because both
+//! reach them in `Invocation::new`, and the number that was checked is the number
+//! that goes on the wire. Each case is the input of a probe of SEV-249 (`A2/wire`
+//! and `A3b/scalars`) or of a review of the slice. A case that refuses a value
+//! asserts the variant beside the words, and the words never print the value that
+//! was refused where it may be a credential.
+
+#![expect(
+    clippy::expect_used,
+    reason = "a test that cannot build its fixture should fail loudly and name it"
+)]
+
+use std::error::Error as _;
+
+use clap::error::ErrorKind;
+use clap::{Arg, ArgMatches, Command, value_parser};
+use http::Uri;
+use typed_openapi::client::{Client, Error as ClientError};
+use typed_openapi::scalar::ScalarError;
+use typed_openapi::tree::{self, ArgError, Asked, DispatchError};
+use typed_openapi::{
+    Answers, BaseUrlError, Document, Invocation, LoadError, NoContent, Plan, PlanError, Recorder,
+    RequestError, ValueError, Values, render,
+};
+
+/// A document with one server and whatever the case puts under `paths`.
+fn document(url: &str, paths: &str) -> String {
+    format!(
+        "openapi: 3.0.3\n\
+         info: {{ title: t, version: \"1\" }}\n\
+         servers: [{{ url: '{url}' }}]\n\
+         paths:\n{paths}"
+    )
+}
+
+const SERVER: &str = "http://api.example.test/base/";
+
+/// `main.yaml` and `hlist.yaml` of `A2/wire`, and `numbody.yaml` with a number in
+/// the query as well: a free-text path parameter on a read and on a write, a
+/// header and a header list, a query list, and every kind of number.
+const PATHS: &str = "  /things/{name}:
+    get:
+      operationId: getThing
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: n, in: query, schema: { type: integer } }
+        - { name: sum, in: query, schema: { type: number } }
+        - { name: X-Trace, in: header, schema: { type: string } }
+        - { name: X-Count, in: header, schema: { type: integer } }
+        - { name: X-Tags, in: header, schema: { type: array, items: { type: string } } }
+        - { name: tags, in: query, explode: false, schema: { type: array, items: { type: string } } }
+        - { name: sort, in: query, schema: { type: string, enum: ['-name', 'name'] } }
+      responses: { \"200\": { description: ok } }
+    delete:
+      operationId: deleteThing
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses: { \"204\": { description: ok } }
+  /items/{id}:
+    get:
+      operationId: getItem
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses: { \"200\": { description: ok } }
+  /lists/{ids}:
+    get:
+      operationId: getLists
+      parameters:
+        - { name: ids, in: path, required: true, schema: { type: array, items: { type: string } } }
+      responses: { \"200\": { description: ok } }
+  /n:
+    post:
+      operationId: num
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sum: { type: number }
+                n: { type: integer }
+                flag: { type: boolean }
+                s: { type: string }
+      responses: { \"200\": { description: ok } }
+";
+
+fn doc() -> Document {
+    Document::load(&document(SERVER, PATHS), &[]).expect("the document loads")
+}
+
+/// The refusal of an invocation, from values the caller built.
+fn refused(doc: &Document, id: &str, values: Values) -> ValueError {
+    let op = doc.get(id).expect("the operation");
+    Invocation::new(op, values).expect_err("the values are refused")
+}
+
+/// The URI of the request that `values` make of `id`.
+fn uri(doc: &Document, id: &str, values: Values) -> String {
+    let op = doc.get(id).expect("the operation");
+    Invocation::new(op, values)
+        .expect("the values satisfy the operation")
+        .request(doc.base())
+        .expect("a request")
+        .uri()
+        .to_string()
+}
+
+fn root(doc: &Document) -> Command {
+    Command::new("p")
+        .subcommand_required(true)
+        .subcommands(tree::commands(doc))
+}
+
+/// What clap makes of an operator's command line.
+fn line(doc: &Document, args: &[&str]) -> Result<ArgMatches, clap::Error> {
+    root(doc).try_get_matches_from(std::iter::once("p").chain(args.iter().copied()))
+}
+
+/// Everything an operator's command line goes through before a request is sent:
+/// clap, the reading of the flags, `Invocation::new` and the gate.
+fn planned(doc: &Document, args: &[&str]) -> Result<Plan, DispatchError> {
+    let matches = line(doc, args).expect("clap accepts the line");
+    match tree::select(doc, &matches)? {
+        Asked::Run(selection) => selection.plan(doc.base()),
+        Asked::Template(_) => panic!("this command line runs the operation"),
+    }
+}
+
+/// The request an operator's command line makes.
+fn sent(doc: &Document, args: &[&str]) -> http::Request<Vec<u8>> {
+    planned(doc, args)
+        .expect("the command line is accepted")
+        .request()
+        .clone()
+}
+
+/// Why an operator's command line made no request.
+fn stopped(doc: &Document, args: &[&str]) -> DispatchError {
+    planned(doc, args).expect_err("the command line is refused")
+}
+
+/// Every message down the chain of `error`, from the head.
+fn chain(error: &dyn std::error::Error) -> String {
+    std::iter::successors(Some(error), |cause| (*cause).source())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// ------------------------------------------------------------------- F-5
+
+/// `A2/wire` `things get --name '..'` is the input. Unrefused, it builds
+/// `GET /base/things/..`, which a server or a proxy reads as `/base/`.
+#[test]
+fn a_path_value_that_is_no_segment_is_refused_and_names_the_parameter() {
+    let doc = doc();
+    for id in ["getThing", "deleteThing"] {
+        for value in ["", ".", ".."] {
+            let error = refused(&doc, id, Values::new().param("name", value));
+            assert!(
+                matches!(&error, ValueError::PathSegment { op, name, value: given }
+                    if op == id && name == "name" && given == value),
+                "{id} `{value}`: {error:?}"
+            );
+        }
+    }
+    for (value, shown) in [("..", "`..`"), (".", "`.`"), ("", "empty")] {
+        assert_eq!(
+            refused(&doc, "deleteThing", Values::new().param("name", value)).to_string(),
+            format!(
+                "deleteThing: `name` is {shown}, which cannot be a path segment: a server reads it \
+                 as a step along the path and not as a name, so the request would reach another \
+                 resource"
+            )
+        );
+    }
+}
+
+/// The command line reaches `Invocation::new` and is refused by it, so a dry run
+/// is as much a refusal as a confirmed run, and nothing is sent.
+#[test]
+fn the_command_line_refuses_the_same_path_values() {
+    let doc = doc();
+    for value in ["..", ".", ""] {
+        let error = stopped(&doc, &["things", "delete", "--name", value, "--commit"]);
+        assert!(
+            matches!(&error, DispatchError::Plan(PlanError::Value(
+                ValueError::PathSegment { op, name, value: given }
+            )) if op == "deleteThing" && name == "name" && given == value),
+            "`{value}`: {error:?}"
+        );
+        assert!(
+            error.to_string().starts_with("deleteThing: `name` is "),
+            "`{value}`: {error}"
+        );
+    }
+    let matches = line(&doc, &["things", "delete", "--name", "..", "--commit"])
+        .expect("clap accepts the line");
+    let client = Recorder::new();
+    let Asked::Run(selection) = tree::select(&doc, &matches).expect("an operation") else {
+        panic!("this command line runs the operation");
+    };
+    assert!(selection.send(&client, doc.base()).is_err());
+    assert!(client.take().is_empty(), "nothing reached the transport");
+}
+
+#[test]
+fn a_value_that_only_looks_like_a_dot_segment_is_a_value() {
+    let doc = doc();
+    for (value, path) in [
+        ("...", "/base/things/..."),
+        (".a", "/base/things/.a"),
+        ("a.", "/base/things/a."),
+        ("..a", "/base/things/..a"),
+        ("a/..", "/base/things/a%2F.."),
+        ("%2e%2e", "/base/things/%252e%252e"),
+        (" ", "/base/things/%20"),
+    ] {
+        let sent = uri(&doc, "getThing", Values::new().param("name", value));
+        assert_eq!(sent, format!("http://api.example.test{path}"), "`{value}`");
+    }
+}
+
+/// The segment is what a list makes of its items, joined by commas, so one item
+/// of two is not a segment of its own.
+#[test]
+fn a_list_is_judged_as_the_segment_it_makes() {
+    let doc = doc();
+    let error = refused(&doc, "getLists", Values::new().each("ids", [".."]));
+    assert!(
+        matches!(&error, ValueError::PathSegment { op, name, value }
+            if op == "getLists" && name == "ids" && value == ".."),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("`ids` is `..`"), "{error}");
+    assert_eq!(
+        uri(&doc, "getLists", Values::new().each("ids", ["..", "a"])),
+        "http://api.example.test/base/lists/..,a"
+    );
+    assert_eq!(
+        uri(&doc, "getLists", Values::new().each("ids", [".", "."])),
+        "http://api.example.test/base/lists/.,."
+    );
+}
+
+// ------------------------------------------------------------------ F-28
+
+/// `A2/wire` `things get --name a --x-trace "v<CR><LF>Injected: 1"` is the input.
+/// The `http` crate refuses it late, as "failed to parse header value" with no
+/// name, so `Invocation::new` refuses it by name, before a request exists.
+#[test]
+fn a_header_value_the_http_crate_refuses_is_refused_by_name() {
+    let doc = doc();
+    for value in [
+        "v\r\nInjected: 1",
+        "v\nx",
+        "v\rx",
+        "\0",
+        "a\u{7f}b",
+        "\u{1}",
+    ] {
+        let error = refused(
+            &doc,
+            "getThing",
+            Values::new().param("name", "a").param("X-Trace", value),
+        );
+        assert!(
+            matches!(&error, ValueError::HeaderValue { op, name }
+                if op == "getThing" && name == "X-Trace"),
+            "{value:?}: {error:?}"
+        );
+        assert!(!error.to_string().contains("Injected"), "{error}");
+    }
+    let error = refused(
+        &doc,
+        "getThing",
+        Values::new()
+            .param("name", "a")
+            .param("X-Trace", "v\r\nInjected: 1"),
+    );
+    assert_eq!(
+        error.to_string(),
+        "getThing: `X-Trace` was given a value that no header can carry: a header value holds \
+         no control character but a tab"
+    );
+}
+
+#[test]
+fn the_command_line_refuses_the_header_value_before_a_request_exists() {
+    let doc = doc();
+    let error = stopped(
+        &doc,
+        &[
+            "things",
+            "get",
+            "--name",
+            "a",
+            "--x-trace",
+            "v\r\nInjected: 1",
+        ],
+    );
+    assert!(
+        matches!(&error, DispatchError::Plan(PlanError::Value(
+            ValueError::HeaderValue { op, name }
+        )) if op == "getThing" && name == "X-Trace"),
+        "{error:?}"
+    );
+    let shown = error.to_string();
+    assert!(
+        shown.starts_with("getThing: `X-Trace` was given a value"),
+        "{shown}"
+    );
+    assert!(!shown.contains("Injected"), "{shown}");
+}
+
+/// The refusal is `HeaderValue`'s, so what it accepts is what it accepts: a tab,
+/// text past ASCII, and a comma in a header that is not a list.
+#[test]
+fn a_header_value_the_http_crate_accepts_is_sent() {
+    let doc = doc();
+    let op = doc.get("getThing").expect("the operation");
+    for value in ["a\tb", "Grüß", "a, b", "", "x=y; z"] {
+        let request = Invocation::new(op, Values::new().param("name", "a").param("X-Trace", value))
+            .expect("a value the http crate accepts")
+            .request(doc.base())
+            .expect("a request");
+        assert_eq!(
+            request.headers()["x-trace"].as_bytes(),
+            value.as_bytes(),
+            "{value:?}"
+        );
+    }
+}
+
+/// `A2/wire` `h list --x-tags 'a,b' --x-tags c` is the input. Sent as
+/// `x-tags: a,b,c`, a receiver reads three items where the caller gave two. A
+/// query list encodes the comma, so there it is a character of the item.
+#[test]
+fn a_comma_inside_one_item_of_a_header_list_is_refused() {
+    let doc = doc();
+    let error = refused(
+        &doc,
+        "getThing",
+        Values::new()
+            .param("name", "a")
+            .each("X-Tags", ["a,b", "c"]),
+    );
+    assert!(
+        matches!(&error, ValueError::HeaderItemComma { op, name }
+            if op == "getThing" && name == "X-Tags"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "getThing: `X-Tags` was given an item with a comma in it, and a header list is split \
+         at its commas"
+    );
+    let error = stopped(
+        &doc,
+        &[
+            "things", "get", "--name", "a", "--x-tags", "a,b", "--x-tags", "c",
+        ],
+    );
+    assert!(
+        matches!(&error, DispatchError::Plan(PlanError::Value(
+            ValueError::HeaderItemComma { name, .. }
+        )) if name == "X-Tags"),
+        "{error:?}"
+    );
+
+    let request = sent(
+        &doc,
+        &[
+            "things", "get", "--name", "a", "--x-tags", "a", "--x-tags", "b", "--tags", "a,b",
+            "--tags", "c",
+        ],
+    );
+    assert_eq!(request.headers()["x-tags"], "a,b");
+    assert_eq!(request.uri().query(), Some("tags=a%2Cb,c"));
+}
+
+#[test]
+fn a_comma_in_a_header_that_is_not_a_list_is_a_character_of_the_value() {
+    let doc = doc();
+    let request = sent(&doc, &["things", "get", "--name", "a", "--x-trace", "a,b"]);
+    assert_eq!(request.headers()["x-trace"], "a,b");
+}
+
+/// `A2/wire` `badheader list --x-bad v` is the input. A name that no request
+/// could carry refuses the document, and the `http` crate does not have to refuse
+/// every request that is built from it.
+#[test]
+fn a_header_parameter_that_is_no_header_name_is_refused_at_load() {
+    let bad = "  /bad:
+    get:
+      operationId: badHeader
+      parameters:
+        - { name: 'X Bad', in: header, schema: { type: string } }
+      responses: { \"200\": { description: ok } }
+";
+    let error = Document::load(&document(SERVER, bad), &[]).expect_err("the document is refused");
+    assert!(
+        matches!(&error, LoadError::HeaderName { op, name }
+            if op == "badHeader" && name == "X Bad"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "badHeader: the header parameter `X Bad` is not a header name; correct or remove it in \
+         an Overlay"
+    );
+
+    // The words are true: each repair loads the document.
+    let overlay = |action: &str| {
+        format!(
+            "overlay: 1.1.0\ninfo: {{ title: t, version: \"1\" }}\nactions:\n  - target: \
+             \"$.paths['/bad'].get.parameters[0]\"\n    {action}\n"
+        )
+    };
+    for action in ["remove: true", "update: { name: X-Bad }"] {
+        Document::load(&document(SERVER, bad), &[&overlay(action)])
+            .unwrap_or_else(|error| panic!("`{action}` leaves a document that loads: {error}"));
+    }
+
+    // Only a header has a header name.
+    for place in ["query", "path"] {
+        let elsewhere = bad
+            .replace("in: header", &format!("in: {place}"))
+            .replace("/bad:", "/bad/{x}:")
+            .replace(
+                "{ name: 'X Bad'",
+                "{ name: 'x', required: true }, { name: 'X Bad'",
+            );
+        let loaded = Document::load(&document(SERVER, &elsewhere), &[]);
+        assert!(
+            !matches!(loaded, Err(LoadError::HeaderName { .. })),
+            "`in: {place}`: {loaded:?}"
+        );
+    }
+}
+
+// ------------------------------------------------------------ F-31, F-76
+
+fn base(text: &str) -> Uri {
+    text.parse().expect("a URI")
+}
+
+/// `A2/wire` `toy --base-url 'http://alice:s3cret@127.0.0.1:18473/' raw vouchers
+/// render --id 5` is the input. Unrefused, a dry run prints
+/// `host: alice:s3cret@127.0.0.1:18473` and a confirmed run sends the credential
+/// as a `Basic` header.
+#[test]
+fn a_base_url_with_userinfo_is_refused_and_the_refusal_does_not_print_it() {
+    let doc = doc();
+    let op = doc.get("getThing").expect("the operation");
+    let invocation = Invocation::new(op, Values::new().param("name", "a")).expect("values");
+
+    let error = invocation
+        .request(&base("http://alice:s3cret@127.0.0.1:18473/"))
+        .expect_err("userinfo is refused");
+
+    assert!(
+        matches!(&error, RequestError::Base(BaseUrlError::Userinfo)),
+        "{error:?}"
+    );
+    let shown = chain(&error);
+    assert!(shown.contains("userinfo"), "{shown}");
+    assert!(
+        !shown.contains("alice") && !shown.contains("s3cret"),
+        "{shown}"
+    );
+    // The empty user and the empty password are userinfo too.
+    for text in ["http://@host/", "http://:@host/", "http://u@host/"] {
+        assert!(
+            matches!(
+                invocation.request(&base(text)),
+                Err(RequestError::Base(BaseUrlError::Userinfo))
+            ),
+            "{text}"
+        );
+    }
+}
+
+/// `A2/wire` `toy --base-url 'http://127.0.0.1:18471/api?key=secret' raw vouchers
+/// list --type ''` is the input. Unrefused, the listener receives
+/// `GET /api/vouchers?type=`, and the query is gone.
+#[test]
+fn a_base_url_with_a_query_is_refused_and_the_refusal_does_not_print_it() {
+    let doc = doc();
+    let op = doc.get("getThing").expect("the operation");
+    let invocation = Invocation::new(op, Values::new().param("name", "a")).expect("values");
+
+    for text in [
+        "http://127.0.0.1:18471/api?key=secret",
+        "http://127.0.0.1:18471/api?",
+        "http://127.0.0.1:18471?key=secret",
+    ] {
+        let error = invocation
+            .request(&base(text))
+            .expect_err("a query is refused");
+        assert!(
+            matches!(&error, RequestError::Base(BaseUrlError::Query)),
+            "{text}: {error:?}"
+        );
+        let shown = chain(&error);
+        assert!(shown.contains("query"), "{shown}");
+        assert!(
+            !shown.contains("key") && !shown.contains("secret"),
+            "{shown}"
+        );
+    }
+    assert_eq!(
+        invocation
+            .request(&base("http://127.0.0.1:18471/api/"))
+            .expect("a base with a path")
+            .uri()
+            .to_string(),
+        "http://127.0.0.1:18471/api/things/a"
+    );
+}
+
+/// Every road a base URL takes to a request ends in the same refusal: the
+/// gate's, a typed call's and the command line's.
+#[test]
+fn every_road_refuses_the_base_the_caller_names() {
+    let doc = doc();
+    let op = doc.get("deleteThing").expect("the operation");
+    let secret = base("http://alice:s3cret@127.0.0.1:18473/");
+
+    let built = Plan::build(
+        op,
+        &secret,
+        Values::new().param("name", "a"),
+        &Answers::new(),
+    )
+    .expect_err("a dry run builds no request either");
+    assert!(
+        matches!(
+            &built,
+            PlanError::Request(RequestError::Base(BaseUrlError::Userinfo))
+        ),
+        "{built:?}"
+    );
+
+    let matches = line(&doc, &["things", "delete", "--name", "a"]).expect("clap accepts the line");
+    let Asked::Run(selection) = tree::select(&doc, &matches).expect("an operation") else {
+        panic!("this command line runs the operation");
+    };
+    let planned = selection.plan(&secret).expect_err("refused");
+    assert!(
+        matches!(
+            &planned,
+            DispatchError::Plan(PlanError::Request(RequestError::Base(
+                BaseUrlError::Userinfo
+            )))
+        ),
+        "{planned:?}"
+    );
+
+    let client = Client::over(doc.clone())
+        .expect("a client")
+        .with_base(secret);
+    let call = client
+        .call::<NoContent>(op, Values::new().param("name", "a"))
+        .expect("the values are fine");
+    let typed = call.request().expect_err("refused");
+    assert!(
+        matches!(
+            &typed,
+            ClientError::Request(RequestError::Base(BaseUrlError::Userinfo))
+        ),
+        "{typed:?}"
+    );
+    for error in [&built as &dyn std::error::Error, &planned, &typed] {
+        let shown = chain(error);
+        assert!(
+            !shown.contains("alice") && !shown.contains("s3cret"),
+            "{shown}"
+        );
+    }
+}
+
+/// A request that someone else built, or a `Plan` an adopter made by hand, still
+/// shows no credential: the host line is the host.
+#[test]
+fn a_dry_run_never_prints_userinfo() {
+    let request = http::Request::builder()
+        .method("DELETE")
+        .uri("http://alice:s3cret@127.0.0.1:18473/base/things/a")
+        .body(Vec::new())
+        .expect("a request");
+
+    let shown = render(&request);
+
+    assert_eq!(
+        shown,
+        "DELETE /base/things/a HTTP/1.1\nhost: 127.0.0.1:18473\n"
+    );
+    let v6 = http::Request::builder()
+        .uri("http://u:p@[::1]:8080/x")
+        .body(Vec::new())
+        .expect("a request");
+    assert_eq!(render(&v6), "GET /x HTTP/1.1\nhost: [::1]:8080\n");
+    let plain = http::Request::builder()
+        .uri("http://127.0.0.1:18473/x")
+        .body(Vec::new())
+        .expect("a request");
+    assert_eq!(render(&plain), "GET /x HTTP/1.1\nhost: 127.0.0.1:18473\n");
+}
+
+/// A document with a `servers` entry the caller could not have sent to without a
+/// credential or a query in it is a document refused, whichever of the three it
+/// holds, and whichever part of the URL is a variable.
+#[test]
+fn a_server_with_userinfo_a_query_or_a_fragment_is_refused_at_load() {
+    for (url, part) in [
+        (
+            "http://alice:s3cret@127.0.0.1:18473/api",
+            BaseUrlError::Userinfo,
+        ),
+        ("http://127.0.0.1:18471/api?key=secret", BaseUrlError::Query),
+        ("http://127.0.0.1:18471/api?", BaseUrlError::Query),
+        ("http://127.0.0.1:18471/api#secret", BaseUrlError::Fragment),
+        ("http://127.0.0.1:18471/api#", BaseUrlError::Fragment),
+        // The credential that is worst to print comes first.
+        (
+            "http://alice:s3cret@host/api?key=secret#top",
+            BaseUrlError::Userinfo,
+        ),
+        ("http://host/api?key=secret#top", BaseUrlError::Query),
+    ] {
+        let error = Document::load(&document(url, PATHS), &[]).expect_err(url);
+        assert!(
+            matches!(&error, LoadError::ServerBase { source } if *source == part),
+            "{url}: {error:?}"
+        );
+        let shown = chain(&error);
+        for secret in ["alice", "s3cret", "key=", "secret", "#top", "127.0.0.1"] {
+            assert!(!shown.contains(secret), "{url}: `{secret}` in {shown}");
+        }
+    }
+}
+
+#[test]
+fn a_server_variable_that_makes_the_url_carry_one_is_refused_too() {
+    let with_variable = "openapi: 3.0.3
+info: { title: t, version: \"1\" }
+servers:
+  - url: 'http://{credentials}host/api'
+    variables:
+      credentials: { default: 'alice:s3cret@' }
+paths: {}
+";
+    let error = Document::load(with_variable, &[]).expect_err("the filled URL holds userinfo");
+    assert!(
+        matches!(
+            &error,
+            LoadError::ServerBase {
+                source: BaseUrlError::Userinfo
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(!chain(&error).contains("s3cret"), "{}", chain(&error));
+}
+
+#[test]
+fn the_words_of_a_server_refusal_name_the_overlay_and_the_repair_loads() {
+    let url = "http://alice:s3cret@127.0.0.1:18473/api";
+    let error = Document::load(&document(url, PATHS), &[]).expect_err("refused");
+    assert!(
+        matches!(
+            &error,
+            LoadError::ServerBase {
+                source: BaseUrlError::Userinfo
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "`servers[0].url` cannot be the base URL of a request; correct it in an Overlay"
+    );
+    assert_eq!(
+        error.source().map(ToString::to_string).as_deref(),
+        Some(
+            "the base URL holds userinfo (`user:password@`), which a request would send as a \
+             credential and a dry run would print"
+        )
+    );
+
+    let overlay = "overlay: 1.1.0\ninfo: { title: t, version: \"1\" }\nactions:\n  - target: \
+                   \"$.servers[0]\"\n    update: { url: 'http://127.0.0.1:18473/api' }\n";
+    let doc = Document::load(&document(url, PATHS), &[overlay]).expect("the repair loads");
+    assert_eq!(doc.base().to_string(), "http://127.0.0.1:18473/api");
+}
+
+/// What loaded before still loads: a port, a path, a trailing slash, a base that
+/// is relative.
+#[test]
+fn a_server_that_is_a_plain_base_still_loads() {
+    for url in [
+        "http://127.0.0.1:18473",
+        "https://api.example.test:8443/v1/",
+        "/",
+        "/api",
+    ] {
+        Document::load(&document(url, PATHS), &[]).unwrap_or_else(|error| panic!("{url}: {error}"));
+    }
+}
+
+// ------------------------------------------------------------------ F-35
+
+/// `A2/wire` `n create --n -5 --sum -1.5` is the input. clap reads `-5` as a flag
+/// of its own unless the flag is told what it is for ("unexpected argument '-5'
+/// found"), and only `--n=-5` works.
+#[test]
+fn a_negative_number_is_a_separate_word() {
+    let doc = doc();
+    let request = sent(
+        &doc,
+        &["things", "get", "--name", "a", "--n", "-5", "--sum", "-1.5"],
+    );
+    assert_eq!(request.uri().query(), Some("n=-5&sum=-1.5"));
+    let joined = sent(
+        &doc,
+        &["things", "get", "--name", "a", "--n=-5", "--sum=-1.5"],
+    );
+    assert_eq!(joined.uri().query(), request.uri().query());
+
+    let body = sent(&doc, &["n", "create", "--n", "-5", "--sum", "-1.5"]);
+    assert_eq!(body.body().as_slice(), br#"{"sum":-1.5,"n":-5}"#);
+    // A path value too.
+    let path = sent(&doc, &["items", "get", "--id", "-5"]);
+    assert_eq!(path.uri().path(), "/base/items/-5");
+}
+
+/// A word that starts with a dash and is no number is still no integer.
+#[test]
+fn a_dash_word_is_not_an_integer() {
+    let doc = doc();
+    for (value, kind) in [
+        ("-abc", ErrorKind::UnknownArgument),
+        ("-5.5", ErrorKind::ValueValidation),
+        ("-", ErrorKind::ValueValidation),
+    ] {
+        let error = line(&doc, &["things", "get", "--name", "a", "--n", value])
+            .expect_err("the value is refused");
+        assert_eq!(error.kind(), kind, "`{value}`: {error}");
+    }
+    let error = line(&doc, &["things", "get", "--name", "a", "--n", "-5.5"])
+        .expect_err("the value is refused");
+    assert!(error.to_string().contains("is not an integer"), "{error}");
+}
+
+#[test]
+fn a_text_flag_takes_a_value_that_starts_with_a_dash() {
+    let doc = doc();
+    let request = sent(&doc, &["things", "get", "--name", "-x", "--q", "-abc"]);
+    assert_eq!(request.uri().path(), "/base/things/-x");
+    assert_eq!(request.uri().query(), Some("q=-abc"));
+    // A word that looks like a flag is a value when it follows a flag that takes
+    // one, and the flag it looks like is not given.
+    let request = sent(&doc, &["things", "get", "--name", "a", "--q", "--sum"]);
+    assert_eq!(request.uri().query(), Some("q=--sum"));
+    let request = sent(&doc, &["things", "get", "--name", "a", "--q", "-"]);
+    assert_eq!(request.uri().query(), Some("q=-"));
+    // And a value from an `enum` too.
+    let request = sent(&doc, &["things", "get", "--name", "a", "--sort", "-name"]);
+    assert_eq!(request.uri().query(), Some("sort=-name"));
+    let refused = line(&doc, &["things", "get", "--name", "a", "--sort", "-other"])
+        .expect_err("not one of the values");
+    assert_eq!(refused.kind(), ErrorKind::InvalidValue);
+}
+
+// ------------------------------------------------------------------ F-36
+
+/// `A7/reduce` is the input: a hand-written verb that declares `--id` with another
+/// parser than the one the document types it with. Read with `get_one`, `values`
+/// panics with "Mismatch between definition and access of `id`".
+#[test]
+fn a_flag_of_another_type_than_the_operation_reads_is_an_arg_error_that_names_it() {
+    let doc = doc();
+    let op = doc.get("getThing").expect("the operation");
+    let matches = Command::new("get")
+        .arg(
+            Arg::new("name")
+                .long("name")
+                .value_parser(value_parser!(i64)),
+        )
+        .get_matches_from(["get", "--name", "5"]);
+
+    let error = tree::values(op, &matches).expect_err("the flag holds an integer");
+
+    assert!(
+        matches!(&error, ArgError::FlagType { flag, .. } if flag == "name"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "`--name` holds a value of another type than the one the operation reads"
+    );
+    assert!(error.source().is_some(), "the cause is clap's");
+}
+
+/// Every flag `values` reads is read the same way: a parameter, a field of a flat
+/// body, the file of a whole body and of a raw one, and the two parts of a
+/// multipart one.
+#[test]
+fn every_flag_values_reads_is_read_without_a_panic() {
+    let doc = Document::load(
+        include_str!("fixtures/toy.yaml"),
+        &[
+            include_str!("fixtures/corrections.yaml"),
+            include_str!("fixtures/cli.yaml"),
+        ],
+    )
+    .expect("the toy document");
+    for (id, flag) in [
+        ("getVoucher", "id"),
+        ("createVoucher", "total"),
+        ("createVoucher", "json-body"),
+        ("createContact", "json-body"),
+        ("uploadDocument", "raw-body"),
+        ("uploadDocumentMultipart", "file"),
+        ("uploadDocumentMultipart", "field"),
+    ] {
+        let op = doc.get(id).expect("the operation");
+        let matches = Command::new("verb")
+            .arg(
+                Arg::new(flag)
+                    .long(flag)
+                    .action(clap::ArgAction::Append)
+                    .value_parser(value_parser!(i64)),
+            )
+            .get_matches_from(["verb", &format!("--{flag}"), "5"]);
+
+        let error = tree::values(op, &matches).expect_err(&format!("`--{flag}` of {id}"));
+
+        assert!(
+            matches!(&error, ArgError::FlagType { flag: named, .. } if named == flag),
+            "{id} `--{flag}`: {error:?}"
+        );
+        assert!(
+            error.to_string().starts_with(&format!("`--{flag}` holds ")),
+            "{id} `--{flag}`: {error}"
+        );
+    }
+}
+
+/// `tree::answers` reads a flag the command never declared as unanswered, and
+/// `values` reads it as not given, so both are safe to point at a command this
+/// crate did not build.
+#[test]
+fn a_command_that_declares_no_flag_gives_no_value_and_no_panic() {
+    let doc = Document::load(
+        include_str!("fixtures/toy.yaml"),
+        &[
+            include_str!("fixtures/corrections.yaml"),
+            include_str!("fixtures/cli.yaml"),
+        ],
+    )
+    .expect("the toy document");
+    let bare = Command::new("verb").get_matches_from(["verb"]);
+    for op in &doc {
+        let values = tree::values(op, &bare).unwrap_or_else(|error| panic!("{}: {error}", op.id()));
+        assert!(values.params().is_empty(), "{}", op.id());
+    }
+}
+
+// ------------------------------------------------------------------ F-74
+
+/// A verb of the adopter's own may declare a field's flag with no parser of the
+/// document's rule. `Invocation::new` holds a body to its kind only, so the
+/// rule is the reading's, and the value that was dropped in silence is refused.
+#[test]
+fn a_field_the_verb_read_with_no_rule_is_refused_with_the_documents_rule() {
+    let doc = Document::load(
+        include_str!("fixtures/toy.yaml"),
+        &[
+            include_str!("fixtures/corrections.yaml"),
+            include_str!("fixtures/cli.yaml"),
+        ],
+    )
+    .expect("the toy document");
+    let op = doc.get("createVoucher").expect("the operation");
+    let matches = Command::new("create")
+        .arg(Arg::new("total").long("total"))
+        .get_matches_from(["create", "--total", "1,50"]);
+
+    let error = tree::values(op, &matches).expect_err("a comma is not a decimal point");
+
+    assert!(
+        matches!(&error, ArgError::FieldValue { flag, source: ScalarError::Rule { .. } }
+            if flag == "total"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "`--total` was given a value the document refuses"
+    );
+    assert_eq!(
+        error.source().map(ToString::to_string).as_deref(),
+        Some(r"`1,50` does not match ^-?[0-9]+(\.[0-9]{1,2})?$")
+    );
+}
+
+// ------------------------------------------------------------------ F-75
+
+/// `A2/wire` `numbody.yaml` is the input. A parameter is checked by
+/// `Scalar::parse`, and unless the parsed value is what is kept, its raw text goes
+/// on the wire: `+5` as `%2B5` and `007` as written, where the typed call sends
+/// `5`.
+#[test]
+fn a_parameter_is_sent_as_it_was_parsed() {
+    let doc = doc();
+    for (raw, sent) in [("+5", "5"), ("007", "7"), ("-0", "0"), ("-007", "-7")] {
+        assert_eq!(
+            uri(&doc, "getItem", Values::new().param("id", raw)),
+            format!("http://api.example.test/base/items/{sent}"),
+            "path {raw}"
+        );
+        assert_eq!(
+            uri(
+                &doc,
+                "getThing",
+                Values::new().param("name", "a").param("n", raw)
+            ),
+            format!("http://api.example.test/base/things/a?n={sent}"),
+            "query {raw}"
+        );
+        let op = doc.get("getThing").expect("the operation");
+        let request = Invocation::new(op, Values::new().param("name", "a").param("X-Count", raw))
+            .expect("an integer")
+            .request(doc.base())
+            .expect("a request");
+        assert_eq!(request.headers()["x-count"], sent, "header {raw}");
+    }
+    for (raw, sent) in [
+        ("1e3", "1000"),
+        ("+0.50", "0.5"),
+        ("007.25", "7.25"),
+        ("1.0", "1"),
+    ] {
+        assert_eq!(
+            uri(
+                &doc,
+                "getThing",
+                Values::new().param("name", "a").param("sum", raw)
+            ),
+            format!("http://api.example.test/base/things/a?sum={sent}"),
+            "{raw}"
+        );
+    }
+}
+
+/// The command line and the typed call send one request for one number, however
+/// the number is written.
+#[test]
+fn the_command_line_and_the_typed_call_send_the_same_number() {
+    let doc = doc();
+    let from_line = sent(
+        &doc,
+        &[
+            "things", "get", "--name", "a", "--n", "+5", "--sum", "007.50",
+        ],
+    );
+    let typed = Values::new()
+        .param("name", "a")
+        .param("n", 5)
+        .param("sum", 7.5);
+    let from_call = doc.get("getThing").map(|op| {
+        Invocation::new(op, typed)
+            .expect("values")
+            .request(doc.base())
+            .expect("a request")
+    });
+    assert_eq!(
+        Some(from_line.uri()),
+        from_call.as_ref().map(http::Request::uri)
+    );
+    assert_eq!(from_line.uri().query(), Some("n=5&sum=7.5"));
+}
+
+/// `A3b/scalars` `integer` and `number` are the input. `9007199254740993` goes out
+/// as `9007199254740992.0` and `1e-400` as `0.0` unless it is refused, and an
+/// integer past `i64` is a number and not "not an integer".
+#[test]
+fn a_number_that_does_not_survive_the_round_trip_is_refused_on_both_roads() {
+    let doc = doc();
+    for raw in ["9007199254740993", "1e-400", "12345678901234567"] {
+        let error = refused(
+            &doc,
+            "getThing",
+            Values::new().param("name", "a").param("sum", raw),
+        );
+        assert!(
+            matches!(&error, ValueError::BadValue { name, source: ScalarError::Rule { rule, .. }, .. }
+                if name == "sum" && rule.starts_with("does not survive the round trip")),
+            "{raw}: {error:?}"
+        );
+        let flag = line(&doc, &["things", "get", "--name", "a", "--sum", raw])
+            .expect_err("the flag refuses it");
+        assert_eq!(flag.kind(), ErrorKind::ValueValidation, "{raw}");
+        let field = line(&doc, &["n", "create", "--sum", raw]).expect_err("the field refuses it");
+        assert_eq!(field.kind(), ErrorKind::ValueValidation, "{raw}");
+        assert!(
+            field
+                .to_string()
+                .contains("does not survive the round trip"),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn an_integer_past_i64_is_out_of_range_on_both_roads() {
+    let doc = doc();
+    let raw = "9223372036854775808";
+    let error = refused(
+        &doc,
+        "getThing",
+        Values::new().param("name", "a").param("n", raw),
+    );
+    assert!(
+        matches!(&error, ValueError::BadValue { source: ScalarError::Rule { rule, .. }, .. }
+            if rule.starts_with("is out of range")),
+        "{error:?}"
+    );
+    let flag =
+        line(&doc, &["things", "get", "--name", "a", "--n", raw]).expect_err("the flag refuses it");
+    assert!(flag.to_string().contains("is out of range"), "{flag}");
+    assert!(!flag.to_string().contains("is not an integer"), "{flag}");
+}
+
+/// The body is the parsed value too: `007` is the number 7, and a number a float
+/// holds exactly is sent as the float.
+#[test]
+fn a_body_flag_is_sent_as_it_was_parsed() {
+    let doc = doc();
+    let request = sent(
+        &doc,
+        &[
+            "n", "create", "--n", "007", "--sum", "1e3", "--flag", "true",
+        ],
+    );
+    assert_eq!(
+        request.body().as_slice(),
+        br#"{"sum":1000.0,"n":7,"flag":true}"#
+    );
+    // The largest integer a float holds is still a number, however it is typed.
+    let request = sent(&doc, &["n", "create", "--sum", "9007199254740992"]);
+    assert_eq!(request.body().as_slice(), br#"{"sum":9007199254740992.0}"#);
+}

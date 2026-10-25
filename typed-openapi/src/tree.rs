@@ -34,6 +34,7 @@
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
+use clap::parser::MatchesError;
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint, builder::PossibleValuesParser};
 use http::Uri;
 use thiserror::Error;
@@ -44,7 +45,7 @@ use crate::model::{
 };
 use crate::names::{CommandName, renamed};
 use crate::plan::{Answers, Plan, PlanError};
-use crate::scalar::Scalar;
+use crate::scalar::{Scalar, ScalarError};
 use crate::transport::{HttpRequest, HttpResponse, SyncClient};
 use crate::values::{Part, Payload, Values};
 
@@ -95,6 +96,35 @@ pub enum ArgError {
         flag: &'static str,
         /// The value as the operator typed it.
         raw: String,
+    },
+    /// A flag that the command stores as another type than the one the
+    /// operation reads, such as a verb of the adopter's own that declares
+    /// `--id` with `value_parser!(i64)` where the document types it as text.
+    /// The command is the adopter's and not this crate's, so the repair is in
+    /// the flag's declaration, and the refusal names the flag.
+    #[error("`--{flag}` holds a value of another type than the one the operation reads")]
+    FlagType {
+        /// The flag, without the leading `--`.
+        flag: String,
+        /// clap's reading of the mismatch: the type it holds and the type that
+        /// was asked for.
+        #[source]
+        source: MatchesError,
+    },
+    /// A per-field flag whose value the document's rule for the field refuses.
+    /// The flags of a subcommand that this crate built are held to the rule by
+    /// their value parsers, so this is the refusal of a verb of the adopter's
+    /// own that declared the flag with a looser parser. `Invocation::new` holds
+    /// a body to its kind and `client::fits` to its content, and neither one
+    /// knows what the rule of a field says, so the value would otherwise reach
+    /// the body unchecked.
+    #[error("`--{flag}` was given a value the document refuses")]
+    FieldValue {
+        /// The flag, without the leading `--`.
+        flag: String,
+        /// The rule of the field that the value broke.
+        #[source]
+        source: ScalarError,
     },
 }
 
@@ -354,6 +384,12 @@ fn flag(matches: &ArgMatches, id: &str) -> bool {
 
 /// Read one operation's arguments out of its `ArgMatches`, under the names the
 /// document uses.
+///
+/// Every flag is read the way [`answers`] reads one, so this is as safe to point
+/// at a command this crate did not build. A flag the command never declared is a
+/// flag that was not given, and `Invocation::new` says so if the operation needs
+/// it. A flag the command stores as another type is [`ArgError::FlagType`], which
+/// names it.
 pub fn values(op: &Operation, matches: &ArgMatches) -> Result<Values, ArgError> {
     let mut values = Values::new();
     for param in op.params() {
@@ -363,7 +399,7 @@ pub fn values(op: &Operation, matches: &ArgMatches) -> Result<Values, ArgError> 
         // `get_many` serves both kinds: a flag given once yields one value, and
         // a repeatable one yields every occurrence, in the order they were
         // typed — which is the order they go on the wire in.
-        for raw in strings(matches, flag) {
+        for raw in strings(matches, flag)? {
             values = values.param(param.name(), raw);
         }
     }
@@ -625,12 +661,10 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
         Body::None => Ok(None),
         // A missing required body is `Invocation::new`'s to report, so that one
         // place decides what satisfies an operation.
-        Body::JsonWhole { .. } => matches
-            .get_one::<PathBuf>(JSON_BODY)
+        Body::JsonWhole { .. } => one::<PathBuf>(matches, JSON_BODY)?
             .map(|path| read_json(path).map(Payload::Json))
             .transpose(),
-        Body::Opaque { .. } => matches
-            .get_one::<PathBuf>(RAW_BODY)
+        Body::Opaque { .. } => one::<PathBuf>(matches, RAW_BODY)?
             .map(|path| read_bytes(path).map(Payload::Raw))
             .transpose(),
         Body::Multipart { .. } => parts(matches).map(|parts| parts.map(Payload::Multipart)),
@@ -646,60 +680,69 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
 /// operator believes they changed. With no flag beside it, the file goes on
 /// as it is: whether a list is a body is for the check of the adopter's types.
 fn assembled(fields: &[Field], matches: &ArgMatches) -> Result<serde_json::Value, ArgError> {
-    let Some(path) = matches.get_one::<PathBuf>(JSON_BODY) else {
+    let Some(path) = one::<PathBuf>(matches, JSON_BODY)? else {
         return Ok(serde_json::Value::Object(edited(
             serde_json::Map::new(),
             fields,
             matches,
-        )));
+        )?));
     };
     let body = read_json(path)?;
     let serde_json::Value::Object(object) = body else {
-        return match fields.iter().find(|field| given(field, matches)) {
-            Some(field) => Err(ArgError::FlagBesideNonObject {
-                flag: field.flag().to_owned(),
-                path: path.clone(),
-                found: crate::client::kind(&body),
-            }),
-            None => Ok(body),
-        };
+        for field in fields {
+            if given(field, matches)? {
+                return Err(ArgError::FlagBesideNonObject {
+                    flag: field.flag().to_owned(),
+                    path: path.clone(),
+                    found: crate::client::kind(&body),
+                });
+            }
+        }
+        return Ok(body);
     };
-    Ok(serde_json::Value::Object(edited(object, fields, matches)))
+    Ok(serde_json::Value::Object(edited(object, fields, matches)?))
 }
 
 /// `object` with each per-field flag the operator gave set in it.
+///
+/// The value parser of a flag that [`command`] built has accepted the value
+/// already, so for those the refusal here cannot happen. A command of the
+/// adopter's own may declare the flag with a looser parser, and nothing after
+/// this holds the value to the field's rule, so the refusal is passed on.
 fn edited(
     mut object: serde_json::Map<String, serde_json::Value>,
     fields: &[Field],
     matches: &ArgMatches,
-) -> serde_json::Map<String, serde_json::Value> {
+) -> Result<serde_json::Map<String, serde_json::Value>, ArgError> {
     for field in fields {
-        let Some(raw) = matches.get_one::<String>(field.flag()) else {
+        let Some(raw) = one::<String>(matches, field.flag())? else {
             continue;
         };
-        // The flag's value parser has already accepted this, so the same rule
-        // is not applied twice with two error shapes; the second call is a
-        // conversion, and `Invocation::new` re-checks the whole set anyway.
-        if let Ok(value) = field.scalar().parse(raw) {
-            object.insert(field.name().to_owned(), value);
-        }
+        let value = field
+            .scalar()
+            .parse(raw)
+            .map_err(|source| ArgError::FieldValue {
+                flag: field.flag().to_owned(),
+                source,
+            })?;
+        object.insert(field.name().to_owned(), value);
     }
-    object
+    Ok(object)
 }
 
 /// Did the operator type this field's flag?
-fn given(field: &Field, matches: &ArgMatches) -> bool {
-    matches.get_one::<String>(field.flag()).is_some()
+fn given(field: &Field, matches: &ArgMatches) -> Result<bool, ArgError> {
+    Ok(one::<String>(matches, field.flag())?.is_some())
 }
 
 /// `--file NAME=PATH` and `--field NAME=VALUE`, in the order they were given.
 fn parts(matches: &ArgMatches) -> Result<Option<Vec<Part>>, ArgError> {
     let mut parts = Vec::new();
-    for raw in strings(matches, FIELD_PART) {
+    for raw in strings(matches, FIELD_PART)? {
         let (name, value) = split_part(FIELD_PART, raw)?;
         parts.push(Part::text(name, value));
     }
-    for raw in strings(matches, FILE_PART) {
+    for raw in strings(matches, FILE_PART)? {
         let (name, path) = split_part(FILE_PART, raw)?;
         let path = PathBuf::from(path);
         let filename = path
@@ -710,8 +753,38 @@ fn parts(matches: &ArgMatches) -> Result<Option<Vec<Part>>, ArgError> {
     Ok((!parts.is_empty()).then_some(parts))
 }
 
-fn strings<'m>(matches: &'m ArgMatches, id: &str) -> impl Iterator<Item = &'m String> {
-    matches.get_many::<String>(id).into_iter().flatten()
+/// Every value of a flag, in the order they were typed. A flag that was not
+/// given, or that the command never declared, has none.
+fn strings<'m>(
+    matches: &'m ArgMatches,
+    id: &str,
+) -> Result<impl Iterator<Item = &'m String>, ArgError> {
+    match matches.try_get_many::<String>(id) {
+        Ok(values) => Ok(values.into_iter().flatten()),
+        Err(MatchesError::UnknownArgument { .. }) => Ok(None.into_iter().flatten()),
+        Err(source) => Err(flag_type(id, source)),
+    }
+}
+
+/// The one value of a flag, when it was given. A flag that the command never
+/// declared was not given: `get_one` panics on it, and a panic is the wrong
+/// answer for a command this crate did not build.
+fn one<'m, T: std::any::Any + Clone + Send + Sync + 'static>(
+    matches: &'m ArgMatches,
+    id: &str,
+) -> Result<Option<&'m T>, ArgError> {
+    match matches.try_get_one::<T>(id) {
+        Ok(value) => Ok(value),
+        Err(MatchesError::UnknownArgument { .. }) => Ok(None),
+        Err(source) => Err(flag_type(id, source)),
+    }
+}
+
+fn flag_type(id: &str, source: MatchesError) -> ArgError {
+    ArgError::FlagType {
+        flag: id.to_owned(),
+        source,
+    }
 }
 
 /// `NAME=REST`, splitting at the first `=` so a value may contain more.
@@ -908,6 +981,15 @@ fn value_arg(flag: &str, scalar: &Scalar, help: Option<String>, required: bool) 
                 .map(|_| raw.to_owned())
                 .map_err(|e| e.to_string())
         })
+    };
+    // A number flag takes a negative number as the word after it, and a text flag
+    // takes any word, one that starts with a dash too. In an accounting API a
+    // negative amount or an offset is ordinary, and clap reads `-5` as a flag of
+    // its own unless it is told what the flag is for.
+    arg = match scalar {
+        Scalar::Integer(_) | Scalar::Number(_) => arg.allow_negative_numbers(true),
+        Scalar::Text(_) | Scalar::Choice(_) => arg.allow_hyphen_values(true),
+        Scalar::Boolean => arg,
     };
     if let Some(help) = help {
         arg = arg.help(help);

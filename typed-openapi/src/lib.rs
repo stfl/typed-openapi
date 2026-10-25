@@ -113,7 +113,7 @@ pub use plan::{Answers, Plan, PlanError};
 /// engine stays the one the generator emitted syntax for, which is the same one
 /// [`Scalar::parse`] runs the command line's values through.
 pub use regress;
-pub use request::{Invocation, ValueError, render};
+pub use request::{BaseUrlError, Invocation, RequestError, ValueError, render};
 pub use scalar::Scalar;
 #[cfg(feature = "document")]
 pub use schema::RefError;

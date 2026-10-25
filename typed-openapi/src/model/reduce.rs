@@ -20,6 +20,7 @@
 
 use std::borrow::Cow;
 
+use http::header::HeaderName;
 use http::{Method, Uri};
 use openapiv3::{
     Components, OpenAPI, Parameter, ParameterData, ParameterSchemaOrContent, PathItem, PathStyle,
@@ -34,6 +35,7 @@ use super::{
 use crate::markers::{COMMAND, GATES, GROUP, REQUIRES, WRITES};
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
 use crate::openapi::Misfit;
+use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
 use crate::scalar::Scalar;
 use crate::schema::{
@@ -116,6 +118,17 @@ pub enum LoadError {
         #[source]
         source: http::uri::InvalidUri,
     },
+    /// The first server's URL cannot be the base of a request: it holds userinfo,
+    /// a query or a fragment, which a request would send, drop or leak. The cause
+    /// says which, and neither it nor this message prints the URL, because a
+    /// credential or a key would be in it. An Overlay corrects the URL. A caller
+    /// who names the base is held to the same rule when the request is built.
+    #[error("`servers[0].url` cannot be the base URL of a request; correct it in an Overlay")]
+    ServerBase {
+        /// What the URL holds that a request cannot keep.
+        #[source]
+        source: BaseUrlError,
+    },
     /// An operation without an `operationId`, which is the name every later
     /// refusal and every generated wrapper uses for it. An Overlay adds one.
     #[error("{method} {path} has no operationId; add one in an Overlay")]
@@ -145,6 +158,21 @@ pub enum LoadError {
         /// The list, spelled as an Overlay names a target:
         /// `$.paths['/upload'].post.servers`.
         at: String,
+    },
+    /// A header parameter whose name is no header name: it holds a space or
+    /// another character that a header name cannot, so no request could carry it
+    /// and the `http` crate would refuse every one that was built. An Overlay
+    /// corrects the name or removes the parameter. A parameter in another place
+    /// has no header name to be.
+    #[error(
+        "{op}: the header parameter `{name}` is not a header name; correct or remove it in an \
+         Overlay"
+    )]
+    HeaderName {
+        /// The `operationId` of the operation.
+        op: String,
+        /// The parameter, as the document spells it.
+        name: String,
     },
     /// A variable in the path template that no path parameter of the operation
     /// answers. The request would go out with the braces in it. An Overlay adds
@@ -853,6 +881,8 @@ impl Document {
                 filled: with_defaults.clone(),
                 source,
             })?;
+        BaseUrlError::of_server(&with_defaults, &base)
+            .map_err(|source| LoadError::ServerBase { source })?;
         let empty = Components::default();
         // Which segment groups this document is a fact about all of its paths,
         // so it is read once and then applied one path at a time.
@@ -1525,6 +1555,14 @@ fn shape_of(
     // a value can never reach takes nothing from the namespace.
     if let Some(place) = namesake {
         return Ok(Shape::Unreachable(Unsupported::Shared(place)));
+    }
+    // A header the request would carry has a name that a header can have. A
+    // parameter with no flag sends nothing, so its name is no one's business.
+    if location == Location::Header && HeaderName::from_bytes(data.name.as_bytes()).is_err() {
+        return Err(LoadError::HeaderName {
+            op: op.to_owned(),
+            name: data.name.clone(),
+        });
     }
     Ok(Shape::Flag {
         flag: flags

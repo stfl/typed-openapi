@@ -21,7 +21,7 @@ use http::{Request, Uri};
 use thiserror::Error;
 
 use crate::model::{Effect, Gate, Operation};
-use crate::request::{Invocation, ValueError};
+use crate::request::{Invocation, RequestError, ValueError};
 use crate::values::Values;
 
 /// What a caller answered at the gate: the write confirmation, and one answer
@@ -137,9 +137,9 @@ pub enum PlanError {
     /// parameter, or says the body is the problem.
     #[error(transparent)]
     Value(#[from] ValueError),
-    /// The values satisfied the operation and the `http` crate refused the
-    /// request they render to: a base URI, a header name or a header value it
-    /// cannot carry.
-    #[error("cannot build the request")]
-    Request(#[from] http::Error),
+    /// The values satisfied the operation and the request they render to could
+    /// not be built: the base URL holds userinfo or a query, or the `http` crate
+    /// refused what the document names, such as a header name.
+    #[error(transparent)]
+    Request(#[from] RequestError),
 }

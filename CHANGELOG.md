@@ -528,6 +528,83 @@ the crate follows [Semantic Versioning][semver].
   belongs, and drop the argument at a call of a wrapper that took one; for the
   refusal, drop the name from `x-cli-requires` in an Overlay. A script that typed
   `--authorization` loses the flag.
+- **A base URL with userinfo, a query or a fragment is refused.** A dry run
+  printed `user:password` in its `host:` line, a confirmed run sent it as a
+  `Basic` header, and the query was dropped from every request in silence.
+  Whoever names the base is held to it, and a request is never built from one
+  that holds any of the three:
+  - `RequestError::Base(BaseUrlError)` comes from `Invocation::request`, so the
+    gate, the typed call and the command line all end in it, for the document's
+    first server, `Client::with_base`, and the `base` of `Plan::build`,
+    `Selection::plan`, `Selection::send` and `tree::dispatch`. `BaseUrlError` is
+    `Userinfo`, `Query` or `Fragment`, and an `http::Uri` drops a fragment when
+    it parses, so only the text of a document holds one.
+  - `LoadError::ServerBase { source }` refuses a document whose first server URL
+    holds one of the three, variables filled in. A document that loaded with
+    one is refused now. Repair: an Overlay that corrects `servers[0].url`
+    (`docs/overlay.md`).
+  - No message prints the URL, and `render` prints the host and the port of a
+    request and never its userinfo.
+
+  Repair for a caller: pass a base URL with the scheme, host, port and path
+  only, and set the credential in the client adapter (`docs/client.md`).
+  `LoadError` is `#[non_exhaustive]`, so the variant is no break.
+- **`Invocation::request` returns `RequestError`, not `http::Error`.**
+  `RequestError` is `#[non_exhaustive]`: `Base(BaseUrlError)` and
+  `Http(http::Error)`. `PlanError::Request` and `client::Error::Request` carry a
+  `RequestError` and print what they printed. Repair: match `Http(error)` where
+  you matched the `http::Error`, or print the error and its `source()` as before.
+- **A path value that is empty, `.` or `..` is refused.** `DELETE /things/..` was
+  built and sent as written, a server or a proxy read it as the collection above,
+  and reqwest sent `DELETE /` itself. `ValueError::PathSegment { op, name, value }`
+  refuses it in `Invocation::new`, so the command line and the typed call refuse
+  the same value, and a list is judged as the segment it makes. Repair: send
+  a name.
+- **A header value that `http::HeaderValue` refuses, and a comma inside one item
+  of a header list, are refused by name.** The `http` crate refused the first
+  late, as "failed to parse header value", with no name; the second was sent as
+  two items. `ValueError::HeaderValue { op, name }` and
+  `ValueError::HeaderItemComma { op, name }` come from `Invocation::new`, and
+  neither prints the value. A comma in a query list or a path list is
+  percent-encoded and stays one item, and a comma in a header that is not a
+  list is a character of the value. A header parameter whose name is no header
+  name, such as `X Bad`, refuses the document (`LoadError::HeaderName { op, name }`);
+  it loaded, and a request that gave it a value failed. Repair: an Overlay that
+  corrects the name or removes the parameter; send each item of a header list with
+  no comma in it.
+- **A number is sent as it was parsed, and a number that would be sent as
+  another one is refused.** A parameter was checked by `Scalar::parse` and its
+  raw text went on the wire, so `+5` was sent as `%2B5` and `007` as written,
+  where the typed call sent `5`. `Scalar::wire` is the text that is sent, and
+  `Invocation::new` keeps it: `+5` is `5`, `007` is `7`, `1e3` is `1000`. Two
+  values that were sent are refused, as `ScalarError::Rule`:
+  - A `type: number` value that does not survive the round trip through a 64-bit
+    float: `9007199254740993` was sent as `9007199254740992.0` and `1e-400` as
+    `0.0`. A value past what a float holds (`1e400`) is out of range.
+  - A `type: integer` value past `i64` is *out of range*. It was *not an
+    integer*, and `typify` writes a `u64` for `minimum: 0`.
+
+  A body field is the JSON value that was parsed, as before. Repair: send fewer
+  digits, or declare the value a `string` with a `pattern`, as the toy's
+  `Voucher.total` does. `docs/validation.md` lists integer formats among the
+  places where the two roads part: a flag reads an `i64` whatever `format` says,
+  and `typify` writes `i32` for a body property of `format: int32`.
+- **A flag takes a value that starts with a dash.** `<INT>` and `<NUMBER>` flags
+  take a negative number as a separate word (`--limit -5`), where clap read `-5`
+  as a flag and only `--limit=-5` worked. `<STRING>` flags, an `enum` among them,
+  take any word, a flag-like one too: `--type --commit` sends the text `--commit`
+  as the `type` and confirms nothing. Repair: none; a script that relied on clap's
+  refusal of the word after a text flag sees the word sent as the value.
+- **`tree::values` reads a flag of another type as an error, and a field is held
+  to its rule.** A verb of your own that declares `--id` with
+  `value_parser!(i64)` where the document types it as text made `values` panic.
+  It reads every flag with `try_get_*` now, as `answers` does: a flag the command
+  never declared is a flag that was not given, and a flag of another type is
+  `ArgError::FlagType { flag, source }`, which names it. A per-field flag that the
+  document's rule for the field refuses is `ArgError::FieldValue { flag, source }`
+  where the field was dropped from the body in silence. `ArgError` is
+  `#[non_exhaustive]`, so both are no break. Repair: declare the flag as text,
+  which is what `values` reads, and type a value that the field's rule accepts.
 
 ### Removed
 

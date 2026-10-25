@@ -47,7 +47,12 @@ comment all name the flag the binary accepts.
 through it, so a hand-written verb and a generated subcommand cannot spell one
 gate two ways. `tree::answers` reads a flag the command never declared as
 unanswered rather than panicking, which is what makes the reading safe to point
-at a command this crate did not build.
+at a command this crate did not build. `tree::values` reads every flag the same
+way, with `try_get_*`: a flag the command never declared was not given, a flag
+stored as another type is `ArgError::FlagType`, which names it, and a field's
+flag that the field's rule refuses is `ArgError::FieldValue`. A command of the
+adopter's own can declare a flag with any parser, and nothing after `values`
+holds a body field to its rule.
 
 **Both command names are decided while the document is reduced.** `Grouping` in
 `src/names.rs` reads the rule off every path once; an `Operation` carries the
@@ -127,13 +132,19 @@ example to its own convention.
 **Every rule the document states about a value is enforced, in one place.**
 `Scalar` carries what the schema said — `pattern`, `minLength`/`maxLength`, the
 bounds, `multipleOf` — and `Scalar::parse` is the only thing that checks any of
-them. A rule that reaches `--help` and not the parser is the defect this
-invariant exists to prevent, so `Scalar::note` and the refusal are one
-rendering. `pattern` runs on `regress`, the engine typify puts inside a
-generated newtype's `FromStr`, so a value the command line accepts is a value
-the generated type accepts by construction. No `format` is special-cased: a
-format names a rule and is not one, and a document that wants a rule states it
-in JSON Schema everything can read.
+them. `Scalar::wire` is the text of a parameter that goes on the wire, and it
+asks `parse`'s own reading of a number, so there is no second check: the number
+that is checked is the number that is sent, and `Invocation::new` keeps the
+text. An `f64` reads the nearest float of its digits, so a number is refused
+when that float is another number (`exact` compares decimal numbers, not text),
+and an integer past `i64` is out of range and not "not an integer". A rule that
+reaches `--help` and not the parser is the defect this invariant exists to
+prevent, so `Scalar::note` and the refusal are one rendering. `pattern` runs on
+`regress`, the engine typify puts inside a generated newtype's `FromStr`, so a
+value the command line accepts is a value the generated type accepts by
+construction. No `format` is special-cased: a format names a rule and is not
+one, and a document that wants a rule states it in JSON Schema everything can
+read.
 
 `Scalar` reads the document, and that is deliberate rather than incidental.
 progenitor decides the same question the other way — `cli.rs` asks typify
@@ -218,7 +229,11 @@ every later refusal and every generated wrapper calls the operation by it. A
 server URL with variables takes the `default` of each, which OpenAPI requires
 for every variable; a variable that `variables` does not declare stays in the
 URL, which is then no URL (`ServerUrl`, which prints the URL as the document
-spells it and as it was refused, with the defaults in it).
+spells it and as it was refused, with the defaults in it). A URL that is one and
+holds userinfo, a query or a fragment is `ServerBase`, which says which and
+prints none of the URL, because the part that is refused is the part that is a
+credential or a key. It is the rule that `Invocation::request` holds a caller's
+base to.
 
 **A refusal names its operation and the place it stopped, and its repair only
 where the repair is true.** A `LoadError` from one operation carries the
@@ -369,6 +384,11 @@ name, because the first entry keeps the name and no later one has a flag. So a
 wrapper's argument is typed by the entry that won, inline or by a `$ref`, and
 the generator keeps no second copy of the merge.
 
+A header parameter that would claim a flag and whose name `HeaderName` refuses
+is `LoadError::HeaderName`, because no request could carry it. A parameter with
+no flag sends nothing, so its name is not asked, and a parameter in another place
+has no header name to be.
+
 `LoadError::Parameter` says where the refused parameter is (`place`), because
 the repair depends on it. `repair` names a repair that loads the document when
 the parameter is the one fault in it. A document with more faults is refused for
@@ -444,6 +464,19 @@ the defect progenitor's `cli.rs` ships.
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
+
+`Invocation::new` refuses every value that the request would carry wrongly,
+whichever road it came by. Beside the schema it refuses a path value that is
+empty, `.` or `..` (judged as the segment a list makes), a header value that
+`HeaderValue` refuses, and a comma inside one item of a header list, which is not
+percent-encoded as a query or a path list is. The messages name the parameter and
+print no value, because a header value can be a credential. `Invocation::request`
+refuses a base URL that holds userinfo or a query (`BaseUrlError`), so the gate,
+the typed call and the command line end in one refusal whoever names the base,
+and `render` prints the host and the port and never the userinfo. An `http::Uri`
+drops a fragment when it parses, so the fragment is refused in the text of the
+document's server (`LoadError::ServerBase`) and nowhere else. No message prints
+the URL.
 
 **A request body is held to the generated type in one place, and an
 undeclared property has no way through.** `client::fits` is where a JSON body
@@ -730,7 +763,12 @@ engine runs refuses every value of its flag when the flag is parsed, and
 repeating the rule would compile every pattern of every operation at each
 start-up to run one subcommand. A refusal whose input the blob does not hold (the
 document's text, a `$ref`, an `x-cli-` marker) cannot be broken from the blob at
-all. Three rules are repeated whatever their breaks, because F-70, the finding
+all. Two refusals of a load stand outside the line. A blob whose header
+parameter has a name that no header has meets the `http` crate when a value is
+given for it (`RequestError::Http`), so `HeaderName` is not repeated. A blob whose
+base holds userinfo or a query meets `Invocation::request`, which refuses every
+base it is given, so `ServerBase` is not repeated either. Neither sends a
+request. Three rules are repeated whatever their breaks, because F-70, the finding
 that asked for the check, names them: the confirmation word, which is the
 validation of `Loading::commit`, the spelling of each flag, and each `requires`.
 The spelling of a flag and the confirmation word of a write have breaks inside
