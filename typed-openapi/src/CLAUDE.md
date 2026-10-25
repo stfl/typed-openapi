@@ -300,7 +300,7 @@ adds no recursion to either walk.
 A parameter that is `in: cookie`, described by `content`, neither a value nor a
 list of values, declaring a `style` this crate does not serialise, *named* in a
 way `names::spelled` refuses, or sharing its name with an earlier parameter of
-the operation (`Unsupported::Shared`), is carried as `Shape::Unreachable` —
+the operation (`Unsupported::Shared(Place)`), is carried as `Shape::Unreachable` —
 named on the subcommand's long help and in the wrapper's documentation, and
 given no flag, no argument and no place in the request — and only a *required*
 one is a `LoadError`, because an operation that could never build a correct
@@ -332,25 +332,50 @@ the document; a body property sends the body whole.
 
 **An operation's parameters are the ones OpenAPI defines, and the request goes
 where the document says.** A parameter is its name and its place. `declared` in
-`src/model/reduce.rs` follows the `$ref` of each parameter and lets the
-operation's entry take the place of the path item's of the same pair, in the
-order the path item lists them; an entry of the operation with a pair that no
-slot is left for is another parameter, which is how two entries of one pair stay
-two. It drops the header parameters `Accept`, `Content-Type` and
+`src/model/reduce.rs` follows the `$ref` of each parameter and builds the one
+list that everything reads: the path item's entries in the order the path item
+lists them, each entry of the operation with the name and the place of one of
+them in that one's slot, and then the operation's other entries in the order the
+operation lists them. An entry of the operation with a pair that no slot is left
+for is another parameter, which is how two entries of one pair stay two. The
+list is the one order the document fixes, because `openapiv3` keeps none between
+a path item's `parameters` and its methods, and an override that keeps its slot
+keeps the wrapper's argument order and the help order where the path item put
+them. `declared` drops the header parameters `Accept`, `Content-Type` and
 `Authorization`, compared without case and in a header only, because OpenAPI
 3.0.3 says they "SHALL be ignored". They are dropped and not carried as
 `Unreachable`, because a required one would then refuse a document that is
-right, and a flag for one puts a credential in argv, in shell history and in
-every dry run.
+right, and a flag for the `Authorization` header puts a credential in argv, in
+shell history and in every dry run. A credential that the document declares
+under another name is a parameter like any other. `place` is the one map from
+the four kinds of `openapiv3::Parameter` to `Place`, with no `_` arm.
 
 `Values` is keyed by the name alone, and so is `Operation::param`, which finds
-the first. So of two parameters left with one name the later is
-`Unsupported::Shared` whatever its place and unless it has a reason of its own,
-and it claims no flag; a required one is `LoadError::Parameter`. The values
-under a name are the first parameter's, so `Invocation::new` counts the given
-values of a parameter with a flag only. The generator finds the schema of a
-wrapper's argument by the same pair, the operation's entry first
-(`param_schema`), because the argument is typed by the entry that won.
+the first. So of two parameters left with one name the one that is later in the
+list is `Unsupported::Shared(Place)`, the place of the earlier one, whatever the
+shape or the place of either, and unless it has a reason of its own: a reason of
+its own wins over `Shared`. It claims no flag, and a required one is
+`LoadError::Parameter`. The earlier one keeps the name even when it has no flag
+itself (`in: cookie`, `content`), and a required path parameter that comes
+later refuses the document. The repair of both is the removal of the earlier
+parameter, which `docs/cli.md` says. A rule by reachability would make
+`Operation::param` "the first parameter with a flag", and a rule by place would
+add a second order beside the list. Both would widen a public seam for a rare
+document, and both would contradict spec F-10 ("the one the document lists
+later"). The values under a name are the first parameter's, so
+`Invocation::new` counts the given values of a parameter with a flag only. The
+generator reads the same list: `entry_of_flag` finds the entry that a flag was
+read from by its name and place in what `declared` returns, so a wrapper's
+argument is typed by the entry that won, inline or by a `$ref`, and the
+generator keeps no second copy of the merge.
+
+`LoadError::Parameter` says where the refused parameter is (`place`), because
+the repair depends on it. `repair` names only a repair that loads: a path
+parameter that is not `required` is refused (`OptionalPathParameter`), so
+dropping the `required` of one is never named; a namesake is mended by removing
+the other parameter, unless the other is a path parameter, which the template
+needs. Each row has a test in `tests/wire.rs` that loads the document with the
+Overlay the words name, and a new reason adds a row.
 
 `reconcile` holds the path template to the path parameters, and refuses a
 variable with no path parameter, a path parameter with no variable and a path

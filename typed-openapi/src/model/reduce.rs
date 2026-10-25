@@ -28,8 +28,8 @@ use openapiv3::{
 use thiserror::Error;
 
 use super::{
-    Body, COMMIT, Document, Effect, Field, Gate, Join, Location, Operation, Param, SPENT, Shape,
-    Unmet, Unsupported, first_collision, gate_on_read, spends, spends_command, unmet,
+    Body, COMMIT, Document, Effect, Field, Gate, Join, Location, Operation, Param, Place, SPENT,
+    Shape, Unmet, Unsupported, first_collision, gate_on_read, spends, spends_command, unmet,
 };
 use crate::markers::{COMMAND, GATES, GROUP, REQUIRES, WRITES};
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
@@ -132,9 +132,9 @@ pub enum LoadError {
     /// the request would go to another host than the document means. An Overlay
     /// removes the list.
     ///
-    /// A path item's list is refused at the first operation under it, which is
-    /// the one named. A path item with no operation sends nothing anywhere, and
-    /// its list is not refused.
+    /// A path item's list is refused at an operation under it, which is the one
+    /// named. A path item with no operation sends nothing anywhere, and its list
+    /// is not refused.
     #[error(
         "{op}: `servers` stands on `{at}`, and this crate sends every request to the first \
          server of the document; remove it in an Overlay"
@@ -457,15 +457,23 @@ pub enum LoadError {
     /// and costs the document nothing. This one is an operation that could never
     /// be invoked correctly, so it is named here rather than mounted as a
     /// subcommand that is guaranteed to build a request the server refuses.
+    ///
+    /// The repair is an Overlay, and which one depends on where the parameter
+    /// is. A parameter that is not in the path can drop its `required`. A path
+    /// parameter cannot, because [`LoadError::OptionalPathParameter`] refuses it
+    /// then. A name that another parameter has is mended by removing that
+    /// parameter, which gives this one its flag.
     #[error(
-        "{op}: parameter `{name}` is {why}, and the document requires it; \
-         correct the parameter in an Overlay, or drop its `required`"
+        "{op}: parameter `{name}` is {why}, and the document requires it; {}",
+        repair(*.place, .name, .why)
     )]
     Parameter {
         /// The `operationId` of the operation that declares the parameter.
         op: String,
         /// The parameter's name, as the document spells it.
         name: String,
+        /// Where the document puts the parameter.
+        place: Place,
         /// Why this crate has no flag for it.
         why: Unsupported,
     },
@@ -545,6 +553,35 @@ pub enum LoadError {
         /// Why this crate has no flag for it.
         why: Unsupported,
     },
+}
+
+/// The repair that [`LoadError::Parameter`] names, and only a repair that loads
+/// the document.
+///
+/// Dropping `required` mends a parameter off the path only: for a path
+/// parameter it gives [`LoadError::OptionalPathParameter`]. A name that another
+/// parameter has is mended by removing that parameter, which is also the one
+/// repair that gives this one its flag. The exception is a path parameter as the
+/// namesake: the template names it, and without it the document is refused for
+/// the variable ([`LoadError::UnboundVariable`]).
+fn repair(place: Place, name: &str, why: &Unsupported) -> String {
+    let off_the_path = place != Place::Path;
+    let mend = match why {
+        Unsupported::Shared(Place::Path) if off_the_path => None,
+        Unsupported::Shared(other) => Some(format!(
+            "remove the `{other}` parameter `{name}` in an Overlay"
+        )),
+        Unsupported::Cookie
+        | Unsupported::Encoded
+        | Unsupported::Structured
+        | Unsupported::Style(_)
+        | Unsupported::Unspellable => Some("correct the parameter in an Overlay".to_owned()),
+    };
+    match (mend, off_the_path) {
+        (Some(mend), true) => format!("{mend}, or drop its `required`"),
+        (Some(mend), false) => mend,
+        (None, _) => "drop its `required` in an Overlay".to_owned(),
+    }
 }
 
 /// The first server's URL as a refusal shows it: as the document spells it, and
@@ -837,7 +874,11 @@ impl Operation {
                 .chain(confirmation),
             SPENT,
         );
-        let declared = declared(id, item, op, whole.components)?;
+        let declared =
+            declared(item, op, whole.components).map_err(|source| LoadError::ParameterRef {
+                op: id.to_owned(),
+                source,
+            })?;
         reconcile(id, path, &declared)?;
         let params = declared
             .iter()
@@ -914,67 +955,95 @@ fn ignored(param: &Parameter) -> bool {
         if IGNORED.iter().any(|name| name.eq_ignore_ascii_case(&parameter_data.name)))
 }
 
-/// Where a parameter is, as the document spells `in`.
-fn place(param: &Parameter) -> &'static str {
+/// Where the document puts a parameter. The only map from the four kinds of
+/// `openapiv3::Parameter` to [`Place`].
+fn place(param: &Parameter) -> Place {
     match param {
-        Parameter::Query { .. } => "query",
-        Parameter::Header { .. } => "header",
-        Parameter::Path { .. } => "path",
-        Parameter::Cookie { .. } => "cookie",
+        Parameter::Query { .. } => Place::Query,
+        Parameter::Header { .. } => Place::Header,
+        Parameter::Path { .. } => Place::Path,
+        Parameter::Cookie { .. } => Place::Cookie,
     }
 }
 
-/// The parameters one operation takes: the path item's, with the operation's own
-/// after them.
+/// A slot of the merged list of parameters, and whose entry it holds.
+enum Slot<'d> {
+    /// The path item's. An entry of the operation with the same name and place
+    /// takes the slot.
+    Inherited(&'d Parameter),
+    /// The operation's own, which nothing takes the slot from: a second entry of
+    /// the operation with one name and place is another parameter.
+    Own(&'d Parameter),
+}
+
+impl<'d> Slot<'d> {
+    fn parameter(&self) -> &'d Parameter {
+        match self {
+            Self::Inherited(param) | Self::Own(param) => param,
+        }
+    }
+}
+
+/// The parameters one operation takes: the path item's, in the order it lists
+/// them, and then the operation's own.
 ///
 /// A parameter is identified by its name and its place, and the operation's
-/// entry takes the place of the path item's of the same pair in the list, as
-/// OpenAPI says, so the order the path item lists them in stays. Nothing else
-/// merges: the same name in another place is another parameter, which
-/// [`namesake`] deals with. The ignored headers are not parameters of the
-/// operation, so they are left out here and neither refuse a document nor take
-/// a name from another parameter.
-fn declared<'d>(
-    id: &str,
+/// entry takes the slot of the path item's entry of the same pair, as OpenAPI
+/// says, so the order the path item lists them in stays, and the operation's
+/// other entries follow in the order it lists them. This is the one order the
+/// document fixes: `openapiv3` keeps none between a path item's `parameters` and
+/// its methods. Nothing else merges: the same name in another place is another
+/// parameter, which [`namesake`] deals with. The ignored headers are not
+/// parameters of the operation, so they are left out here and neither refuse a
+/// document nor take a name from another parameter.
+///
+/// The generator reads the same list, so a wrapper's argument is typed by the
+/// entry that won.
+pub(crate) fn declared<'d>(
     item: &'d PathItem,
     op: &'d openapiv3::Operation,
     components: &'d Components,
-) -> Result<Vec<&'d Parameter>, LoadError> {
+) -> Result<Vec<&'d Parameter>, RefError> {
     let followed = |list: &'d [ReferenceOr<Parameter>]| {
         list.iter()
-            .map(|param| {
-                resolve(param, |key| components.parameters.get(key), "parameters").map_err(
-                    |source| LoadError::ParameterRef {
-                        op: id.to_owned(),
-                        source,
-                    },
-                )
-            })
+            .map(|param| resolve(param, |key| components.parameters.get(key), "parameters"))
             .collect::<Result<Vec<&'d Parameter>, _>>()
     };
     let same = |a: &Parameter, b: &Parameter| {
         a.parameter_data_ref().name == b.parameter_data_ref().name && place(a) == place(b)
     };
-    // Whether a slot holds an entry of the operation already, so that a second
-    // entry of the operation with one name and place stays a second parameter.
-    let mut merged: Vec<(&Parameter, bool)> = followed(&item.parameters)?
+    let mut merged: Vec<Slot<'d>> = followed(&item.parameters)?
         .into_iter()
-        .map(|param| (param, false))
+        .map(Slot::Inherited)
         .collect();
     for over in followed(&op.parameters)? {
         match merged
             .iter_mut()
-            .find(|(param, taken)| !*taken && same(param, over))
+            .find(|slot| matches!(slot, Slot::Inherited(param) if same(param, over)))
         {
-            Some(slot) => *slot = (over, true),
-            None => merged.push((over, true)),
+            Some(slot) => *slot = Slot::Own(over),
+            None => merged.push(Slot::Own(over)),
         }
     }
     Ok(merged
-        .into_iter()
-        .map(|(param, _)| param)
+        .iter()
+        .map(Slot::parameter)
         .filter(|param| !ignored(param))
         .collect())
+}
+
+/// The entry of `declared` that a flag was read from: the one with the flag's
+/// name that goes where the flag's value goes.
+#[cfg(feature = "generate")]
+pub(crate) fn entry_of_flag<'d>(
+    declared: &[&'d Parameter],
+    name: &str,
+    location: Location,
+) -> Option<&'d Parameter> {
+    declared.iter().copied().find(|param| {
+        param.parameter_data_ref().name == name
+            && sent_in(param).is_some_and(|(sent, _)| sent == location)
+    })
 }
 
 /// The variables of a path template, in the order the path writes them. A `{`
@@ -1035,7 +1104,7 @@ fn reconcile(id: &str, path: &str, params: &[&Parameter]) -> Result<(), LoadErro
 ///
 /// A value reaches a parameter by its name alone, so the second parameter with
 /// a name could never be given one: [`Operation::param`] finds the first.
-fn namesake(earlier: &[&Parameter], param: &Parameter) -> Option<&'static str> {
+fn namesake(earlier: &[&Parameter], param: &Parameter) -> Option<Place> {
     earlier
         .iter()
         .copied()
@@ -1237,7 +1306,7 @@ impl Param {
     fn build(
         op: &str,
         param: &Parameter,
-        namesake: Option<&str>,
+        namesake: Option<Place>,
         components: &Components,
         flags: &mut Namespace,
     ) -> Result<Self, LoadError> {
@@ -1249,6 +1318,7 @@ impl Param {
             return Err(LoadError::Parameter {
                 op: op.to_owned(),
                 name: data.name.clone(),
+                place: place(param),
                 why: why.clone(),
             });
         }
@@ -1322,7 +1392,7 @@ fn companions(op: &str, params: &[Param]) -> Result<(), LoadError> {
 fn shape_of(
     op: &str,
     param: &Parameter,
-    namesake: Option<&str>,
+    namesake: Option<Place>,
     components: &Components,
     flags: &mut Namespace,
 ) -> Result<Shape, LoadError> {
@@ -1362,7 +1432,7 @@ fn shape_of(
     // After the name is spelled, and before it claims a flag: a parameter that
     // a value can never reach takes nothing from the namespace.
     if let Some(place) = namesake {
-        return Ok(Shape::Unreachable(Unsupported::Shared(place.to_owned())));
+        return Ok(Shape::Unreachable(Unsupported::Shared(place)));
     }
     Ok(Shape::Flag {
         flag: flags

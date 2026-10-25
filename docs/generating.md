@@ -462,10 +462,11 @@ Three things are worth knowing:
 - **One wire name gets one argument.** A parameter is identified by its name and
   its place, so a document may use `ref` in the path and again in the query, and
   an operation may override a parameter of its path item. The override is one
-  argument, with the type that the operation's entry states. The request
-  builder is given values by name alone, so the second of two parameters with
-  one name has no argument, and the wrapper's own documentation says so, as it
-  does for any parameter it cannot carry.
+  argument, with the type that the operation's entry states, inline or by a
+  `$ref`. The request builder is given values by name alone, so the one that
+  comes later of two parameters with one name has no argument (the order is in
+  [docs/cli.md](cli.md#parameters-with-no-flag)), and the wrapper's own
+  documentation says so, as it does for any parameter it cannot carry.
 
 [typify]: https://docs.rs/typify
 [bon]: https://bon-rs.com

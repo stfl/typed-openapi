@@ -124,7 +124,8 @@ answers a test from a script instead, are in [docs/client.md][client].
   name that an earlier parameter of the operation has carry no flag: each is
   named on its subcommand's help, and refuses the document only where it is
   `required`. The headers `Accept`, `Content-Type` and `Authorization` are not
-  parameters at all, as OpenAPI says, so a credential is never a flag.
+  parameters at all, as OpenAPI says, so the `Authorization` header is never a
+  flag. A credential that the document declares under another name still is one.
 - **No OpenAPI 3.1.** The crate reads OpenAPI 3.0. A document whose `openapi`
   says another version is refused, and the refusal names it: 3.1 spells some
   rules another way and means others that 3.0 does not have, so a reading as

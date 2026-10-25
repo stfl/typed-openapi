@@ -319,7 +319,8 @@ the crate follows [Semantic Versioning][semver].
     word in `x-cli-gates`, in an Overlay that removes the list and writes it
     again, because an `update` appends to a list;
   - a required parameter (`Parameter`). Repair: drop its `required` in an
-    Overlay;
+    Overlay, where the parameter is not in the path; the message says which
+    repair loads;
   - the word of `Loading::commit` and `Settings::commit_word`
     (`ConfirmationError::Spelling`). Repair: an ASCII word.
 
@@ -429,31 +430,54 @@ the crate follows [Semantic Versioning][semver].
   `Invocation::new` with "given 2". It is one parameter now, in the place the
   path item lists it, held to the rules the operation's entry states, so
   `Operation::params()` lists it once, the command line has `--id`, and the
-  wrapper is `get_thing(id)` with the type of the operation's entry. A parameter
-  of the operation that overrides nothing follows the path item's. The same name
-  in another place does not override: it is the next entry. Repair: run the
-  bless step again, and drop the extra argument at a call of such a wrapper. A
-  script that typed `--param-id` loses the flag.
+  wrapper is `get_thing(id)` with the type of the operation's entry, whether the
+  operation states it inline or by a `$ref`. A parameter of the operation that
+  overrides nothing follows the path item's. The same name in another place does
+  not override: it is the next entry. A parameter that the operation gives by a
+  `$ref` alone has its wrapper argument too, where the bless step refused it
+  with "is not declared on this operation". Repair: run the bless step again,
+  and drop the extra argument at a call of such a wrapper. A script that typed
+  `--param-id` loses the flag.
 - **A second parameter with one name is carried with no flag.** `Values` and
   `Operation::param` find a parameter by its name, so of `ref` in the path and
   `ref` in the query only the first can be given a value. The second had a flag
   (`--param-ref`) and a wrapper argument (`ref_2`) that could never send,
-  because every value was filed under the first. The one the document lists
-  later is now `Shape::Unreachable(Unsupported::Shared(place))`, and its long
-  help and the documentation of the wrapper say it is sharing its name with the
-  `path` parameter. `Unsupported::Shared(String)` is a new variant of
-  `Unsupported`, which is not `#[non_exhaustive]`, so a `match` on it with no
-  `_` arm stops compiling; `place` is `path`, `query`, `header` or `cookie`. The
-  variant is in the blob, so `Document::MODEL_LAYOUT` is 5. A document that
-  loaded is refused where the later parameter is `required`
-  (`LoadError::Parameter`, with the new reason). Repair: run the bless step
-  again; for a document that is refused, drop the `required` of the later
-  parameter in an Overlay. A script that typed `--param-ref` loses the flag.
+  because every value was filed under the first. The one that comes later in
+  `Operation::params()` is now `Shape::Unreachable(Unsupported::Shared(place))`,
+  and its long help and the documentation of the wrapper say it is sharing its
+  name with the `path` parameter. That list is the path item's parameters in the
+  order the path item lists them, with the operation's override in the slot of
+  the entry it replaces, and then the operation's other parameters in the order
+  it lists them. `Unsupported::Shared(Place)` is a new variant of `Unsupported`,
+  which is not `#[non_exhaustive]`, so a `match` on it with no `_` arm stops
+  compiling. `Place` is a new public enum (`typed_openapi::Place`: `Path`,
+  `Query`, `Header` and `Cookie`) that displays as the `in` of the document. The
+  variant and the enum are in the blob, so `Document::MODEL_LAYOUT` is 5. A
+  document that loaded is refused where the later parameter is `required`
+  (`LoadError::Parameter`, with the new reason), and the earlier one may be a
+  parameter that has no flag itself, such as an `in: cookie`. Repair: run the
+  bless step again; for a document that is refused, the message names the
+  Overlay (the next entry), and `docs/cli.md` says what the rule costs. A script
+  that typed `--param-ref` loses the flag.
+- **`LoadError::Parameter` says where the parameter is, and names a repair that
+  loads.** The message named "correct the parameter in an Overlay, or drop its
+  `required`" for every refusal, but a path parameter that is not `required` is
+  refused too (`OptionalPathParameter`), so for a path parameter the second half
+  was no repair. The variant has a new field, `place: Place`, so a pattern on it
+  with no `..` stops compiling; `LoadError` is `#[non_exhaustive]`, which does
+  not cover a field. The message now names:
+  - for a parameter off the path, to correct it or to drop its `required`;
+  - for a path parameter, to correct it;
+  - for a name that another parameter has, to remove that parameter, and for a
+    parameter off the path whose namesake is a path parameter, to drop its
+    `required`, because the template needs the namesake.
+
+  Repair: add `..` or `place` to the pattern.
 - **A path template and its path parameters must agree.** A request went out
   with `{id}` in its path, or with a required flag whose value was thrown away,
   and `http::Uri` accepted the braces, so a confirmed write was sent too. Each
-  of these is a `LoadError` that names the operation, the path and the
-  parameter, and each is mended by an Overlay:
+  of these is a `LoadError` that names the operation, the path and the name, and
+  each is mended by an Overlay:
   - `UnboundVariable { op, path, name }`: a variable in the path with no path
     parameter of that name. Repair: add the parameter. A parameter in the query
     or a header with the name does not answer it.
@@ -466,7 +490,7 @@ the crate follows [Semantic Versioning][semver].
   to the first server of the document, so an upload endpoint on another host was
   sent to the wrong one, in silence. `LoadError::Servers { op, at }` names the
   operation and spells the list as an Overlay names a target, such as
-  `$.paths['/upload'].post.servers`. A path item's list is refused at the first
+  `$.paths['/upload'].post.servers`. A path item's list is refused at an
   operation under it, and a path item with no operation is not refused. An empty
   list is no list. Repair: an Overlay `remove` action with that target
   (`docs/overlay.md`), after which the request goes to the first server of the
@@ -479,10 +503,13 @@ the crate follows [Semantic Versioning][semver].
   which put the credential in argv, in shell history and in every dry run. They
   are not parameters of the operation now: no flag, no wrapper argument, no
   `Shape::Unreachable`, and no refusal of a document that declares one as
-  `required`. A value given for one is `ValueError::UnknownParam`. Repair: set
-  the header in the client adapter (`docs/client.md`), where a credential
-  belongs, and drop the argument at a call of a wrapper that took one. A script
-  that typed `--authorization` loses the flag.
+  `required`. A value given for one is `ValueError::UnknownParam`. A document
+  whose `x-cli-requires` names one of the three loaded, and is refused now
+  (`RequiresUnknown`: the header is not a parameter of the operation). Repair:
+  set the header in the client adapter (`docs/client.md`), where a credential
+  belongs, and drop the argument at a call of a wrapper that took one; for the
+  refusal, drop the name from `x-cli-requires` in an Overlay. A script that typed
+  `--authorization` loses the flag.
 
 ### Removed
 

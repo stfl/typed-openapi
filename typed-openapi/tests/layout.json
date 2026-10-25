@@ -291,6 +291,22 @@
           }
         ]
       },
+      "Place": {
+        "ENUM": {
+          "0": {
+            "Path": "UNIT"
+          },
+          "1": {
+            "Query": "UNIT"
+          },
+          "2": {
+            "Header": "UNIT"
+          },
+          "3": {
+            "Cookie": "UNIT"
+          }
+        }
+      },
       "Scalar": {
         "ENUM": {
           "0": {
@@ -408,7 +424,9 @@
           },
           "5": {
             "Shared": {
-              "NEWTYPE": "STR"
+              "NEWTYPE": {
+                "TYPENAME": "Place"
+              }
             }
           }
         }

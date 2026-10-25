@@ -324,7 +324,7 @@ by `content` instead of `schema`, one whose schema is neither a value nor a list
 of values, one declaring a `style` this CLI does not write — `spaceDelimited`,
 `pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — one
 whose *name* has no kebab-case spelling, and one whose name an earlier parameter
-of the operation has. The style is read whatever the schema is, because it is
+of the operation has (the list is below). The style is read whatever the schema is, because it is
 not only about delimiters: `matrix` puts a `;name=` in front of a single value
 too.
 
@@ -334,15 +334,25 @@ named `*` or `()` reduces to nothing under it. A name with a character outside
 ASCII, such as `straße`, has no spelling either: it is not kebab-cased to
 `stra-e`, and nothing is transliterated.
 
+The parameters of an operation are one list. It holds the path item's
+parameters in the order the path item lists them, with a parameter of the
+operation that has the name and the place of one of them in that one's place,
+and then the operation's other parameters in the order the operation lists them.
+A path-level `id` that an operation overrides is one `--id`, held to the rules
+the operation's entry states, and it keeps its place in the wrapper's arguments
+and on the help page.
+
 OpenAPI tells two parameters apart by their name and their place, so `ref` in
 the path and `ref` in the query are two parameters. A value reaches a parameter
-by its name alone, on the command line and in the typed wrapper alike, so the
-one the document lists first has the flag and the one it lists later has none.
+by its name alone, on the command line and in the typed wrapper alike, so of
+two parameters with one name the one that comes first in the list has the flag
+and the one that comes later has none.
 
-An operation's parameter that has the name and the place of its path item's
-replaces it, in the place the path item lists it. A path-level `id` that an
-operation overrides is one `--id`, held to the rules the operation's entry
-states, and the operation's other parameters follow the path item's.
+That rule has two costs. A required path parameter that comes after its
+namesake refuses the document, because it is required and has no flag. And a
+parameter that can have no flag, an `in: cookie` or a `content` one, still holds
+its name, so a later query or header parameter with that name has none either.
+The repair of both is an Overlay that removes the namesake that comes first.
 
 None of them refuses the document. The parameter stays in the reduction, the
 subcommand grows nothing for it, and its long help carries a line of its own
@@ -358,9 +368,16 @@ the `path` parameter.
 
 The one exception is a parameter the document marks `required: true`. That
 operation could never build a correct request, so it is a `LoadError::Parameter`
-naming the parameter and the reason when the document is read, and an
-[Overlay](overlay.md) is the way out — retype the parameter, or drop its
-`required`.
+naming the parameter, the reason and where it is when the document is read, and
+an [Overlay](overlay.md) is the way out. The error names a repair that loads:
+
+- Off the path, correct the parameter or drop its `required`.
+- A path parameter is always required (see below), so only the correction is
+  named for one.
+- A name that another parameter has is mended by removing that parameter from
+  wherever the document declares it, which also gives this one its flag. When
+  the other is a path parameter the template needs it, so a required query or
+  header parameter with that name can only drop its `required`.
 
 An object is refused a spelling rather than given a guessed one. OpenAPI says
 how a *flat* object serialises under `deepObject` and says nothing about a
@@ -379,7 +396,7 @@ repairs one.
 The path template and the path parameters are held to each other while the
 document is reduced. A request that went out with `{id}` in it, or with a value
 thrown away, looks sent and is not read. Each of these is a `LoadError` that
-names the operation and the parameter, and each names the Overlay that mends it:
+names the operation and the name, and each names the Overlay that mends it:
 
 | the document has | the repair |
 |---|---|
@@ -399,10 +416,12 @@ what it accepts is the client's, and a credential is a security scheme. The
 reduction drops the three, so none of them grows a flag, none is carried as a
 parameter with no flag, and a required one does not refuse the document, which
 a parameter with no flag would. A converted Swagger 2 document often declares
-them. So a credential never lands in a shell's history or in the output of a
-dry run, and a request carries one `content-type`, the body's. A parameter
-named `authorization` in the query is not a header, and is a flag like any
-other.
+them. So the `Authorization` header is never a flag, and a bearer token never
+lands in a shell's history or in the output of a dry run, and a request carries
+one `content-type`, the body's. A credential that the document declares under
+another name, such as an `X-Api-Key` header or an `api_key` query parameter, is
+a flag like any other parameter, and so is a parameter named `authorization` in
+the query, which is not a header.
 
 ### Per-field flags are merged over `--json-body`
 

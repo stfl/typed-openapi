@@ -1,11 +1,12 @@
 //! The request goes to the path and the host that the document declares.
 //!
 //! `{id}` never goes on the wire, a path-level parameter that an operation
-//! overrides can be invoked, a credential never becomes a flag, and no request
-//! goes to a host the document did not mean. Each case is the input of a probe
-//! of SEV-249 (`p01` to `p06` and `p11d` of `A3a/reduce`). A case that refuses a
-//! document asserts the variant beside the words, and where the words name a
-//! repair the case loads the document with that repair, so they are true.
+//! overrides can be invoked, the `Authorization` header never becomes a flag, and
+//! no request goes to a host the document did not mean. Each case is the input of
+//! a probe of SEV-249 (`p01` to `p06` and `p11d` of `A3a/reduce`) or of a review
+//! of the slice. A case that refuses a document asserts the variant beside the
+//! words and loads the document with the repair the words name, so they are
+//! true.
 
 #![expect(
     clippy::expect_used,
@@ -15,7 +16,7 @@
 
 use clap::error::ErrorKind;
 use typed_openapi::{
-    Document, Invocation, LoadError, Location, Shape, Unsupported, ValueError, Values, tree,
+    Document, Invocation, LoadError, Location, Place, Shape, Unsupported, ValueError, Values, tree,
 };
 
 /// A document with one server and whatever the case puts under `paths`.
@@ -80,8 +81,8 @@ const OVERRIDDEN: &str = "  /vouchers/{id}:
       responses: { \"200\": { description: OK } }
 ";
 
-/// `p01`. The operation gets two required flags, `--id` and `--param-id`, and
-/// neither alone nor both together can be sent.
+/// `p01`. The path item's entry and the operation's of one name and place are one
+/// parameter, so one `--id` is the whole of what the request needs.
 #[test]
 fn a_path_level_parameter_that_the_operation_overrides_is_one_parameter() {
     let doc = loaded(OVERRIDDEN);
@@ -164,7 +165,7 @@ fn a_second_entry_of_the_operation_with_the_same_name_and_place_replaces_nothing
     assert!(matches!(first.shape(), Shape::Flag { .. }));
     assert_eq!(
         second.shape(),
-        &Shape::Unreachable(Unsupported::Shared("query".to_owned()))
+        &Shape::Unreachable(Unsupported::Shared(Place::Query))
     );
 }
 
@@ -196,10 +197,7 @@ fn a_parameter_in_another_location_overrides_nothing() {
         .collect();
     assert_eq!(
         places,
-        [
-            Ok(Location::Path),
-            Err(Unsupported::Shared("path".to_owned()))
-        ]
+        [Ok(Location::Path), Err(Unsupported::Shared(Place::Path))]
     );
 }
 
@@ -212,8 +210,8 @@ const SHARED: &str = "  /logs/{ref}:
       responses: { \"201\": { description: OK } }
 ";
 
-/// `p02`. One wire name in the path and the query is legal, and the flag for the
-/// query's could never send, because every value was filed under the path's.
+/// `p02`. One wire name in the path and the query is legal. Only the parameter
+/// that comes first has a flag, because every value is filed under the name.
 #[test]
 fn of_two_parameters_with_one_name_the_one_the_document_lists_later_is_unreachable() {
     let doc = loaded(SHARED);
@@ -231,12 +229,20 @@ fn of_two_parameters_with_one_name_the_one_the_document_lists_later_is_unreachab
     ));
     assert_eq!(
         query.shape(),
-        &Shape::Unreachable(Unsupported::Shared("path".to_owned()))
+        &Shape::Unreachable(Unsupported::Shared(Place::Path))
     );
     assert_eq!(
-        Unsupported::Shared("path".to_owned()).to_string(),
+        Unsupported::Shared(Place::Path).to_string(),
         "sharing its name with the `path` parameter"
     );
+}
+
+/// A place displays as the word the document spells `in` with.
+#[test]
+fn a_place_displays_as_the_word_the_document_spells_in_with() {
+    let spelled = [Place::Path, Place::Query, Place::Header, Place::Cookie].map(|p| p.to_string());
+
+    assert_eq!(spelled, ["path", "query", "header", "cookie"]);
 }
 
 /// `Values` is keyed by name, so the value reaches the parameter that holds the
@@ -272,11 +278,142 @@ fn the_values_of_a_list_are_not_counted_against_a_namesake() {
     );
 }
 
+// The repair that `Parameter` names depends on where the refused parameter is
+// and on why it has no flag, and each one loads the document.
+
 /// A required parameter that no flag can carry is the document's to mend, so it
-/// is refused by name as any other is.
+/// is refused by name as any other is. Off the path it can stop being required.
 #[test]
-fn a_required_parameter_that_shares_a_name_refuses_the_document_by_name() {
-    let paths = "  /logs/{ref}:
+fn a_required_parameter_off_the_path_is_corrected_or_stops_being_required() {
+    const PATHS: &str = "  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - { name: ids, in: query, required: true, style: pipeDelimited, schema: { type: array, items: { type: string } } }
+      responses: { \"200\": { description: OK } }
+";
+    let target = "$.paths['/things'].get.parameters[0]";
+
+    let error = refused(PATHS);
+
+    assert!(
+        matches!(&error, LoadError::Parameter { op, name, place: Place::Query, why: Unsupported::Style(style) }
+            if op == "listThings" && name == "ids" && style == "pipeDelimited"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "listThings: parameter `ids` is declared with `style: pipeDelimited`, which this CLI \
+         does not serialise, and the document requires it; correct the parameter in an \
+         Overlay, or drop its `required`"
+    );
+    for update in ["{ style: form }", "{ required: false }"] {
+        Document::load(&document(PATHS), &[&updating(target, update)])
+            .unwrap_or_else(|error| panic!("the Overlay `{update}` loads the document: {error}"));
+    }
+}
+
+/// A path parameter that is not `required` is refused too, so dropping the
+/// `required` of one is no repair, and the words do not name it.
+#[test]
+fn a_required_path_parameter_is_corrected_and_never_made_optional() {
+    const PATHS: &str = "  /things/{id}:
+    get:
+      operationId: getThing
+      parameters:
+        - { name: id, in: path, required: true, style: matrix, schema: { type: string } }
+      responses: { \"200\": { description: OK } }
+";
+    let target = "$.paths['/things/{id}'].get.parameters[0]";
+
+    let error = refused(PATHS);
+
+    assert!(
+        matches!(
+            &error,
+            LoadError::Parameter {
+                place: Place::Path,
+                why: Unsupported::Style(_),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "getThing: parameter `id` is declared with `style: matrix`, which this CLI does not \
+         serialise, and the document requires it; correct the parameter in an Overlay"
+    );
+    let corrected = Document::load(&document(PATHS), &[&updating(target, "{ style: simple }")])
+        .expect("the Overlay corrects the style");
+    assert_eq!(names(&corrected, "getThing"), ["id"]);
+    let optional = Document::load(
+        &document(PATHS),
+        &[&updating(target, "{ required: false }")],
+    )
+    .expect_err("a path parameter that is not required is refused");
+    assert!(
+        matches!(optional, LoadError::OptionalPathParameter { .. }),
+        "{optional:?}"
+    );
+}
+
+/// The parameter that the document lists later is the one that has no flag, so
+/// removing the one before it gives it the flag.
+#[test]
+fn a_required_namesake_off_the_path_is_given_its_flag_by_removing_the_other() {
+    const PATHS: &str = "  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - { name: q, in: header, schema: { type: string } }
+        - { name: q, in: query, required: true, schema: { type: string } }
+      responses: { \"200\": { description: OK } }
+";
+
+    let error = refused(PATHS);
+
+    assert!(
+        matches!(&error, LoadError::Parameter { op, name, place: Place::Query, why: Unsupported::Shared(Place::Header) }
+            if op == "listThings" && name == "q"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "listThings: parameter `q` is sharing its name with the `header` parameter, and the \
+         document requires it; remove the `header` parameter `q` in an Overlay, or drop its \
+         `required`"
+    );
+    let removed = Document::load(
+        &document(PATHS),
+        &[&removing("$.paths['/things'].get.parameters[0]")],
+    )
+    .expect("the Overlay removes the header");
+    assert!(matches!(
+        removed
+            .get("listThings")
+            .and_then(|op| op.param("q"))
+            .map(typed_openapi::Param::shape),
+        Some(Shape::Flag {
+            location: Location::Query,
+            ..
+        })
+    ));
+    Document::load(
+        &document(PATHS),
+        &[&updating(
+            "$.paths['/things'].get.parameters[1]",
+            "{ required: false }",
+        )],
+    )
+    .expect("the Overlay drops the `required`");
+}
+
+/// The template names a path parameter, so the words offer no removal of one:
+/// the document would then be refused for the variable.
+#[test]
+fn a_required_namesake_of_a_path_parameter_drops_its_required() {
+    const PATHS: &str = "  /logs/{ref}:
     post:
       operationId: appendLogEntry
       parameters:
@@ -285,21 +422,20 @@ fn a_required_parameter_that_shares_a_name_refuses_the_document_by_name() {
       responses: { \"201\": { description: OK } }
 ";
 
-    let error = refused(paths);
+    let error = refused(PATHS);
 
     assert!(
-        matches!(&error, LoadError::Parameter { op, name, why }
-            if op == "appendLogEntry" && name == "ref"
-                && *why == Unsupported::Shared("path".to_owned())),
+        matches!(&error, LoadError::Parameter { op, name, place: Place::Query, why: Unsupported::Shared(Place::Path) }
+            if op == "appendLogEntry" && name == "ref"),
         "{error:?}"
     );
     assert_eq!(
         error.to_string(),
         "appendLogEntry: parameter `ref` is sharing its name with the `path` parameter, and the \
-         document requires it; correct the parameter in an Overlay, or drop its `required`"
+         document requires it; drop its `required` in an Overlay"
     );
     let mended = Document::load(
-        &document(paths),
+        &document(PATHS),
         &[&updating(
             "$.paths['/logs/{ref}'].post.parameters[1]",
             "{ required: false }",
@@ -307,11 +443,130 @@ fn a_required_parameter_that_shares_a_name_refuses_the_document_by_name() {
     )
     .expect("the Overlay drops the `required`");
     assert!(mended.get("appendLogEntry").is_some());
+    let unbound = Document::load(
+        &document(PATHS),
+        &[&removing("$.paths['/logs/{ref}'].post.parameters[0]")],
+    )
+    .expect_err("the template needs the path parameter");
+    assert!(
+        matches!(unbound, LoadError::UnboundVariable { .. }),
+        "{unbound:?}"
+    );
+}
+
+const PATH_LEVEL_QUERY: &str = "  /logs/{ref}:
+    parameters:
+      - { name: ref, in: query, schema: { type: string } }
+    post:
+      operationId: appendLogEntry
+      parameters:
+        - { name: ref, in: path, required: true, schema: { type: string } }
+      responses: { \"201\": { description: OK } }
+";
+
+/// A path parameter has no `required` to drop, so the only repair that loads is
+/// the removal of the parameter it shares the name with.
+#[test]
+fn a_path_parameter_that_shares_its_name_is_given_its_flag_by_removing_the_other() {
+    let error = refused(PATH_LEVEL_QUERY);
+
+    assert!(
+        matches!(&error, LoadError::Parameter { op, name, place: Place::Path, why: Unsupported::Shared(Place::Query) }
+            if op == "appendLogEntry" && name == "ref"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "appendLogEntry: parameter `ref` is sharing its name with the `query` parameter, and the \
+         document requires it; remove the `query` parameter `ref` in an Overlay"
+    );
+    let mended = Document::load(
+        &document(PATH_LEVEL_QUERY),
+        &[&removing("$.paths['/logs/{ref}'].parameters[0]")],
+    )
+    .expect("the Overlay removes the query parameter");
+    assert!(matches!(
+        mended
+            .get("appendLogEntry")
+            .and_then(|op| op.param("ref"))
+            .map(typed_openapi::Param::shape),
+        Some(Shape::Flag {
+            location: Location::Path,
+            ..
+        })
+    ));
+    let optional = Document::load(
+        &document(PATH_LEVEL_QUERY),
+        &[&updating(
+            "$.paths['/logs/{ref}'].post.parameters[0]",
+            "{ required: false }",
+        )],
+    )
+    .expect_err("a path parameter that is not required is refused");
+    assert!(
+        matches!(optional, LoadError::OptionalPathParameter { .. }),
+        "{optional:?}"
+    );
+}
+
+/// "Later" reads the list the reduction builds: the path item's entries in its
+/// order, the operation's entry in the slot of the one it replaces, and then the
+/// operation's others. So the operation's override of the path item's query `ref`
+/// comes before the operation's path `ref` that it lists first, and the path
+/// `ref` is the later one.
+#[test]
+fn an_override_that_takes_the_slot_of_a_path_level_entry_comes_before_the_entries_listed_after_it()
+{
+    const PATHS: &str = "  /logs/{ref}:
+    parameters:
+      - { name: ref, in: query, schema: { type: string } }
+    post:
+      operationId: appendLogEntry
+      parameters:
+        - { name: ref, in: path, required: true, schema: { type: string } }
+        - { name: ref, in: query, description: \"the override\", schema: { type: string } }
+      responses: { \"201\": { description: OK } }
+";
+
+    let error = refused(PATHS);
+
+    assert!(
+        matches!(
+            &error,
+            LoadError::Parameter {
+                place: Place::Path,
+                why: Unsupported::Shared(Place::Query),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let mended = Document::load(
+        &document(PATHS),
+        &[&removing("$.paths['/logs/{ref}'].parameters[0]")],
+    )
+    .expect("the Overlay removes the path-level entry");
+    let op = mended.get("appendLogEntry").expect("the operation");
+    let [path, query] = op.params() else {
+        panic!("two parameters: {:?}", op.params())
+    };
+    assert!(matches!(
+        path.shape(),
+        Shape::Flag {
+            location: Location::Path,
+            ..
+        }
+    ));
+    assert_eq!(
+        query.shape(),
+        &Shape::Unreachable(Unsupported::Shared(Place::Path))
+    );
 }
 
 // ------------------------------------------------------------------ F-11
 
-/// `p03`. The request went to `/vouchers/{id}` with the braces in it.
+/// `p03`. A variable that no path parameter answers is refused, so `{id}` is
+/// never in a request.
 #[test]
 fn a_template_variable_with_no_path_parameter_is_refused() {
     const PATHS: &str = "  /vouchers/{id}:
@@ -344,25 +599,64 @@ fn a_template_variable_with_no_path_parameter_is_refused() {
 }
 
 /// A parameter of another location with the variable's name does not answer it.
+/// The path parameter that the words ask for shares its name with the query one,
+/// and that refusal names the repair that finishes the job.
 #[test]
 fn a_template_variable_is_not_answered_by_a_query_parameter() {
-    let error = refused(
-        "  /vouchers/{id}:
+    const PATHS: &str = "  /vouchers/{id}:
     get:
       operationId: getVoucher
       parameters:
         - { name: id, in: query, required: true, schema: { type: string } }
       responses: { \"200\": { description: OK } }
-",
+";
+    let adding = updating(
+        "$.paths['/vouchers/{id}'].get.parameters",
+        "{ name: id, in: path, required: true, schema: { type: string } }",
     );
+
+    let error = refused(PATHS);
 
     assert!(
-        matches!(&error, LoadError::UnboundVariable { name, .. } if name == "id"),
+        matches!(&error, LoadError::UnboundVariable { op, name, .. } if op == "getVoucher" && name == "id"),
         "{error:?}"
     );
+    assert_eq!(
+        error.to_string(),
+        "getVoucher: `/vouchers/{id}` has the variable `{id}`, and the operation declares no \
+         path parameter of that name; add one in an Overlay"
+    );
+    let added = Document::load(&document(PATHS), &[&adding]).expect_err("the namesake is first");
+    assert!(
+        matches!(
+            &added,
+            LoadError::Parameter {
+                place: Place::Path,
+                why: Unsupported::Shared(Place::Query),
+                ..
+            }
+        ),
+        "{added:?}"
+    );
+    assert!(
+        added
+            .to_string()
+            .ends_with("remove the `query` parameter `id` in an Overlay"),
+        "{added}"
+    );
+    let finished = Document::load(
+        &document(PATHS),
+        &[
+            &adding,
+            &removing("$.paths['/vouchers/{id}'].get.parameters[0]"),
+        ],
+    )
+    .expect("the Overlays add the path parameter and remove the query one");
+    assert_eq!(names(&finished, "getVoucher"), ["id"]);
 }
 
-/// `p04`. The flag was required and its value was thrown away.
+/// `p04`. A path parameter that no variable names is refused, so no required
+/// flag has its value thrown away.
 #[test]
 fn a_path_parameter_with_no_template_variable_is_refused() {
     const PATHS: &str = "  /vouchers:
@@ -393,7 +687,8 @@ fn a_path_parameter_with_no_template_variable_is_refused() {
     assert_eq!(names(&mended, "listVouchers"), Vec::<String>::new());
 }
 
-/// `p05`. The flag was optional, and the request then sent `{id}`.
+/// `p05`. A path parameter that is not `required` is refused, so no flag can be
+/// left out and leave `{id}` in the request.
 #[test]
 fn a_path_parameter_that_is_not_required_is_refused() {
     const PATHS: &str = "  /vouchers/{id}:
@@ -474,8 +769,8 @@ fn the_three_header_names_are_dropped_and_the_document_loads() {
     assert_eq!(names(&doc, "createVoucher"), ["X-Request-Id"]);
 }
 
-/// `ctype.yaml` sent two `content-type` headers, and `main.yaml` put a bearer
-/// token in argv and in the dry run.
+/// `ctype.yaml` and `main.yaml`. The request carries the one `content-type` of its
+/// body, and no header of the three comes from a parameter of the document.
 #[test]
 fn a_request_carries_the_documents_content_type_and_no_credential_of_the_document() {
     let doc = loaded(CREDENTIALS);
@@ -541,7 +836,7 @@ fn the_names_are_compared_without_case_and_only_in_a_header() {
     );
 }
 
-/// A credential never becomes a flag.
+/// The `Authorization` header never becomes a flag, and neither do the two others.
 #[test]
 fn no_flag_is_grown_for_the_dropped_headers() {
     let doc = loaded(CREDENTIALS);
@@ -557,8 +852,8 @@ fn no_flag_is_grown_for_the_dropped_headers() {
 
 // ------------------------------------------------------------------ F-20
 
-/// `p11d`. The request went to the document's first server, and the upload
-/// server was named in the document.
+/// The `/upload` path item of `p11d`, with the `servers` lists the case puts on
+/// the path item and on its `post`.
 fn upload(item_servers: &str, operation_servers: &str) -> String {
     format!(
         "  /upload:\n{item_servers}    post:\n      operationId: upload\n{operation_servers}      \
@@ -603,6 +898,11 @@ fn servers_on_a_path_item_are_refused_and_name_an_operation_under_it() {
             if op == "upload" && at == "$.paths['/upload'].servers"),
         "{error:?}"
     );
+    assert_eq!(
+        error.to_string(),
+        "upload: `servers` stands on `$.paths['/upload'].servers`, and this crate sends every \
+         request to the first server of the document; remove it in an Overlay"
+    );
     let mended = Document::load(
         &document(&paths),
         &[&removing("$.paths['/upload'].servers")],
@@ -611,19 +911,36 @@ fn servers_on_a_path_item_are_refused_and_name_an_operation_under_it() {
     assert!(mended.get("upload").is_some());
 }
 
-/// The probe sets both, and the refusal is of the path item, which it reads
-/// first.
+/// The probe sets both, and the refusal is of the path item, which the reduction
+/// reads first. Its repair leaves the list of the operation, which is refused in
+/// turn with the Overlay that removes it.
 #[test]
 fn servers_on_both_are_refused_at_the_path_item() {
-    let error = refused(&upload(
-        &format!("    {SERVERS}"),
-        &format!("      {SERVERS}"),
-    ));
+    let paths = upload(&format!("    {SERVERS}"), &format!("      {SERVERS}"));
+
+    let error = refused(&paths);
 
     assert!(
         matches!(&error, LoadError::Servers { at, .. } if at == "$.paths['/upload'].servers"),
         "{error:?}"
     );
+    assert_eq!(
+        error.to_string(),
+        "upload: `servers` stands on `$.paths['/upload'].servers`, and this crate sends every \
+         request to the first server of the document; remove it in an Overlay"
+    );
+    let item = removing("$.paths['/upload'].servers");
+    let left = Document::load(&document(&paths), &[&item]).expect_err("the operation's remains");
+    assert!(
+        matches!(&left, LoadError::Servers { at, .. } if at == "$.paths['/upload'].post.servers"),
+        "{left:?}"
+    );
+    let mended = Document::load(
+        &document(&paths),
+        &[&item, &removing("$.paths['/upload'].post.servers")],
+    )
+    .expect("the Overlays remove both");
+    assert!(mended.get("upload").is_some());
 }
 
 /// `servers` with no entry is no server of its own, and a path item that no

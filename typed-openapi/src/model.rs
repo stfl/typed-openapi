@@ -30,6 +30,9 @@ use thiserror::Error;
 // the one type wherever the reading itself is written down.
 #[cfg(feature = "document")]
 pub use self::reduce::{ConfirmationError, LoadError, Loading};
+// The generator reads the parameters of an operation as the reduction did.
+#[cfg(feature = "generate")]
+pub(crate) use self::reduce::{declared, entry_of_flag};
 use crate::names::{CommandName, NameError, renamed, spelled};
 use crate::scalar::Scalar;
 
@@ -272,6 +275,34 @@ impl<'op> Carrier<'op> {
     }
 }
 
+/// Where the document puts a parameter: its `in`.
+///
+/// [`Location`] is where a flag's value goes in the request, and a cookie has no
+/// flag, so the fourth place is only here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Place {
+    /// `in: path`.
+    Path,
+    /// `in: query`.
+    Query,
+    /// `in: header`.
+    Header,
+    /// `in: cookie`.
+    Cookie,
+}
+
+impl std::fmt::Display for Place {
+    /// The word the document spells `in` with.
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(match self {
+            Self::Path => "path",
+            Self::Query => "query",
+            Self::Header => "header",
+            Self::Cookie => "cookie",
+        })
+    }
+}
+
 /// Where a parameter goes in the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Location {
@@ -400,15 +431,14 @@ pub enum Unsupported {
     /// accident.
     Unspellable,
     /// A name that an earlier parameter of the operation already has, in the
-    /// place this string names: `path`, `query`, `header` or `cookie`, as the
-    /// document spells `in`.
+    /// place this value names.
     ///
     /// OpenAPI tells two parameters apart by their name and their place, and
     /// [`Values`](crate::Values) tells them apart by their name alone, so a value
     /// for the name reaches the first parameter that has it and never the
-    /// second. The one the document lists later has no flag, so no flag is left
-    /// that could never send.
-    Shared(String),
+    /// second. The one that comes later in [`Operation::params`] has no flag, so
+    /// no flag is left that could never send.
+    Shared(Place),
 }
 
 impl std::fmt::Display for Unsupported {
