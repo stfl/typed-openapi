@@ -629,6 +629,92 @@ paths:
     );
 }
 
+/// A vendor document at `version` with nothing in it, and a layer that sets
+/// `openapi` to `to` at the root.
+fn relabelled(dir: &Path, version: &str, to: &str) -> Settings {
+    let document = wrote(
+        dir,
+        "vendor.yaml",
+        &format!(
+            "openapi: {version}\ninfo: {{ title: Vendor, version: \"1.0\" }}\nservers: [{{ url: \
+             \"http://localhost:9999\" }}]\npaths: {{}}\n"
+        ),
+    );
+    let layer = wrote(
+        dir,
+        "relabel.yaml",
+        &format!(
+            "overlay: 1.1.0\ninfo: {{ title: t, version: \"1\" }}\nactions:\n  - target: $\n    \
+             description: the version\n    update:\n      openapi: {to}\n"
+        ),
+    );
+    Settings::new(&document).overlay(&layer)
+}
+
+/// The bless step lays the layers itself, and a layer that changes `openapi` is
+/// refused at its file, as `Document::load_with` refuses it at its index. The
+/// error names the file, and the cause names both versions.
+#[test]
+fn a_layer_that_changes_openapi_is_named_by_its_file() {
+    let dir = out("relabel");
+
+    let error = relabelled(&dir, "3.0.3", "3.1.0")
+        .write_to(&dir)
+        .expect_err("the layer changes the version");
+
+    assert!(
+        matches!(&error, GenerateError::Overlay { path, source: OverlayError::OpenApiVersion { before, after } }
+            if path.ends_with("relabel.yaml")
+                && before.as_deref() == Some("3.0.3")
+                && after.as_deref() == Some("3.1.0")),
+        "{error:?}"
+    );
+    let reported = reported(&error);
+    assert!(reported.contains("relabel.yaml"), "{reported}");
+    assert!(
+        reported.contains("changes `openapi` from `3.0.3` to `3.1.0`"),
+        "{reported}"
+    );
+}
+
+/// A 3.1 document is refused for its version, and a layer that would hold it to
+/// 3.0 is refused as well. The bless step asks the vendor's version before it
+/// lays a layer, so the document is what is refused when the layer would also
+/// have been.
+#[test]
+fn a_3_1_document_is_refused_for_its_version_before_the_bless_step_lays_a_layer() {
+    let dir = out("version-first");
+    let document = wrote(
+        &dir,
+        "vendor.yaml",
+        "openapi: 3.1.0\ninfo: { title: Vendor, version: \"1.0\" }\nservers: [{ url: \
+         \"http://localhost:9999\" }]\npaths: {}\n",
+    );
+    let never_applies = wrote(
+        &dir,
+        "never.yaml",
+        "overlay: 1.1.0\ninfo: { title: t, version: \"1\" }\nactions:\n  - target: $.nothing\n    \
+         description: a target that is not there\n    update:\n      x: 1\n",
+    );
+
+    let error = Settings::new(&document)
+        .overlay(&never_applies)
+        .write_to(&dir)
+        .expect_err("a 3.1 document");
+
+    assert!(
+        matches!(&error, GenerateError::Unusable(LoadError::Version { version }) if version == "3.1.0"),
+        "{error:?}"
+    );
+    let control = out("version-first-control");
+    assert!(
+        relabelled(&control, "3.0.3", "3.0.3")
+            .write_to(&control)
+            .is_ok(),
+        "a layer that writes the version the document has is not a change"
+    );
+}
+
 /// Every string a YAML 1.1 reader would misread, as the vendor writes them.
 const LOOKALIKES: &str = r#"
 openapi: 3.0.3

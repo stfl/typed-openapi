@@ -9,7 +9,8 @@
 //! module knows nothing about what any of them is *for*: whether a layer
 //! repairs the vendor's mistakes, sharpens a type, or marks an operation for a
 //! command line is a convention an adoption keeps, not a thing the library
-//! can see.
+//! can see. It knows one thing about the document: `openapi` is the vendor's,
+//! and a layer that changes it is refused ([`OverlayError::OpenApiVersion`]).
 //!
 //! # How YAML is read
 //!
@@ -65,6 +66,40 @@ pub enum OverlayError {
     /// An action of the Overlay could not be laid over the document.
     #[error("the Overlay does not apply")]
     Apply(#[source] Cause),
+    /// The Overlay changed the `openapi` of the document: another version,
+    /// another patch of 3.0, a value that is not text, or no key at all. The
+    /// version is the vendor's. It changes how this crate reads every schema of
+    /// the document, so a label that an Overlay writes can drop rules that
+    /// nobody who reads the Overlay can see.
+    #[error(
+        "the Overlay changes `openapi` from {} to {}; the version is the vendor's, and no Overlay \
+         changes it",
+        stated(.before.as_deref()),
+        stated(.after.as_deref())
+    )]
+    OpenApiVersion {
+        /// The `openapi` key before the layer: the text, or the JSON of a value
+        /// that is not text. `None` is no key.
+        before: Option<String>,
+        /// The `openapi` key after the layer, spelled as `before` is.
+        after: Option<String>,
+    },
+}
+
+/// An `openapi` key as a message shows it.
+fn stated(version: Option<&str>) -> String {
+    version.map_or_else(
+        || "no `openapi` key".to_owned(),
+        |version| format!("`{version}`"),
+    )
+}
+
+/// The `openapi` key of a document as text: the string itself, or the JSON of a
+/// value that is not a string.
+fn shown(version: &serde_json::Value) -> String {
+    version
+        .as_str()
+        .map_or_else(|| version.to_string(), str::to_owned)
 }
 
 /// What the YAML reader or the Overlay engine said, as a message and a place.
@@ -289,6 +324,10 @@ fn action_of_all(findings: &[roas_overlay::validation::ValidationError]) -> Opti
 /// correction a check as well as an edit: an action whose JSONPath no longer
 /// matches — because the vendor renamed or retyped the thing it corrects — is
 /// an error here rather than a silent no-op.
+///
+/// A layer leaves `openapi` as the document had it. The version decides how
+/// every schema is read, so the vendor's is the one that counts, and a layer
+/// that changes it, adds it or removes it is [`OverlayError::OpenApiVersion`].
 pub fn apply(mut doc: serde_json::Value, overlay: &str) -> Result<serde_json::Value, OverlayError> {
     use roas_overlay::apply::Apply as _;
     use roas_overlay::validation::Validate as _;
@@ -308,6 +347,7 @@ pub fn apply(mut doc: serde_json::Value, overlay: &str) -> Result<serde_json::Va
         let place = action_of_all(&invalid.errors).map(Place::Action);
         OverlayError::Invalid(Cause::new(findings.join("; "), place))
     })?;
+    let version = doc.get("openapi").cloned();
     overlay
         .apply(
             &mut doc,
@@ -319,6 +359,12 @@ pub fn apply(mut doc: serde_json::Value, overlay: &str) -> Result<serde_json::Va
                 Some(Place::Action(refused.action_index)),
             ))
         })?;
+    if doc.get("openapi") != version.as_ref() {
+        return Err(OverlayError::OpenApiVersion {
+            before: version.as_ref().map(shown),
+            after: doc.get("openapi").map(shown),
+        });
+    }
     Ok(doc)
 }
 

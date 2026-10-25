@@ -92,10 +92,11 @@ pub enum LoadError {
         #[source]
         source: crate::overlay::OverlayError,
     },
-    /// The overlaid document says it is a version of OpenAPI that this crate
-    /// does not read. 3.1 spells some rules differently from 3.0 and means others
+    /// The vendor's document says it is a version of OpenAPI that this crate does
+    /// not read. 3.1 spells some rules differently from 3.0 and means others
     /// that 3.0 does not have, so reading it as 3.0 would drop a rule in silence
-    /// or refuse a spelling with no place. Support for 3.1 is out of scope.
+    /// or refuse a spelling with no place. Support for 3.1 is out of scope, and
+    /// no Overlay holds a document to 3.0: one that changes `openapi` is refused.
     #[error("the document says `openapi: {version}`, and this crate reads OpenAPI 3.0 only")]
     Version {
         /// The `openapi` key as the document spells it.
@@ -113,19 +114,23 @@ pub enum LoadError {
         #[source]
         source: serde_json::Error,
     },
-    /// The document lists no server, so a request has nowhere to go. OpenAPI
-    /// reads a missing `servers` as `/`, which is relative to wherever the
-    /// document was served from, and a command line has no such place. An Overlay
-    /// adds the server.
+    /// The document lists no server, so it has no default host to give.
+    /// [`Document::base`] is the first server: the default that the command line
+    /// and the typed client both start from, and that a caller replaces when the
+    /// host is theirs to choose. An Overlay adds the server.
     #[error("the document lists no `servers` entry to send requests to; add one in an Overlay")]
     NoServer,
     /// The first server's URL is not a URL, once each variable in it is replaced
     /// by its default. A variable the server does not declare has no default
     /// and stays in the URL as it is written.
-    #[error("`servers[0].url` ({url}) is not a URL")]
+    #[error("`servers[0].url` is not a URL: {}", refused_url(.url, .filled))]
     ServerUrl {
         /// `servers[0].url` as the document spells it.
         url: String,
+        /// The URL with the `default` of each declared variable in place of its
+        /// name, which is the text that was refused. It is `url` itself where
+        /// the URL holds no variable.
+        filled: String,
         /// The `http` crate's reason.
         #[source]
         source: http::uri::InvalidUri,
@@ -417,6 +422,16 @@ pub enum LoadError {
     },
 }
 
+/// The first server's URL as a refusal shows it: as the document spells it, and
+/// where a variable was filled in, the text that was refused beside it.
+fn refused_url(url: &str, filled: &str) -> String {
+    if url == filled {
+        format!("`{url}`")
+    } else {
+        format!("`{url}`, which is `{filled}` with the default of each variable")
+    }
+}
+
 /// Why a word cannot be the confirmation.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ConfirmationError {
@@ -492,8 +507,10 @@ impl Document {
     /// ones before it produced, so the order they are given in is the order
     /// they happen. An empty list runs a document that is already corrected.
     ///
-    /// The document is OpenAPI 3.0. The overlaid document's `openapi` is asked
-    /// first, and any version but `3.0` and `3.0.x` is [`LoadError::Version`].
+    /// The document is OpenAPI 3.0. The vendor's `openapi` is asked first, before
+    /// any Overlay, and any version but `3.0` and `3.0.x` is
+    /// [`LoadError::Version`]. An Overlay that changes `openapi` is refused at
+    /// its layer.
     ///
     /// This is the expensive door, and the `document` feature is what opens it.
     /// A bless step calls it once and writes [`Document::to_blob`] beside the
@@ -550,18 +567,15 @@ impl Document {
         loading: &Loading,
     ) -> Result<Self, LoadError> {
         let mut doc = crate::overlay::parse(document).map_err(LoadError::Overlay)?;
+        // The version first, and the vendor's: a document that is not 3.0 is
+        // refused for what it is, and not for the first spelling of it that the
+        // readers below trip on, or worse, read as 3.0 and drop a rule from. No
+        // layer changes it (`overlay::apply` refuses that), so the version that
+        // is read is the one on the vendor's first line.
+        crate::openapi::require_3_0(&doc)?;
         for (layer, overlay) in overlays.iter().enumerate() {
             doc = crate::overlay::apply(doc, overlay)
                 .map_err(|source| LoadError::Layer { layer, source })?;
-        }
-        // The version first: a document that is not 3.0 is refused for what it
-        // is, and not for the first spelling of it that the readers below trip
-        // on, or worse, read as 3.0 and drop a rule from. It is the overlaid
-        // document's version, the one that is read.
-        if let Some(version) = crate::openapi::unread_version(&doc) {
-            return Err(LoadError::Version {
-                version: version.to_owned(),
-            });
         }
         // Against the corrected document, so that an adopter's own Overlay is
         // what repairs a contradiction, and while it is still the text the
@@ -575,10 +589,13 @@ impl Document {
 
     fn from_openapi(doc: &OpenAPI, commit: &str) -> Result<Self, LoadError> {
         let server = doc.servers.first().ok_or(LoadError::NoServer)?;
-        let base = Uri::try_from(filled(server)).map_err(|source| LoadError::ServerUrl {
-            url: server.url.clone(),
-            source,
-        })?;
+        let with_defaults = filled(server);
+        let base =
+            Uri::try_from(with_defaults.as_str()).map_err(|source| LoadError::ServerUrl {
+                url: server.url.clone(),
+                filled: with_defaults.clone(),
+                source,
+            })?;
         let empty = Components::default();
         // Which segment groups this document is a fact about all of its paths,
         // so it is read once and then applied one path at a time.

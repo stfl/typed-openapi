@@ -39,7 +39,7 @@ pub struct CommandName(String);
 impl CommandName {
     /// `renderVoucher` becomes `render-voucher`; anything that will not reduce to
     /// `[a-z0-9-]` is rejected rather than mangled, and so is a name with a
-    /// letter or a digit outside ASCII, which nothing here transliterates.
+    /// character outside ASCII, which nothing here transliterates.
     ///
     /// `origin` is what the raw name was read off, and it is there for the
     /// error: a document whose own words cannot be spelled is told which word.
@@ -298,16 +298,22 @@ pub(crate) fn renamed(flag: &str, wire_name: &str) -> bool {
 /// name was read off, and it is there for the error: a document whose own words
 /// cannot be spelled is told which word.
 ///
-/// A letter or a digit outside ASCII refuses the name. [`kebab`] would turn it
-/// into a separator, so `straße` would become `stra-e`: a flag that is not the
-/// vendor's word, which nobody can guess from it. Nothing is transliterated,
-/// because `strasse` is a choice, and a choice is the adopter's to write in an
-/// Overlay.
+/// A character outside ASCII refuses the name. [`kebab`] would turn it into a
+/// separator, so `straße` would become `stra-e`, and `é` written as `e` and a
+/// combining accent would become plain `e`: a flag that is not the vendor's
+/// word, which nobody can guess from it. A character that nobody sees (a soft
+/// hyphen, a zero-width space) would become a separator that nobody sees.
+/// Nothing is transliterated, because `strasse` is a choice, and a choice is the
+/// adopter's to write in an Overlay.
+///
+/// The rule is `is_ascii` and not a test for a letter, a digit or a mark.
+/// Whether a character is one of those is a table in the standard library that
+/// changes with the toolchain, and a name must be read the same way by every
+/// compiler.
 pub(crate) fn spelled(origin: &'static str, raw: &str) -> Result<String, NameError> {
     let name = kebab(raw);
     let allowed = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
-    let outside_ascii = |c: char| !c.is_ascii() && c.is_alphanumeric();
-    if name.is_empty() || !name.bytes().all(allowed) || raw.chars().any(outside_ascii) {
+    if name.is_empty() || !name.bytes().all(allowed) || !raw.is_ascii() {
         return Err(NameError {
             origin,
             raw: raw.to_owned(),
@@ -390,9 +396,11 @@ mod tests {
         );
     }
 
-    /// `straße` used to become `stra-e`: kebab-casing took the `ß` for a
-    /// separator, and the flag was no word of the vendor's. Nothing is
-    /// transliterated either, because `strasse` is a choice the adopter makes.
+    /// Kebab-casing alone makes `stra-e` of `straße`, so the flag would be no word
+    /// of the vendor's. Nothing is transliterated either, because `strasse` is a
+    /// choice the adopter makes. The letter written as a base and a combining
+    /// mark is the same letter to a reader, and is refused like the one written
+    /// as a single character.
     #[test]
     fn a_letter_or_a_digit_outside_ascii_is_refused_and_nothing_is_transliterated() {
         for raw in [
@@ -403,6 +411,10 @@ mod tests {
             "日本",
             "x٣",
             "Ünit",
+            "a\u{308}nderungen",
+            "gro\u{308}sse",
+            "cafe\u{301}",
+            "re\u{301}sume\u{301}",
         ] {
             let error = CommandName::new("path segment", raw).expect_err(raw);
             assert_eq!(
@@ -417,15 +429,30 @@ mod tests {
         }
     }
 
-    /// A mark that is no letter and no digit separates words outside ASCII as it
-    /// does inside, so only a name that would lose a letter is refused.
+    /// A character outside ASCII that is no letter and no digit is refused too:
+    /// it would be a separator, and a separator that nobody can see (the soft
+    /// hyphen and the zero-width space) is as much a mangled name as one that
+    /// shows.
     #[test]
-    fn a_mark_outside_ascii_that_is_no_letter_is_a_separator() {
-        let name = CommandName::new("path segment", "list—all");
-        assert_eq!(
-            name.map(|n| n.as_str().to_owned()),
-            Ok("list-all".to_owned())
-        );
+    fn a_character_outside_ascii_that_is_no_letter_is_refused_too() {
+        for raw in [
+            "list\u{2014}all",
+            "list\u{2013}all",
+            "list\u{a0}all",
+            "price\u{20ac}",
+            "fo\u{ad}o",
+            "fo\u{200b}o",
+        ] {
+            let error = CommandName::new("path segment", raw).expect_err(raw);
+            assert_eq!(
+                error,
+                NameError {
+                    origin: "path segment",
+                    raw: raw.to_owned(),
+                },
+                "{raw}"
+            );
+        }
     }
 
     #[cfg(feature = "document")]

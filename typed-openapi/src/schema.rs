@@ -45,9 +45,10 @@ pub enum RefError {
         /// `#/components/schemas/Voucher`.
         reference: String,
     },
-    /// A reference into the inside of a component, such as
-    /// `#/components/schemas/Holder/properties/code`. The pointer is valid, and
-    /// this crate follows a component and goes no further in.
+    /// A reference into the inside of a component this document holds, such as
+    /// `#/components/schemas/Holder/properties/code`. This crate follows a
+    /// component and goes no further in. A reference that goes inside a name
+    /// that no component has is [`RefError::Missing`].
     #[error(
         "`{reference}` points inside a component, and this crate follows only \
          `#/components/<section>/<name>`"
@@ -117,15 +118,23 @@ fn follow<'c, T>(
                         reference: reference.clone(),
                     });
                 }
-                let named = reference.strip_prefix(&prefix);
-                if named.is_some_and(|name| name.contains('/')) {
+                // The component is what comes before the first `/`, and it is
+                // looked up before the rest is read: a pointer into a component
+                // that does not exist is a name to go and look for, and not a
+                // pointer that goes in too far.
+                let rest = reference.strip_prefix(&prefix);
+                let component = rest.and_then(|rest| rest.split('/').next());
+                let Some(found) = component.and_then(section) else {
+                    return Err(RefError::Missing {
+                        reference: reference.clone(),
+                    });
+                };
+                if rest.is_some_and(|rest| rest.contains('/')) {
                     return Err(RefError::Inside {
                         reference: reference.clone(),
                     });
                 }
-                current = named.and_then(section).ok_or_else(|| RefError::Missing {
-                    reference: reference.clone(),
-                })?;
+                current = found;
             }
         }
     }

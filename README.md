@@ -126,14 +126,15 @@ answers a test from a script instead, are in [docs/client.md][client].
 - **No OpenAPI 3.1.** The crate reads OpenAPI 3.0. A document whose `openapi`
   says another version is refused, and the refusal names it: 3.1 spells some
   rules another way and means others that 3.0 does not have, so a reading as
-  3.0 would drop them without a word.
+  3.0 would drop them without a word. The version is the vendor's, so an
+  Overlay that changes `openapi` is refused too.
 - **No guessing at what a request needs.** A document with no `servers` is
   refused, where OpenAPI would send to `/`, and so is an operation with no
   `operationId`. Each refusal names the repair, an Overlay that adds the server
   or the id ([docs/overlay.md][ov]). A server URL with variables uses the
   `default` of each.
-- **No letters outside ASCII in a name.** A command is `[a-z0-9-]`. A path
-  segment, a gate or a parameter that holds a letter or a digit outside ASCII is
+- **No characters outside ASCII in a name.** A command is `[a-z0-9-]`. A path
+  segment, a gate or a parameter that holds a character outside ASCII is
   refused or carried with no flag, and never dropped from the word or
   transliterated: `straße` is not `--stra-e`. A path segment then wants
   `x-cli-group` and `x-cli-command` in an Overlay.

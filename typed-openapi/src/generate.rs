@@ -317,6 +317,11 @@ impl Settings {
         };
 
         let mut overlaid = overlay::parse(&read(&self.document)?).map_err(fault(&self.document))?;
+        // The vendor's version, before the first layer, as `Document::load_with`
+        // asks it: this road lays the layers itself, and a layer that does not
+        // apply to a 3.1 document is a refusal for the document, not for the
+        // layer.
+        crate::openapi::require_3_0(&overlaid).map_err(GenerateError::Unusable)?;
         for layer in &self.overlays {
             overlaid = overlay::apply(overlaid, &read(layer)?).map_err(fault(layer))?;
         }

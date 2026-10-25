@@ -248,43 +248,71 @@ the crate follows [Semantic Versioning][semver].
     `LoadError::Unresolvable { op, name: "requestBody", source }`, as for any
     other body schema. Repair: correct the `$ref` in an Overlay.
 - **A document that is not OpenAPI 3.0 is refused, and the refusal names the
-  version.** `LoadError::Version { version }` is asked before anything else
-  reads the document, and its message is ``the document says `openapi: 3.1.0`,
-  and this crate reads OpenAPI 3.0 only``. `3.0` and `3.0.` with a patch after
-  it are read. A 3.1 document used to load when none of its spellings was one
-  that the model refuses, and then the reduction dropped the rules that 3.1
-  means and 3.0 does not: a `$ref` keeps the `maximum` beside it, and `const` is
-  a rule. The rest were refused with serde's message, which names a spelling and
-  not the version. The version is the overlaid document's, the one that is
-  read. There is no repair that makes 3.1 readable; support for it is out of
-  scope. A document that says 3.1 and uses nothing but what 3.0 has can be held
-  to 3.0 by an Overlay that sets `openapi`, and that Overlay is then the
-  adopter's claim. The README says "OpenAPI 3.0".
+  version.** `LoadError::Version { version }` is asked of the vendor's document
+  before any Overlay is laid and before anything else reads it, and its message
+  is ``the document says `openapi: 3.1.0`, and this crate reads OpenAPI 3.0
+  only``. `3.0`, and `3.0.` with a patch number after it, are read; a
+  pre-release label may follow the patch, as in `3.0.0-rc1`. A 3.1 document
+  loaded when none of its spellings was one that the model refuses, and then
+  the reduction dropped the rules that 3.1 means and 3.0 does not: a `$ref`
+  keeps the `maximum` beside it, and `const` is a rule. The rest were refused
+  with serde's message, which names a spelling and not the version. There is no
+  repair that makes 3.1 readable; support for it is out of scope. The README
+  says "OpenAPI 3.0".
+- **An Overlay that changes `openapi` is refused.**
+  `OverlayError::OpenApiVersion { before, after }` is what `overlay::apply`
+  returns when a layer leaves the key with another value: another version,
+  another patch of 3.0, a value that is not text, or no key. A layer that
+  writes the version the document already has changes nothing and is not
+  refused. The version is the vendor's. It decides how every schema is read, and
+  a label that an Overlay writes can drop rules that nobody who reads the
+  Overlay can see. The message names the version before the layer and the
+  version after it, ``the Overlay changes `openapi` from `3.0.3` to `3.1.0`;
+  the version is the vendor's, and no Overlay changes it``. `LoadError::Layer`
+  names the layer and `GenerateError::Overlay` names the file. `OverlayError`
+  is `#[non_exhaustive]`, so a new variant is not a break. A 3.1 document that
+  an Overlay held to 3.0 loaded at 0.0.2 and is refused now, first for its
+  version, and then there is no repair: the document says 3.1.
 - **A server URL with variables loads, and the two refusals that remain name
   their repair.** The first server's URL takes the `default` of each variable
   in `variables`, which OpenAPI requires, and `Document::base` holds the result.
   It was refused as `LoadError::ServerUrl`. A variable that `variables` does not
-  declare stays in the URL, which is still `ServerUrl`. A document with no
+  declare stays in the URL, which is still `ServerUrl`. `ServerUrl` has the new
+  field `filled`, the URL with the defaults in it, because a default can make
+  the URL bad. Where a variable was filled in, the message shows both, ``
+  `servers[0].url` is not a URL: `https://{tenant}.example.com`, which is
+  `https://my tenant.example.com` with the default of each variable``. Repair:
+  a `match` that binds the fields of `ServerUrl` adds `filled` or `..`. A document with no
   `servers` is `LoadError::NoServer`, whose message is now ``the document lists
   no `servers` entry to send requests to; add one in an Overlay``. An operation
   with no `operationId` is `LoadError::NoOperationId`, whose message is now
   ``<method> <path> has no operationId; add one in an Overlay``. Both are
   refused as before. Repair: the Overlay each message names, shown in
   `docs/overlay.md`. The README's *What it does not do* lists both.
-- **A name with a letter or a digit outside ASCII is refused and not mangled.**
+- **A name with a character outside ASCII is refused and not mangled.**
   `names::spelled` kept the ASCII letters of such a name and made a separator of
-  the rest, so `straße` was the flag `--stra-e` and `/kontakte/änderungen` the
-  group `kontakte nderungen`. It refuses the name and transliterates nothing. A
-  document that loaded is refused where the name is a path segment (`Name`,
-  whose repair is `x-cli-group` and `x-cli-command` in an Overlay), a gate in
-  `x-cli-gates` (`GateName`), a required parameter (`Parameter`: correct it in
-  an Overlay or drop its `required`), or the word of `Loading::commit` and
-  `Settings::commit_word` (`ConfirmationError::Spelling`). It loads and changes
-  where the name is an optional parameter, which is carried with no flag and
-  named on the subcommand's help, or a property of a flat body, which sends the
-  whole body through `--json-body`. A script that typed `--stra-e` no longer
-  finds the flag. A mark outside ASCII that is no letter and no digit is still
-  a separator.
+  the rest, so `straße` was the flag `--stra-e`, `/kontakte/änderungen` the group
+  `kontakte nderungen`, and `é` written as `e` and a combining accent was a plain
+  `e`. It refuses the name and transliterates nothing. The rule is that the name
+  is ASCII, so a letter written as a base and a combining mark, a dash, a
+  no-break space and a character that nobody sees (a soft hyphen, a zero-width
+  space) are refused as a letter is. A document that loaded is refused where the
+  name is:
+  - a path segment (`Name`). Repair: `x-cli-group` and `x-cli-command` in an
+    Overlay;
+  - a gate in `x-cli-gates` (`GateName`). Repair: write the gate with an ASCII
+    word in `x-cli-gates`, in an Overlay that removes the list and writes it
+    again, because an `update` appends to a list;
+  - a required parameter (`Parameter`). Repair: drop its `required` in an
+    Overlay;
+  - the word of `Loading::commit` and `Settings::commit_word`
+    (`ConfirmationError::Spelling`). Repair: an ASCII word.
+
+  It loads and changes where the name is an optional parameter, which is carried
+  with no flag and named on the subcommand's help, or a property of a flat body,
+  which sends the whole body through `--json-body`. No Overlay gives such a
+  parameter its flag back, because its name is the name on the wire. A script
+  that typed `--stra-e` no longer finds the flag.
 - **`GET /{tenant}/vouchers` is `vouchers list`.** Whether a path addresses one
   resource is read from the segments below the group, as `docs/cli.md` says, and
   not from a template above it. A `GET` with a template above the group and none
@@ -295,7 +323,8 @@ the crate follows [Semantic Versioning][semver].
   such as `#/components/schemas/Holder/properties/code`, was `Missing` and
   printed that it does not resolve, though the pointer is valid. It is `Inside`,
   and its message says that this crate follows only
-  `#/components/<section>/<name>`. `RefError` is not `#[non_exhaustive]`, so a
+  `#/components/<section>/<name>`. A pointer inside a name that no component has
+  is still `Missing`. `RefError` is not `#[non_exhaustive]`, so a
   `match` on it with no `_` arm stops compiling. Repair: add an arm for
   `Inside`. The document was refused before and is refused now, and only the
   reason changed. Repair for the document: point the `$ref` at the component.

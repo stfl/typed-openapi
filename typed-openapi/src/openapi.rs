@@ -1,4 +1,5 @@
-//! The overlaid document, read into the OpenAPI object model.
+//! The vendor's document asked for its version, and the overlaid document read
+//! into the OpenAPI object model.
 //!
 //! The model refuses a document with a message and no place: `openapiv3` reads
 //! `paths` through a deserialiser that drops the path inside it, so serde says
@@ -11,6 +12,8 @@ use openapiv3::{OpenAPI, PathItem, ReferenceOr};
 use serde::Deserialize;
 use serde_json::Value;
 use serde_path_to_error::{Path, Segment};
+
+use crate::model::LoadError;
 
 /// The first node of a document that the OpenAPI model refuses.
 #[derive(Debug)]
@@ -25,26 +28,40 @@ pub(crate) struct Misfit {
     pub(crate) source: serde_json::Error,
 }
 
-/// The `openapi` version a document states, when it is one this crate does not
-/// read.
+/// Refuse a document whose `openapi` is a version this crate does not read.
 ///
 /// This crate reads OpenAPI 3.0. 3.1 spells some rules differently, which the
 /// model refuses with no place, and means others that 3.0 does not have, which
 /// the model drops in silence: a `$ref` keeps the `maximum` beside it in 3.1, and
 /// `const` is a rule. So the version is asked before anything else reads the
-/// document.
+/// document, and of the document as the vendor wrote it: an Overlay cannot
+/// change `openapi` (`overlay::apply` refuses it), so no layer relabels a 3.1
+/// document as 3.0 and has its rules dropped.
 ///
-/// A document with no `openapi` key, or one that is not text, has no version to
-/// name, and the model refuses it at the key.
-pub(crate) fn unread_version(document: &Value) -> Option<&str> {
-    let version = document.get("openapi")?.as_str()?;
-    (!is_openapi_3_0(version)).then_some(version)
+/// A document with no `openapi` key has no version to name, and the model
+/// refuses it at `.`. So does a value that is not text, at `openapi`.
+pub(crate) fn require_3_0(document: &Value) -> Result<(), LoadError> {
+    match document.get("openapi").and_then(Value::as_str) {
+        Some(version) if !is_openapi_3_0(version) => Err(LoadError::Version {
+            version: version.to_owned(),
+        }),
+        _ => Ok(()),
+    }
 }
 
-/// `3.0`, and `3.0.` with a patch after it: every version of 3.0 the
-/// specification published.
+/// `3.0`, and `3.0.` with a patch number after it, which a pre-release label may
+/// follow as in `3.0.0-rc1`: every version of 3.0 the specification published.
 fn is_openapi_3_0(version: &str) -> bool {
-    version == "3.0" || version.starts_with("3.0.")
+    let Some(patch) = version.strip_prefix("3.0.") else {
+        return version == "3.0";
+    };
+    let (number, label) = match patch.split_once('-') {
+        Some((number, label)) => (number, Some(label)),
+        None => (patch, None),
+    };
+    !number.is_empty()
+        && number.bytes().all(|b| b.is_ascii_digit())
+        && label.is_none_or(|label| !label.is_empty())
 }
 
 /// Read a document into the OpenAPI model, and say where it stopped if the model

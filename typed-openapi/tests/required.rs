@@ -332,8 +332,8 @@ components:
 /// A document is as long as its vendor wrote it, and a chain of `allOf` hops
 /// is one schema written as many. The walk follows it with a work list and not
 /// with a call per hop, so the stack it needs does not depend on the length: the
-/// check runs here on a thread of 512 KiB, and 7,000 hops used to abort the
-/// process with a stack overflow on a thread of 8 MiB.
+/// check runs here on a thread of 512 KiB. A call per hop overflows the stack at
+/// 7,000 hops, a thread of 8 MiB included.
 ///
 /// The first schema requires `x` and the last one declares it, so finding
 /// nothing is also the proof that the walk went to the end of the chain. The

@@ -795,8 +795,10 @@ impl Document {
     /// anything. The number moves with the layout: a change to a type of the
     /// model that `postcard` writes differently, such as a field added,
     /// removed, reordered or retyped, or a variant added, removed or moved,
-    /// needs a new number. The crate's own tests trace the layout and fail on a
-    /// change that left the number where it was.
+    /// needs a new number. It moves too when a load writes something different
+    /// for the same document and no type changed. The crate's own tests trace
+    /// the layout and fail on a change to a type that left the number where it
+    /// was.
     pub const MODEL_LAYOUT: u32 = 3;
 
     /// The same reduction, already done and written down.

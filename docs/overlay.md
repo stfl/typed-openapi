@@ -9,6 +9,7 @@ when a correction later stops fitting is [docs/drift.md](drift.md).
 - [Why an Overlay](#why-an-overlay)
 - [Action kinds](#action-kinds)
 - [A correction adds; it cannot subtract](#a-correction-adds-it-cannot-subtract)
+- [The version is the vendor's](#the-version-is-the-vendors)
 - [Pointing a field at a named schema](#pointing-a-field-at-a-named-schema)
 - [The tripwire form](#the-tripwire-form)
 - [Writing a target](#writing-a-target)
@@ -120,6 +121,24 @@ read.
 The workaround that does exist is to replace the whole parent object rather than
 the one keyword, which costs every sibling key the vendor wrote. That is usually
 worse than living with the stale keyword.
+
+## The version is the vendor's
+
+`openapi` is the one key of the document that no Overlay changes. The version
+decides how every schema of the document is read, and a label that an Overlay
+writes can drop rules that nobody who reads the Overlay can see: a 3.1 document
+that an Overlay calls `3.0.3` loses the `maximum` beside a `$ref`, and `const`.
+So `typed-openapi` asks the vendor's `openapi` before it lays the first layer,
+and it refuses a layer that changes the key: another version, another patch of
+3.0, a value that is not text, or no key at all. The refusal names the layer and
+both versions:
+
+```
+the Overlay changes `openapi` from `3.0.3` to `3.1.0`; the version is the vendor's, and no Overlay changes it
+```
+
+A document that says 3.1 has no repair in an Overlay. Reading 3.1 is out of
+scope.
 
 ## Pointing a field at a named schema
 
@@ -311,9 +330,10 @@ An operation the vendor ships and documents nowhere:
             "200": { description: OK }
 ```
 
-A document with no `servers`. OpenAPI reads that as `/`, a place relative to
-wherever the document was served from, and a command line has none, so
-`typed-openapi` refuses the document and the Overlay is where the host goes:
+A document with no `servers`. The first server is the default host that the
+command line and the typed client start from, and a caller may replace it. A
+document that lists none has no default to give, so `typed-openapi` refuses the
+document and the Overlay is where the host goes:
 
 ```
 the document lists no `servers` entry to send requests to; add one in an Overlay
