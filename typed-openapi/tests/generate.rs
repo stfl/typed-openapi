@@ -19,6 +19,7 @@ use std::error::Error as _;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
 use typed_openapi::generate::{GenerateError, Settings};
 use typed_openapi::overlay::{self, OverlayError, Place};
 use typed_openapi::{Document, LoadError};
@@ -629,9 +630,10 @@ paths:
     );
 }
 
-/// A vendor document at `version` with nothing in it, and a layer that sets
-/// `openapi` to `to` at the root.
-fn relabelled(dir: &Path, version: &str, to: &str) -> Settings {
+/// A vendor document at `version` with nothing in it, and a layer with one
+/// action that `update`s the root of the document. `update` is the value of
+/// `update:`, written as a flow collection.
+fn with_root_update(dir: &Path, version: &str, update: &str) -> Settings {
     let document = wrote(
         dir,
         "vendor.yaml",
@@ -642,10 +644,10 @@ fn relabelled(dir: &Path, version: &str, to: &str) -> Settings {
     );
     let layer = wrote(
         dir,
-        "relabel.yaml",
+        "layer.yaml",
         &format!(
             "overlay: 1.1.0\ninfo: {{ title: t, version: \"1\" }}\nactions:\n  - target: $\n    \
-             description: the version\n    update:\n      openapi: {to}\n"
+             description: the root\n    update: {update}\n"
         ),
     );
     Settings::new(&document).overlay(&layer)
@@ -653,34 +655,56 @@ fn relabelled(dir: &Path, version: &str, to: &str) -> Settings {
 
 /// The bless step lays the layers itself, and a layer that changes `openapi` is
 /// refused at its file, as `Document::load_with` refuses it at its index. The
-/// error names the file, and the cause names both versions.
+/// error names the file, and the cause names both versions. The inputs are the
+/// ones `Document::load` is given in `tests/reading.rs`: another version,
+/// another patch of 3.0, and a layer that replaces the document with a list and
+/// so leaves no key.
 #[test]
 fn a_layer_that_changes_openapi_is_named_by_its_file() {
-    let dir = out("relabel");
+    for (label, update, after, said) in [
+        (
+            "another-version",
+            "{ openapi: 3.1.0 }",
+            Some(json!("3.1.0")),
+            "changes `openapi` from `3.0.3` to `3.1.0`",
+        ),
+        (
+            "another-patch",
+            "{ openapi: 3.0.0 }",
+            Some(json!("3.0.0")),
+            "changes `openapi` from `3.0.3` to `3.0.0`",
+        ),
+        (
+            "no-key",
+            "[1]",
+            None,
+            "changes `openapi` from `3.0.3` to no `openapi` key",
+        ),
+    ] {
+        let dir = out(&format!("relabel-{label}"));
 
-    let error = relabelled(&dir, "3.0.3", "3.1.0")
-        .write_to(&dir)
-        .expect_err("the layer changes the version");
+        let error = with_root_update(&dir, "3.0.3", update)
+            .write_to(&dir)
+            .expect_err(label);
 
-    assert!(
-        matches!(&error, GenerateError::Overlay { path, source: OverlayError::OpenApiVersion { before, after } }
-            if path.ends_with("relabel.yaml")
-                && before.as_deref() == Some("3.0.3")
-                && after.as_deref() == Some("3.1.0")),
-        "{error:?}"
-    );
-    let reported = reported(&error);
-    assert!(reported.contains("relabel.yaml"), "{reported}");
-    assert!(
-        reported.contains("changes `openapi` from `3.0.3` to `3.1.0`"),
-        "{reported}"
-    );
+        assert!(
+            matches!(&error, GenerateError::Overlay { path, source: OverlayError::OpenApiVersion { before, after: now } }
+                if path.ends_with("layer.yaml")
+                    && before.as_deref() == Some(&json!("3.0.3"))
+                    && now.as_deref() == after.as_ref()),
+            "{label}: {error:?}"
+        );
+        let reported = reported(&error);
+        assert!(reported.contains("layer.yaml"), "{label}: {reported}");
+        assert!(reported.contains(said), "{label}: {reported}");
+    }
 }
 
-/// A 3.1 document is refused for its version, and a layer that would hold it to
-/// 3.0 is refused as well. The bless step asks the vendor's version before it
-/// lays a layer, so the document is what is refused when the layer would also
-/// have been.
+/// A 3.1 document given a layer whose target is not in it is refused for its
+/// version and not for the layer. The bless step asks the vendor's version
+/// before it lays a layer, so the document is what is refused when the layer
+/// would also have been. The control is a 3.0.3 document with a layer that
+/// writes the version it has, which changes nothing.
 #[test]
 fn a_3_1_document_is_refused_for_its_version_before_the_bless_step_lays_a_layer() {
     let dir = out("version-first");
@@ -706,9 +730,14 @@ fn a_3_1_document_is_refused_for_its_version_before_the_bless_step_lays_a_layer(
         matches!(&error, GenerateError::Unusable(LoadError::Version { version }) if version == "3.1.0"),
         "{error:?}"
     );
+    assert_eq!(
+        error.to_string(),
+        "the document does not describe a usable CLI",
+        "the vendor's document is not yet overlaid, so the words must not say it is"
+    );
     let control = out("version-first-control");
     assert!(
-        relabelled(&control, "3.0.3", "3.0.3")
+        with_root_update(&control, "3.0.3", "{ openapi: 3.0.3 }")
             .write_to(&control)
             .is_ok(),
         "a layer that writes the version the document has is not a change"

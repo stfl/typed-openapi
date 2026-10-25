@@ -698,7 +698,8 @@ paths:
     );
     assert!(
         unwrapped(&op).contains(
-            "`*` has no flag: it is named in a way that does not kebab-case into [a-z0-9-]."
+            "`*` has no flag: it is named with a character outside ASCII, or in a way that does \
+             not kebab-case into [a-z0-9-]."
         ),
         "the long help does not say why it has none:\n{}",
         unwrapped(&op)
@@ -709,9 +710,9 @@ paths:
         Document::load(&starred(true), &[]).expect_err("a required one could never be supplied");
     assert_eq!(
         refused.to_string(),
-        "listFirings: parameter `*` is named in a way that does not kebab-case into \
-         [a-z0-9-], and the document requires it; correct the parameter in an Overlay, \
-         or drop its `required`"
+        "listFirings: parameter `*` is named with a character outside ASCII, or in a way that \
+         does not kebab-case into [a-z0-9-], and the document requires it; correct the \
+         parameter in an Overlay, or drop its `required`"
     );
 }
 

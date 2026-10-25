@@ -2,10 +2,10 @@
 //!
 //! The reduction never loads a document with a rule dropped, and a refusal says
 //! what to change. Each case here is the input of a probe of SEV-249 or of a
-//! finding of a review, and asserts the variant beside the words: the variant is
-//! what a caller matches, and the message is what a person reads. Where a
-//! message names a repair, the case also loads the document with that repair, so
-//! the words are true.
+//! finding of a review. A case that refuses a document asserts the variant
+//! beside the words: the variant is what a caller matches, and the message is
+//! what a person reads. Where a message names a repair, the case also loads the
+//! document with that repair, so the words are true.
 
 #![expect(
     clippy::expect_used,
@@ -15,6 +15,7 @@
 use std::fmt::Write as _;
 
 use http::Uri;
+use serde_json::{Value, json};
 use typed_openapi::names::NameError;
 use typed_openapi::overlay::OverlayError;
 use typed_openapi::{
@@ -39,6 +40,11 @@ fn refused(rest: &str) -> LoadError {
 /// The document `rest` makes, as an OpenAPI 3.0.3 document.
 fn loaded(rest: &str) -> Document {
     Document::load(&at("3.0.3", rest), &[]).expect("the document loads")
+}
+
+/// The words a document with the version `version` is refused in.
+fn version_refusal(version: &str) -> String {
+    format!("the document says `openapi: {version}`, and this crate reads OpenAPI 3.0 only")
 }
 
 /// One read operation, with the given parameters and nothing else.
@@ -152,6 +158,7 @@ fn every_version_of_openapi_3_0_loads_and_no_other_does() {
             matches!(&error, LoadError::Version { version: found } if found == version),
             "{version}: {error:?}"
         );
+        assert_eq!(error.to_string(), version_refusal(version), "{version}");
     }
 }
 
@@ -170,6 +177,7 @@ fn a_3_1_document_is_refused_for_its_version_before_the_phantom_check_reads_it()
         matches!(&error, LoadError::Version { version } if version == "3.1.0"),
         "{error:?}"
     );
+    assert_eq!(error.to_string(), version_refusal("3.1.0"));
     assert!(
         matches!(refused(PHANTOM), LoadError::Phantom(_)),
         "under 3.0.3 the same words are the phantom check's to refuse"
@@ -185,6 +193,10 @@ fn an_openapi_key_that_is_not_text_is_the_models_to_refuse() {
     assert!(
         matches!(&error, LoadError::Shape { at, .. } if at == "openapi"),
         "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "the overlaid document is not an OpenAPI 3 document: refused at `openapi`"
     );
 }
 
@@ -218,6 +230,7 @@ fn an_overlay_cannot_hold_a_3_1_document_to_3_0() {
         matches!(&error, LoadError::Version { version } if version == "3.1.0"),
         "{error:?}"
     );
+    assert_eq!(error.to_string(), version_refusal("3.1.0"));
 }
 
 /// The vendor's version is asked before the first layer, so a 3.1 document is
@@ -234,68 +247,115 @@ fn the_version_is_asked_before_any_layer_is_applied() {
         matches!(&error, LoadError::Version { version } if version == "3.1.0"),
         "{error:?}"
     );
+    assert_eq!(error.to_string(), version_refusal("3.1.0"));
+    let alone = Document::load(&at("3.0.3", "paths: {}\n"), &[NEVER_APPLIES])
+        .expect_err("the layer does not apply");
     assert!(
         matches!(
-            Document::load(&at("3.0.3", "paths: {}\n"), &[NEVER_APPLIES]),
-            Err(LoadError::Layer { layer: 0, .. })
+            &alone,
+            LoadError::Layer {
+                layer: 0,
+                source: OverlayError::Apply(_)
+            }
         ),
-        "the layer is refused alone, so the version is what came first above"
+        "the layer is refused alone, so the version is what came first above: {alone:?}"
+    );
+    assert_eq!(alone.to_string(), "cannot use `overlays[0]`");
+}
+
+/// A 3.0.3 document laid over by `layers`, which the layer at index `layer` of
+/// them turns into `after`. The refusal is that layer's, and its cause names the
+/// version before it, which is `3.0.3`, and `said` of the version after it.
+fn assert_refused_at_layer(
+    label: &str,
+    layers: &[&String],
+    layer: usize,
+    after: &Value,
+    said: &str,
+) {
+    let layers: Vec<&str> = layers.iter().map(|layer| layer.as_str()).collect();
+
+    let error = Document::load(&at("3.0.3", "paths: {}\n"), &layers).expect_err(label);
+
+    assert!(
+        matches!(&error, LoadError::Layer { layer: found, source: OverlayError::OpenApiVersion { before, after: now } }
+            if *found == layer
+                && before.as_deref() == Some(&json!("3.0.3"))
+                && now.as_deref() == Some(after)),
+        "{label}: {error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        format!("cannot use `overlays[{layer}]`"),
+        "{label}"
+    );
+    let cause = std::error::Error::source(&error).expect("the refusal has a cause");
+    assert_eq!(
+        cause.to_string(),
+        format!(
+            "the Overlay changes `openapi` from `3.0.3` to {said}; the version is the vendor's, \
+             and no Overlay changes it"
+        ),
+        "{label}"
     );
 }
 
-/// A layer changes the version by another version, another patch of 3.0, or no
-/// key, and each is refused at the layer that does it.
+/// A layer that writes another version or another patch of 3.0 over the key is
+/// refused at that layer, the second layer among them, and the cause names both
+/// versions.
 #[test]
 fn a_layer_that_changes_openapi_is_refused_at_its_layer() {
     let to_3_1 = updating_the_root("      openapi: 3.1.0\n");
     let to_3_0_0 = updating_the_root("      openapi: 3.0.0\n");
-    let to_a_number = updating_the_root("      openapi: 3\n");
-    let to_null = updating_the_root("      openapi: null\n");
     let harmless = updating_the_root("      x-note: kept\n");
 
-    for (label, layers, layer, before, after) in [
-        (
-            "another version",
-            vec![&to_3_1],
-            0,
-            Some("3.0.3"),
-            Some("3.1.0"),
-        ),
-        (
-            "another patch of 3.0",
-            vec![&to_3_0_0],
-            0,
-            Some("3.0.3"),
-            Some("3.0.0"),
-        ),
-        (
-            "the second layer",
-            vec![&harmless, &to_3_1],
-            1,
-            Some("3.0.3"),
-            Some("3.1.0"),
-        ),
-        (
-            "a value that is not text",
-            vec![&to_a_number],
-            0,
-            Some("3.0.3"),
-            Some("3"),
-        ),
-        ("null", vec![&to_null], 0, Some("3.0.3"), Some("null")),
-    ] {
-        let layers: Vec<&str> = layers.into_iter().map(String::as_str).collect();
+    assert_refused_at_layer("another version", &[&to_3_1], 0, &json!("3.1.0"), "`3.1.0`");
+    assert_refused_at_layer(
+        "another patch of 3.0",
+        &[&to_3_0_0],
+        0,
+        &json!("3.0.0"),
+        "`3.0.0`",
+    );
+    assert_refused_at_layer(
+        "the second layer",
+        &[&harmless, &to_3_1],
+        1,
+        &json!("3.1.0"),
+        "`3.1.0`",
+    );
+}
 
-        let error = Document::load(&at("3.0.3", "paths: {}\n"), &layers).expect_err(label);
+/// A layer that writes a number or `null` over the key is refused at that layer,
+/// and the cause names the value for its kind, because it is no version.
+#[test]
+fn a_layer_that_writes_a_value_that_is_not_text_over_openapi_is_refused_at_its_layer() {
+    let to_a_number = updating_the_root("      openapi: 3\n");
+    let to_null = updating_the_root("      openapi: null\n");
 
-        assert!(
-            matches!(&error, LoadError::Layer { layer: found, source: OverlayError::OpenApiVersion { before: was, after: now } }
-                if *found == layer
-                    && was.as_deref() == before
-                    && now.as_deref() == after),
-            "{label}: {error:?}"
-        );
-    }
+    assert_refused_at_layer("a number", &[&to_a_number], 0, &json!(3), "the number `3`");
+    assert_refused_at_layer("null", &[&to_null], 0, &Value::Null, "a null");
+}
+
+/// The text `3.0` and the number `3.0` print alike as JSON. The message names the
+/// number as one, so that the reader sees what the layer changed.
+#[test]
+fn a_layer_that_writes_the_number_for_the_text_is_shown_as_a_number() {
+    let number = updating_the_root("      openapi: 3.0\n");
+
+    let error = Document::load(&at("'3.0'", "paths: {}\n"), &[&number]).expect_err("a number");
+
+    assert!(
+        matches!(&error, LoadError::Layer { layer: 0, source: OverlayError::OpenApiVersion { before, after } }
+            if before.as_deref() == Some(&json!("3.0")) && after.as_deref() == Some(&json!(3.0))),
+        "{error:?}"
+    );
+    let cause = std::error::Error::source(&error).expect("the refusal has a cause");
+    assert_eq!(
+        cause.to_string(),
+        "the Overlay changes `openapi` from `3.0` to the number `3.0`; the version is the \
+         vendor's, and no Overlay changes it"
+    );
 }
 
 /// The message names the version before the layer and the version after it, and
@@ -306,8 +366,18 @@ fn the_refusal_of_a_changed_version_names_both_versions_and_the_layer() {
 
     let error = Document::load(&at("3.0.3", "paths: {}\n"), &[&to_3_1]).expect_err("a relabel");
 
+    assert!(
+        matches!(
+            &error,
+            LoadError::Layer {
+                layer: 0,
+                source: OverlayError::OpenApiVersion { .. }
+            }
+        ),
+        "{error:?}"
+    );
     assert_eq!(error.to_string(), "cannot use `overlays[0]`");
-    let cause = std::error::Error::source(&error).expect("the layer has a cause");
+    let cause = std::error::Error::source(&error).expect("the refusal has a cause");
     assert_eq!(
         cause.to_string(),
         "the Overlay changes `openapi` from `3.0.3` to `3.1.0`; the version is the vendor's, and \
@@ -329,10 +399,10 @@ fn a_layer_cannot_remove_the_version_or_give_a_document_one() {
 
     assert!(
         matches!(&left_out, LoadError::Layer { layer: 0, source: OverlayError::OpenApiVersion { before, after } }
-            if before.as_deref() == Some("3.0.3") && after.is_none()),
+            if before.as_deref() == Some(&json!("3.0.3")) && after.is_none()),
         "{left_out:?}"
     );
-    let cause = std::error::Error::source(&left_out).expect("the layer has a cause");
+    let cause = std::error::Error::source(&left_out).expect("the refusal has a cause");
     assert_eq!(
         cause.to_string(),
         "the Overlay changes `openapi` from `3.0.3` to no `openapi` key; the version is the \
@@ -344,8 +414,14 @@ fn a_layer_cannot_remove_the_version_or_give_a_document_one() {
 
     assert!(
         matches!(&given, LoadError::Layer { layer: 0, source: OverlayError::OpenApiVersion { before, after } }
-            if before.is_none() && after.as_deref() == Some("3.0.3")),
+            if before.is_none() && after.as_deref() == Some(&json!("3.0.3"))),
         "{given:?}"
+    );
+    let cause = std::error::Error::source(&given).expect("the refusal has a cause");
+    assert_eq!(
+        cause.to_string(),
+        "the Overlay changes `openapi` from no `openapi` key to `3.0.3`; the version is the \
+         vendor's, and no Overlay changes it"
     );
     assert!(
         matches!(Document::load(WITHOUT, &[]), Err(LoadError::Shape { at, .. }) if at == "."),
@@ -580,13 +656,13 @@ fn a_path_segment_with_a_letter_outside_ascii_needs_the_markers_that_name_the_re
 #[test]
 fn a_letter_in_two_code_points_and_an_invisible_character_are_refused_like_any_other() {
     let segments = [
-        "a\u{308}nderungen",
-        "re\u{301}sume\u{301}",
-        "fo\u{ad}o",
-        "fo\u{200b}o",
+        ("a\u{308}nderungen", "U+0308"),
+        ("re\u{301}sume\u{301}", "U+0301"),
+        ("fo\u{ad}o", "U+00AD"),
+        ("fo\u{200b}o", "U+200B"),
     ];
 
-    for segment in segments {
+    for (segment, code) in segments {
         let paths = format!(
             "paths:\n  /kontakte/{segment}:\n    get:\n      operationId: listChanges\n      \
              responses: {{ '200': {{ description: ok }} }}\n"
@@ -599,6 +675,21 @@ fn a_letter_in_two_code_points_and_an_invisible_character_are_refused_like_any_o
                 if op == "listChanges"
                     && *source == NameError { origin: "path segment", raw: segment.to_owned() }),
             "{segment:?}: {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "listChanges: no command name can be read off this operation; name it with \
+             `x-cli-group` and `x-cli-command` in an Overlay",
+            "{segment:?}"
+        );
+        let cause = std::error::Error::source(&error).expect("the refusal has a cause");
+        assert_eq!(
+            cause.to_string(),
+            format!(
+                "the path segment `{segment}` holds {code}, a character outside ASCII, which this \
+                 crate does not transliterate"
+            ),
+            "{segment:?}"
         );
     }
 
@@ -655,9 +746,9 @@ fn a_parameter_with_a_letter_outside_ascii_has_no_flag_and_a_required_one_refuse
     );
     assert_eq!(
         error.to_string(),
-        "listItems: parameter `straße` is named in a way that does not kebab-case into \
-         [a-z0-9-], and the document requires it; correct the parameter in an Overlay, or \
-         drop its `required`"
+        "listItems: parameter `straße` is named with a character outside ASCII, or in a way that \
+         does not kebab-case into [a-z0-9-], and the document requires it; correct the \
+         parameter in an Overlay, or drop its `required`"
     );
     let mended =
         Document::load(&at("3.0.3", &required), &[DROPS_REQUIRED]).expect("the Overlay drops it");
@@ -735,7 +826,8 @@ fn a_gate_and_a_confirmation_with_a_letter_outside_ascii_are_refused() {
     );
     assert_eq!(
         word.to_string(),
-        "the confirmation `löschen` does not kebab-case into [a-z0-9-]"
+        "the confirmation `löschen` holds U+00F6, a character outside ASCII, which this crate \
+         does not transliterate"
     );
     assert!(
         Loading::new().commit("loeschen").is_ok(),
@@ -811,7 +903,7 @@ fn a_ref_into_the_inside_of_a_schema_is_refused_with_what_is_followed() {
                 && reference == "#/components/schemas/Holder/properties/code"),
         "{error:?}"
     );
-    let cause = std::error::Error::source(&error).expect("the layer has a cause");
+    let cause = std::error::Error::source(&error).expect("the refusal has a cause");
     assert_eq!(
         cause.to_string(),
         "`#/components/schemas/Holder/properties/code` points inside a component, and this crate \
@@ -843,7 +935,7 @@ fn a_ref_to_nothing_still_does_not_resolve() {
             if reference == "#/components/schemas/Nope"),
         "{error:?}"
     );
-    let cause = std::error::Error::source(&error).expect("the layer has a cause");
+    let cause = std::error::Error::source(&error).expect("the refusal has a cause");
     assert_eq!(
         cause.to_string(),
         "`#/components/schemas/Nope` does not resolve"
@@ -865,5 +957,10 @@ fn a_ref_inside_a_component_that_does_not_exist_does_not_resolve() {
         matches!(&error, LoadError::Unresolvable { source: RefError::Missing { reference }, .. }
             if reference == "#/components/schemas/Nope/properties/code"),
         "{error:?}"
+    );
+    let cause = std::error::Error::source(&error).expect("the refusal has a cause");
+    assert_eq!(
+        cause.to_string(),
+        "`#/components/schemas/Nope/properties/code` does not resolve"
     );
 }

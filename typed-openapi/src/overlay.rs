@@ -40,9 +40,11 @@ use thiserror::Error;
 
 /// The Overlay, or the document it is applied to, is not usable.
 ///
-/// Each variant carries a [`Cause`]: a message, and the [`Place`] it points at
-/// where there is one. No type of the YAML reader or of the Overlay
-/// engine is part of this crate's API.
+/// Each variant but [`OverlayError::OpenApiVersion`] carries a [`Cause`]: a
+/// message, and the [`Place`] it points at where there is one. That variant
+/// carries the two values of `openapi` that it compares, and no cause, because
+/// nothing refused to read or to apply. No type of the YAML reader or of the
+/// Overlay engine is part of this crate's API.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OverlayError {
@@ -78,28 +80,32 @@ pub enum OverlayError {
         stated(.after.as_deref())
     )]
     OpenApiVersion {
-        /// The `openapi` key before the layer: the text, or the JSON of a value
-        /// that is not text. `None` is no key.
-        before: Option<String>,
-        /// The `openapi` key after the layer, spelled as `before` is.
-        after: Option<String>,
+        /// The `openapi` key before the layer. `None` is no key. It is boxed
+        /// because a `Value` is large and this error sits in every `Result` of
+        /// the module.
+        before: Option<Box<serde_json::Value>>,
+        /// The `openapi` key after the layer, as `before` is.
+        after: Option<Box<serde_json::Value>>,
     },
 }
 
 /// An `openapi` key as a message shows it.
-fn stated(version: Option<&str>) -> String {
-    version.map_or_else(
-        || "no `openapi` key".to_owned(),
-        |version| format!("`{version}`"),
-    )
-}
+///
+/// Text is the only value that can be a version, so it alone is shown as one,
+/// between backticks. Every other value says what kind it is, so that the
+/// number `3.0` never prints like the text `3.0` it replaced.
+fn stated(version: Option<&serde_json::Value>) -> String {
+    use serde_json::Value;
 
-/// The `openapi` key of a document as text: the string itself, or the JSON of a
-/// value that is not a string.
-fn shown(version: &serde_json::Value) -> String {
-    version
-        .as_str()
-        .map_or_else(|| version.to_string(), str::to_owned)
+    match version {
+        None => "no `openapi` key".to_owned(),
+        Some(Value::String(text)) => format!("`{text}`"),
+        Some(Value::Number(number)) => format!("the number `{number}`"),
+        Some(Value::Bool(flag)) => format!("the boolean `{flag}`"),
+        Some(Value::Null) => "a null".to_owned(),
+        Some(Value::Array(_)) => "a list".to_owned(),
+        Some(Value::Object(_)) => "a mapping".to_owned(),
+    }
 }
 
 /// What the YAML reader or the Overlay engine said, as a message and a place.
@@ -361,8 +367,8 @@ pub fn apply(mut doc: serde_json::Value, overlay: &str) -> Result<serde_json::Va
         })?;
     if doc.get("openapi") != version.as_ref() {
         return Err(OverlayError::OpenApiVersion {
-            before: version.as_ref().map(shown),
-            after: doc.get("openapi").map(shown),
+            before: version.map(Box::new),
+            after: doc.get("openapi").cloned().map(Box::new),
         });
     }
     Ok(doc)
@@ -388,6 +394,38 @@ mod tests {
     fn an_empty_overlay_leaves_the_document_alone() {
         let out = apply(document(), "   \n").expect("an empty layer is no layer");
         assert_eq!(out["openapi"], "3.0.3");
+    }
+
+    /// The message names a value that is not text for its kind, so the number
+    /// `3.0` does not print like the text `3.0` it replaced, and the text `null`
+    /// does not print like a null.
+    #[test]
+    fn a_version_that_is_not_text_is_named_for_its_kind() {
+        use serde_json::json;
+
+        for (after, said) in [
+            (None, "no `openapi` key"),
+            (Some(json!("3.0")), "`3.0`"),
+            (Some(json!("null")), "`null`"),
+            (Some(json!(3.0)), "the number `3.0`"),
+            (Some(json!(true)), "the boolean `true`"),
+            (Some(json!(null)), "a null"),
+            (Some(json!([1])), "a list"),
+            (Some(json!({ "a": 1 })), "a mapping"),
+        ] {
+            let error = OverlayError::OpenApiVersion {
+                before: Some(Box::new(json!("3.0.3"))),
+                after: after.map(Box::new),
+            };
+
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "the Overlay changes `openapi` from `3.0.3` to {said}; the version is the \
+                     vendor's, and no Overlay changes it"
+                )
+            );
+        }
     }
 
     #[test]

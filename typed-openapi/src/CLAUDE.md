@@ -252,10 +252,13 @@ is one letter to a reader and would be mangled the same way, and a character
 that nobody sees, such as a soft hyphen, would be a separator that nobody sees.
 The test is `is_ascii` and not a test for a letter, a digit or a mark, because
 those are tables in the standard library that change with the toolchain, and a
-name has to be read the same way by every compiler. A path segment that holds
-one needs `x-cli-group` or `x-cli-command`, and `Name` says so; a gate or the
-confirmation word is refused; a parameter is `Unreachable`, and only a required
-one refuses the document; a body property sends the body whole.
+name has to be read the same way by every compiler. The `NameError` names the
+first such character by its code point (`U+00AD`), because a soft hyphen shows
+as nothing and an en dash as a hyphen, so the name beside a message that only
+said "does not kebab-case" would look right. A path segment that holds one needs
+`x-cli-group` or `x-cli-command`, and `Name` says so; a gate or the confirmation
+word is refused; a parameter is `Unreachable`, and only a required one refuses
+the document; a body property sends the body whole.
 
 **A body template is read from the model and reaches no request.** The body with
 no per-field flags is the body `--help` cannot describe, so `Body::JsonWhole`
@@ -463,13 +466,13 @@ only if the descent is off the caller's stack.
 would make them public. Nothing in the lint block stops a new `pub` item from
 naming an `openapiv3` type, so review keeps the claim true for it. `overlay`
 stays public because a bless step calls `overlay::parse`, and `overlay::Cause`
-with it because every `OverlayError` variant carries one, and `overlay::Place`
-because `Cause::place` returns it. `required::check` stays public with the
-`PhantomKeys` it returns, and `scalar::Text` stays public because an adopter's
-test names it. A type that a public variant carries is public too, which is why
-`RefError` is re-exported at the root while the rest of `schema` is not.
-`unreachable_pub` is a warning the gate denies, so a `pub` item the crate does
-not export fails it.
+with it because every `OverlayError` variant but `OpenApiVersion` carries one,
+and `overlay::Place` because `Cause::place` returns it. `required::check` stays
+public with the `PhantomKeys` it returns, and `scalar::Text` stays public
+because an adopter's test names it. A type that a public variant carries is
+public too, which is why `RefError` is re-exported at the root while the rest of
+`schema` is not. `unreachable_pub` is a warning the gate denies, so a `pub` item
+the crate does not export fails it.
 
 **Every public item is documented, and no `allow` goes on an error.**
 `#![warn(missing_docs)]` is in `src/lib.rs`, and the gate's `-D warnings` makes

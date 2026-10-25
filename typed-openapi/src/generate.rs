@@ -866,16 +866,17 @@ pub enum GenerateError {
         #[source]
         source: io::Error,
     },
-    /// A document or a layer over it that does not read, or does not apply.
-    /// `path` is the file to go and open: with corrections split across
-    /// layers, which one stopped the bless is the first thing to know.
+    /// A document or a layer over it that does not read, does not apply, or
+    /// changes the `openapi` of the document. `path` is the file to go and
+    /// open: with corrections split across layers, which one stopped the bless
+    /// is the first thing to know.
     #[error("cannot use {path}")]
     Overlay {
         /// The path as the adopter gave it to [`Settings::new`] or
         /// [`Settings::overlay`].
         path: PathBuf,
-        /// What stopped the file: its syntax, its shape or an action that
-        /// matched nothing.
+        /// What stopped the file: its syntax, its shape, an action that matched
+        /// nothing, or a layer that changed the `openapi` of the document.
         #[source]
         source: OverlayError,
     },
@@ -883,9 +884,12 @@ pub enum GenerateError {
     /// that no type of the emitter is part of this crate's API.
     #[error("the overlaid document is not representable as YAML")]
     Yaml(#[source] Box<dyn Error + Send + Sync>),
-    /// The corrected document could not be reduced to a command tree. The
-    /// cause is the refusal of [`Document::load_with`].
-    #[error("the overlaid document does not describe a usable CLI")]
+    /// The document could not be reduced to a command tree. The cause is the
+    /// refusal that [`Document::load_with`] gives for it. A version of OpenAPI
+    /// that this crate does not read is refused for the vendor's document before
+    /// the first layer is laid, and every other cause is a refusal of the
+    /// document with its layers laid.
+    #[error("the document does not describe a usable CLI")]
     Unusable(#[source] LoadError),
     /// The corrected document is not an OpenAPI 3 document, so the generator
     /// has no object model of it.

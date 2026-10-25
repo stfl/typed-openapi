@@ -56,10 +56,10 @@ the crate follows [Semantic Versioning][semver].
   `Shape`. It was `Syntax`, whose message said the text "is not valid YAML or
   JSON". Repair: where you reported `Syntax` for a wrong shape, report `Shape`
   too.
-- **`overlay::Cause`**, the payload of every `OverlayError` variant: the
-  `message()`, and the `place()` where the thing that refused said one. An
-  `overlay::Place` is the line and column of the text, or the index of the
-  action in the Overlay.
+- **`overlay::Cause`**, the payload of every `OverlayError` variant but
+  `OpenApiVersion`: the `message()`, and the `place()` where the thing that
+  refused said one. An `overlay::Place` is the line and column of the text, or
+  the index of the action in the Overlay.
 - **A body property that no schema declares stops the request.** `client::fits`
   refuses a body that carries a property which the target type does not take, at
   any depth and inside a union or a `flatten`ed struct, as
@@ -157,8 +157,8 @@ the crate follows [Semantic Versioning][semver].
   Repair: a test of yours that read YAML with `serde_yaml_ng` names its own
   dependency, or calls `overlay::parse`.
 - **No type of the YAML reader, of `roas-overlay` or of typify is in a public
-  signature.** Each `OverlayError` variant holds an `overlay::Cause`.
-  `GenerateError::Yaml` and `GenerateError::Typify` hold a
+  signature.** Each `OverlayError` variant but `OpenApiVersion` holds an
+  `overlay::Cause`. `GenerateError::Yaml` and `GenerateError::Typify` hold a
   `Box<dyn Error + Send + Sync>`, and the cause is still `source()`. Repair: a
   `match` that bound `serde_yaml_ng::Error`, `roas_overlay::validation::Error`,
   `roas_overlay::apply::ApplyError` or `typify::Error` reads the `Cause`, or
@@ -178,8 +178,8 @@ the crate follows [Semantic Versioning][semver].
   longer shows it. Most messages lose only the `: <cause>` they ended with:
   `OverlayError`, `PlanError::Request`, `ArgError`,
   `client::Error::{Document, Request, Encode, Decode}`,
-  `LoadError::ServerUrl` and `GenerateError::{Yaml, Unusable, Schema, Typify,
-  NotRust, Blob}`. These are worded anew:
+  `LoadError::ServerUrl` and `GenerateError::{Yaml, Schema, Typify, NotRust,
+  Blob}`. These are worded anew:
   - `ValueError::BadValue`: ``<op>: `<name>` was given a value the document
     refuses``
   - `LoadError::Unresolvable`: ``<op>: `<name>` has a `$ref` that cannot be
@@ -191,6 +191,9 @@ the crate follows [Semantic Versioning][semver].
     `cannot write <path>` and `cannot run rustfmt on <path>`
   - `GenerateError::Overlay`: `cannot use <path>`
   - `GenerateError::Operation`: `the wrapper for <op> cannot be generated`
+  - `GenerateError::Unusable`: `the document does not describe a usable CLI`.
+    The vendor's `openapi` is asked before the first layer, so "overlaid" is not
+    true of every cause.
 - **A refusal names its operation and the place it stopped.** A document of tens
   of thousands of lines gave a message with no pointer to where to look. These
   payloads and messages change:
@@ -266,13 +269,17 @@ the crate follows [Semantic Versioning][semver].
   writes the version the document already has changes nothing and is not
   refused. The version is the vendor's. It decides how every schema is read, and
   a label that an Overlay writes can drop rules that nobody who reads the
-  Overlay can see. The message names the version before the layer and the
-  version after it, ``the Overlay changes `openapi` from `3.0.3` to `3.1.0`;
-  the version is the vendor's, and no Overlay changes it``. `LoadError::Layer`
-  names the layer and `GenerateError::Overlay` names the file. `OverlayError`
-  is `#[non_exhaustive]`, so a new variant is not a break. A 3.1 document that
-  an Overlay held to 3.0 loaded at 0.0.2 and is refused now, first for its
-  version, and then there is no repair: the document says 3.1.
+  Overlay can see. `before` and `after` are the key as the layer found it and
+  left it, `None` for no key, and a boxed `serde_json::Value` so that the number
+  `3.0` is not the text `3.0`. The message names the version before the layer
+  and the version after it, ``the Overlay changes `openapi` from `3.0.3` to
+  `3.1.0`; the version is the vendor's, and no Overlay changes it``. A value
+  that is not text is named for its kind, as in ``from `3.0` to the number
+  `3.0` ``. `LoadError::Layer` names the layer and `GenerateError::Overlay`
+  names the file. `OverlayError` is `#[non_exhaustive]`, so a new variant is not
+  a break. A 3.1 document that an Overlay held to 3.0 loaded at 0.0.2 and is
+  refused now, first for its version, and then there is no repair: the document
+  says 3.1.
 - **A server URL with variables loads, and the two refusals that remain name
   their repair.** The first server's URL takes the `default` of each variable
   in `variables`, which OpenAPI requires, and `Document::base` holds the result.
@@ -296,8 +303,15 @@ the crate follows [Semantic Versioning][semver].
   `e`. It refuses the name and transliterates nothing. The rule is that the name
   is ASCII, so a letter written as a base and a combining mark, a dash, a
   no-break space and a character that nobody sees (a soft hyphen, a zero-width
-  space) are refused as a letter is. A document that loaded is refused where the
-  name is:
+  space) are refused as a letter is. The message of the `NameError` names the
+  first such character by its code point, such as `U+00AD`, because a soft
+  hyphen shows as nothing and an en dash as a hyphen; a name of ASCII that
+  kebab-cases to nothing keeps ``does not kebab-case into [a-z0-9-]``. The line
+  that names a parameter with no flag reads ``named with a character outside
+  ASCII, or in a way that does not kebab-case into [a-z0-9-]``, in the long help
+  and in the documentation of a generated wrapper, so a bless step writes that
+  sentence where it wrote the shorter one. A document that loaded is refused
+  where the name is:
   - a path segment (`Name`). Repair: `x-cli-group` and `x-cli-command` in an
     Overlay;
   - a gate in `x-cli-gates` (`GateName`). Repair: write the gate with an ASCII

@@ -10,8 +10,14 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// A name the document offers that is not spellable as a command.
+///
+/// The message gives the reason that is true of `raw`. A name with a character
+/// outside ASCII is refused for that character, which the message names by its
+/// code point: a soft hyphen and a zero-width space show as nothing, and an en
+/// dash shows as a hyphen, so the name alone does not say what is wrong with
+/// it. Any other name is refused because it kebab-cases to nothing.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("the {origin} `{raw}` does not kebab-case into [a-z0-9-]")]
+#[error("the {origin} `{raw}` {}", reason(.raw))]
 pub struct NameError {
     /// What the name was read off, so the message says where to go and look:
     /// a path segment, the whole path where it has no segment to read, the
@@ -20,6 +26,24 @@ pub struct NameError {
     pub origin: &'static str,
     /// The name, as the document spells it.
     pub raw: String,
+}
+
+/// Why [`spelled`] refuses `raw`, as the end of the message of a [`NameError`].
+///
+/// The first character outside ASCII is the reason when there is one, because
+/// it is true whatever else the name holds, and it is the one thing the reader
+/// cannot always see.
+fn reason(raw: &str) -> String {
+    raw.chars().find(|c| !c.is_ascii()).map_or_else(
+        || "does not kebab-case into [a-z0-9-]".to_owned(),
+        |c| {
+            format!(
+                "holds U+{:04X}, a character outside ASCII, which this crate does not \
+                 transliterate",
+                u32::from(c)
+            )
+        },
+    )
 }
 
 /// One half of a command name: kebab-cased, `[a-z0-9-]` only.
@@ -451,6 +475,34 @@ mod tests {
                     raw: raw.to_owned(),
                 },
                 "{raw}"
+            );
+        }
+    }
+
+    /// The message names the first character outside ASCII by its code point,
+    /// because the name alone does not show it: a soft hyphen shows as nothing
+    /// and an en dash as a hyphen. A name that kebab-cases to nothing and holds
+    /// such a character is refused for the character, which is the part the
+    /// reader can repair.
+    #[test]
+    fn the_message_of_a_refused_name_names_the_character_that_refuses_it() {
+        for (raw, code) in [
+            ("fo\u{ad}o", "U+00AD"),
+            ("fo\u{200b}o", "U+200B"),
+            ("list\u{2013}all", "U+2013"),
+            ("stra\u{df}e", "U+00DF"),
+            ("a\u{308}b\u{ad}", "U+0308"),
+            ("\u{e9}", "U+00E9"),
+            ("\u{1f600}", "U+1F600"),
+        ] {
+            let error = CommandName::new("path segment", raw).expect_err(raw);
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "the path segment `{raw}` holds {code}, a character outside ASCII, which this \
+                     crate does not transliterate"
+                ),
+                "{raw:?}"
             );
         }
     }

@@ -377,9 +377,11 @@ pub enum Unsupported {
     /// it. Writing it out as some other style would put the value on the wire
     /// in a shape the server does not read.
     Style(String),
-    /// A name with no kebab-case spelling, so there is no flag to offer. A
-    /// parameter named `*` or `()` or `_` is the vendor's business and reaches
-    /// a command line as nothing at all.
+    /// A name with no spelling as a flag, so there is no flag to offer. It holds
+    /// a character outside ASCII, which nothing here transliterates (`straße`),
+    /// or it does not kebab-case into `[a-z0-9-]`: a parameter named `*` or `()`
+    /// or `_` is the vendor's business and reaches a command line as nothing at
+    /// all.
     ///
     /// A flag is the one name in this crate a *user types*, so it passes the
     /// rule [`crate::names`] states once and a command name and a gate are
@@ -407,9 +409,10 @@ impl std::fmt::Display for Unsupported {
                     "declared with `style: {style}`, which this CLI does not serialise"
                 )
             }
-            Self::Unspellable => {
-                out.write_str("named in a way that does not kebab-case into [a-z0-9-]")
-            }
+            Self::Unspellable => out.write_str(
+                "named with a character outside ASCII, or in a way that does not kebab-case into \
+                 [a-z0-9-]",
+            ),
         }
     }
 }
