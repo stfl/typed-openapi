@@ -1,0 +1,602 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Address": {
+      "type": "object",
+      "required": [
+        "street",
+        "city"
+      ],
+      "properties": {
+        "street": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        }
+      }
+    },
+    "Point": {
+      "type": "object",
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        }
+      }
+    },
+    "OpenTrue": {
+      "type": "object",
+      "required": [
+        "a"
+      ],
+      "properties": {
+        "a": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "OpenEmpty": {
+      "type": "object",
+      "required": [
+        "a"
+      ],
+      "properties": {
+        "a": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "Untagged": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/Address"
+        },
+        {
+          "$ref": "#/definitions/Point"
+        }
+      ]
+    },
+    "Pet": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "dog"
+              ]
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "lives"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "cat"
+              ]
+            },
+            "lives": {
+              "type": "integer"
+            }
+          }
+        }
+      ]
+    },
+    "External": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "address"
+          ],
+          "properties": {
+            "address": {
+              "$ref": "#/definitions/Address"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "point"
+          ],
+          "properties": {
+            "point": {
+              "$ref": "#/definitions/Point"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Overlap": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Address"
+        },
+        {
+          "$ref": "#/definitions/Point"
+        }
+      ]
+    },
+    "Named": {
+      "type": "object",
+      "required": [
+        "street",
+        "name"
+      ],
+      "properties": {
+        "street": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "Overlap2": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Address"
+        },
+        {
+          "$ref": "#/definitions/Named"
+        }
+      ]
+    },
+    "ObjOrList": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/Address"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "Merged": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Address"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "zip": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "AddrMap": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/Address"
+      }
+    },
+    "Closed": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Contact": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "memo": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "address": {
+          "$ref": "#/definitions/Address"
+        },
+        "positions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Address"
+          }
+        },
+        "spot": {
+          "$ref": "#/definitions/Untagged"
+        },
+        "pet": {
+          "$ref": "#/definitions/Pet"
+        },
+        "place": {
+          "$ref": "#/definitions/External"
+        },
+        "any": {
+          "$ref": "#/definitions/Overlap"
+        },
+        "open": {
+          "$ref": "#/definitions/OpenTrue"
+        },
+        "openmap": {
+          "$ref": "#/definitions/OpenEmpty"
+        },
+        "closed": {
+          "$ref": "#/definitions/Closed"
+        },
+        "al": {
+          "$ref": "#/definitions/Flat"
+        },
+        "ei": {
+          "$ref": "#/definitions/ExternalInline"
+        },
+        "rep": {
+          "$ref": "#/definitions/ExternalRepeat"
+        },
+        "repn": {
+          "$ref": "#/definitions/ExternalRepeatNewtype"
+        },
+        "adj": {
+          "$ref": "#/definitions/Adjacent"
+        },
+        "deep": {
+          "$ref": "#/definitions/ExternalDeep"
+        }
+      }
+    },
+    "Holder": {
+      "type": "object",
+      "properties": {
+        "o2": {
+          "$ref": "#/definitions/Overlap2"
+        },
+        "ol": {
+          "$ref": "#/definitions/ObjOrList"
+        },
+        "m": {
+          "$ref": "#/definitions/Merged"
+        },
+        "am": {
+          "$ref": "#/definitions/AddrMap"
+        },
+        "na": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/Address"
+            }
+          ]
+        }
+      }
+    },
+    "Flat": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "b": {
+              "type": "integer"
+            }
+          }
+        }
+      ]
+    },
+    "ExternalInline": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "address"
+          ],
+          "properties": {
+            "address": {
+              "type": "object",
+              "required": [
+                "street"
+              ],
+              "properties": {
+                "street": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "point"
+          ],
+          "properties": {
+            "point": {
+              "type": "object",
+              "required": [
+                "x"
+              ],
+              "properties": {
+                "x": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Inner": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        }
+      }
+    },
+    "Wide": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "$ref": "#/definitions/Inner"
+        },
+        "b": {
+          "type": "integer"
+        }
+      }
+    },
+    "ExternalRepeat": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "a"
+          ],
+          "properties": {
+            "a": {
+              "type": "object",
+              "properties": {
+                "a": {
+                  "$ref": "#/definitions/Inner"
+                },
+                "b": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "z"
+          ],
+          "properties": {
+            "z": {
+              "type": "object",
+              "properties": {
+                "c": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ExternalRepeatNewtype": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "a"
+          ],
+          "properties": {
+            "a": {
+              "$ref": "#/definitions/Wide"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "z"
+          ],
+          "properties": {
+            "z": {
+              "$ref": "#/definitions/Point"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HasB": {
+      "type": "object",
+      "properties": {
+        "b": {
+          "$ref": "#/definitions/Inner"
+        }
+      }
+    },
+    "HasK": {
+      "type": "object",
+      "properties": {
+        "k": {
+          "type": "object",
+          "properties": {
+            "y": {
+              "type": "integer"
+            },
+            "z": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    "ExternalDeep": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "a"
+          ],
+          "properties": {
+            "a": {
+              "type": "object",
+              "properties": {
+                "a": {
+                  "$ref": "#/definitions/HasB"
+                },
+                "b": {
+                  "$ref": "#/definitions/HasK"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "z"
+          ],
+          "properties": {
+            "z": {
+              "type": "object",
+              "properties": {
+                "c": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ScalarOrInner": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/Inner"
+        }
+      ]
+    },
+    "NoneOrB": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "b"
+          ],
+          "properties": {
+            "b": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Adjacent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "data"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "a"
+              ]
+            },
+            "data": {
+              "$ref": "#/definitions/Inner"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "data"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "b"
+              ]
+            },
+            "data": {
+              "$ref": "#/definitions/Point"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

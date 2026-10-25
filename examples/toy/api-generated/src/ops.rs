@@ -39,6 +39,8 @@ pub enum OperationId {
     SendVoucherByEmail,
     ///createContact
     CreateContact,
+    ///setContactLabels
+    SetContactLabels,
     ///uploadDocument
     UploadDocument,
     ///uploadDocumentMultipart
@@ -60,6 +62,7 @@ impl OperationId {
         OperationId::RenderVoucher,
         OperationId::SendVoucherByEmail,
         OperationId::CreateContact,
+        OperationId::SetContactLabels,
         OperationId::UploadDocument,
         OperationId::UploadDocumentMultipart,
         OperationId::CreateLedgerEntry,
@@ -81,6 +84,7 @@ impl OperationId {
             ("vouchers", "render") => Some(Self::RenderVoucher),
             ("vouchers", "send-by-email") => Some(Self::SendVoucherByEmail),
             ("contacts", "create") => Some(Self::CreateContact),
+            ("contacts", "labels") => Some(Self::SetContactLabels),
             ("documents", "create") => Some(Self::UploadDocument),
             ("documents-multipart", "create") => Some(Self::UploadDocumentMultipart),
             ("ledger", "entries") => Some(Self::CreateLedgerEntry),
@@ -112,6 +116,9 @@ impl OperationId {
             Self::CreateContact => {
                 typed_openapi::client::fits::<crate::types::Contact>("createContact", body)
             }
+            Self::SetContactLabels => {
+                typed_openapi::client::fits::<crate::types::ContactLabels>("setContactLabels", body)
+            }
             Self::CreateLedgerEntry => typed_openapi::client::fits::<
                 crate::types::CreateLedgerEntryBody,
             >("createLedgerEntry", body),
@@ -138,6 +145,7 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
     ("renderVoucher", "GET", "/vouchers/{id}/render"),
     ("sendVoucherByEmail", "POST", "/vouchers/{id}/send-by-email"),
     ("createContact", "POST", "/contacts"),
+    ("setContactLabels", "PUT", "/contacts/{id}/labels"),
     ("uploadDocument", "POST", "/documents"),
     ("uploadDocumentMultipart", "POST", "/documents-multipart"),
     ("createLedgerEntry", "POST", "/ledger/entries"),
@@ -145,7 +153,7 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
 ];
 ///How many operations the document declares. An operation *added*
 ///upstream moves this number and nothing else would have noticed.
-pub const OPERATION_COUNT: usize = 12usize;
+pub const OPERATION_COUNT: usize = 13usize;
 const fn str_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
@@ -294,6 +302,23 @@ impl Api {
         )
     }
     /**
+    Replace the labels of a contact
+
+    PUT /contacts/{id}/labels
+
+    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    */
+    pub fn set_contact_labels(
+        &self,
+        id: i64,
+        body: &crate::types::ContactLabels,
+    ) -> Result<Call<'_, crate::types::ContactLabels>, Error> {
+        self.call(
+            OperationId::SetContactLabels,
+            Values::new().param("id", id).json(crate::to_json(body)?),
+        )
+    }
+    /**
     Upload a document as a PDF
 
     POST /documents
@@ -417,6 +442,15 @@ impl Api {
         body: &crate::types::Contact,
     ) -> Result<Call<'_, crate::types::Contact>, Error> {
         self.create_contact(body)
+    }
+    ///The same call as [`Api::set_contact_labels`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn set_contact_labels_builder(
+        &self,
+        id: i64,
+        body: &crate::types::ContactLabels,
+    ) -> Result<Call<'_, crate::types::ContactLabels>, Error> {
+        self.set_contact_labels(id, body)
     }
     ///The same call as [`Api::upload_document`], with its arguments named. A missing required argument is a compile error.
     #[builder]

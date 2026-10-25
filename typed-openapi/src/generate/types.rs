@@ -61,12 +61,28 @@
 //! `format` declared inside an inline body becomes the adopter's type exactly
 //! as it does inside a named schema.
 //!
+//! # A schema that leaves further properties open is said as `{}`
+//!
+//! typify reads `additionalProperties: true` beside declared properties as
+//! "ignore the rest" and writes no field for it; it writes the `flatten`ed map
+//! `extra` for the schema `{}`, which admits the same values, and its own
+//! comment names `{}` as the way to get one. A request body is checked against
+//! the generated type, and a property that no field of the type takes is one
+//! that no schema declares, so the first reading would refuse what the document
+//! leaves open. [`OpenWithAMap`] says every `true` as `{}` before typify reads
+//! the schema, in the named schemas and in the inline ones, at any depth. A
+//! schema that states no `additionalProperties` stays closed, because the
+//! refusal of an undeclared property is what that check is for, and `false`
+//! stays what typify closes with `deny_unknown_fields`.
+//!
 //! [`with_conversion`]: typify::TypeSpaceSettings::with_conversion
 
 use std::collections::BTreeSet;
 
 use proc_macro2::Span;
 use quote::quote;
+use schemars::schema::{Schema, SchemaObject};
+use schemars::visit::Visitor;
 use serde_json::Value;
 use syn::visit_mut::VisitMut;
 use typify::{TypeSpace, TypeSpaceImpl, TypeSpaceSettings};
@@ -364,21 +380,41 @@ fn definitions(api: &openapiv3::OpenAPI) -> Result<Vec<Definition>, GenerateErro
 
 /// The same schemas as typify's own type, which is the last point at which a
 /// shape it cannot read is still attributable to a name.
-fn schemas(
-    definitions: Vec<Definition>,
-) -> Result<Vec<(String, schemars::schema::Schema)>, GenerateError> {
+fn schemas(definitions: Vec<Definition>) -> Result<Vec<(String, Schema)>, GenerateError> {
     definitions
         .into_iter()
         .map(|(name, value)| {
-            let schema: schemars::schema::Schema =
-                serde_json::from_value(value).map_err(|source| {
-                    GenerateError::Unsupported(format!(
-                        "schema `{name}` is not a JSON Schema typify accepts: {source}"
-                    ))
-                })?;
+            let schema = typify_schema(value).map_err(|source| {
+                GenerateError::Unsupported(format!(
+                    "schema `{name}` is not a JSON Schema typify accepts: {source}"
+                ))
+            })?;
             Ok((name, schema))
         })
         .collect()
+}
+
+/// One schema as typify's own type, with every further property it leaves open
+/// said as a schema.
+fn typify_schema(value: Value) -> Result<Schema, serde_json::Error> {
+    let mut schema: Schema = serde_json::from_value(value)?;
+    OpenWithAMap.visit_schema(&mut schema);
+    Ok(schema)
+}
+
+/// Says `additionalProperties: true` as `additionalProperties: {}`, at every
+/// depth, which is where typify writes the map for the rest.
+struct OpenWithAMap;
+
+impl Visitor for OpenWithAMap {
+    fn visit_schema_object(&mut self, schema: &mut SchemaObject) {
+        if let Some(object) = schema.object.as_mut()
+            && object.additional_properties.as_deref() == Some(&Schema::Bool(true))
+        {
+            object.additional_properties = Some(Box::new(Schema::Object(SchemaObject::default())));
+        }
+        schemars::visit::visit_schema_object(self, schema);
+    }
 }
 
 /// Every schema an operation states inline, in the model's order.
@@ -400,17 +436,16 @@ fn stated(api: &openapiv3::OpenAPI, model: &Document) -> Result<Vec<Stated>, Gen
 }
 
 /// The same schemas as typify's own type.
-fn inline(stated: Vec<Stated>) -> Result<Vec<(Site, schemars::schema::Schema)>, GenerateError> {
+fn inline(stated: Vec<Stated>) -> Result<Vec<(Site, Schema)>, GenerateError> {
     stated
         .into_iter()
         .map(|(site, value)| {
-            let schema: schemars::schema::Schema =
-                serde_json::from_value(value).map_err(|source| {
-                    GenerateError::Unsupported(format!(
-                        "{} is not a JSON Schema typify accepts: {source}",
-                        site.described()
-                    ))
-                })?;
+            let schema = typify_schema(value).map_err(|source| {
+                GenerateError::Unsupported(format!(
+                    "{} is not a JSON Schema typify accepts: {source}",
+                    site.described()
+                ))
+            })?;
             Ok((site, schema))
         })
         .collect()

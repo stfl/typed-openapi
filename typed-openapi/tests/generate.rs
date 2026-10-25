@@ -2146,3 +2146,139 @@ fn a_flat_body_stated_inline_still_grows_a_flag_per_field() {
     let named: Vec<&str> = fields.iter().map(typed_openapi::Field::name).collect();
     assert_eq!(named, ["account", "amount", "memo"]);
 }
+
+/// Three schemas that differ in what they say about further properties, and an
+/// inline body that says `additionalProperties: true` beside its own, with a
+/// list of objects that say it too.
+const OPEN: &str = r#"
+openapi: 3.0.3
+info: { title: Open, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /profiles:
+    post:
+      operationId: createProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                notes:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      tag: { type: string }
+                    additionalProperties: true
+              additionalProperties: true
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Address:
+      type: object
+      properties:
+        street: { type: string }
+      additionalProperties: true
+    Said:
+      type: object
+      properties:
+        street: { type: string }
+      additionalProperties: {}
+    Unsaid:
+      type: object
+      properties:
+        street: { type: string }
+    Closed:
+      type: object
+      properties:
+        street: { type: string }
+      additionalProperties: false
+"#;
+
+/// The same document with every `true` spelled as the schema that admits
+/// everything.
+fn open_spelled_as_a_schema() -> String {
+    OPEN.replace("additionalProperties: true", "additionalProperties: {}")
+}
+
+/// typify reads `additionalProperties: true` beside properties as "ignore the
+/// rest" and writes no field, so a request body that carries a property the
+/// schema leaves open would be an `Undeclared` one: the check finds nothing
+/// that took it. It writes the `flatten`ed map for the schema `{}`, which says
+/// the same thing, so the generator says it that way, at any depth.
+#[test]
+fn an_open_schema_beside_properties_gets_a_map_for_the_rest_at_any_depth() {
+    let dir = out("open-true");
+    Settings::new(wrote(&dir, "document.yaml", OPEN))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    let map = "    pub extra: ::serde_json::Map<::std::string::String, ::serde_json::Value>,";
+    for opens in [
+        "pub struct Address",
+        "pub struct CreateProfileBody ",
+        "pub struct CreateProfileBodyNotesItem",
+    ] {
+        let schema = item(&types, opens);
+        assert!(
+            schema.contains("    #[serde(flatten)]") && schema.contains(map),
+            "`{opens}` has no map for the properties it leaves open:\n{types}"
+        );
+    }
+}
+
+/// `true` is rewritten to the schema `{}` and to nothing else: the two are one
+/// document to the generator, and a schema that states nothing stays closed.
+#[test]
+fn an_open_schema_is_the_same_as_the_schema_that_admits_everything() {
+    let dir = out("open-spelled-two-ways");
+    Settings::new(wrote(&dir, "true.yaml", OPEN))
+        .write_to(dir.join("true"))
+        .expect("the document with `true` generates");
+    Settings::new(wrote(&dir, "schema.yaml", &open_spelled_as_a_schema()))
+        .write_to(dir.join("schema"))
+        .expect("the document with `{}` generates");
+
+    let spelled_true = read(&dir.join("true/src/types.rs"));
+    let spelled_schema = read(&dir.join("schema/src/types.rs"));
+
+    // The header names the command and the document the types came from.
+    let without_header = |types: &str| -> String {
+        types
+            .lines()
+            .filter(|line| !line.starts_with("//!"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(
+        without_header(&spelled_true),
+        without_header(&spelled_schema)
+    );
+}
+
+/// A schema that says nothing about further properties is closed as far as the
+/// check goes, and `false` is closed by typify itself. Neither gets the map.
+#[test]
+fn a_schema_that_leaves_the_rest_unsaid_or_shut_gets_no_map() {
+    let dir = out("open-shut");
+    Settings::new(wrote(&dir, "document.yaml", OPEN))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    let unsaid = item(&types, "pub struct Unsaid");
+    let closed_by_typify = item(&types, "pub struct Closed");
+    assert!(!unsaid.contains("extra"), "{unsaid}");
+    assert!(!unsaid.contains("deny_unknown_fields"), "{unsaid}");
+    assert!(!closed_by_typify.contains("extra"), "{closed_by_typify}");
+    assert!(
+        types.contains("#[serde(deny_unknown_fields)]\npub struct Closed"),
+        "`false` no longer closes the type:\n{types}"
+    );
+}

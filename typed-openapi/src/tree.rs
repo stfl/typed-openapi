@@ -74,6 +74,20 @@ pub enum ArgError {
         #[source]
         source: serde_json::Error,
     },
+    /// A per-field flag came beside a `--json-body` file whose top level is not
+    /// an object. The flag sets a property of the body, and a list or a scalar
+    /// has none to set, so the flag would be dropped in silence.
+    #[error("`--{flag}` sets a property of the body, and {} holds {found}, not an object", path.display())]
+    FlagBesideNonObject {
+        /// The first per-field flag the operator gave, in the order of the
+        /// body's properties, without the leading `--`.
+        flag: String,
+        /// The path as the operator typed it after `--json-body`.
+        path: PathBuf,
+        /// What the file holds, as the message words it after "holds": `an
+        /// array`, `a string`, `a number`, `a boolean` or `null`.
+        found: &'static str,
+    },
     /// A `--field` or `--file` value that has no part name before its first `=`.
     #[error("`--{flag} {raw}` is not `NAME=VALUE`")]
     PartSyntax {
@@ -626,14 +640,39 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
 
 /// `--json-body` is the base document; per-field flags are merged over it, so a
 /// flag beside a file is an edit rather than a value the CLI silently drops.
+///
+/// A file whose top level is not an object has no property for a flag to edit.
+/// A flag beside one is refused, because dropping it would send a body the
+/// operator believes they changed. With no flag beside it, the file goes on
+/// as it is: whether a list is a body is for the check of the adopter's types.
 fn assembled(fields: &[Field], matches: &ArgMatches) -> Result<serde_json::Value, ArgError> {
-    let mut body = match matches.get_one::<PathBuf>(JSON_BODY) {
-        Some(path) => read_json(path)?,
-        None => serde_json::Value::Object(serde_json::Map::new()),
+    let Some(path) = matches.get_one::<PathBuf>(JSON_BODY) else {
+        return Ok(serde_json::Value::Object(edited(
+            serde_json::Map::new(),
+            fields,
+            matches,
+        )));
     };
-    let Some(object) = body.as_object_mut() else {
-        return Ok(body);
+    let body = read_json(path)?;
+    let serde_json::Value::Object(object) = body else {
+        return match fields.iter().find(|field| given(field, matches)) {
+            Some(field) => Err(ArgError::FlagBesideNonObject {
+                flag: field.flag().to_owned(),
+                path: path.clone(),
+                found: crate::client::kind(&body),
+            }),
+            None => Ok(body),
+        };
     };
+    Ok(serde_json::Value::Object(edited(object, fields, matches)))
+}
+
+/// `object` with each per-field flag the operator gave set in it.
+fn edited(
+    mut object: serde_json::Map<String, serde_json::Value>,
+    fields: &[Field],
+    matches: &ArgMatches,
+) -> serde_json::Map<String, serde_json::Value> {
     for field in fields {
         let Some(raw) = matches.get_one::<String>(field.flag()) else {
             continue;
@@ -645,7 +684,12 @@ fn assembled(fields: &[Field], matches: &ArgMatches) -> Result<serde_json::Value
             object.insert(field.name().to_owned(), value);
         }
     }
-    Ok(body)
+    object
+}
+
+/// Did the operator type this field's flag?
+fn given(field: &Field, matches: &ArgMatches) -> bool {
+    matches.get_one::<String>(field.flag()).is_some()
 }
 
 /// `--file NAME=PATH` and `--field NAME=VALUE`, in the order they were given.

@@ -87,7 +87,7 @@ knowing before you decide how much to put in the document.
 | a path, query or header parameter | `Scalar::parse`, in the flag's value parser and again in `Invocation::new` | the command line, and every typed call |
 | a body field, from a per-field flag | `Scalar::parse`, in the flag's value parser | the command line |
 | a body field, in a generated type | the type's own `FromStr` / `Deserialize` | every typed call, and every response |
-| a whole body from `--json-body FILE` | nothing in this crate | — |
+| a whole body from `--json-body FILE` | `client::fits`, called by the adopter's own seam | the command line, before the request is built |
 
 A parameter never passes through a generated type, so `Scalar` is the only thing
 that can ever check one. A body field has both roads, and they run the same rule
@@ -111,13 +111,140 @@ carries a `pattern` is the repair, and
 [`examples/toy/spec/corrections.yaml`](../examples/toy/spec/corrections.yaml)
 does exactly that for `Voucher.total`.
 
-The other gap is the last row. `check_body` in
-[`src/request.rs`](../typed-openapi/src/request.rs) asks whether a JSON body was
-supplied where JSON is wanted and stops there — holding the *content* of a file
-to a schema needs the generated `struct`, which only the adopter's crate can
-name. [`tree::select`](cli.md#mounting-the-tree) is the seam for it, and
-[`examples/toy/cli/src/raw.rs`](../examples/toy/cli/src/raw.rs) is that check in
-nine lines.
+The last row is the one road that this crate cannot walk by itself.
+`check_body` in [`src/request.rs`](../typed-openapi/src/request.rs) asks whether
+a JSON body was supplied where JSON is wanted and stops there — holding the
+*content* of a file to a schema needs the generated `struct`, which only the
+adopter's crate can name. [`tree::select`](cli.md#mounting-the-tree) is the seam
+for it, and [`examples/toy/cli/src/raw.rs`](../examples/toy/cli/src/raw.rs) is
+that check in nine lines: the generated `OperationId::check_body` hands the body
+and the operation's type to `client::fits`. A CLI that calls `tree::dispatch`
+and nothing more has no such seam and sends the file as it is.
+
+## What `fits` refuses
+
+`client::fits` refuses a body three ways, each its own `client::BodyError`
+variant, and a fourth variant says that it could not ask. The path is in the `jq`
+spelling, and `.` is the body itself. `Undeclared` and `NotAnObject` print no
+value from the body. The cause of a `Mismatch` is serde's own message, and it can
+quote the value it refused, so print it only where a value in the body may be
+read.
+
+| the body | variant | a refusal reads |
+|---|---|---|
+| a value of the wrong type, or a missing property | `Mismatch` | `` createVoucher: the request body does not fit the schema the document declares at `status` `` |
+| a property that the type does not take, at any depth | `Undeclared` | `` createContact: the request body carries a property that the schema the document declares does not take, at `address.extra` `` |
+| a list where the type reads an object, at any depth, or a list or a scalar as the body itself where the type reads one | `NotAnObject` | `` createContact: the request body has an array at `address`, where the schema the document declares takes an object `` |
+| a type that cannot be written back as JSON | `Unwritable` | `<operationId>: the type the document declares for the request body cannot be written as JSON` |
+
+They are asked in this order:
+
+1. The body itself: a list or a scalar where the type reads an object is
+   `NotAnObject` at `.`. A struct, a map and an adjacently tagged union read an
+   object. For an untagged, internally tagged or externally tagged union a scalar
+   body that no member reads is a `Mismatch`, and so is a list that no member
+   reads. A list that a member reads by position is `NotAnObject` at `.`, found in
+   step 4.
+2. Whether the values have the right types, and no property is missing:
+   `Mismatch`. A scalar below the top where the type takes an object is one of
+   these, because serde cannot read an object from it.
+3. Whether the type can be written back: `Unwritable`.
+4. The body beside what the type wrote back. The first place in the order of the
+   body that holds either a property the type did not write back (`Undeclared`)
+   or a list the type read by position (`NotAnObject`) is the one named.
+5. Where that found nothing, the first property that the type skipped while it
+   read is `Undeclared`. It is a property that holds a `null`, an empty list or
+   an empty map, and the paragraph *One kind of property is seen only where the
+   type reads its object directly* says where `fits` can see one.
+
+Each of `Undeclared` and `NotAnObject` names one place. An operator sees the next
+one when they have repaired that one.
+
+**The measure is the type.** `fits` reads the body into the type, writes the type
+back as JSON, and walks the body beside what came back. A body key that the type
+did not write back is a property it did not take. A list in the place of an
+object was read by position, because serde fills a struct from a list, and the
+server would read a list. Both hold at every depth and inside every shape typify
+writes: a union (untagged, internally tagged, adjacently tagged or externally
+tagged), a `flatten`ed struct, a map of objects and a list. In an externally
+tagged union the key of the member is a step of the path
+(`place.address.extra`). A list at the top, where the type reads an object, is
+`NotAnObject` whatever its length. Everywhere else a list that the type cannot
+read is a `Mismatch`, like any other value of the wrong type. So is a scalar
+below the top where the type takes an object, and a scalar as the body that no
+member of an untagged, internally tagged or externally tagged union reads: those
+ask for no shape, so the body itself is not asked first, and a union with a scalar
+member reads a scalar.
+
+**There is no way to allow an undeclared property on a call.** No flag, no
+setting and no cargo feature does it. A server may drop a property it does not
+know without a word, and then the operator believes it took effect. The repair
+is an Overlay that declares the property, which an adopter blesses and a
+reviewer reads: [`corrections.yaml`](../examples/toy/spec/corrections.yaml)
+declares `internal_ref` that way, and
+[Plain corrections](overlay.md#1-plain-corrections) shows the action.
+
+**A schema that leaves further properties open gets a map for them.** A schema
+that types its further properties is a map to typify, and the map takes them.
+`setContactLabels` in the toy has `ContactLabels`, which is
+`additionalProperties: {type: string}`, so
+`{"vip": "yes", "region": "east"}` is sent as it is, and `{"vip": 1}` is a
+`Mismatch`. `additionalProperties: true` beside declared properties is the same:
+typify would write no field for it, so the generator says it as
+`additionalProperties: {}` before typify reads the schema, and the type gets the
+`flatten`ed map `extra`. A schema that states no `additionalProperties` is
+closed: JSON Schema reads it as open, but then no body would be refused. To open
+one, declare `additionalProperties` in an Overlay. `additionalProperties: false`
+gets `deny_unknown_fields` from typify, so serde refuses first and the refusal is
+a `Mismatch` whose cause says `unknown field`. The generator adds no
+`#[serde(deny_unknown_fields)]` of its own, because the same types decode a
+vendor's responses and a response may carry more than the document says. Only a
+request is held to the rule.
+
+**Where the type reads less than the document says, a body is refused like any
+other, because the typed call cannot send it either.** Two shapes do that:
+
+- An `anyOf` that typify writes as an `untagged` enum, given a body that fills
+  two of its members. The enum keeps one member, so a property of another member
+  is `Undeclared`. typify writes the enum when it judges the members exclusive.
+- A `oneOf` of an object and a list, given a list that the object reads by
+  position. The body is `NotAnObject`.
+
+The repair is an Overlay that makes the schema say what the type reads: one
+member, or the properties declared on one schema.
+
+An `anyOf` whose members typify cannot judge exclusive, such as objects with
+nothing required, is a struct that takes the properties of every member, and a
+body that fills two members fits. In that struct a value of the wrong type for a
+member is `Undeclared` and not a `Mismatch`: serde reads a member that fails as
+absent, so the key is one the type did not write back.
+
+**One kind of property is seen only where the type reads its object directly.**
+A type leaves a `null`, an empty list and an empty map out of what it writes when
+the property is optional, which is what typify's `skip_serializing_if` does. So a
+property that nothing declares and whose value is one of those three is found only
+where the type skips it while it reads. The refusal names the place the read was
+at, and an externally tagged union puts the key of its member in it.
+
+Serde reads some objects from a buffer, and nothing is skipped from a buffer: an
+untagged union, an internally tagged union, a `flatten`ed struct, and the content
+of an adjacently tagged union when it comes before the tag. A property of that
+kind passes inside one of them. It passes at the top as well when the type of the
+body itself is an untagged union, an internally tagged union or a `flatten`ed
+struct, because every property of the body is then read from a buffer. Everywhere
+else it is refused: in a struct, in an externally tagged union, in the content of
+an adjacently tagged union whose tag comes first, and among the own keys of an
+adjacently tagged union, which serde reads directly whichever key comes first.
+`{"kind": "a", "data": {"x": 1, "extra": null}}` is refused, and
+`{"data": {"x": 1, "extra": null}, "kind": "a"}` passes. A `zzz` of that kind
+beside `kind` and `data` is refused in both orders. A property with any other
+value is found everywhere.
+
+**A type you own is written back too.** `fits` needs the type to implement
+`Serialize`, and the type has to write the shape it reads: an object as an object
+and a list as a list. A generated type does, and so does a type named in
+`Settings::replace` that reads a string and writes one. A type that cannot be
+written back is `Unwritable`.
 
 Two things are not read at all: an `enum` on a numeric schema, and every
 keyword that describes a shape no flag carries — `minItems`, `minProperties`

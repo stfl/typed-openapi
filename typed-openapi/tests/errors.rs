@@ -202,10 +202,17 @@ fn requesting() -> Vec<Case> {
         case("PlanError::Request", PlanError::Request(http_error())),
         case("PlanError::Value", PlanError::Value(bad_value())),
         case(
-            "client::BodyError",
-            BodyError {
+            "client::BodyError::Mismatch",
+            BodyError::Mismatch {
                 op: "createThing".to_owned(),
                 path: ".".to_owned(),
+                source: json_error(),
+            },
+        ),
+        case(
+            "client::BodyError::Unwritable",
+            BodyError::Unwritable {
+                op: "createThing".to_owned(),
                 source: json_error(),
             },
         ),

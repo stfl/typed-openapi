@@ -186,6 +186,129 @@ the defect progenitor's `cli.rs` ships.
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
 
+**A request body is held to the generated type in one place, and an
+undeclared property has no way through.** `client::fits` is where a JSON body
+meets the type of its operation. The library cannot name that type, so the
+adopter's seam calls it (`tree::select`, then the generated
+`OperationId::check_body`), and a CLI that only calls `tree::dispatch` has none.
+Each refusal is its own `BodyError` variant: is the body an object where the
+type takes one (`NotAnObject`), do the values have the right types (`Mismatch`),
+and does the type write back everything the body holds (`Undeclared` for a
+property, `NotAnObject` for a list that serde read by place). A type that cannot
+be written back is `Unwritable`, because there is nothing to hold the body
+beside, and the gate fails closed. A new refusal is a new variant, since
+`BodyError` is `#[non_exhaustive]`. `Undeclared` and `NotAnObject` print no value
+of the body, which can be a credential or a client's data. The cause of a
+`Mismatch` is serde's message, which can quote it. A path is spelled as
+`serde_path_to_error` spells one (`address.extra`, `positions[1].flag`), and
+`client::spelled` is the one place that spells a place, whether the walk found it
+or the read did.
+
+D4: no flag, setting or cargo feature lets an undeclared property through on a
+call. The repair is an Overlay that declares it, which an adopter blesses and a
+reviewer reads, and a second road round the check (an `--allow-undeclared`) is
+what the rule is there to prevent. The generated types get no
+`#[serde(deny_unknown_fields)]`: the same types decode a vendor's responses, and
+a response may carry more than the document says. The rule lives in `fits`
+because a request is the only side it is about.
+
+**The measure is the generated type, found by writing a body back.** The typed
+call is held to the same type, and anything that makes the command line and the
+typed call disagree about an operation is a bug, so a body is refused where the
+type reads less than the document says. `fits` reads the body into the type,
+writes the value with `serde_json::to_value` and walks the body beside what came
+back (`beside`): a body list beside a written object was read by place, and a
+body key that the written object lacks was not read. That is the way to see
+inside an untagged union, an internally tagged union, an adjacently tagged union
+whose content comes before its tag, and a `flatten`ed struct (which is also what
+typify writes for an `anyOf` it cannot judge exclusive). Serde reads each of them
+from a buffer, and nothing is skipped from a buffer. Writing the body back is why
+`fits` takes `T: Serialize`: a type must write the shape it reads, an object as
+an object and a list as a list, and that holds for the type from
+`Settings::replace` as well.
+
+**A property that holds nothing is found by the read, and the place is the
+read's.** A type drops a `null`, an empty list and an empty map when it writes an
+optional property (`skip_serializing_if`, in typify-impl's `structs.rs`), so the
+walk lets a key with such a value pass. `src/body_reader.rs` names it where the
+type skips it while it reads. Serde asks its deserializer for
+`deserialize_ignored_any` where a type has no field for a key, and `Reader` is
+`serde_json`'s reading of a `Value` that knows where it is in the body and notes
+the place when it is asked. Only the first is kept.
+
+The place comes from the read and not from a search of the body. The key of an
+externally tagged variant is a step of the body, and only the type knows that an
+object of one key is a variant: a body can spell a variant like a property of its
+content, and then it has two readings that nothing in the body tells apart.
+`Reader` takes the key from the `deserialize_enum` that the type asks.
+
+`Reader` is `serde_json`'s own except for the walk down. A scalar, a refusal and
+the count of what a read leaves behind are asked of the `&Value` that
+`serde_json` implements `Deserializer` for. A list or an object is read by
+`serde_json` through a visitor that hands the visitor of the type an access that
+knows the step of each value, so the keys of a map (an integer key parses as it
+does there) and every message are `serde_json`'s. The name of a newtype reaches
+`serde_json` too, which reads a `RawValue` through it when the `raw_value`
+feature is on, and any crate of an adopter's build can turn that on. A reader
+that differs from `serde_json` in a value or a message is a defect:
+`src/body_reader.rs` holds a test that gives both a set of types and bodies and
+compares them, `RawValue` among the types.
+
+Serde skips nothing from a buffer, so the property passes inside an untagged
+union, an internally tagged union, a `flatten`ed struct and an adjacently tagged
+union whose content comes before its tag, and at the top when the body itself is
+one of the first three. A struct, an externally tagged union and an adjacently
+tagged union read their own keys directly, so a property that holds nothing is
+refused there, and so is it in the content of an adjacently tagged union whose
+tag comes first. That is a limit, `docs/validation.md` states it, and
+`tests/shapes.rs` pins it on the types typify writes, and a unit test in
+`src/client.rs` on a type of its own.
+
+`Probe` asks the type what it reads for the body itself, because the body cannot
+tell: serde derives `visit_seq` beside `visit_map` for a struct, so a list of
+five values reads into a struct of five fields. The type is read from a
+deserializer that holds nothing, and a call to `deserialize_struct` or
+`deserialize_map` is an object, which is a struct, a map and an adjacently
+tagged union. A type that reads itself through `deserialize_any` (an untagged or
+an internally tagged union, a `serde_json::Value`), `deserialize_enum` (an
+externally tagged union) or `deserialize_option` asks for none. A list or a
+scalar at the top is `NotAnObject` at `.` whatever its length when the type asks
+for an object. For a union that asks for none, a scalar at the top that no
+member reads is a `Mismatch` (a union with a scalar member reads one), and a list
+is `NotAnObject` when a member reads it by place and a `Mismatch` when none does.
+Below the top the walk finds a list that serde read by place, and a list that
+the type cannot read is a `Mismatch`, like a scalar, which serde cannot read an
+object from.
+
+`tests/shapes.rs` is the measurement of typify: it runs `typify::import_types!`
+over `tests/fixtures/shapes.json` and holds `fits` to the types typify 0.8 writes
+for each shape (a struct, an untagged, an internally tagged, an adjacently tagged
+and an externally tagged enum, an `anyOf` that typify writes as an enum and one
+that it writes as a struct of `flatten`ed `Option`s, an `allOf`, a map of objects
+and each way to leave the rest open), so a release of typify that writes a shape
+another way fails under the case that stood on it. The unit tests in
+`src/client.rs` and `src/body_reader.rs` use hand-written types and hold the
+mechanism. Two shapes are narrower in the type than in the document, and a body
+is refused like any other: an `anyOf` that typify writes as an `untagged` enum,
+given a body that fills two members, and a `oneOf` of an object and a list given
+a list that the object reads. `docs/validation.md` says both to an adopter. The
+struct of `flatten`ed `Option`s takes the properties of every member, but serde
+reads a member that fails as absent, so a value of the wrong type for a member is
+`Undeclared` there and not a `Mismatch`.
+
+**`additionalProperties: true` is said as `{}` before typify reads the schema.**
+typify writes no field for `true` beside declared properties, and the
+`flatten`ed `extra` map for `{}`, which admits the same values and which its own
+comment names as the way to get the map. The check is against the generated type,
+so the first would make a property that the document leaves open `Undeclared`.
+`OpenWithAMap` in `src/generate/types.rs` is a `schemars` visitor that says every
+`true` as `{}`, at every depth, in the named schemas and in the inline ones. It
+walks the schema and not the JSON, so a `default` or an `example` that holds the
+same words is not changed. A schema that states no `additionalProperties` stays
+closed: reading it as open would refuse nothing, and the refusal of an
+undeclared property is the point. `false` stays what typify closes with
+`deny_unknown_fields`.
+
 **Every YAML text is read by one function, and no foreign error is public.**
 `read` in `src/overlay.rs` is the function every document and every Overlay goes
 through, into a `serde_json::Value`, before anything else looks at it. That

@@ -60,6 +60,44 @@ the crate follows [Semantic Versioning][semver].
   `message()`, and the `place()` where the thing that refused said one. An
   `overlay::Place` is the line and column of the text, or the index of the
   action in the Overlay.
+- **A body property that no schema declares stops the request.** `client::fits`
+  refuses a body that carries a property which the target type does not take, at
+  any depth and inside a union or a `flatten`ed struct, as
+  `BodyError::Undeclared { op, path }`. It runs before a request exists, so a dry
+  run and a confirmed run both stop, and it names the operation and the path in
+  the `jq` spelling (`address.extra`, and `place.address.extra` for an externally
+  tagged union) and never prints the value. The generated
+  `OperationId::check_body` calls it, so a CLI with the seam of `toy raw` refuses
+  the body and sends nothing. A property that a map admits
+  (`additionalProperties: {type: string}`, `{}` or `true`) passes. The generated
+  types do not get `deny_unknown_fields`, because they decode responses too.
+  There is no flag or setting that allows an undeclared property on a call.
+  Repair: an Overlay that declares the property, then the bless step
+  (`docs/overlay.md`, *Plain corrections*). A committed `--json-body` file with
+  vendor extras fails now, and the repair is the same. A schema that states no
+  `additionalProperties` is closed. What the check does not see is in
+  `docs/validation.md`, *What `fits` refuses*.
+- **`BodyError::NotAnObject { op, path, found }`.** `fits` refuses a list where
+  the type reads an object, at any depth, and a list or a scalar as the body
+  itself where the type reads an object (a struct, a map or an adjacently tagged
+  union): `path` is `.` for the body and `address` or `positions[1]` below it. A
+  list of the right length used to pass, because serde fills a struct from a list
+  by position. Below the top, a list that the type cannot read and a scalar are a
+  `Mismatch`. So is a scalar as the body that no member of an untagged,
+  internally tagged or externally tagged union reads, and so is a list that no
+  member of one reads. Repair: send an object.
+- **A body that the type reads as less than the document says is refused.** Two
+  shapes: an `anyOf` that typify writes as an `untagged` enum, given a body that
+  fills two members (the enum keeps one member, so a property of the other is
+  `Undeclared`), and a `oneOf` of an object and a list given a list that the
+  object reads by position (`NotAnObject`). The typed call cannot send such a
+  body either. An `anyOf` that typify writes as a struct of `flatten`ed
+  `Option`s takes the properties of every member. Repair: an Overlay that makes
+  the schema say what the type reads.
+- **`ArgError::FlagBesideNonObject { flag, path, found }`.** A per-field flag
+  beside a `--json-body` file whose top level is not an object is refused. It
+  was dropped, and the file went out as it was. Repair: drop the flag, or send an
+  object.
 
 ### Changed
 
@@ -69,6 +107,16 @@ the crate follows [Semantic Versioning][semver].
   commit `src/model.postcard`. The stamp holds the version of typed-openapi, so
   the blob changes with each release even when the layout does not; a check that
   blesses again and compares asks for a commit after each upgrade.
+- **`additionalProperties: true` beside declared properties generates the
+  map.** The generator says it as `additionalProperties: {}` before typify reads
+  the schema, at any depth, so the struct gains
+  `#[serde(flatten)] pub extra: serde_json::Map<String, serde_json::Value>`, as
+  typify writes for `{}`. typify wrote no field for `true`, which would have made
+  a property the document leaves open an undeclared one. A struct literal of such
+  a type must add `extra`, and a struct whose other properties were all optional
+  no longer derives `Default`. A schema that states no `additionalProperties` is
+  unchanged, and so is `false`. Repair: run the bless step again and add the
+  field to a literal of the struct.
 - **`DocumentError::Blob` is worded anew, and `DocumentError::Encode` is the
   failure to write one.** At 0.0.2 `Blob` read `the reduced model the bless step
   writes is not valid: <cause>`. It reads `the model blob is damaged; run the
@@ -148,6 +196,18 @@ the crate follows [Semantic Versioning][semver].
   `DocumentError`. A `match` on one needs a `_` arm, and a refusal added later
   is a new variant, not a break. A match on an error is the same in every
   feature build, `_` arm included.
+- **`client::BodyError` is an `#[non_exhaustive]` enum.** At 0.0.2 it was a
+  struct with `op`, `path` and `source`. Those fields are the variant
+  `BodyError::Mismatch { op, path, source }`, with the same message, beside
+  `Undeclared`, `NotAnObject` and `Unwritable`. Repair: match the variant where
+  you read the fields, with a `_` arm for a refusal added later.
+- **`client::fits` takes a type that implements `Serialize`.** It writes the
+  value back and walks the body beside it, which is how it sees inside a union.
+  The signature is `fits<T: DeserializeOwned + Serialize>`. Every type the
+  generator writes has both, and so has a type named in `Settings::replace` when
+  it can be written as JSON. A type that cannot is
+  `BodyError::Unwritable { op, source }`. Repair: derive or implement
+  `Serialize` on a type of yours that a body reaches.
 
 ### Removed
 
