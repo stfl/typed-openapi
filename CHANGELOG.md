@@ -546,13 +546,21 @@ the crate follows [Semantic Versioning][semver].
   - No text that the library makes holds a base URL's userinfo. The refusals of
     `BaseUrlError` and `LoadError::ServerBase` print no part of the URL, and
     `render` prints the host and the port of a request and never its userinfo.
-    A server URL that holds userinfo is `ServerBase` also when it is no URL, and
-    whatever stands before its `://` (a variable that nothing declares, a space,
-    a character that no scheme holds): it was `LoadError::ServerUrl`, which
-    printed the URL, the userinfo among it. A document that was refused as
-    `ServerUrl` for that reason is refused as `ServerBase` now, and no document
-    that loaded is refused for it. A text with no authority, such as
-    `http:/u@h/a b`, holds no userinfo and stays `ServerUrl`.
+    Userinfo is looked for where an authority is read: in the text up to its
+    first `/`, `?` or `#`, and, when that character starts a `//`, in the text
+    after it up to the next one. So a base is refused for `//alice:s3cret@host/`
+    too, which the `http` crate takes for a path with no authority and a request
+    was built from, and a dry run, a message and a `Debug` leave that userinfo
+    out.
+  - A server URL that holds userinfo is `ServerBase` also when it is no URL, and
+    whatever stands before its `//` but a `/`, `?` or `#` (a variable that
+    nothing declares, a space, a character that no scheme holds, no colon): it
+    was `LoadError::ServerUrl`, which printed the URL, the userinfo among it.
+    `ServerUrl` prints the URL as the document spells it beside the one with the
+    defaults in it, so a URL that is refused is read in both. A document that was
+    refused as `ServerUrl` for that reason is refused as `ServerBase` now. A text
+    with an `@` in none of the places that are read, such as `http:/u@h/a b`,
+    stays `ServerUrl`, and its message prints it.
   - The `Debug` of a `Client` and of a `Document` prints the base without its
     userinfo and its query. It printed the base whole, so a `{client:?}` in a log
     held the credential of a `Client::with_base`, and a `Document` that
@@ -595,9 +603,10 @@ the crate follows [Semantic Versioning][semver].
   (`LoadError::HeaderName { op, name }`); it loaded, and a request that gave it a
   value failed. A header with no flag sends nothing and is not asked. `ValueError`
   is `#[non_exhaustive]`, so the variants are no break. Repair: an Overlay that
-  corrects the name or removes the parameter; send a header value, and each item
-  of a header list, with no space or tab at its edge; send no comma inside an
-  item of a list; and leave out an empty item.
+  corrects the name or removes the parameter; send no control character other
+  than a tab in a header value; send a header value, and each item of a header
+  list, with no space or tab at its edge; send no comma inside an item of a list;
+  and leave out an empty item.
 - **A number is sent as it was parsed, and a number that would be sent as
   another one is refused.** A parameter was checked by `Scalar::parse` and its
   raw text went on the wire, so `+5` was sent as `%2B5` and `007` as written,

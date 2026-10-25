@@ -154,6 +154,13 @@ fn a_base_url_that_carries_a_credential_stops_the_invocation_and_prints_none_of_
             "userinfo",
             &["alice", "s3cret"][..],
         ),
+        // The `http` crate reads this one as a path, and a dry run would print it.
+        (
+            "//alice:s3cret@127.0.0.1:18473/",
+            BaseUrlError::Userinfo,
+            "userinfo",
+            &["alice", "s3cret"][..],
+        ),
         (
             "http://127.0.0.1:18471/api?key=secret",
             BaseUrlError::Query,

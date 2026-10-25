@@ -106,9 +106,11 @@ pub enum LoadError {
     /// The first server's URL is not a URL, once each variable in it is replaced
     /// by its default. A variable the server does not declare has no default
     /// and stays in the URL as it is written. A URL that holds userinfo is
-    /// [`LoadError::ServerBase`] whether it is a URL or not, so this message
-    /// prints no credential. A text with no authority, such as `http:/u@h/a b`,
-    /// holds no userinfo and is refused here.
+    /// [`LoadError::ServerBase`] whether it is a URL or not, as the document
+    /// spells it and with the defaults in it, so this message prints no
+    /// credential. A text with an `@` in none of the places where an authority is
+    /// read (see [`BaseUrlError::Userinfo`]), such as `http:/u@h/a b`, is refused
+    /// here, and the message prints it.
     #[error("`servers[0].url` is not a URL: {}", refused_url(.url, .filled))]
     ServerUrl {
         /// `servers[0].url` as the document spells it.
@@ -125,10 +127,11 @@ pub enum LoadError {
     /// a query or a fragment, which a request would send, drop or leak. The cause
     /// says which, and neither it nor this message prints the URL, because a
     /// credential or a key would be in it. A URL that holds userinfo is refused
-    /// for it also when the text is no URL, wherever its authority stands in
-    /// the text, because [`LoadError::ServerUrl`] prints the URL. An Overlay
-    /// corrects the URL. A caller who names the base is held to the same rule
-    /// when the request is built.
+    /// for it also when the text is no URL, whatever stands before the `//` that
+    /// begins its authority but a `/`, `?` or `#`, because
+    /// [`LoadError::ServerUrl`] prints the URL. An Overlay corrects the URL. A
+    /// caller who names the base is held to the same rule when the request is
+    /// built.
     #[error("`servers[0].url` cannot be the base URL of a request; correct it in an Overlay")]
     ServerBase {
         /// What the URL holds that a request cannot keep.
@@ -880,20 +883,7 @@ impl Document {
     }
 
     fn from_openapi(doc: &OpenAPI, commit: &str) -> Result<Self, LoadError> {
-        let server = doc.servers.first().ok_or(LoadError::NoServer)?;
-        let with_defaults = filled(server);
-        // Before the parse: a URL with userinfo that is no URL is refused for the
-        // userinfo, and `ServerUrl` prints the URL.
-        BaseUrlError::userinfo_in(&with_defaults)
-            .map_err(|source| LoadError::ServerBase { source })?;
-        let base =
-            Uri::try_from(with_defaults.as_str()).map_err(|source| LoadError::ServerUrl {
-                url: server.url.clone(),
-                filled: with_defaults.clone(),
-                source,
-            })?;
-        BaseUrlError::of_server(&with_defaults, &base)
-            .map_err(|source| LoadError::ServerBase { source })?;
+        let base = base_of(doc.servers.first().ok_or(LoadError::NoServer)?)?;
         let empty = Components::default();
         // Which segment groups this document is a fact about all of its paths,
         // so it is read once and then applied one path at a time.
@@ -927,6 +917,42 @@ impl Document {
             commit: commit.to_owned(),
             ops,
         })
+    }
+}
+
+/// The base of every request: the URL of the first server, once it is a URL that
+/// a request can be built from.
+///
+/// The userinfo is read from the text before it is parsed, so a URL that holds
+/// userinfo and is no URL is refused for the userinfo, and `ServerUrl` prints a
+/// URL that holds none.
+fn base_of(server: &Server) -> Result<Uri, LoadError> {
+    let with_defaults = filled(server);
+    BaseUrlError::userinfo_in(&with_defaults).map_err(|source| LoadError::ServerBase { source })?;
+    let base = Uri::try_from(with_defaults.as_str())
+        .map_err(|source| unparsed(server, with_defaults.clone(), source))?;
+    BaseUrlError::of_server(&with_defaults, &base)
+        .map_err(|source| LoadError::ServerBase { source })?;
+    Ok(base)
+}
+
+/// The refusal of a first server whose URL does not parse: `ServerBase` when it
+/// holds userinfo, and `ServerUrl` when it does not.
+///
+/// `ServerUrl` prints the URL as the document spells it beside the one with the
+/// defaults in it, and a default that holds a `/` can move the `@` out of the
+/// authority of the one and not of the other. So the spelling is read too, once
+/// the filled text is refused. A filled text that parses is the URL a request
+/// goes to, and the spelling is not read then: in `http://{h}alice:s3cret@host/`
+/// with `h` defaulting to `x/` the authority is `x`.
+fn unparsed(server: &Server, with_defaults: String, source: http::uri::InvalidUri) -> LoadError {
+    match BaseUrlError::userinfo_in(&server.url) {
+        Err(userinfo) => LoadError::ServerBase { source: userinfo },
+        Ok(()) => LoadError::ServerUrl {
+            url: server.url.clone(),
+            filled: with_defaults,
+            source,
+        },
     }
 }
 

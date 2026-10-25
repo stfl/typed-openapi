@@ -43,8 +43,8 @@ decimal numbers and not as text, so `1.0`, `1e0` and `001` are one number and ar
 accepted. A number with many significant digits can fail it, and so can a number
 too small for a float (`1e-400`, `4.9e-325`); `0.30000000000000004` has 17 digits
 and passes, because it is the shortest text of its float. A document that needs
-such a number states the value as a `string` with a `pattern`, as the toy's
-`Voucher.total` does.
+a number that fails it states the value as a `string` with a `pattern`, as the
+toy's `Voucher.total` does.
 
 The same rules are the flag's help line, rendered by the same code:
 
@@ -195,16 +195,23 @@ A base URL is the scheme, the host and the path of every request, and nothing
 else of it is kept. One with userinfo (`user:password@`) or a query is refused
 when a request is built (`RequestError::Base`), whoever names it: the document's
 first server, `Client::with_base`, and the `base` of `Plan::build`, `Selection`
-and `tree::dispatch`. A server URL in the document is refused when the document
-loads (`LoadError::ServerBase`), with a fragment too, which an `http::Uri` cannot
-hold and so only the text of a document can. A credential belongs in the client
+and `tree::dispatch`. Userinfo is looked for where an authority is read: in the
+text up to its first `/`, `?` or `#`, and, when that character starts a `//`, in
+the text after it up to the next one. So `//user:password@host/`, which the
+`http` crate reads as a path, is refused as `http://user:password@host/` is. A
+server URL in the document is refused when the document loads
+(`LoadError::ServerBase`), with a fragment too, which an `http::Uri` cannot hold
+and so only the text of a document can. A credential belongs in the client
 adapter ([client.md](client.md#writing-an-adapter)). No text that the library
 makes holds the userinfo of a base URL. The refusals of `RequestError::Base` and
 `LoadError::ServerBase` print no part of the URL, and so a server URL that holds
-userinfo is `ServerBase` also when it is no URL, and `LoadError::ServerUrl` prints
-a URL that holds none. A dry run prints the host and the port, and the `Debug` of
-a `Client` and of a `Document` prints its base without the userinfo and the
-query.
+userinfo is `ServerBase` also when it is no URL, whatever stands before its `//`
+but a `/`, `?` or `#`. `LoadError::ServerUrl` prints the URL as the document
+spells it and with the defaults in it, and both are read first. A text with an
+`@` in none of the places where an authority is read, such as `http:/u@h/a b`,
+stays `ServerUrl`, and its message prints it. A dry run prints the host and the
+port, and the `Debug` of a `Client` and of a `Document` prints its base without
+the userinfo and the query.
 
 ## What `fits` refuses
 

@@ -21,7 +21,8 @@
 //! the `tree` module (feature `clap`); a generated Rust wrapper reaches it by building a
 //! [`Values`] directly. Neither spells a path template twice.
 
-use http::uri::Authority;
+use std::ops::Range;
+
 use http::{HeaderValue, Request, Uri, header};
 use thiserror::Error;
 
@@ -210,6 +211,12 @@ pub enum BaseUrlError {
     /// `user:password@` before the host. A client sends it as an `Authorization`
     /// header and a dry run would print it. A credential belongs in the client
     /// adapter (`docs/client.md`).
+    ///
+    /// It is looked for where an authority is read: in the text up to its first
+    /// `/`, `?` or `#`, and, when that character starts a `//`, in the text after
+    /// it up to the next one. So `//user:password@host/`, which the `http` crate
+    /// reads as a path with no authority, is refused as `http://user:password@host/`
+    /// is.
     #[error(
         "the base URL holds userinfo (`user:password@`), which a request would send as a \
          credential and a dry run would print"
@@ -232,29 +239,31 @@ pub enum BaseUrlError {
 impl BaseUrlError {
     /// What a request cannot keep of `base`, userinfo first because it is the
     /// credential.
+    ///
+    /// The userinfo is read from the text that `base` writes, as it is read from
+    /// the text of a server URL. The `http` crate reads `//alice:s3cret@host/` as
+    /// a path with no authority, and a request built from it would carry the
+    /// credential all the same.
     fn of(base: &Uri) -> Result<(), Self> {
-        if base
-            .authority()
-            .is_some_and(|authority| authority.as_str().contains('@'))
-        {
-            return Err(Self::Userinfo);
-        }
+        Self::userinfo_in(&base.to_string())?;
         if base.query().is_some() {
             return Err(Self::Query);
         }
         Ok(())
     }
 
-    /// Whether the text of a server URL holds userinfo, as the document spells
-    /// it once its variables have their defaults.
+    /// Whether `text` holds userinfo where an authority is read (see
+    /// `authority_spans`).
     ///
     /// It is asked of the text and before the text is parsed, so a URL that
     /// holds userinfo and is no URL is refused for the userinfo. The refusal
     /// that a URL that does not parse gets prints the URL, and that is where a
     /// credential must not be.
-    #[cfg(feature = "document")]
     pub(crate) fn userinfo_in(text: &str) -> Result<(), Self> {
-        if authorities_of(text).any(|authority| authority.contains('@')) {
+        if authority_spans(text).any(|span| {
+            text.get(span)
+                .is_some_and(|authority| authority.contains('@'))
+        }) {
             return Err(Self::Userinfo);
         }
         Ok(())
@@ -272,28 +281,53 @@ impl BaseUrlError {
     }
 }
 
-/// Every place in `text` where an authority can stand, each up to the first
-/// `/`, `?` or `#`: after the first `://` that no `/`, `?` or `#` comes before,
-/// or after a leading `//`, and the start of the text.
+/// The characters that end an authority.
+const AUTHORITY_END: [char; 3] = ['/', '?', '#'];
+
+/// Every place in `text` where an authority is read, as a range of bytes: the
+/// text up to its first `/`, `?` or `#`, and, when that character starts a `//`,
+/// the text after the two slashes up to the next `/`, `?` or `#`.
 ///
-/// A server URL that is no URL can still hold a credential, and the text before
-/// its `://` is whatever the document wrote: a variable that nothing declares, a
-/// space, a scheme with a character that no scheme holds. So the text before
-/// the `://` is not judged to be a scheme, and the start of the text is read as
-/// an authority too (`alice:s3cret@host://x`). A URL that parses has a scheme
-/// and an authority, so the start of its text holds no `@`.
-#[cfg(feature = "document")]
-fn authorities_of(text: &str) -> impl Iterator<Item = &str> {
-    let delimiters = ['/', '?', '#'];
-    let after_scheme = text
-        .split_once("://")
-        .filter(|(before, _)| !before.contains(delimiters))
-        .map(|(_, rest)| rest)
-        .or_else(|| text.strip_prefix("//"));
-    std::iter::once(text).chain(after_scheme).map(move |from| {
-        from.split_once(delimiters)
-            .map_or(from, |(authority, _)| authority)
-    })
+/// A server URL that is no URL can still hold a credential, and what stands
+/// before its `//` is whatever the document wrote: a variable that nothing
+/// declares, a space, a scheme with a character that no scheme holds, or no
+/// colon at all. So nothing before the `//` is judged to be a scheme, and the
+/// start of the text is read as an authority too (`alice:s3cret@host://x`). A URL
+/// that parses holds an `@` before its first `/`, `?` or `#` only when it is an
+/// authority alone (`alice:s3cret@host:80`), and that `@` is userinfo, which a
+/// request refuses all the same.
+fn authority_spans(text: &str) -> impl Iterator<Item = Range<usize>> {
+    let end_from = |from: usize| {
+        text.get(from..)
+            .and_then(|rest| rest.find(AUTHORITY_END))
+            .map_or(text.len(), |at| from + at)
+    };
+    let start = end_from(0);
+    let after_slashes = text
+        .get(start..)
+        .is_some_and(|rest| rest.starts_with("//"))
+        .then(|| start + 2..end_from(start + 2));
+    std::iter::once(0..start).chain(after_slashes)
+}
+
+/// `text` with the userinfo of each authority that `authority_spans` reads
+/// left out. This is how a dry run shows the host and the request line and how a
+/// `Debug` shows a base: a credential belongs in neither.
+fn without_userinfo(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    for span in authority_spans(text) {
+        let Some(at) = text
+            .get(span.clone())
+            .and_then(|authority| authority.rfind('@'))
+        else {
+            continue;
+        };
+        out.push_str(text.get(from..span.start).unwrap_or_default());
+        from = span.start + at + 1;
+    }
+    out.push_str(text.get(from..).unwrap_or_default());
+    out
 }
 
 /// Why an invocation did not become a request.
@@ -701,13 +735,15 @@ pub fn render(request: &Request<Vec<u8>>) -> String {
         out,
         "{} {} HTTP/1.1",
         request.method(),
-        request
-            .uri()
-            .path_and_query()
-            .map_or("/", http::uri::PathAndQuery::as_str)
+        without_userinfo(
+            request
+                .uri()
+                .path_and_query()
+                .map_or("/", http::uri::PathAndQuery::as_str)
+        )
     );
     if let Some(authority) = request.uri().authority() {
-        let _ = writeln!(out, "host: {}", host_of(authority));
+        let _ = writeln!(out, "host: {}", without_userinfo(authority.as_str()));
     }
     for (name, value) in request.headers() {
         let _ = writeln!(out, "{name}: {}", value.to_str().unwrap_or("<non-utf8>"));
@@ -719,23 +755,15 @@ pub fn render(request: &Request<Vec<u8>>) -> String {
     out
 }
 
-/// The authority a request is sent to, which is the host and the port. Userinfo
-/// is not part of it: a client sends it as a header, and a dry run that printed
-/// it would put a credential in a log.
-fn host_of(authority: &Authority) -> &str {
-    authority
-        .as_str()
-        .rsplit_once('@')
-        .map_or_else(|| authority.as_str(), |(_, host)| host)
-}
-
 /// A base URL as text a message may hold: its scheme, host, port and path. This
 /// is how a type that holds a base shows it in its `Debug`.
 ///
-/// Userinfo is left out because it is a credential. The query is left out
-/// because a key goes there (`?api_key=…`), and a request from a base that holds
-/// one is refused (`BaseUrlError::Query`), so the base is shown as what a
-/// request would be built from.
+/// Userinfo is left out because it is a credential, wherever `authority_spans`
+/// reads it, so a base that the `http` crate reads as a path
+/// (`//alice:s3cret@host/`) shows no more of it than one with an authority. The
+/// query is left out because a key goes there (`?api_key=…`), and a request from
+/// a base that holds one is refused (`BaseUrlError::Query`), so the base is shown
+/// as what a request would be built from.
 pub(crate) fn without_userinfo_and_query(base: &Uri) -> String {
     let mut out = String::new();
     if let Some(scheme) = base.scheme_str() {
@@ -743,10 +771,10 @@ pub(crate) fn without_userinfo_and_query(base: &Uri) -> String {
         out.push_str("://");
     }
     if let Some(authority) = base.authority() {
-        out.push_str(host_of(authority));
+        out.push_str(authority.as_str());
     }
     out.push_str(base.path());
-    out
+    without_userinfo(&out)
 }
 
 /// Does `item` start or end with a space or a tab? RFC 9110 leaves those two
@@ -794,6 +822,37 @@ fn body_text(request: &Request<Vec<u8>>) -> String {
 )]
 mod tests {
     use super::*;
+
+    /// The refusal of userinfo and the text without it read the same places, so
+    /// a text is changed exactly when it is refused.
+    #[test]
+    fn userinfo_is_refused_in_the_places_it_is_left_out_of() {
+        for (text, without) in [
+            ("http://alice:s3cret@host:80/a?b", "http://host:80/a?b"),
+            ("//alice:s3cret@host/a", "//host/a"),
+            ("alice:s3cret@host:80", "host:80"),
+            (" //u@h/", " //h/"),
+            ("{p}//u@h/", "{p}//h/"),
+            ("u@h://x", "h://x"),
+            ("http://@host", "http://host"),
+            ("http://a@b@host/", "http://host/"),
+            ("http://host/a@b", "http://host/a@b"),
+            ("http://host//u@h/", "http://host//u@h/"),
+            ("http:/u@h/a", "http:/u@h/a"),
+            ("http:///u@h/a", "http:///u@h/a"),
+            ("/api/u@h", "/api/u@h"),
+            ("host?u@h", "host?u@h"),
+            ("http://host/x#u@h", "http://host/x#u@h"),
+            ("", ""),
+        ] {
+            assert_eq!(without_userinfo(text), without, "{text}");
+            assert_eq!(
+                BaseUrlError::userinfo_in(text).is_err(),
+                without != text,
+                "{text}"
+            );
+        }
+    }
 
     #[test]
     fn encoding_leaves_the_unreserved_set_alone_and_escapes_the_rest() {

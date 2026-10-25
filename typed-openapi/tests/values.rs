@@ -611,22 +611,35 @@ fn a_base_url_with_userinfo_is_refused_and_the_refusal_does_not_print_it() {
     let op = doc.get("getThing").expect("the operation");
     let invocation = Invocation::new(op, Values::new().param("name", "a")).expect("values");
 
-    let error = invocation
-        .request(&base("http://alice:s3cret@127.0.0.1:18473/"))
-        .expect_err("userinfo is refused");
+    for text in [
+        "http://alice:s3cret@127.0.0.1:18473/",
+        // The `http` crate reads this as a path with no authority. The load reads
+        // it as an authority, and so does a client that is handed the text.
+        "//alice:s3cret@127.0.0.1:18473/",
+    ] {
+        let error = invocation
+            .request(&base(text))
+            .expect_err("userinfo is refused");
 
-    assert!(
-        matches!(&error, RequestError::Base(BaseUrlError::Userinfo)),
-        "{error:?}"
-    );
-    let shown = chain(&error);
-    assert!(shown.contains("userinfo"), "{shown}");
-    assert!(
-        !shown.contains("alice") && !shown.contains("s3cret"),
-        "{shown}"
-    );
+        assert!(
+            matches!(&error, RequestError::Base(BaseUrlError::Userinfo)),
+            "{text}: {error:?}"
+        );
+        let shown = chain(&error);
+        assert!(shown.contains("userinfo"), "{shown}");
+        assert!(
+            !shown.contains("alice") && !shown.contains("s3cret"),
+            "{shown}"
+        );
+    }
     // The empty user and the empty password are userinfo too.
-    for text in ["http://@host/", "http://:@host/", "http://u@host/"] {
+    for text in [
+        "http://@host/",
+        "http://:@host/",
+        "http://u@host/",
+        "//@host/",
+        "//u@host/api",
+    ] {
         assert!(
             matches!(
                 invocation.request(&base(text)),
@@ -675,17 +688,50 @@ fn a_base_url_with_a_query_is_refused_and_the_refusal_does_not_print_it() {
     );
 }
 
+/// A base with no authority, or with an `@` that is no userinfo, is a base.
+#[test]
+fn a_base_whose_at_sign_is_no_userinfo_is_a_base() {
+    let doc = doc();
+    let op = doc.get("getThing").expect("the operation");
+    let invocation = Invocation::new(op, Values::new().param("name", "a")).expect("values");
+
+    for (text, sent) in [
+        ("//host/api", "//host/api/things/a"),
+        ("/api", "/api/things/a"),
+        ("/api/u@h", "/api/u@h/things/a"),
+        ("http://host//u@h/", "http://host//u@h/things/a"),
+        (
+            "http://host/api/http://u@h/",
+            "http://host/api/http://u@h/things/a",
+        ),
+    ] {
+        let request = invocation
+            .request(&base(text))
+            .unwrap_or_else(|error| panic!("{text}: {error:?}"));
+        assert_eq!(request.uri().to_string(), sent, "{text}");
+    }
+}
+
 /// Every road a base URL takes to a request ends in the same refusal: the
-/// gate's, a typed call's and the command line's.
+/// gate's, a typed call's and the command line's. The `http` crate reads the
+/// second base as a path, and the roads refuse it as they refuse the first.
 #[test]
 fn every_road_refuses_the_base_the_caller_names() {
+    for text in [
+        "http://alice:s3cret@127.0.0.1:18473/",
+        "//alice:s3cret@127.0.0.1:18473/",
+    ] {
+        refused_on_every_road(&base(text));
+    }
+}
+
+fn refused_on_every_road(secret: &Uri) {
     let doc = doc();
     let op = doc.get("deleteThing").expect("the operation");
-    let secret = base("http://alice:s3cret@127.0.0.1:18473/");
 
     let built = Plan::build(
         op,
-        &secret,
+        secret,
         Values::new().param("name", "a"),
         &Answers::new(),
     )
@@ -702,7 +748,7 @@ fn every_road_refuses_the_base_the_caller_names() {
     let Asked::Run(selection) = tree::select(&doc, &matches).expect("an operation") else {
         panic!("this command line runs the operation");
     };
-    let planned = selection.plan(&secret).expect_err("refused");
+    let planned = selection.plan(secret).expect_err("refused");
     assert!(
         matches!(
             &planned,
@@ -715,7 +761,7 @@ fn every_road_refuses_the_base_the_caller_names() {
 
     let client = Client::over(doc.clone())
         .expect("a client")
-        .with_base(secret);
+        .with_base(secret.clone());
     let call = client
         .call::<NoContent>(op, Values::new().param("name", "a"))
         .expect("the values are fine");
@@ -762,6 +808,16 @@ fn a_dry_run_never_prints_userinfo() {
         .body(Vec::new())
         .expect("a request");
     assert_eq!(render(&plain), "GET /x HTTP/1.1\nhost: 127.0.0.1:18473\n");
+    // The `http` crate reads this as a path, and the credential stands in it.
+    let path = http::Request::builder()
+        .method("DELETE")
+        .uri("//alice:s3cret@127.0.0.1:18473/base/things/a")
+        .body(Vec::new())
+        .expect("a request");
+    assert_eq!(
+        render(&path),
+        "DELETE //127.0.0.1:18473/base/things/a HTTP/1.1\n"
+    );
 }
 
 /// A `Debug` goes to logs, and the base of a client is the caller's. Its query
@@ -777,6 +833,10 @@ fn the_debug_of_a_client_holds_no_userinfo_and_no_query() {
         ),
         ("http://u:p@[::1]:8080/x", "base: http://[::1]:8080/x"),
         ("http://@host/", "base: http://host/"),
+        (
+            "//alice:s3cret@127.0.0.1:18473/api?key=k3y",
+            "base: //127.0.0.1:18473/api",
+        ),
         (
             "http://127.0.0.1:18473/api",
             "base: http://127.0.0.1:18473/api",
@@ -800,41 +860,53 @@ fn the_debug_of_a_client_holds_no_userinfo_and_no_query() {
 /// A blob is read with no load, and `Document::from_blob` does not repeat the
 /// refusal of a server URL, so a document can hold a base with userinfo and a
 /// query. Its `Debug`, and the `Debug` of a client over it, leave both out, and
-/// a request from that base is refused all the same.
+/// a request from that base is refused all the same. The `http` crate reads a
+/// base that starts with `//` as a path, and its userinfo is left out as well.
 #[test]
 fn the_debug_of_a_document_read_from_a_blob_holds_no_userinfo_and_no_query() {
-    let mut value = serde_json::to_value(doc()).expect("a document is a value");
-    value
-        .as_object_mut()
-        .expect("a document is an object")
-        .insert(
-            "base".to_owned(),
-            "http://alice:s3cret@127.0.0.1:18473/api?key=k3y".into(),
-        );
-    let edited: Document = serde_json::from_value(value).expect("the edit reads back");
-    let document = Document::from_blob(&edited.to_blob().expect("the edit encodes"))
-        .expect("a blob is not refused for its base");
-    let client = Client::over(document.clone()).expect("a client");
-
-    for (what, debug) in [
-        ("document", format!("{document:?}")),
-        ("document, pretty", format!("{document:#?}")),
-        ("client", format!("{client:?}")),
+    for (text, shown) in [
+        (
+            "http://alice:s3cret@127.0.0.1:18473/api?key=k3y",
+            "base: http://127.0.0.1:18473/api,",
+        ),
+        (
+            "//alice:s3cret@127.0.0.1:18473/api?key=k3y",
+            "base: //127.0.0.1:18473/api,",
+        ),
     ] {
-        assert!(
-            debug.contains("base: http://127.0.0.1:18473/api,"),
-            "{what}: {debug}"
-        );
-        for secret in ["alice", "s3cret", "k3y"] {
-            assert!(!debug.contains(secret), "{what}: `{secret}` in {debug}");
+        let mut value = serde_json::to_value(doc()).expect("a document is a value");
+        value
+            .as_object_mut()
+            .expect("a document is an object")
+            .insert("base".to_owned(), text.into());
+        let edited: Document = serde_json::from_value(value).expect("the edit reads back");
+        let document = Document::from_blob(&edited.to_blob().expect("the edit encodes"))
+            .expect("a blob is not refused for its base");
+        let client = Client::over(document.clone()).expect("a client");
+
+        for (what, debug) in [
+            ("document", format!("{document:?}")),
+            ("document, pretty", format!("{document:#?}")),
+            ("client", format!("{client:?}")),
+        ] {
+            assert!(debug.contains(shown), "{text}, {what}: {debug}");
+            for secret in ["alice", "s3cret", "k3y"] {
+                assert!(
+                    !debug.contains(secret),
+                    "{text}, {what}: `{secret}` in {debug}"
+                );
+            }
         }
+        let op = document.get("getThing").expect("the operation");
+        let invocation = Invocation::new(op, Values::new().param("name", "a")).expect("values");
+        assert!(
+            matches!(
+                invocation.request(document.base()),
+                Err(RequestError::Base(BaseUrlError::Userinfo))
+            ),
+            "{text}"
+        );
     }
-    let op = document.get("getThing").expect("the operation");
-    let invocation = Invocation::new(op, Values::new().param("name", "a")).expect("values");
-    assert!(matches!(
-        invocation.request(document.base()),
-        Err(RequestError::Base(BaseUrlError::Userinfo))
-    ));
 }
 
 /// A document with a `servers` entry the caller could not have sent to without a
@@ -874,9 +946,12 @@ fn a_server_with_userinfo_a_query_or_a_fragment_is_refused_at_load() {
 /// refuses, so the userinfo is read from the text first and the refusal is
 /// `ServerBase`. No `LoadError` holds the text, in a field or in a message.
 ///
-/// The text before the `://` is whatever the document wrote: a variable that
-/// `variables` does not declare, a space or a tab in front, a scheme with a
-/// character that no scheme holds, or a userinfo that stands before the `://`.
+/// The authority is read after the first `/`, `?` or `#` of the text when that
+/// character starts a `//`, and at the start of the text. What stands before the
+/// `//` is whatever the document wrote: a variable that `variables` does not
+/// declare, a space, a tab or a byte order mark in front, a scheme with a
+/// character that no scheme holds or with no colon, or a userinfo that stands
+/// before a `://`.
 #[test]
 fn a_server_url_with_userinfo_that_is_no_url_is_refused_for_the_userinfo() {
     for url in [
@@ -893,6 +968,12 @@ fn a_server_url_with_userinfo_that_is_no_url_is_refused_for_the_userinfo() {
         "ht_tp://alice:s3cret@host/",
         "1http://alice:s3cret@host/a b",
         "alice:s3cret@host://x",
+        " //alice:s3cret@host/",
+        "\t//alice:s3cret@host/",
+        "\u{feff}//alice:s3cret@host/",
+        "{proto}//alice:s3cret@host/",
+        "http//alice:s3cret@host/a b",
+        "http: //alice:s3cret@host/a b",
     ] {
         let error = Document::load(&document(url, PATHS), &[]).expect_err(url);
         assert!(
@@ -919,8 +1000,12 @@ fn an_at_sign_past_the_authority_is_no_userinfo() {
         "http://host/a b",
         "http://host/a@b c",
         "http://host?u=a@b c",
-        // Nothing stands where an authority stands.
+        // No `@` stands where an authority is read.
         "http:/u@h/a b",
+        "http:/\\u@h/a b",
+        "http:///u@h/a b",
+        // A `/` stands before the `//`, so no authority is read there.
+        "{a/b}://u@h/ x",
         "/redirect?to=http://u@h/ x",
         "host/path?u=a://b@c x",
     ] {
@@ -950,27 +1035,77 @@ fn an_at_sign_past_the_authority_is_no_userinfo() {
     }
 }
 
+/// A document with one server whose URL has one variable.
+fn with_variable(url: &str, name: &str, default: &str) -> String {
+    format!(
+        "openapi: 3.0.3\n\
+         info: {{ title: t, version: \"1\" }}\n\
+         servers:\n  - url: '{url}'\n    variables:\n      {name}: {{ default: '{default}' }}\n\
+         paths: {{}}\n"
+    )
+}
+
+/// `ServerUrl` prints the URL as the document spells it beside the one with the
+/// defaults in it. A default that holds a `/` moves the `@` out of the authority
+/// of the filled text and leaves it in the authority of the spelled one, so the
+/// spelling is read too, for a URL that does not parse. One that parses is a
+/// base, and `http://x/alice:s3cret@host/` holds no userinfo.
+#[test]
+fn the_spelling_of_a_server_url_is_read_for_userinfo_when_the_url_is_refused() {
+    for (url, name, default) in [
+        ("{p}://alice:s3cret@host/a b", "p", "a/b"),
+        ("http://{h}alice:s3cret@host/a b", "h", "x/"),
+    ] {
+        let error = Document::load(&with_variable(url, name, default), &[]).expect_err(url);
+        assert!(
+            matches!(
+                &error,
+                LoadError::ServerBase {
+                    source: BaseUrlError::Userinfo
+                }
+            ),
+            "{url}: {error:?}"
+        );
+        for secret in ["alice", "s3cret"] {
+            assert!(!chain(&error).contains(secret), "{url}: {error}");
+            assert!(!format!("{error:?}").contains(secret), "{url}: {error:?}");
+        }
+    }
+    let loaded = Document::load(
+        &with_variable("http://{h}alice:s3cret@host/", "h", "x/"),
+        &[],
+    )
+    .expect("the filled text is a URL whose authority is `x`");
+    assert_eq!(loaded.base().to_string(), "http://x/alice:s3cret@host/");
+}
+
+/// The default of a variable puts userinfo in the URL, and the spelling holds
+/// none: the filled text is what a request goes to, and what `ServerUrl` prints
+/// when it does not parse.
 #[test]
 fn a_server_variable_that_makes_the_url_carry_one_is_refused_too() {
-    let with_variable = "openapi: 3.0.3
-info: { title: t, version: \"1\" }
-servers:
-  - url: 'http://{credentials}host/api'
-    variables:
-      credentials: { default: 'alice:s3cret@' }
-paths: {}
-";
-    let error = Document::load(with_variable, &[]).expect_err("the filled URL holds userinfo");
-    assert!(
-        matches!(
-            &error,
-            LoadError::ServerBase {
-                source: BaseUrlError::Userinfo
-            }
-        ),
-        "{error:?}"
-    );
-    assert!(!chain(&error).contains("s3cret"), "{}", chain(&error));
+    for url in [
+        "http://{credentials}host/api",
+        "http://{credentials}host/a b",
+    ] {
+        let document = with_variable(url, "credentials", "alice:s3cret@");
+        let error = Document::load(&document, &[]).expect_err("the filled URL holds userinfo");
+        assert!(
+            matches!(
+                &error,
+                LoadError::ServerBase {
+                    source: BaseUrlError::Userinfo
+                }
+            ),
+            "{url}: {error:?}"
+        );
+        assert!(
+            !chain(&error).contains("s3cret"),
+            "{url}: {}",
+            chain(&error)
+        );
+        assert!(!format!("{error:?}").contains("s3cret"), "{url}: {error:?}");
+    }
 }
 
 #[test]

@@ -165,9 +165,10 @@ pub struct Document {
 }
 
 /// The base is shown without its userinfo and its query. A load refuses a
-/// server that holds either, but a blob is read with no load, and a `Debug` goes
-/// to logs. Every field is bound by name, so a field added to `Document` stops
-/// this from compiling until it is shown or left out on purpose.
+/// server that holds either, but a blob is read with no load, and so is a
+/// document read through `Deserialize` in another format, and a `Debug` goes to
+/// logs. Every field is bound by name, so a field added to `Document` stops this
+/// from compiling until it is shown or left out on purpose.
 impl fmt::Debug for Document {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { base, commit, ops } = self;

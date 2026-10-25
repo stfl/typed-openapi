@@ -226,22 +226,29 @@ document that lists none has no default to give. A relative first server such as
 `/` loads for the same reason, as a default the caller replaces. `NoOperationId`
 names the method and the path of an operation with no `operationId`, because
 every later refusal and every generated wrapper calls the operation by it. A
-server URL with variables takes the `default` of each, which OpenAPI requires
-for every variable; a variable that `variables` does not declare stays in the
-URL, which is then no URL (`ServerUrl`, which prints the URL as the document
-spells it and as it was refused, with the defaults in it). A URL that holds
-userinfo, a query or a fragment is `ServerBase`, which says which and prints none
-of the URL, because the part that is refused is the part that is a credential or
-a key. Userinfo is read from the text before the text is parsed
-(`BaseUrlError::userinfo_in`: what stands up to the first `/`, `?` or `#` after
-the first `://` that none of the three comes before, after a leading `//`, and at
-the start of the text), so a URL that holds userinfo and is no URL is
-`ServerBase` as well, and `ServerUrl` prints a URL that holds none. The text
-before the `://` is not judged to be a scheme, because a document writes
-whatever it writes there (`{scheme}`, a space), and a credential is a credential
-in a URL that nothing parses. A text with no authority (`http:/u@h/a b`) holds
-no userinfo and stays `ServerUrl`. It is the rule that `Invocation::request`
-holds a caller's base to.
+server URL with variables takes the `default` of each, which OpenAPI requires for
+every variable; a variable that `variables` does not declare stays in the URL,
+which is then no URL (`ServerUrl`, which prints the URL as the document spells it
+and as it was refused, with the defaults in it). A URL that holds userinfo, a
+query or a fragment is `ServerBase`, which says which and prints none of the URL,
+because the part that is refused is the part that is a credential or a key.
+Userinfo is read from the text before the text is parsed
+(`BaseUrlError::userinfo_in`, over `authority_spans` in `src/request.rs`: the
+text up to its first `/`, `?` or `#`, and, when that character starts a `//`, the
+text after it up to the next one), so a URL that holds userinfo and is no URL is
+`ServerBase` as well, and `ServerUrl` prints a URL that holds none. What stands
+before the `//` is not judged to be a scheme, because a document writes whatever
+it writes there (`{scheme}`, a space, no colon), and a credential is a credential
+in a URL that nothing parses. `ServerUrl` prints the spelling beside the text
+with the defaults, so a text that is refused as a URL is read in both (`base_of`
+in `src/model/reduce.rs`): a default that holds a `/` can move the `@` out of the
+authority of one and not of the other. A text that parses is read once, with the
+defaults, because that is the URL a request goes to. A text with an `@` in none
+of the places that are read stays `ServerUrl`, which prints it: `http:/u@h/a b`,
+and `{a/b}://u@h/ x`, where a `/` stands before the `//`. The same reading holds
+a caller's base to the rule in `Invocation::request`: the `http` crate takes
+`//alice:s3cret@host/` for a path with no authority, and it is `Userinfo` all the
+same.
 
 **A refusal names its operation and the place it stopped, and its repair only
 where the repair is true.** A `LoadError` from one operation carries the
@@ -495,12 +502,15 @@ fragment is refused in the text of the document's server
 
 No text that the library makes holds a base URL's userinfo. The refusals of
 `BaseUrlError` and `LoadError::ServerBase` print no part of the URL;
-`LoadError::ServerUrl` prints a URL that holds no userinfo, because the userinfo
-is read first; `render` prints the host and the port; and a type that holds a
-base writes its `Debug` by hand and leaves the userinfo and the query out
-(`request::without_userinfo_and_query`, which `render` shares with it through
-`host_of`). Three types hold a base. `Client` holds the caller's, and `Document`
-holds the one its load or its blob gave it: a blob is read with no load, and
+`LoadError::ServerUrl` prints a URL that holds no userinfo where an authority is
+read, because the userinfo is read first; `render` prints the host and the port;
+and a type that holds a base writes its `Debug` by hand and leaves the userinfo
+and the query out (`request::without_userinfo_and_query`). `render` and the
+`Debug` leave the userinfo out through `without_userinfo`, which reads the places
+that `userinfo_in` reads, so a text is changed exactly when it is refused, and a
+test holds the two together. Three types hold a base. `Client` holds the
+caller's, and `Document` holds the one its load, its blob or a read through
+`Deserialize` in another format gave it: the last two read with no load, and
 `from_blob` does not repeat `ServerBase`, so the base of a `Document` can hold
 userinfo, and `Document` binds each of its fields by name in its `Debug`, so a
 field added there stops it compiling. `Call` holds a reference to the base of
