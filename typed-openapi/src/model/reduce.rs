@@ -313,10 +313,13 @@ pub enum LoadError {
     /// (a key beside a `$ref`), so the gate, the name or the requirement the
     /// adopter wrote has no effect, and nothing says so.
     ///
-    /// The scan asks the extensions of the objects the specification gives
+    /// The scan asks the extensions of the objects that OpenAPI 3.0.3 gives
     /// fixed fields, and reads nothing inside a value of the vendor's own: an
     /// `example`, the `parameters` and the `requestBody` of a Link Object, or an
     /// extension holds JSON, and a key spelled like a marker in it is not one.
+    /// It reads nothing under a key that 3.0.3 does not define either, such as
+    /// `webhooks` or a schema's `$defs`: the model drops those, and nothing
+    /// builds a request from them.
     #[error(
         "`{key}` stands on `{at}`, where this crate does not read it; {}",
         crate::markers::reading(.key)
@@ -1038,10 +1041,11 @@ fn requires_of(op: &str, data: &ParameterData) -> Result<Vec<String>, LoadError>
 ///
 /// Checked once every parameter is read, because a requirement may name one the
 /// document lists after it. A parameter that lists its own name asks for
-/// nothing, and clap refuses an argument that requires itself. A name that is
-/// not there, or one this crate cannot send, is a requirement no run could meet.
-/// Each is refused here rather than mounted: the first would stop clap, and the
-/// others would make a flag that refuses everyone who gives it.
+/// nothing, and a debug build of clap refuses an argument that requires itself.
+/// A name that is not there, or one this crate cannot send, is a requirement no
+/// run could meet. Each is refused here rather than mounted: the first would
+/// stop a debug build of clap, and the others would make a flag that refuses
+/// everyone who gives it.
 fn companions(op: &str, params: &[Param]) -> Result<(), LoadError> {
     match unmet(params) {
         None => Ok(()),

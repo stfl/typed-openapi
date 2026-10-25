@@ -2624,7 +2624,7 @@ fn an_x_cli_key_on_a_path_item_is_refused_by_key_and_place() {
     assert_eq!(
         error.to_string(),
         "`x-cli-writes` stands on `$.paths['/render/{id}']`, where this crate does not \
-         read it; it reads that key on an operation"
+         read it; it reads that key on a method of a path item under `paths`"
     );
 
     for key in [
@@ -2655,7 +2655,8 @@ fn an_x_cli_key_on_the_wrong_kind_of_node_is_refused_by_key_and_place() {
     assert_eq!(
         on_operation.to_string(),
         "`x-cli-requires` stands on `$.paths['/render/{id}'].get`, where this crate does \
-         not read it; it reads `x-cli-requires` on a parameter, and not beside a `$ref`"
+         not read it; it reads `x-cli-requires` on a parameter under `paths` or \
+         `components.parameters`, and not beside a `$ref`"
     );
 
     let on_parameter = render_with("x-p: 1", "x-cli-gates: [render]", "x-o: 1");
@@ -2699,7 +2700,8 @@ fn an_x_cli_requires_beside_a_ref_is_refused() {
     assert_eq!(
         error.to_string(),
         "`x-cli-requires` stands on `$.paths['/a'].get.parameters[0]`, where this crate does \
-         not read it; it reads `x-cli-requires` on a parameter, and not beside a `$ref`"
+         not read it; it reads `x-cli-requires` on a parameter under `paths` or \
+         `components.parameters`, and not beside a `$ref`"
     );
 }
 
@@ -2826,6 +2828,45 @@ fn an_x_cli_spelling_that_is_a_name_or_data_is_no_marker() {
         &[],
     )
     .expect("a name, an example and a vendor's own JSON are not markers");
+
+    let listing = doc.get("listVouchers").expect("the document describes it");
+    assert_eq!(listing.effect(), Effect::Read, "and nothing changed");
+}
+
+/// A key that OpenAPI 3.0.3 does not define is dropped by the model, and
+/// nothing builds a request or a flag from what stands under it. A marker there
+/// is read by nothing and is no mistake of the adopter's, whichever kind of key
+/// it is: a field of a later version (`webhooks`, `components.pathItems`), a
+/// keyword of a later draft (`$defs`, `if`), or a key that no version defines
+/// (a path with no `/`, a response that is no status code).
+#[test]
+fn a_marker_under_a_key_openapi_3_0_3_does_not_define_is_not_refused() {
+    let doc = Document::load(
+        &synthetic(
+            "  /vouchers:\n\
+             \x20   get:\n\
+             \x20     operationId: listVouchers\n\
+             \x20     responses:\n\
+             \x20       \"200\": { description: OK }\n\
+             \x20       foo: { x-cli-writes: true, x-cli-mode: fast }\n\
+             \x20 vouchers:\n\
+             \x20   get: { x-cli-writes: true, x-cli-mode: fast }\n\
+             webhooks:\n\
+             \x20 settled:\n\
+             \x20   post: { x-cli-writes: true, x-cli-mode: fast }\n\
+             components:\n\
+             \x20 pathItems:\n\
+             \x20   Settled:\n\
+             \x20     post: { x-cli-gates: [a], x-cli-mode: fast }\n\
+             \x20 schemas:\n\
+             \x20   Defined:\n\
+             \x20     type: object\n\
+             \x20     $defs: { Inner: { x-cli-mode: fast } }\n\
+             \x20     if: { x-cli-writes: true }\n",
+        ),
+        &[],
+    )
+    .expect("a marker under a key the model drops is not read, so it is not refused");
 
     let listing = doc.get("listVouchers").expect("the document describes it");
     assert_eq!(listing.effect(), Effect::Read, "and nothing changed");

@@ -23,12 +23,23 @@
 //!
 //! # Where a schema stands
 //!
-//! A node is read as a schema only where the specification puts one: under
-//! `components.schemas`, under the `schema` of a parameter, a header or a
-//! media type, and under the keywords a schema states further schemas with.
-//! Every step down to one is a step the document's own shape names — `paths`
+//! A node is judged as a schema only where the specification puts one: under
+//! `components.schemas`, under the `schema` of a parameter, a header or a media
+//! type, and under the keywords a schema states further schemas with. Every
+//! step down to one is a step that the table in `src/shape.rs` names — `paths`
 //! to path items, a method to an operation, `content` to media types — and a
-//! key naming no such step is not followed at all.
+//! key naming no such step is not followed at all. The table also leads to
+//! objects that hold no schema, such as an Info, a Server, a Tag or a Link
+//! Object, and the walk enters them and judges nothing there.
+//!
+//! The table has two kinds of route: the ones that OpenAPI 3.0.3 defines, and
+//! the ones that a 3.0 document may carry and the object model drops, among
+//! them `webhooks`, `components.pathItems`, the keywords of a later draft such
+//! as `$defs` and `if`, a key of `paths` that is no path, and a key of the
+//! responses that is no status code. This walk enters both. It judges a schema
+//! by what it holds and not by where it stands, so where it can tell that a
+//! name is declared nowhere, a phantom is refused, and the refusal names an
+//! Overlay.
 //!
 //! Position is what tells a schema from JSON that merely looks like one, and a
 //! specification extension is why that has to be told. An object the
@@ -96,10 +107,12 @@
 //! it would refuse every document with a required path parameter, which is
 //! every document.
 //!
-//! `example`, `examples`, `default`, `enum` and `const` hold instance data
-//! rather than schemas, and no step leads through one. A vendor whose example
-//! spells out a form as `required: [name, email]` is writing a value, not
-//! requiring a key.
+//! `example`, `default`, `enum` and `const` hold instance data rather than
+//! schemas, and so does an `examples` on a schema and the `value` of an Example
+//! Object, which the `examples` of a parameter, a media type or `components`
+//! lead to. No step leads through any of them. A vendor whose example spells
+//! out a form as `required: [name, email]` is writing a value, not requiring a
+//! key.
 //!
 //! # What is exempt, and why the list is a measurement
 //!
@@ -169,8 +182,12 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::shape::{
-    COMPOSED, CONDITIONAL, DEPENDENT, ITEMS, Keys, Kind, PROPERTIES, Route, is_extension,
+    COMPOSED, CONDITIONAL, DEPENDENT, Entry, ITEMS, Keys, Kind, PROPERTIES, Reach, Route,
 };
+
+/// The walk judges a schema by what it holds, so it enters the whole table,
+/// the positions that OpenAPI 3.0.3 does not define included.
+const REACH: Reach = Reach::Whole;
 
 /// A schema's list of the keys a value must carry.
 const REQUIRED: &str = "required";
@@ -288,9 +305,9 @@ struct Walk<'d> {
 }
 
 impl<'d> Walk<'d> {
-    /// This node, then everything under it the document leads to a schema
-    /// through. A list under a key stands for each of its members, which is
-    /// how one reading serves `allOf` and `parameters` alike.
+    /// This node, then everything under it that the table leads to. A list
+    /// under a key stands for each of its members, which is how one reading
+    /// serves `allOf` and `parameters` alike.
     fn read(&mut self, kind: Kind, node: &'d Value) {
         match node {
             Value::Object(fields) => {
@@ -315,14 +332,13 @@ impl<'d> Walk<'d> {
     /// One field of `node`, read with the right notion of what stands under it
     /// and of which value it is about.
     ///
-    /// A key the document does not lead to a schema through is not read at
-    /// all. A keyword stating further schemas about the same value keeps
-    /// talking about the value `node` talks about, so `node` joins what those
-    /// schemas are held to. Every other key — a property, an item, a response,
-    /// a path — is a different value, and the schemas out here have nothing to
-    /// say about it.
+    /// A key the table does not lead through is not read at all. A keyword
+    /// stating further schemas about the same value keeps talking about the
+    /// value `node` talks about, so `node` joins what those schemas are held
+    /// to. Every other key — a property, an item, a response, a path — is a
+    /// different value, and the schemas out here have nothing to say about it.
     fn field(&mut self, kind: Kind, node: &'d Value, key: &'d str, value: &'d Value) {
-        let Some(route) = kind.route(key) else {
+        let Some(route) = kind.route(key, REACH) else {
             return;
         };
         self.at.push(Step::Key(key));
@@ -356,12 +372,14 @@ impl<'d> Walk<'d> {
     /// unless the route said the specification lets a vendor write beside them.
     fn entries(&mut self, kind: Kind, keys: Keys, map: &'d Value) {
         for (key, entry) in map.as_object().into_iter().flatten() {
-            if matches!(keys, Keys::NamesAndExtensions) && is_extension(key) {
-                continue;
+            match keys.entry(key, REACH) {
+                Some(Entry::Member) => {
+                    self.at.push(Step::Key(key));
+                    self.read(kind, entry);
+                    self.at.pop();
+                }
+                Some(Entry::Extension) | None => {}
             }
-            self.at.push(Step::Key(key));
-            self.read(kind, entry);
-            self.at.pop();
         }
     }
 

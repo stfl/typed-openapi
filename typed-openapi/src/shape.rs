@@ -6,7 +6,7 @@
 //! declares, and [`markers`](crate::markers) looks for an `x-cli-` key that
 //! nothing reads. Each has to tell an object the specification gives fixed
 //! fields from a name somebody chose and from JSON that is the vendor's own, so
-//! they read one table, and a map added to it is added for both.
+//! they read one table.
 //!
 //! # The table is a list of what is entered
 //!
@@ -29,6 +29,32 @@
 //! An `x-…` key of an object that a walk enters is an extension, and the walk
 //! asks about it by its name. In a map of names somebody chose it is a name like
 //! any other.
+//!
+//! # What OpenAPI 3.0.3 defines, and what only the schema walk enters
+//!
+//! A route is one that OpenAPI 3.0.3 defines, which is what the object model
+//! reads, or one that a 3.0 document may carry and the model drops. The second
+//! kind is a field of a later version (`webhooks`, `pathItems`), a keyword of a
+//! later draft (`$defs`, `if`), or a key that no version defines: a key of the
+//! Paths Object that is no path, and a key of the Responses Object that is no
+//! status code. A walk says how far it reaches with a [`Reach`].
+//!
+//! Both walks enter what 3.0.3 defines, so a map added to the table for a route
+//! of that kind is added for both. Only the schema walk enters the rest, and
+//! [`Reach::Whole`] is where the table says why:
+//!
+//! - The marker walk judges a key by where it stands. Nothing builds a request
+//!   or a flag from what stands under a key the model drops, so a refusal there
+//!   refuses a document for data that nobody reads, and a walk that reads
+//!   `webhooks` as path items reads a document that says it is 3.0 as 3.1.
+//! - The schema walk judges a schema by what it holds and not by where it
+//!   stands. Wherever it can tell that a name is declared nowhere, it refuses
+//!   the phantom, also where typify writes no type for the schema, and the
+//!   refusal names an Overlay.
+
+use openapiv3::StatusCode;
+use serde::Deserialize as _;
+use serde::de::value::{Error, StrDeserializer};
 
 /// A specification extension: where the specification lets an object carry one,
 /// an `x-…` key holds the vendor's own arbitrary JSON rather than a part of the
@@ -131,9 +157,24 @@ pub(crate) enum Route {
     /// One node of this kind — or, where the key holds a list of them, each
     /// member of it.
     Node(Kind),
-    /// A map whose values are each one node of this kind, under keys the
-    /// specification either lets a vendor write beside or does not.
+    /// A map whose values are each one node of this kind, under keys of the
+    /// sort [`Keys`] says.
     Map(Kind, Keys),
+}
+
+/// How much of the table a walk enters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reach {
+    /// What OpenAPI 3.0.3 defines, and so what the object model reads. The walk
+    /// of [`markers`](crate::markers) reaches this far, because it judges a key
+    /// by where it stands, and a key under a position that the model drops
+    /// stands nowhere.
+    Defined,
+    /// What 3.0.3 defines, and the routes and keys beside it that a 3.0
+    /// document may carry and the model drops. The walk of
+    /// [`required`](crate::required) reaches this far, because it judges a
+    /// schema by what it holds, wherever the document puts it.
+    Whole,
 }
 
 /// What the keys of a map are.
@@ -151,21 +192,75 @@ pub(crate) enum Route {
 pub(crate) enum Keys {
     /// Every key names one entry.
     Names,
-    /// Every key names one entry but an `x-…`, which is the vendor's own JSON
-    /// standing beside them.
-    NamesAndExtensions,
+    /// The Paths Object. A key that starts with `/` names a path, an `x-…` key
+    /// is the vendor's own JSON, and any other key is no path: the model reads
+    /// the keys that start with a `/` and no others.
+    Paths,
+    /// The Responses Object. `default` and an HTTP status code (`200`, `2XX`)
+    /// name a response, an `x-…` key is the vendor's own JSON, and any other
+    /// key is no response: the model keeps the keys that
+    /// `openapiv3::StatusCode` reads and no others.
+    Responses,
+}
+
+/// What stands under one key of a map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Entry {
+    /// One entry of the map: a node to enter.
+    Member,
+    /// The vendor's own JSON, standing beside the entries.
+    Extension,
+}
+
+impl Keys {
+    /// What `key` is in a map of this sort, for a walk that reaches this far,
+    /// and `None` for a key that the walk does not enter.
+    pub(crate) fn entry(self, key: &str, reach: Reach) -> Option<Entry> {
+        if !matches!(self, Self::Names) && is_extension(key) {
+            Some(Entry::Extension)
+        } else if self.names(key) || reach == Reach::Whole {
+            Some(Entry::Member)
+        } else {
+            None
+        }
+    }
+
+    /// Whether `key` names an entry that 3.0.3 defines.
+    fn names(self, key: &str) -> bool {
+        match self {
+            Self::Names => true,
+            Self::Paths => key.starts_with('/'),
+            Self::Responses => key == "default" || is_status_code(key),
+        }
+    }
+}
+
+/// Whether the object model keeps a key of the Responses Object as a response:
+/// it asks `StatusCode` itself, so the two cannot disagree about a spelling
+/// such as `2xx`.
+fn is_status_code(key: &str) -> bool {
+    StatusCode::deserialize(StrDeserializer::<Error>::new(key)).is_ok()
 }
 
 impl Kind {
-    /// What one of this node's keys leads to, and `None` for a key that leads to
-    /// no object.
+    /// What one of this node's keys leads to for a walk that reaches this far,
+    /// and `None` for a key that leads to no object, or to one the walk does
+    /// not enter.
     ///
     /// This is the whole of what a walk is allowed to enter. A position left out
     /// is a node unread, and a position wrongly put in is a document wrongly
-    /// refused — so it names what the specification names, and a shape the
-    /// specification leaves to the vendor is not in it.
-    pub(crate) fn route(self, key: &str) -> Option<Route> {
-        use Keys::{Names, NamesAndExtensions};
+    /// refused — so the table names what the specification names, and a shape
+    /// the specification leaves to the vendor is not in it.
+    pub(crate) fn route(self, key: &str, reach: Reach) -> Option<Route> {
+        self.defined(key).or_else(|| match reach {
+            Reach::Defined => None,
+            Reach::Whole => self.undefined(key),
+        })
+    }
+
+    /// The routes that OpenAPI 3.0.3 defines.
+    fn defined(self, key: &str) -> Option<Route> {
+        use Keys::{Names, Paths, Responses};
         use Kind::{
             Callback, Components, Contact, Encoding, Example, ExternalDocs, Header, Info, License,
             Link, MediaType, OAuthFlow, OAuthFlows, Operation, Parameter, PathItem, RequestBody,
@@ -179,10 +274,7 @@ impl Kind {
             (Root, "components") => Node(Components),
             // The Paths Object is one of the two maps here that the
             // specification also lets a vendor hang JSON of its own inside.
-            // `webhooks` and `components.pathItems` are plain maps of path
-            // items under names somebody chose.
-            (Root, "paths") => Map(PathItem, NamesAndExtensions),
-            (Root, "webhooks") | (Components, "pathItems") => Map(PathItem, Names),
+            (Root, "paths") => Map(PathItem, Paths),
             (Root, "info") => Node(Info),
             (Info, "contact") => Node(Contact),
             (Info, "license") => Node(License),
@@ -205,7 +297,7 @@ impl Kind {
             (Components, "requestBodies") => Map(RequestBody, Names),
             // The Responses Object is the other one. `components.responses` is
             // a plain map, where a response called `x-problem` is a response.
-            (Operation, "responses") => Map(Response, NamesAndExtensions),
+            (Operation, "responses") => Map(Response, Responses),
             (Components, "responses") => Map(Response, Names),
             (Components | Response | Encoding, "headers") => Map(Header, Names),
             (Components | Response, "links") => Map(Link, Names),
@@ -223,32 +315,69 @@ impl Kind {
             _ => return None,
         })
     }
+
+    /// The routes that a 3.0 document may carry and OpenAPI 3.0.3 does not
+    /// define, which the object model drops and only [`Reach::Whole`] enters.
+    ///
+    /// The phantom check judges a schema by what it holds, not by where it
+    /// stands, so it reads a schema here as it reads one anywhere and refuses a
+    /// `required` that names a key nothing declares, although typify writes no
+    /// type for some of these. The refusal names an Overlay, which is the
+    /// repair wherever the schema stands.
+    fn undefined(self, key: &str) -> Option<Route> {
+        use Keys::Names;
+        use Kind::{Components, PathItem, Root, Schema};
+        use Route::Map;
+        match (self, key) {
+            // Fields of 3.1: plain maps of path items under names somebody
+            // chose.
+            (Root, "webhooks") | (Components, "pathItems") => Some(Map(PathItem, Names)),
+            (Schema, key) => later_keyword(key),
+            _ => None,
+        }
+    }
 }
 
-/// What one of a schema's keywords leads to.
+/// What one of a schema's keywords leads to, among those that OpenAPI 3.0.3
+/// defines.
 ///
-/// Every keyword whose value is a schema, or a list or a map of them, and the
-/// three whose value is a small object of its own. A keyword left out states
-/// something other than an object — a `type`, a bound, a `pattern` — or is no
-/// keyword of a 3.0 schema, as `examples` and `dependencies` are not, and
-/// nothing under such a keyword is entered.
+/// `properties`, `items`, `additionalProperties`, the three compositions and
+/// `not` lead to a schema, or to a list or a map of them, and `discriminator`,
+/// `xml` and `externalDocs` lead to a small object of their own. A keyword left
+/// out states something other than an object — a `type`, a bound, a `pattern` —
+/// or is no keyword of a 3.0 schema, as `examples` and `dependencies` are not,
+/// and nothing under such a keyword is entered.
 fn keyword(key: &str) -> Option<Route> {
     Some(match key {
-        PROPERTIES | "patternProperties" | "$defs" | "definitions" | DEPENDENT => {
+        PROPERTIES => Route::Map(Kind::Schema, Keys::Names),
+        ITEMS | "additionalProperties" | "not" => Route::Node(Kind::Schema),
+        key if COMPOSED.contains(&key) => Route::Node(Kind::Schema),
+        "discriminator" => Route::Node(Kind::Discriminator),
+        "xml" => Route::Node(Kind::Xml),
+        "externalDocs" => Route::Node(Kind::ExternalDocs),
+        _ => return None,
+    })
+}
+
+/// The keywords of a later draft of JSON Schema that lead to a schema, which a
+/// 3.0 schema does not have and which typify reads.
+///
+/// They are the other half of what the schema walk follows: a 3.0 document may
+/// carry any of them, and the model drops them without a word.
+fn later_keyword(key: &str) -> Option<Route> {
+    Some(match key {
+        "patternProperties" | "$defs" | "definitions" | DEPENDENT => {
             Route::Map(Kind::Schema, Keys::Names)
         }
-        ITEMS
-        | "prefixItems"
-        | "additionalProperties"
+        "prefixItems"
         | "unevaluatedProperties"
         | "unevaluatedItems"
         | "propertyNames"
         | "contains"
-        | "contentSchema" => Route::Node(Kind::Schema),
-        key if COMPOSED.contains(&key) || CONDITIONAL.contains(&key) => Route::Node(Kind::Schema),
-        "discriminator" => Route::Node(Kind::Discriminator),
-        "xml" => Route::Node(Kind::Xml),
-        "externalDocs" => Route::Node(Kind::ExternalDocs),
+        | "contentSchema"
+        | "if"
+        | "then"
+        | "else" => Route::Node(Kind::Schema),
         _ => return None,
     })
 }

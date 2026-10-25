@@ -360,16 +360,18 @@ the crate follows [Semantic Versioning][semver].
   `x-cli-gates`, `x-cli-group` and `x-cli-writes` are read on an operation, a
   method of a path item under `paths`, and `x-cli-requires` on a parameter that
   is not a `$ref`. Every other key under the prefix is
-  `LoadError::UnknownMarker { key, at }`, and a key of the five anywhere else is
-  `LoadError::MisplacedMarker { key, at }`, among them `x-cli-writes` on a path
-  item, `x-cli-requires` on an operation and `x-cli-requires` beside a `$ref`.
-  `at` is the node that holds the key, spelled as an Overlay names a target, such
-  as `$.paths['/vouchers/{id}/render']`. Each used to load and read as no
-  marker, so a typo such as `x-cli-write: true` left a writing `GET` sent on
-  sight. A name or a value spelled like a marker, such as a property called
-  `x-cli-writes` or an `example` that holds one, is not a marker and is not
-  read. Repair: spell the key as one of the five, move it to where it is read,
-  or give an extension of your own another prefix.
+  `LoadError::UnknownMarker { key, at }`, and a key of the five on any other
+  object of the document is `LoadError::MisplacedMarker { key, at }`, among them
+  `x-cli-writes` on a path item, `x-cli-requires` on an operation and
+  `x-cli-requires` beside a `$ref`. `at` is the node that holds the key, spelled
+  as an Overlay names a target, such as `$.paths['/vouchers/{id}/render']`. Each
+  used to load and read as no marker, so a typo such as `x-cli-write: true` left
+  a writing `GET` sent on sight. A name or a value spelled like a marker, such
+  as a property called `x-cli-writes` or an `example` that holds one, is not a
+  marker and is not read. Nothing under a key that OpenAPI 3.0 does not define
+  is read either, such as `webhooks` or a schema's `$defs`. Repair: spell the
+  key as one of the five, move it to where it is read, or give an extension of
+  your own another prefix.
 - **An `x-cli-requires` that names its own parameter is refused.**
   `LoadError::RequiresItself { op, name }`. It loaded, and a debug build of the
   binary panicked at start-up, because clap does not let an argument require

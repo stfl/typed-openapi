@@ -558,18 +558,20 @@ and it is last because nothing else has any use for what is in it.
 
 This crate owns the `x-cli-` prefix, and a marker is read where it stands or the
 document is refused. The four on an operation are read on an operation, a method
-of a path item, and `x-cli-requires` on a parameter, and not beside a `$ref`,
-which the OpenAPI model drops in silence. The same key on a path item, or any
-other `x-cli-` key anywhere, is a `LoadError` that names the key and the node
-that holds it:
+of a path item under `paths`, and `x-cli-requires` on a parameter under `paths`
+or `components.parameters`, and not beside a `$ref`, which the OpenAPI model
+drops in silence. The same key on a path item, or any other `x-cli-` key on an
+object of the document, is a `LoadError` that names the key and the node that
+holds it:
 
 ```
-`x-cli-writes` stands on `$.paths['/vouchers/{id}/render']`, where this crate does not read it; it reads that key on an operation
+`x-cli-writes` stands on `$.paths['/vouchers/{id}/render']`, where this crate does not read it; it reads that key on a method of a path item under `paths`
 ```
 
 An extension of your own goes under another prefix. A name or a value that
 happens to be spelled like a marker, such as a property called `x-cli-writes` or
-an `example`, is no marker and is not read.
+an `example`, is no marker and is not read. Nothing under a key that OpenAPI 3.0
+does not define is read either, such as `webhooks` or a schema's `$defs`.
 
 `x-cli-group` and `x-cli-command` are also the only way out of a name collision
 — two operations reducing to one `<group> <command>` is a `LoadError` at bless

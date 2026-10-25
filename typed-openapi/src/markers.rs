@@ -17,9 +17,9 @@
 //! | `x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes` | an operation: a method of a path item under `paths` |
 //! | `x-cli-requires` | a parameter: of a path item, of an operation, or under `components.parameters`, and not beside a `$ref` |
 //!
-//! Those are the places the reduction reads, so a key anywhere else is read by
-//! nothing. An operation under `callbacks` or `webhooks` is never reduced, and
-//! the marker on it is refused with the others. A parameter under
+//! Those are the places the reduction reads, so a key on any other object the
+//! walk enters is read by nothing. An operation under `callbacks` is never
+//! reduced, and the marker on it is refused with the others. A parameter under
 //! `components.parameters` is a place the key is read whether or not the
 //! `$ref` of an operation names it, because a component is where the adopter
 //! writes it once.
@@ -36,9 +36,14 @@
 //! It reads nothing under any other key. That is a field of type Any (an
 //! `example`, a `default`, an `enum`, the `value` of an Example Object, and the
 //! `parameters` values and the `requestBody` of a Link Object), the value of an
-//! extension, and a key that the object does not define (`examples` and
-//! `dependencies` on a 3.0 schema). It is the vendor's own JSON, and a key in
-//! it that is spelled like a marker is not one.
+//! extension, and a key that OpenAPI 3.0.3 does not define. The last is one
+//! class whoever defines the key: a field of a later version (`webhooks`), a
+//! keyword of a later draft (`$defs`, or `dependencies` on a schema), or a key
+//! that no version defines (`vouchers` in `paths`, which is no path, and `foo`
+//! among the responses, which is no status code). The object model drops each
+//! of them and nothing builds a request or a flag from them. What stands there
+//! is the vendor's own JSON, and a key in it that is spelled like a marker is
+//! not one.
 //!
 //! Position is what tells an extension from a name. A map keyed by names
 //! somebody chose holds a property, a component, a media type or a response
@@ -56,7 +61,11 @@ use serde_json::{Map, Value};
 
 use crate::model::LoadError;
 use crate::required::{Step, spelled};
-use crate::shape::{Keys, Kind, Route, is_extension};
+use crate::shape::{Entry, Keys, Kind, Reach, Route, is_extension};
+
+/// The walk judges a key by where it stands, so it enters what OpenAPI 3.0.3
+/// defines and nothing beside it.
+const REACH: Reach = Reach::Defined;
 
 /// The prefix this crate owns.
 const PREFIX: &str = "x-cli-";
@@ -111,23 +120,20 @@ impl Subject {
     /// object that nothing is built from.
     ///
     /// The position tells a path item that the reduction reads from one that it
-    /// never does. An operation under `callbacks` or `webhooks` is of the kind
-    /// of an operation and is not read, and a path key without a `/` is no
-    /// path.
+    /// never does: an operation under `callbacks` is of the kind of an
+    /// operation and is not read.
     fn of(kind: Kind, at: &[Step<'_>], holder: &Map<String, Value>) -> Option<Self> {
         use Step::{Index, Key};
         match (kind, at) {
-            (Kind::Operation, [Key("paths"), Key(path), Key(_)]) if path.starts_with('/') => {
-                Some(Self::Operation)
-            }
+            (Kind::Operation, [Key("paths"), Key(_), Key(_)]) => Some(Self::Operation),
             // A `$ref` stands for the parameter it names, and the model keeps
             // nothing beside it.
             (Kind::Parameter, _) if holder.contains_key("$ref") => None,
             (
                 Kind::Parameter,
-                [Key("paths"), Key(path), Key("parameters"), Index(_)]
-                | [Key("paths"), Key(path), Key(_), Key("parameters"), Index(_)],
-            ) if path.starts_with('/') => Some(Self::Parameter),
+                [Key("paths"), Key(_), Key("parameters"), Index(_)]
+                | [Key("paths"), Key(_), Key(_), Key("parameters"), Index(_)],
+            ) => Some(Self::Parameter),
             (Kind::Parameter, [Key("components"), Key("parameters"), Key(_)]) => {
                 Some(Self::Parameter)
             }
@@ -136,16 +142,22 @@ impl Subject {
     }
 }
 
-/// What the reasons of a refusal say about where `key` is read.
+/// What the reasons of a refusal say about where `key` is read, as the table of
+/// the module doc does.
 ///
-/// The message of `LoadError::MisplacedMarker` ends with it. A key that nothing
-/// reads gets the plainer sentence.
+/// The message of `LoadError::MisplacedMarker` ends with it. The walk refuses a
+/// key that nothing reads as an `UnknownMarker`, so the last arm is for a
+/// `MisplacedMarker` built outside it.
 pub(crate) fn reading(key: &str) -> String {
     match READ.iter().find(|(read, _)| *read == key) {
-        Some((read, Subject::Parameter)) => {
-            format!("it reads `{read}` on a parameter, and not beside a `$ref`")
+        Some((_, Subject::Operation)) => {
+            "it reads that key on a method of a path item under `paths`".to_owned()
         }
-        Some((_, Subject::Operation)) | None => "it reads that key on an operation".to_owned(),
+        Some((read, Subject::Parameter)) => format!(
+            "it reads `{read}` on a parameter under `paths` or `components.parameters`, \
+             and not beside a `$ref`"
+        ),
+        None => "it reads no such key".to_owned(),
     }
 }
 
@@ -198,7 +210,7 @@ impl<'d> Walk<'d> {
         if is_extension(key) {
             return self.extension(Subject::of(kind, &self.at, holder), key);
         }
-        let Some(route) = kind.route(key) else {
+        let Some(route) = kind.route(key, REACH) else {
             return Ok(());
         };
         self.at.push(Step::Key(key));
@@ -223,15 +235,18 @@ impl<'d> Walk<'d> {
         let Some(entries) = map.as_object() else {
             return Ok(());
         };
-        entries.iter().try_for_each(|(key, entry)| {
-            if matches!(keys, Keys::NamesAndExtensions) && is_extension(key) {
-                return self.extension(None, key);
-            }
-            self.at.push(Step::Key(key));
-            let read = self.read(kind, entry);
-            self.at.pop();
-            read
-        })
+        entries
+            .iter()
+            .try_for_each(|(key, entry)| match keys.entry(key, REACH) {
+                Some(Entry::Member) => {
+                    self.at.push(Step::Key(key));
+                    let read = self.read(kind, entry);
+                    self.at.pop();
+                    read
+                }
+                Some(Entry::Extension) => self.extension(None, key),
+                None => Ok(()),
+            })
     }
 
     /// An extension standing on `subject`. The value of one is the vendor's own
@@ -343,13 +358,6 @@ mod tests {
                 "$.components.schemas.A",
             ),
             ("paths:\n  x-cli-writes: true\n", "x-cli-writes", "$.paths"),
-            // A key of `paths` that does not start with `/` is no path, so the
-            // reduction reads no operation under it.
-            (
-                "paths:\n  a:\n    get: { x-cli-writes: true }\n",
-                "x-cli-writes",
-                "$.paths.a.get",
-            ),
             // A Link Object and an Example Object are objects the walk enters:
             // their fields are fixed, and what they hold of the vendor's own
             // is the value of a field that is of type Any.
@@ -488,6 +496,20 @@ mod tests {
     }
 
     #[test]
+    fn the_reason_of_a_refusal_says_where_the_key_is_read() {
+        assert_eq!(
+            reading("x-cli-gates"),
+            "it reads that key on a method of a path item under `paths`"
+        );
+        assert_eq!(
+            reading("x-cli-requires"),
+            "it reads `x-cli-requires` on a parameter under `paths` or \
+             `components.parameters`, and not beside a `$ref`"
+        );
+        assert_eq!(reading("x-cli-mode"), "it reads no such key");
+    }
+
+    #[test]
     fn of_two_keys_nothing_reads_the_one_the_document_lists_first_is_named() {
         let document = "paths:\n  /a:\n    x-cli-gates: [g]\n    x-cli-writes: true\n";
         assert_eq!(verdict(document), misplaced("x-cli-gates", "$.paths['/a']"));
@@ -549,6 +571,7 @@ mod tests {
     /// A value that OpenAPI 3.0.3 gives the type Any, and a key that an object
     /// does not define, are the vendor's data and no part of the document. A
     /// walk that entered them would refuse a document with no marker in it.
+    /// The keys that 3.0.3 does not define anywhere are in the test below.
     #[test]
     fn a_field_of_type_any_and_a_key_the_object_does_not_define_are_not_entered() {
         let response = "paths:\n  /a:\n    get:\n      responses:\n        '200': ";
@@ -556,6 +579,10 @@ mod tests {
             // The `parameters` values and the `requestBody` of a Link Object.
             &format!(
                 "{response}{{ description: d, links: {{ next: {{ operationId: o, parameters: {{ filter: {{ x-cli-writes: true }} }} }} }} }}\n"
+            ),
+            // An argument that a link passes on may be named like a marker.
+            &format!(
+                "{response}{{ description: d, links: {{ next: {{ operationId: o, parameters: {{ x-cli-writes: '$response.body#/id' }} }} }} }}\n"
             ),
             &format!(
                 "{response}{{ description: d, links: {{ next: {{ operationId: o, requestBody: {{ x-cli-gates: [a] }} }} }} }}\n"
@@ -577,6 +604,83 @@ mod tests {
             "info: { title: t, version: v, contact: { name: n }, license: { name: l }, summary: { x-cli-writes: true } }\n",
         ] {
             assert_eq!(verdict(document), "read", "{document}");
+        }
+    }
+
+    /// A key that OpenAPI 3.0.3 does not define is no part of a 3.0 document,
+    /// whoever defines it: a field of a later version (`webhooks`), a keyword
+    /// of a later draft (`$defs`), or a key that no version defines
+    /// (`paths.vouchers`). The object model drops each of them, and nothing
+    /// else reads them, so a marker under one is read by nothing and is no
+    /// mistake of the adopter's.
+    #[test]
+    fn a_key_that_openapi_3_0_3_does_not_define_is_not_entered() {
+        // One marker that nothing reads and one that is read elsewhere, so a
+        // document that loads has not escaped one refusal only.
+        let markers = ["x-cli-writes: true", "x-cli-mode: fast"];
+        let mut templates: Vec<String> = [
+            // A field of a later version.
+            "webhooks:\n  w:\n    post: { MARKER }\n",
+            "components:\n  pathItems:\n    P:\n      get: { MARKER }\n",
+            // A key that no version defines: no path, and no response.
+            "paths:\n  vouchers:\n    get: { MARKER }\n",
+            "paths:\n  /a:\n    get:\n      responses:\n        foo: { MARKER }\n",
+        ]
+        .map(str::to_owned)
+        .into();
+        // A keyword of a later draft: each one the schema walk of `required`
+        // follows that a 3.0 schema does not have.
+        for keyword in [
+            "$defs",
+            "definitions",
+            "patternProperties",
+            "dependentSchemas",
+        ] {
+            templates.push(format!(
+                "components:\n  schemas:\n    A:\n      {keyword}: {{ B: {{ MARKER }} }}\n"
+            ));
+        }
+        for keyword in [
+            "unevaluatedProperties",
+            "unevaluatedItems",
+            "propertyNames",
+            "contains",
+            "contentSchema",
+            "if",
+            "then",
+            "else",
+        ] {
+            templates.push(format!(
+                "components:\n  schemas:\n    A:\n      {keyword}: {{ MARKER }}\n"
+            ));
+        }
+        templates
+            .push("components:\n  schemas:\n    A:\n      prefixItems: [{ MARKER }]\n".to_owned());
+        for template in &templates {
+            for marker in markers {
+                let document = template.replace("MARKER", marker);
+                assert_eq!(verdict(&document), "read", "{document}");
+            }
+        }
+    }
+
+    /// The keys of the Responses Object that the model reads beside a code are
+    /// entered: `default`, and a range in either case, because
+    /// `openapiv3::StatusCode` decides.
+    #[test]
+    fn a_response_under_a_key_the_model_reads_is_entered() {
+        let responses = "paths:\n  /a:\n    get:\n      responses:\n        ";
+        for (key, at) in [
+            ("default", "$.paths['/a'].get.responses.default"),
+            ("2XX", "$.paths['/a'].get.responses['2XX']"),
+            ("2xx", "$.paths['/a'].get.responses['2xx']"),
+        ] {
+            let document = format!("{responses}{key}: {{ x-cli-writes: true }}\n");
+            assert_eq!(
+                verdict(&document),
+                misplaced("x-cli-writes", at),
+                "{document}"
+            );
         }
     }
 

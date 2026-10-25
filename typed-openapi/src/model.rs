@@ -1214,8 +1214,8 @@ impl Param {
 /// answer.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Unmet<'p> {
-    /// The parameter lists its own name. It asks for nothing, and clap refuses
-    /// an argument that requires itself.
+    /// The parameter lists its own name. It asks for nothing, and a debug build
+    /// of clap refuses an argument that requires itself.
     Itself { name: &'p str },
     /// The parameter that `requires` lists is not one the operation declares.
     Unknown { name: &'p str, requires: &'p str },
