@@ -317,6 +317,11 @@ impl Settings {
         };
 
         let mut overlaid = overlay::parse(&read(&self.document)?).map_err(fault(&self.document))?;
+        // The vendor's version, before the first layer, as `Document::load_with`
+        // asks it: this road lays the layers itself, and a layer that does not
+        // apply to a 3.1 document is a refusal for the document, not for the
+        // layer.
+        crate::openapi::require_3_0(&overlaid).map_err(GenerateError::Unusable)?;
         for layer in &self.overlays {
             overlaid = overlay::apply(overlaid, &read(layer)?).map_err(fault(layer))?;
         }
@@ -415,6 +420,19 @@ impl Settings {
             .chain(&self.overlays)
             .map(|path| name(path))
             .collect()
+    }
+}
+
+/// What [`GenerateError::OneType`] asks an adopter to change.
+///
+/// A `title` on an inline schema gives its type a name of the document's own, so
+/// it is the repair wherever one of the two is inline. Two schemas the document
+/// declares have names the vendor wrote, and one of them is renamed.
+fn repair(inline: bool) -> &'static str {
+    if inline {
+        "give an inline schema a `title` in an Overlay"
+    } else {
+        "rename one of them in an Overlay"
     }
 }
 
@@ -848,16 +866,17 @@ pub enum GenerateError {
         #[source]
         source: io::Error,
     },
-    /// A document or a layer over it that does not read, or does not apply.
-    /// `path` is the file to go and open: with corrections split across
-    /// layers, which one stopped the bless is the first thing to know.
+    /// A document or a layer over it that does not read, does not apply, or
+    /// changes the `openapi` of the document. `path` is the file to go and
+    /// open: with corrections split across layers, which one stopped the bless
+    /// is the first thing to know.
     #[error("cannot use {path}")]
     Overlay {
         /// The path as the adopter gave it to [`Settings::new`] or
         /// [`Settings::overlay`].
         path: PathBuf,
-        /// What stopped the file: its syntax, its shape or an action that
-        /// matched nothing.
+        /// What stopped the file: its syntax, its shape, an action that matched
+        /// nothing, or a layer that changed the `openapi` of the document.
         #[source]
         source: OverlayError,
     },
@@ -865,18 +884,21 @@ pub enum GenerateError {
     /// that no type of the emitter is part of this crate's API.
     #[error("the overlaid document is not representable as YAML")]
     Yaml(#[source] Box<dyn Error + Send + Sync>),
-    /// The corrected document could not be reduced to a command tree. The
-    /// cause is the refusal of [`Document::load_with`].
-    #[error("the overlaid document does not describe a usable CLI")]
+    /// The document could not be reduced to a command tree. The cause is the
+    /// refusal that [`Document::load_with`] gives for it. A version of OpenAPI
+    /// that this crate does not read is refused for the vendor's document before
+    /// the first layer is laid, and every other cause is a refusal of the
+    /// document with its layers laid.
+    #[error("the document does not describe a usable CLI")]
     Unusable(#[source] LoadError),
     /// The corrected document is not an OpenAPI 3 document, so the generator
     /// has no object model of it.
     #[error("the overlaid document is not an OpenAPI 3 document: refused at `{at}`")]
     NotOpenApi {
         /// The first node that the OpenAPI model refuses, from the root of the
-        /// document: `info.title`, `components.schemas.Voucher`, or a node
-        /// inside a path item as `paths[/vouchers].get.deprecated`. `.` is the
-        /// document itself.
+        /// document: `info.title`, `components.schemas.Voucher`, a path item as
+        /// `paths[/vouchers]`, or a node inside a path item as
+        /// `paths[/vouchers].get.deprecated`. `.` is the document itself.
         at: String,
         /// `serde_json`'s message.
         #[source]
@@ -917,7 +939,14 @@ pub enum GenerateError {
     /// schema the document declares, or a body or response an operation states
     /// inline — because the two are refused together and a reader needs to know
     /// which is which.
-    #[error("{first} and {second} are both `{rust}` in Rust; rename one of them in an Overlay")]
+    ///
+    /// The cheap repair is a `title` on an inline schema, which typify names the
+    /// type after, so the message names it where one of the two is inline and
+    /// asks for a rename of a schema the document declares where neither is.
+    #[error(
+        "{first} and {second} are both `{rust}` in Rust; {}",
+        repair(*.inline)
+    )]
     OneType {
         /// The sentence naming the shape that claimed the Rust name first.
         first: String,
@@ -925,6 +954,9 @@ pub enum GenerateError {
         second: String,
         /// The Rust name both reduce to, in typify's spelling.
         rust: String,
+        /// Whether either of the two is stated inline by an operation, and not
+        /// declared under `components.schemas`.
+        inline: bool,
     },
     /// A schema whose Rust name is one this crate declares a replaced type
     /// under. Every other named schema becomes a type of its own, so this one

@@ -19,6 +19,7 @@ use std::error::Error as _;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
 use typed_openapi::generate::{GenerateError, Settings};
 use typed_openapi::overlay::{self, OverlayError, Place};
 use typed_openapi::{Document, LoadError};
@@ -626,6 +627,120 @@ paths:
     assert!(
         reported.contains("invalid type: string \"yes\", expected a boolean"),
         "{reported}"
+    );
+}
+
+/// A vendor document at `version` with nothing in it, and a layer with one
+/// action that `update`s the root of the document. `update` is the value of
+/// `update:`, written as a flow collection.
+fn with_root_update(dir: &Path, version: &str, update: &str) -> Settings {
+    let document = wrote(
+        dir,
+        "vendor.yaml",
+        &format!(
+            "openapi: {version}\ninfo: {{ title: Vendor, version: \"1.0\" }}\nservers: [{{ url: \
+             \"http://localhost:9999\" }}]\npaths: {{}}\n"
+        ),
+    );
+    let layer = wrote(
+        dir,
+        "layer.yaml",
+        &format!(
+            "overlay: 1.1.0\ninfo: {{ title: t, version: \"1\" }}\nactions:\n  - target: $\n    \
+             description: the root\n    update: {update}\n"
+        ),
+    );
+    Settings::new(&document).overlay(&layer)
+}
+
+/// The bless step lays the layers itself, and a layer that changes `openapi` is
+/// refused at its file, as `Document::load_with` refuses it at its index. The
+/// error names the file, and the cause names both versions. The inputs are the
+/// ones `Document::load` is given in `tests/reading.rs`: another version,
+/// another patch of 3.0, and a layer that replaces the document with a list and
+/// so leaves no key.
+#[test]
+fn a_layer_that_changes_openapi_is_named_by_its_file() {
+    for (label, update, after, said) in [
+        (
+            "another-version",
+            "{ openapi: 3.1.0 }",
+            Some(json!("3.1.0")),
+            "changes `openapi` from `3.0.3` to `3.1.0`",
+        ),
+        (
+            "another-patch",
+            "{ openapi: 3.0.0 }",
+            Some(json!("3.0.0")),
+            "changes `openapi` from `3.0.3` to `3.0.0`",
+        ),
+        (
+            "no-key",
+            "[1]",
+            None,
+            "changes `openapi` from `3.0.3` to no `openapi` key",
+        ),
+    ] {
+        let dir = out(&format!("relabel-{label}"));
+
+        let error = with_root_update(&dir, "3.0.3", update)
+            .write_to(&dir)
+            .expect_err(label);
+
+        assert!(
+            matches!(&error, GenerateError::Overlay { path, source: OverlayError::OpenApiVersion { before, after: now } }
+                if path.ends_with("layer.yaml")
+                    && before.as_deref() == Some(&json!("3.0.3"))
+                    && now.as_deref() == after.as_ref()),
+            "{label}: {error:?}"
+        );
+        let reported = reported(&error);
+        assert!(reported.contains("layer.yaml"), "{label}: {reported}");
+        assert!(reported.contains(said), "{label}: {reported}");
+    }
+}
+
+/// A 3.1 document given a layer whose target is not in it is refused for its
+/// version and not for the layer. The bless step asks the vendor's version
+/// before it lays a layer, so the document is what is refused when the layer
+/// would also have been. The control is a 3.0.3 document with a layer that
+/// writes the version it has, which changes nothing.
+#[test]
+fn a_3_1_document_is_refused_for_its_version_before_the_bless_step_lays_a_layer() {
+    let dir = out("version-first");
+    let document = wrote(
+        &dir,
+        "vendor.yaml",
+        "openapi: 3.1.0\ninfo: { title: Vendor, version: \"1.0\" }\nservers: [{ url: \
+         \"http://localhost:9999\" }]\npaths: {}\n",
+    );
+    let never_applies = wrote(
+        &dir,
+        "never.yaml",
+        "overlay: 1.1.0\ninfo: { title: t, version: \"1\" }\nactions:\n  - target: $.nothing\n    \
+         description: a target that is not there\n    update:\n      x: 1\n",
+    );
+
+    let error = Settings::new(&document)
+        .overlay(&never_applies)
+        .write_to(&dir)
+        .expect_err("a 3.1 document");
+
+    assert!(
+        matches!(&error, GenerateError::Unusable(LoadError::Version { version }) if version == "3.1.0"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "the document does not describe a usable CLI",
+        "the vendor's document is not yet overlaid, so the words must not say it is"
+    );
+    let control = out("version-first-control");
+    assert!(
+        with_root_update(&control, "3.0.3", "{ openapi: 3.0.3 }")
+            .write_to(&control)
+            .is_ok(),
+        "a layer that writes the version the document has is not a change"
     );
 }
 
@@ -2115,13 +2230,36 @@ fn a_body_stated_inline_that_claims_a_schemas_name_is_refused_by_name() {
         .write_to(&dir)
         .expect_err("one name cannot be two types");
 
+    assert!(
+        matches!(&failure, GenerateError::OneType { inline: true, .. }),
+        "{failure:?}"
+    );
     assert_eq!(
         failure.to_string(),
         "the schema `CreateLedgerEntryBody` and the request body stated inline by \
-         `createLedgerEntry` are both `CreateLedgerEntryBody` in Rust; rename one \
-         of them in an Overlay",
-        "the refusal has to say which of the two is the operation's own"
+         `createLedgerEntry` are both `CreateLedgerEntryBody` in Rust; give an inline \
+         schema a `title` in an Overlay",
+        "the refusal has to say which of the two is the operation's own, and the cheap repair"
     );
+}
+
+/// The repair the refusal names is the smaller one: a `title` on the inline
+/// schema, where the other repair renames a schema the vendor wrote.
+#[test]
+fn a_title_on_the_inline_schema_mends_the_collision_the_refusal_names() {
+    const TITLES_IT: &str = "overlay: 1.1.0\ninfo: { title: t, version: \"1\" }\nactions:\n  - \
+         target: $.paths['/ledger/entries'].post.requestBody.content['application/json'].schema\n    \
+         description: a name for the shape the operation states\n    update:\n      title: \
+         LedgerEntry\n";
+    let dir = out("claimed-then-titled");
+
+    Settings::new(wrote(&dir, "document.yaml", CLAIMED))
+        .overlay(wrote(&dir, "titles.overlay.yaml", TITLES_IT))
+        .write_to(&dir)
+        .expect("a title names the inline schema");
+
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+    assert!(ops.contains("body:&crate::types::LedgerEntry"), "{ops}");
 }
 
 /// The same body, under a name the document gives it.

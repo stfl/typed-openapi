@@ -151,9 +151,10 @@ once per layer; calls accumulate, and the order of the calls is the order the
 layers are applied.
 
 Every layer is named in the headers too, in that order. A layer that does not
-read, or does not apply, names itself in the error — which is the practical
-reason to have more than one. [overlay.md](overlay.md#layers) has the split
-this repository recommends, and what each layer buys.
+read, does not apply, or changes the `openapi` of the document names itself in
+the error — which is the practical reason to have more than one.
+[overlay.md](overlay.md#layers) has the split this repository recommends, and
+what each layer buys.
 
 ### `Settings::replace(format, rust_type) -> Settings`
 
@@ -302,8 +303,8 @@ in advance:
 
 | Case | Means |
 |---|---|
-| `Overlay` | a document did not read, or a correction did not apply — the message names the file. See [drift.md](drift.md) |
-| `Unusable` | the corrected document does not describe a usable CLI |
+| `Overlay` | a document did not read, a correction did not apply, or a layer changed the `openapi` of the document — the message names the file. See [drift.md](drift.md) |
+| `Unusable` | the document does not describe a usable CLI: the vendor's `openapi` is not 3.0, or the document with its layers laid is refused |
 | `Unsupported` | the document declares something the generator has no Rust spelling for |
 | `RustfmtMissing` | `rustfmt` is not on `PATH` |
 

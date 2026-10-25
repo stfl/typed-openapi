@@ -1477,8 +1477,8 @@ fn a_comma_inside_a_value_is_not_the_comma_between_two_values() {
 }
 
 /// The regression this shape exists for. One parameter no flag can carry is an
-/// operation's problem; it used to be the whole document's, which made every
-/// other operation in it unreachable as well.
+/// operation's problem and not the whole document's: every other operation in
+/// the document stays reachable.
 #[test]
 fn a_parameter_no_flag_can_carry_leaves_every_other_operation_standing() {
     let doc = Document::load(&synthetic(SHAPES), &[])

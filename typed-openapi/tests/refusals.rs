@@ -53,8 +53,8 @@ fn cause(error: &dyn Error) -> String {
 }
 
 /// The OpenAPI model refuses a document and says nothing of where. The reduction
-/// reads it again a path item and an operation at a time, so the refusal points
-/// at the node and not at `paths`.
+/// reads it again one path item at a time, so the refusal points at the node and
+/// not at `paths`.
 #[test]
 fn the_openapi_model_refusing_an_operation_names_its_path_and_its_node() {
     let error = refused(&format!(
@@ -271,10 +271,12 @@ fn a_document_that_is_not_an_openapi_object_is_refused_at_its_root() {
     assert_eq!(cause(&error), "missing field `openapi`");
 }
 
-/// A schema deep in a large document that the model cannot read, as sevDesk's
-/// 3.1 habits write it: the probe puts one such property in the request body of
-/// `/r137`, the 138th of 200 operations. The refusal names the `requestBody` of
-/// that operation, which is as far in as the model's own place goes.
+/// A schema deep in a large document that the model cannot read. Two inputs are
+/// 3.1 spellings, a number for `exclusiveMinimum` and a list for `type`; the
+/// other two are wrong in every version, a boolean `required` on a property and
+/// a negative `maxLength`. The probe puts one such property in the request body
+/// of `/r137`, the 138th of 200 operations. The refusal names the `requestBody`
+/// of that operation, which is as far in as the model's own place goes.
 #[test]
 fn a_bad_schema_in_one_of_200_operations_names_that_operation() {
     for (label, bad) in [
@@ -319,13 +321,13 @@ fn a_bad_schema_in_one_of_200_operations_names_that_operation() {
 
 /// A schema of `components` that the model cannot read is named by the schema,
 /// which is as far in as the model's own place goes. The probe has an Overlay
-/// write `nullable: 7`, a 3.1 spelling, on a property of a vendor schema; this
-/// test calls the schema `Voucher`.
+/// write `nullable: 7`, a number where `nullable` takes a boolean, on a property
+/// of a vendor schema; this test calls the schema `Voucher`.
 #[test]
 fn a_component_schema_that_an_overlay_left_unreadable_is_named() {
     const NULLABLE: &str = "overlay: 1.1.0\ninfo: { title: t, version: \"1\" }\nactions:\n  \
                             - target: $.components.schemas.Voucher.properties.name\n    \
-                            description: one 3.1 spelling\n    update:\n      nullable: 7\n";
+                            description: nullable is no number\n    update:\n      nullable: 7\n";
     let document = document(
         "paths: {}\ncomponents:\n  schemas:\n    Voucher:\n      type: object\n      \
          properties:\n        name: { type: string }\n",

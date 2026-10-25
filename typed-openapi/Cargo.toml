@@ -65,6 +65,10 @@ name = "layout"
 required-features = []
 
 [[test]]
+name = "reading"
+required-features = ["document"]
+
+[[test]]
 name = "refusals"
 required-features = ["document"]
 

@@ -5,9 +5,9 @@ with every write behind a dry-run gate.
 
 What comes out is `api.get_voucher(5)?.send(&client)?` returning your own
 `Voucher`, and `toy vouchers get --id 5` on a command line nobody wrote. What
-goes in is the vendor's document plus [OpenAPI Overlay 1.1][overlay] documents
-holding your corrections to it. This is not a typed model *of* an OpenAPI
-document — for that, use [`openapiv3`].
+goes in is the vendor's OpenAPI 3.0 document plus [OpenAPI Overlay 1.1][overlay]
+documents holding your corrections to it. This is not a typed model *of* an
+OpenAPI document — for that, use [`openapiv3`].
 
 ```console
 $ toy vouchers create --total 12.50 --currency EUR --status open  # operations at the root
@@ -123,6 +123,21 @@ answers a test from a script instead, are in [docs/client.md][client].
   parameter, an unserialisable `style` and a name that will not kebab-case
   carry no flag: each is named on its subcommand's help, and refuses the
   document only where it is `required`.
+- **No OpenAPI 3.1.** The crate reads OpenAPI 3.0. A document whose `openapi`
+  says another version is refused, and the refusal names it: 3.1 spells some
+  rules another way and means others that 3.0 does not have, so a reading as
+  3.0 would drop them without a word. The version is the vendor's, so an
+  Overlay that changes `openapi` is refused too.
+- **No guessing at what a request needs.** A document with no `servers` is
+  refused, where OpenAPI would send to `/`, and so is an operation with no
+  `operationId`. Each refusal names the repair, an Overlay that adds the server
+  or the id ([docs/overlay.md][ov]). A server URL with variables uses the
+  `default` of each.
+- **No characters outside ASCII in a name.** A command is `[a-z0-9-]`. A path
+  segment, a gate or a parameter that holds a character outside ASCII is
+  refused or carried with no flag, and never dropped from the word or
+  transliterated: `straße` is not `--stra-e`. A path segment then wants
+  `x-cli-group` and `x-cli-command` in an Overlay.
 - **No async CLI.** The command tree is sync; `AsyncClient` is for the typed
   caller.
 - **A regex engine in every binary.** Enforcing `pattern` costs one and no

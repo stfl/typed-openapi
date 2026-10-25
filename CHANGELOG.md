@@ -56,10 +56,10 @@ the crate follows [Semantic Versioning][semver].
   `Shape`. It was `Syntax`, whose message said the text "is not valid YAML or
   JSON". Repair: where you reported `Syntax` for a wrong shape, report `Shape`
   too.
-- **`overlay::Cause`**, the payload of every `OverlayError` variant: the
-  `message()`, and the `place()` where the thing that refused said one. An
-  `overlay::Place` is the line and column of the text, or the index of the
-  action in the Overlay.
+- **`overlay::Cause`**, the payload of every `OverlayError` variant but
+  `OpenApiVersion`: the `message()`, and the `place()` where the thing that
+  refused said one. An `overlay::Place` is the line and column of the text, or
+  the index of the action in the Overlay.
 - **A body property that no schema declares stops the request.** `client::fits`
   refuses a body that carries a property which the target type does not take, at
   any depth and inside a union or a `flatten`ed struct, as
@@ -157,8 +157,8 @@ the crate follows [Semantic Versioning][semver].
   Repair: a test of yours that read YAML with `serde_yaml_ng` names its own
   dependency, or calls `overlay::parse`.
 - **No type of the YAML reader, of `roas-overlay` or of typify is in a public
-  signature.** Each `OverlayError` variant holds an `overlay::Cause`.
-  `GenerateError::Yaml` and `GenerateError::Typify` hold a
+  signature.** Each `OverlayError` variant but `OpenApiVersion` holds an
+  `overlay::Cause`. `GenerateError::Yaml` and `GenerateError::Typify` hold a
   `Box<dyn Error + Send + Sync>`, and the cause is still `source()`. Repair: a
   `match` that bound `serde_yaml_ng::Error`, `roas_overlay::validation::Error`,
   `roas_overlay::apply::ApplyError` or `typify::Error` reads the `Cause`, or
@@ -178,8 +178,8 @@ the crate follows [Semantic Versioning][semver].
   longer shows it. Most messages lose only the `: <cause>` they ended with:
   `OverlayError`, `PlanError::Request`, `ArgError`,
   `client::Error::{Document, Request, Encode, Decode}`,
-  `LoadError::ServerUrl` and `GenerateError::{Yaml, Unusable, Schema, Typify,
-  NotRust, Blob}`. These are worded anew:
+  `LoadError::ServerUrl` and `GenerateError::{Yaml, Schema, Typify, NotRust,
+  Blob}`. These are worded anew:
   - `ValueError::BadValue`: ``<op>: `<name>` was given a value the document
     refuses``
   - `LoadError::Unresolvable`: ``<op>: `<name>` has a `$ref` that cannot be
@@ -191,16 +191,22 @@ the crate follows [Semantic Versioning][semver].
     `cannot write <path>` and `cannot run rustfmt on <path>`
   - `GenerateError::Overlay`: `cannot use <path>`
   - `GenerateError::Operation`: `the wrapper for <op> cannot be generated`
+  - `GenerateError::Unusable`: `the document does not describe a usable CLI`.
+    The vendor's `openapi` is asked before the first layer, so "overlaid" is not
+    true of every cause.
 - **A refusal names its operation and the place it stopped.** A document of tens
   of thousands of lines gave a message with no pointer to where to look. These
   payloads and messages change:
   - `LoadError::Shape` is `Shape { at, source }`, and `GenerateError::NotOpenApi`
     is `NotOpenApi { at, source }`. At 0.0.2 each held a `serde_json::Error` and
     said nothing of a place, because the OpenAPI model drops the path inside
-    `paths`. `at` is the first node that the model refuses, found by reading
-    each path item alone, in the order the document lists them, and the node
-    inside it: `paths[/b].get.deprecated`, `paths[/b].parameters[0]`,
-    `info.title`, or `.` for the document itself. The message is
+    `paths`. `at` is the first node that the model refuses. For a fault inside
+    `paths` the document is read again one path item at a time, in the order it
+    lists them, and `at` is the item and the node inside it: `paths[/b]` for an
+    item that is no object, `paths[/b].get.deprecated`, or
+    `paths[/b].parameters[0]`. For a fault anywhere else `at` is the place the
+    model gives, such as `info.title` or `components.schemas.Voucher`, or `.`
+    for the document itself. The message is
     ``the overlaid document is not an OpenAPI 3 document: refused at `<at>` ``,
     and serde's reason is the cause. Repair: match `Shape { .. }` and
     `NotOpenApi { .. }`, and print `at`.
@@ -216,28 +222,138 @@ the crate follows [Semantic Versioning][semver].
     spelled as a flag is the new `GateName { op, source }`, whose repair is
     `x-cli-gates`. The root path `/` has no segment, so its cause reads
     ``the path `/` does not kebab-case into [a-z0-9-]`` and not "the path
-    segment". Repair: match `Name { .. }` and `GateName { .. }` where you
-    matched `Name(_)`. To mend the document, write the two markers on the
-    operation, or correct the gate, in an Overlay.
+    segment". The message of `GateName` is ``<op>: a gate in `x-cli-gates` is
+    not a word that can be a flag; correct it in an Overlay``. Repair: match
+    `Name { .. }` and `GateName { .. }` where you matched `Name(_)`. To mend the
+    document, write the two markers on the operation, or correct the gate, in an
+    Overlay.
   - `LoadError::Reference(RefError)` is gone. A path item that is a `$ref` is
     `PathItem { path, reference }`, and a parameter whose `$ref` cannot be
     followed is `ParameterRef { op, source }`. A path item said
     `` `paths[/a]` does not resolve ``, a place the document does not spell,
     and said it of a reference that resolves as well. This crate follows no
-    path item's `$ref`, so `PathItem` holds the reference and no cause. Repair:
-    match the two new variants.
+    path item's `$ref`, so `PathItem` holds the reference and no cause. Its
+    message is ``<path>: the path item is the `$ref` `<reference>`, which this
+    crate does not follow``. The message of `ParameterRef` is ``<op>: a
+    parameter is a `$ref` that cannot be followed``, and its cause is the
+    `RefError`. Repair: match the two new variants.
   - `LoadError` no longer implements `From<OverlayError>`, `From<NameError>` or
     `From<RefError>`. A `?` that turned one of them into a `LoadError` does not
     compile. Each of the three is now one variant among several, and the
-    variant says which operation or layer it came from. Repair: build the
-    variant with `map_err`: `LoadError::Overlay` for the vendor's document,
-    `Layer { layer, source }` for an Overlay layer, `Name { op, source }` or
-    `GateName { op, source }` for a name, and `ParameterRef { op, source }` or
-    `Unresolvable { op, name, source }` for a reference.
+    variant says which document, layer or operation it came from. Repair:
+    build the variant with `map_err`: `LoadError::Overlay` for the vendor's
+    document, `Layer { layer, source }` for an Overlay layer,
+    `Name { op, source }` or `GateName { op, source }` for a name, and
+    `ParameterRef { op, source }` or `Unresolvable { op, name, source }` for a
+    reference.
   - **A document that loaded is refused.** A multipart body whose schema is a
     `$ref` that cannot be followed loaded with no part names. It is
     `LoadError::Unresolvable { op, name: "requestBody", source }`, as for any
     other body schema. Repair: correct the `$ref` in an Overlay.
+- **A document that is not OpenAPI 3.0 is refused, and the refusal names the
+  version.** `LoadError::Version { version }` is asked of the vendor's document
+  before any Overlay is laid and before anything else reads it, and its message
+  is ``the document says `openapi: 3.1.0`, and this crate reads OpenAPI 3.0
+  only``. `3.0`, and `3.0.` with a patch number after it, are read; a
+  pre-release label may follow the patch, as in `3.0.0-rc1`. A 3.1 document
+  loaded when none of its spellings was one that the model refuses, and then
+  the reduction dropped the rules that 3.1 means and 3.0 does not: a `$ref`
+  keeps the `maximum` beside it, and `const` is a rule. The rest were refused
+  with serde's message, which names a spelling and not the version. There is no
+  repair that makes 3.1 readable; support for it is out of scope. The README
+  says "OpenAPI 3.0".
+- **An Overlay that changes `openapi` is refused.**
+  `OverlayError::OpenApiVersion { before, after }` is what `overlay::apply`
+  returns when a layer leaves the key with another value: another version,
+  another patch of 3.0, a value that is not text, or no key. A layer that
+  writes the version the document already has changes nothing and is not
+  refused. The version is the vendor's. It decides how every schema is read, and
+  a label that an Overlay writes can drop rules that nobody who reads the
+  Overlay can see. `before` and `after` are the key as the layer found it and
+  left it, `None` for no key, and a boxed `serde_json::Value` so that the number
+  `3.0` is not the text `3.0`. The message names the version before the layer
+  and the version after it, ``the Overlay changes `openapi` from `3.0.3` to
+  `3.1.0`; the version is the vendor's, and no Overlay changes it``. A value
+  that is not text is named for its kind, as in ``from `3.0` to the number
+  `3.0` ``. `LoadError::Layer` names the layer and `GenerateError::Overlay`
+  names the file. `OverlayError` is `#[non_exhaustive]`, so a new variant is not
+  a break. A 3.1 document that an Overlay held to 3.0 loaded at 0.0.2 and is
+  refused now, first for its version, and then there is no repair: the document
+  says 3.1.
+- **A server URL with variables loads, and the two refusals that remain name
+  their repair.** The first server's URL takes the `default` of each variable
+  in `variables`, which OpenAPI requires, and `Document::base` holds the result.
+  It was refused as `LoadError::ServerUrl`. A variable that `variables` does not
+  declare stays in the URL, which is still `ServerUrl`. `ServerUrl` has the new
+  field `filled`, the URL with the defaults in it, because a default can make
+  the URL bad. Where a variable was filled in, the message shows both, ``
+  `servers[0].url` is not a URL: `https://{tenant}.example.com`, which is
+  `https://my tenant.example.com` with the default of each variable``. Repair:
+  a `match` that binds the fields of `ServerUrl` adds `filled` or `..`. A document with no
+  `servers` is `LoadError::NoServer`, whose message is now ``the document lists
+  no `servers` entry to send requests to; add one in an Overlay``. An operation
+  with no `operationId` is `LoadError::NoOperationId`, whose message is now
+  ``<method> <path> has no operationId; add one in an Overlay``. Both are
+  refused as before. Repair: the Overlay each message names, shown in
+  `docs/overlay.md`. The README's *What it does not do* lists both.
+- **A name with a character outside ASCII is refused and not mangled.**
+  `names::spelled` kept the ASCII letters of such a name and made a separator of
+  the rest, so `straße` was the flag `--stra-e`, `/kontakte/änderungen` the group
+  `kontakte nderungen`, and `é` written as `e` and a combining accent was a plain
+  `e`. It refuses the name and transliterates nothing. The rule is that the name
+  is ASCII, so a letter written as a base and a combining mark, a dash, a
+  no-break space and a character that nobody sees (a soft hyphen, a zero-width
+  space) are refused as a letter is. The message of the `NameError` names the
+  first such character by its code point, such as `U+00AD`, because a soft
+  hyphen shows as nothing and an en dash as a hyphen; a name of ASCII that
+  kebab-cases to nothing keeps ``does not kebab-case into [a-z0-9-]``. The line
+  that names a parameter with no flag reads ``named with a character outside
+  ASCII, or in a way that does not kebab-case into [a-z0-9-]``, in the long help
+  and in the documentation of a generated wrapper, so a bless step writes that
+  sentence where it wrote the shorter one. A document that loaded is refused
+  where the name is:
+  - a path segment (`Name`). Repair: `x-cli-group` and `x-cli-command` in an
+    Overlay;
+  - a gate in `x-cli-gates` (`GateName`). Repair: write the gate with an ASCII
+    word in `x-cli-gates`, in an Overlay that removes the list and writes it
+    again, because an `update` appends to a list;
+  - a required parameter (`Parameter`). Repair: drop its `required` in an
+    Overlay;
+  - the word of `Loading::commit` and `Settings::commit_word`
+    (`ConfirmationError::Spelling`). Repair: an ASCII word.
+
+  It loads and changes where the name is an optional parameter, which is carried
+  with no flag and named on the subcommand's help, or a property of a flat body,
+  which sends the whole body through `--json-body`. No Overlay gives such a
+  parameter its flag back, because its name is the name on the wire. A script
+  that typed `--stra-e` no longer finds the flag.
+- **`GET /{tenant}/vouchers` is `vouchers list`.** Whether a path addresses one
+  resource is read from the segments below the group, as `docs/cli.md` says, and
+  not from a template above it. A `GET` with a template above the group and none
+  below it was `get`, and a document with `getVoucher` beside it was refused as
+  `DuplicateCommand`. Repair: use the new name, or keep the old one with
+  `x-cli-command: get` in an Overlay.
+- **`RefError::Inside { reference }`.** A `$ref` into the inside of a component,
+  such as `#/components/schemas/Holder/properties/code`, was `Missing` and
+  printed that it does not resolve, though the pointer is valid. It is `Inside`,
+  and its message says that this crate follows only
+  `#/components/<section>/<name>`. A pointer inside a name that no component has
+  is still `Missing`. `RefError` is not `#[non_exhaustive]`, so a
+  `match` on it with no `_` arm stops compiling. Repair: add an arm for
+  `Inside`. The document was refused before and is refused now, and only the
+  reason changed. Repair for the document: point the `$ref` at the component.
+- **`GenerateError::OneType` has the field `inline`, and its repair is a
+  `title`.** Where one of the two shapes that reduce to one Rust name is stated
+  inline by an operation, the message ends ``give an inline schema a `title` in
+  an Overlay``, which names a type for the shape and renames no schema of the
+  vendor's. The message for two declared schemas is unchanged. `inline` is true
+  when either shape is inline. Repair: a `match` that binds the fields of
+  `OneType` adds `inline` or `..`.
+- **A chain of `allOf` hops does not overflow the stack.** The check for a
+  required name that nothing declares followed each hop with a call, and a chain
+  of about 7,000 hops aborted the bless step with a stack overflow. It walks a
+  work list now, and the chain loads. Nothing else changes: the check refuses
+  the same documents.
 - **Eight error enums are `#[non_exhaustive]`:** `LoadError`, `ValueError`,
   `client::Error`, `DispatchError`, `ArgError`, `PlanError`, `OverlayError` and
   `DocumentError`. A `match` on one needs a `_` arm, and a refusal added later

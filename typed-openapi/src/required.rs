@@ -607,48 +607,58 @@ impl<'d> Admits<'d> {
 
     /// One node's own names, then the names of everything it composes with.
     ///
+    /// The nodes still to read are a list this function owns, and not a call per
+    /// node: a chain of `allOf` hops is as long as the document makes it, and a
+    /// call for each would need a stack as deep. What is built is a union, so the
+    /// order the nodes are read in changes nothing.
+    ///
     /// `followed` carries the references already taken. It is shared across
     /// every branch rather than copied down each one: what is being built is a
     /// union, so a reference a second branch asks for has already put its names
     /// into the answer.
     fn gather(&mut self, node: &'d Value, doc: &'d Value, followed: &mut BTreeSet<&'d str>) {
-        let Some(node) = node.as_object() else {
-            return;
-        };
-        if let Some(declared) = node.get(PROPERTIES).and_then(Value::as_object) {
-            self.named.extend(declared.keys().map(String::as_str));
-        }
-        if CONDITIONAL.iter().any(|key| node.contains_key(*key)) {
-            self.hidden = true;
-        }
-        if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
-            self.follow(reference, doc, followed);
-        }
-        for key in COMPOSED {
-            for member in node
-                .get(key)
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                self.gather(member, doc, followed);
+        let mut pending = vec![node];
+        while let Some(node) = pending.pop() {
+            let Some(node) = node.as_object() else {
+                continue;
+            };
+            if let Some(declared) = node.get(PROPERTIES).and_then(Value::as_object) {
+                self.named.extend(declared.keys().map(String::as_str));
+            }
+            if CONDITIONAL.iter().any(|key| node.contains_key(*key)) {
+                self.hidden = true;
+            }
+            if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
+                pending.extend(self.follow(reference, doc, followed));
+            }
+            for key in COMPOSED {
+                pending.extend(
+                    node.get(key)
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten(),
+                );
             }
         }
     }
 
-    /// One `$ref`, taken once.
+    /// One `$ref`, taken once: the node it names, to be read, or nothing when
+    /// the reference was taken before.
     ///
     /// A reference this walk cannot follow leads out of the document — into
     /// another file, or at nothing that is there — so whatever it declares is
     /// hidden rather than absent, and the node carrying it is exempt.
-    fn follow(&mut self, reference: &'d str, doc: &'d Value, followed: &mut BTreeSet<&'d str>) {
+    fn follow(
+        &mut self,
+        reference: &'d str,
+        doc: &'d Value,
+        followed: &mut BTreeSet<&'d str>,
+    ) -> Option<&'d Value> {
         let Some(target) = pointed_at(doc, reference) else {
             self.hidden = true;
-            return;
+            return None;
         };
-        if followed.insert(reference) {
-            self.gather(target, doc, followed);
-        }
+        followed.insert(reference).then_some(target)
     }
 
     /// Whether these schemas declare this name, or hide the place it would be
@@ -902,6 +912,15 @@ mod emission {
     /// the four `CONDITIONAL` keywords has a row of its own, so dropping one
     /// from that list takes a row off this reading rather than going
     /// unnoticed.
+    ///
+    /// A row says what a node holds, not where the node stands. The node with
+    /// the phantom is always the base of the row, standing where a document puts
+    /// a named schema. A node that holds the same phantom while it stands under
+    /// `unevaluatedProperties`, `propertyNames`, `prefixItems`, `contains`,
+    /// `then`, `contentSchema`, `$defs`, a `dependentSchemas` subschema or `not`
+    /// is not a row, though typify writes no field there: the walk can tell
+    /// whether a name is declared at each of those, so the node is refused, and
+    /// an exemption needs that it cannot tell *and* that typify writes no field.
     const SHAPES: &[(&str, Emits)] = &[
         ("", Emits::UntypedField),
         ("additionalProperties: false\n", Emits::UntypedField),

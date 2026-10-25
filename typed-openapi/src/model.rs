@@ -377,9 +377,11 @@ pub enum Unsupported {
     /// it. Writing it out as some other style would put the value on the wire
     /// in a shape the server does not read.
     Style(String),
-    /// A name with no kebab-case spelling, so there is no flag to offer. A
-    /// parameter named `*` or `()` or `_` is the vendor's business and reaches
-    /// a command line as nothing at all.
+    /// A name with no spelling as a flag, so there is no flag to offer. It holds
+    /// a character outside ASCII, which nothing here transliterates (`straße`),
+    /// or it does not kebab-case into `[a-z0-9-]`: a parameter named `*` or `()`
+    /// or `_` is the vendor's business and reaches a command line as nothing at
+    /// all.
     ///
     /// A flag is the one name in this crate a *user types*, so it passes the
     /// rule [`crate::names`] states once and a command name and a gate are
@@ -407,9 +409,10 @@ impl std::fmt::Display for Unsupported {
                     "declared with `style: {style}`, which this CLI does not serialise"
                 )
             }
-            Self::Unspellable => {
-                out.write_str("named in a way that does not kebab-case into [a-z0-9-]")
-            }
+            Self::Unspellable => out.write_str(
+                "named with a character outside ASCII, or in a way that does not kebab-case into \
+                 [a-z0-9-]",
+            ),
         }
     }
 }
@@ -795,9 +798,11 @@ impl Document {
     /// anything. The number moves with the layout: a change to a type of the
     /// model that `postcard` writes differently, such as a field added,
     /// removed, reordered or retyped, or a variant added, removed or moved,
-    /// needs a new number. The crate's own tests trace the layout and fail on a
-    /// change that left the number where it was.
-    pub const MODEL_LAYOUT: u32 = 2;
+    /// needs a new number. It moves too when a load writes something different
+    /// for the same document and no type changed. The crate's own tests trace
+    /// the layout and fail on a change to a type that left the number where it
+    /// was.
+    pub const MODEL_LAYOUT: u32 = 3;
 
     /// The same reduction, already done and written down.
     ///
@@ -880,7 +885,8 @@ impl Document {
         postcard::to_extend(self, stamp).map_err(DocumentError::Encode)
     }
 
-    /// The server the document names first. A caller may override it.
+    /// The server the document names first, with each variable in its URL
+    /// replaced by the `default` the document gives it. A caller may override it.
     #[must_use]
     pub fn base(&self) -> &Uri {
         &self.base

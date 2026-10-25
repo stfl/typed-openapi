@@ -23,7 +23,7 @@ use std::borrow::Cow;
 use http::{Method, Uri};
 use openapiv3::{
     Components, OpenAPI, Parameter, ParameterData, ParameterSchemaOrContent, PathStyle, QueryStyle,
-    ReferenceOr, Schema, SchemaKind,
+    ReferenceOr, Schema, SchemaKind, Server,
 };
 use thiserror::Error;
 
@@ -92,33 +92,52 @@ pub enum LoadError {
         #[source]
         source: crate::overlay::OverlayError,
     },
+    /// The vendor's document says it is a version of OpenAPI that this crate does
+    /// not read. 3.1 spells some rules differently from 3.0 and means others
+    /// that 3.0 does not have, so reading it as 3.0 would drop a rule in silence
+    /// or refuse a spelling with no place. Support for 3.1 is out of scope, and
+    /// no Overlay holds a document to 3.0: one that changes `openapi` is refused.
+    #[error("the document says `openapi: {version}`, and this crate reads OpenAPI 3.0 only")]
+    Version {
+        /// The `openapi` key as the document spells it.
+        version: String,
+    },
     /// The overlaid document is not an OpenAPI 3 document.
     #[error("the overlaid document is not an OpenAPI 3 document: refused at `{at}`")]
     Shape {
         /// The first node that the OpenAPI model refuses, from the root of the
-        /// document: `info.title`, `components.schemas.Voucher`, or a node
-        /// inside a path item as `paths[/vouchers].get.deprecated`. `.` is the
-        /// document itself.
+        /// document: `info.title`, `components.schemas.Voucher`, a path item as
+        /// `paths[/vouchers]`, or a node inside a path item as
+        /// `paths[/vouchers].get.deprecated`. `.` is the document itself.
         at: String,
         /// `serde_json`'s message.
         #[source]
         source: serde_json::Error,
     },
-    /// The document lists no server, so a request has nowhere to go.
-    #[error("no `servers` entry to send requests to")]
+    /// The document lists no server, so it has no default host to give.
+    /// [`Document::base`] is the first server: the default that the command line
+    /// and the typed client both start from, and that a caller replaces when the
+    /// host is theirs to choose. An Overlay adds the server.
+    #[error("the document lists no `servers` entry to send requests to; add one in an Overlay")]
     NoServer,
-    /// The first server's URL is not a URL.
-    #[error("`servers[0].url` ({url}) is not a URL")]
+    /// The first server's URL is not a URL, once each variable in it is replaced
+    /// by its default. A variable the server does not declare has no default
+    /// and stays in the URL as it is written.
+    #[error("`servers[0].url` is not a URL: {}", refused_url(.url, .filled))]
     ServerUrl {
         /// `servers[0].url` as the document spells it.
         url: String,
+        /// The URL with the `default` of each declared variable in place of its
+        /// name, which is the text that was refused. It is `url` itself where
+        /// the URL holds no variable.
+        filled: String,
         /// The `http` crate's reason.
         #[source]
         source: http::uri::InvalidUri,
     },
     /// An operation without an `operationId`, which is the name every later
-    /// refusal and every generated wrapper uses for it.
-    #[error("{method} {path} has no operationId")]
+    /// refusal and every generated wrapper uses for it. An Overlay adds one.
+    #[error("{method} {path} has no operationId; add one in an Overlay")]
     NoOperationId {
         /// The method of the operation, lowercase, as the path item spells it.
         method: String,
@@ -403,6 +422,16 @@ pub enum LoadError {
     },
 }
 
+/// The first server's URL as a refusal shows it: as the document spells it, and
+/// where a variable was filled in, the text that was refused beside it.
+fn refused_url(url: &str, filled: &str) -> String {
+    if url == filled {
+        format!("`{url}`")
+    } else {
+        format!("`{url}`, which is `{filled}` with the default of each variable")
+    }
+}
+
 /// Why a word cannot be the confirmation.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ConfirmationError {
@@ -478,6 +507,11 @@ impl Document {
     /// ones before it produced, so the order they are given in is the order
     /// they happen. An empty list runs a document that is already corrected.
     ///
+    /// The document is OpenAPI 3.0. The vendor's `openapi` is asked first, before
+    /// any Overlay, and any version but `3.0` and `3.0.x` is
+    /// [`LoadError::Version`]. An Overlay that changes `openapi` is refused at
+    /// its layer.
+    ///
     /// This is the expensive door, and the `document` feature is what opens it.
     /// A bless step calls it once and writes [`Document::to_blob`] beside the
     /// rest of what it generates; a shipped binary compiles without the feature
@@ -533,6 +567,12 @@ impl Document {
         loading: &Loading,
     ) -> Result<Self, LoadError> {
         let mut doc = crate::overlay::parse(document).map_err(LoadError::Overlay)?;
+        // The version first, and the vendor's: a document that is not 3.0 is
+        // refused for what it is, and not for the first spelling of it that the
+        // readers below trip on, or worse, read as 3.0 and drop a rule from. No
+        // layer changes it (`overlay::apply` refuses that), so the version that
+        // is read is the one on the vendor's first line.
+        crate::openapi::require_3_0(&doc)?;
         for (layer, overlay) in overlays.iter().enumerate() {
             doc = crate::overlay::apply(doc, overlay)
                 .map_err(|source| LoadError::Layer { layer, source })?;
@@ -549,10 +589,13 @@ impl Document {
 
     fn from_openapi(doc: &OpenAPI, commit: &str) -> Result<Self, LoadError> {
         let server = doc.servers.first().ok_or(LoadError::NoServer)?;
-        let base = Uri::try_from(&server.url).map_err(|source| LoadError::ServerUrl {
-            url: server.url.clone(),
-            source,
-        })?;
+        let with_defaults = filled(server);
+        let base =
+            Uri::try_from(with_defaults.as_str()).map_err(|source| LoadError::ServerUrl {
+                url: server.url.clone(),
+                filled: with_defaults.clone(),
+                source,
+            })?;
         let empty = Components::default();
         // Which segment groups this document is a fact about all of its paths,
         // so it is read once and then applied one path at a time.
@@ -587,6 +630,39 @@ impl Document {
             commit: commit.to_owned(),
             ops,
         })
+    }
+}
+
+/// The server's URL with each `{name}` in it replaced by the `default` of the
+/// variable that `variables` declares under that name.
+///
+/// OpenAPI requires a default for every variable, and it is the value the
+/// document says to send when the caller supplies none. A name that `variables`
+/// does not declare has no default, so it stays as it is written and the URL
+/// that results is not one.
+fn filled(server: &Server) -> String {
+    let mut url = String::with_capacity(server.url.len());
+    let mut rest = server.url.as_str();
+    loop {
+        let Some((before, after)) = rest.split_once('{') else {
+            url.push_str(rest);
+            return url;
+        };
+        url.push_str(before);
+        let Some((name, tail)) = after.split_once('}') else {
+            url.push('{');
+            url.push_str(after);
+            return url;
+        };
+        let declared = server.variables.as_ref().and_then(|all| all.get(name));
+        if let Some(variable) = declared {
+            url.push_str(&variable.default);
+        } else {
+            url.push('{');
+            url.push_str(name);
+            url.push('}');
+        }
+        rest = tail;
     }
 }
 

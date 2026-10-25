@@ -48,7 +48,10 @@ A shipped binary reads them and derives nothing. Two operations reducing to one
 `<group> <command>` is a `LoadError` naming both `operationId`s — never a silent
 rename, because a name that moves when a *second* operation arrives is a name
 that moved without anyone asking. `x-cli-group` and `x-cli-command` are the way
-out, and they are read in the same place the rule runs.
+out, and they are read in the same place the rule runs. Whether a path
+addresses one resource, which makes a `GET` a `get` and not a `list`, is read
+from the segments below the group only: a template above the group names a
+value the caller supplies for every operation under it.
 
 **Corrections are an ordered list of Overlays, and the library reads nothing
 into it.** `Settings::overlay` and `Document::load` take layers and apply them
@@ -116,6 +119,43 @@ the document saying something this crate has no reading for, so both are a
 what the vendor meant is a correction, and a correction is the adopter's to
 write in an Overlay where a reviewer can see it.
 
+**A document is read as the version it says, or refused by name.**
+`Document::load_with` asks the vendor's `openapi` right after it reads the
+document and before the first Overlay, and a version that is not `3.0` or
+`3.0.x` is `LoadError::Version`, which prints it. `3.0.x` is `3.0.` and a patch
+number, and a pre-release label may follow it, as in `3.0.0-rc1`. 3.1 spells
+some rules another way, and the model refuses those with no place, and it means
+others that 3.0 does not have, and the model drops those in silence: a `$ref`
+keeps its sibling `maximum`, and `const` is a rule. Support for 3.1 is out of
+scope, so the refusal names no repair.
+
+The version is the vendor's, and no Overlay changes it. `overlay::apply`
+compares `openapi` before and after each layer and refuses any difference,
+another version, another patch of 3.0, a value that is not text, or no key, as
+`OverlayError::OpenApiVersion`. Both roads put the layer on that error already
+(`LoadError::Layer`, `GenerateError::Overlay`), so the refusal names it on both.
+A label that an Overlay writes changes how every schema is read, and nobody who
+reads the Overlay can see which rules it drops: it is the approximation that
+the rule above forbids, and not a correction. A document with no `openapi` is refused
+by the model at `.`, a value that is not text at `openapi`, and no Overlay can
+add the key. The bless step lays the layers itself, so `Settings::correct` asks
+the vendor's version before its first layer, as `load_with` does, and the
+refusal of a 3.1 document comes before the refusal of a layer that does not
+apply to it.
+
+**A document that leaves out what a request needs is refused with the Overlay
+that adds it.** `NoServer` is a document with no `servers`: `Document::base` is
+the first server, the default that the command line and the typed client both
+start from, and a caller replaces it where the host is theirs to choose, so a
+document that lists none has no default to give. A relative first server such as
+`/` loads for the same reason, as a default the caller replaces. `NoOperationId`
+names the method and the path of an operation with no `operationId`, because
+every later refusal and every generated wrapper calls the operation by it. A
+server URL with variables takes the `default` of each, which OpenAPI requires
+for every variable; a variable that `variables` does not declare stays in the
+URL, which is then no URL (`ServerUrl`, which prints the URL as the document
+spells it and as it was refused, with the defaults in it).
+
 **A refusal names its operation and the place it stopped, and its repair only
 where the repair is true.** A `LoadError` from one operation carries the
 `operationId`; one from a path item carries the path (`PathItem`), and one from
@@ -135,14 +175,14 @@ overlaid value once, and where serde stopped at `paths` it reads the value again
 one path item at a time, in document order, and names the first item that fails
 and the node inside it (`paths[/b].get.deprecated`). The re-read refuses only
 what the model refuses, with the model's cause: it tries the keys that start
-with `/` and no others, as `openapiv3` does, and reads each item as a
-`PathItem`, which reads the item's keys in the order it lists them, as the model
-does. Anywhere else serde's own place is kept. The bless step's `NotOpenApi`
-calls the same function. A read that returns a `RefError` passes it on through
-`under`, a body's multipart schema included: a schema that cannot be followed is
-never a body with no parts. `ParameterRef` and `PathItem` are the two variants
-that do not go through `under`: `ParameterRef` names the operation that lists
-the parameter itself, and `PathItem` has no `RefError` to pass on.
+with `/` and no others, as `openapiv3` does, and reads each item as an
+`openapiv3::PathItem`, which reads the item's keys in the order it lists them,
+as the model does. Anywhere else serde's own place is kept. The bless step's
+`NotOpenApi` calls the same function. A read that returns a `RefError` passes it
+on through `under`, a body's multipart schema included: a schema that cannot be
+followed is never a body with no parts. `ParameterRef` and `PathItem` are the
+two variants that do not go through `under`: `ParameterRef` names the operation
+that lists the parameter itself, and `PathItem` has no `RefError` to pass on.
 `tests/refusals.rs` holds a case for each, from the input of the probe or the
 review finding that found it.
 
@@ -170,6 +210,23 @@ exemption added without a row there is a reading of the specification rather
 than a measurement, and a reading of the specification is what lets a shape the
 generator still spoils onto the list.
 
+Both conditions are necessary. Where the walk can tell whether a name is
+declared, a phantom is refused although typify writes no field for it, and the
+rows measure what a node holds and not where the node stands. SEV-249 measured
+nine positions where typify writes no field: `unevaluatedProperties`, a
+`dependentSchemas` subschema, `propertyNames`, `prefixItems`, `contains`,
+`then`, `contentSchema`, `$defs`, and anywhere below `not`. At each of them the
+walk reads the node and can tell, so a phantom there is refused, and no row
+exempts a position. Eight of the nine are keywords that a 3.0 schema does not
+have, and a document that is not 3.0 is refused first. The ninth, below `not`,
+is rare, and its refusal names an Overlay.
+
+The walk takes its nodes from a work list that shares the `followed` set, and
+makes no call for a hop. A chain of `allOf` hops is as long as the vendor wrote
+it, and a call per hop overflows the stack at 7,000 of them, on a thread of
+8 MiB too. `schema::follow` is a loop for the same reason, so a reference chain
+adds no recursion to either walk.
+
 **A shape this crate cannot spell stops at the operation, not at the document.**
 A parameter that is `in: cookie`, described by `content`, neither a value nor a
 list of values, declaring a `style` this crate does not serialise, or *named* in
@@ -186,6 +243,22 @@ spelled `*` sends its body whole rather than claiming a flag called `""`. The
 body's rule turns on whether a property has a flag and never on why it has none,
 so an unspellable property and a nested one reach the same answer — and the
 `Body::JsonWhole` template is then the one place the key is written down.
+
+`spelled` refuses a name that holds a character outside ASCII, and
+transliterates nothing. `kebab` would turn that character into a separator, so
+`straße` would be the flag `--stra-e`, which is no word of the vendor's and which
+two different names can share. A letter written as a base and a combining mark
+is one letter to a reader and would be mangled the same way, and a character
+that nobody sees, such as a soft hyphen, would be a separator that nobody sees.
+The test is `is_ascii` and not a test for a letter, a digit or a mark, because
+those are tables in the standard library that change with the toolchain, and a
+name has to be read the same way by every compiler. The `NameError` names the
+first such character by its code point (`U+00AD`), because a soft hyphen shows
+as nothing and an en dash as a hyphen, so the name beside a message that only
+said "does not kebab-case" would look right. A path segment that holds one needs
+`x-cli-group` or `x-cli-command`, and `Name` says so; a gate or the confirmation
+word is refused; a parameter is `Unreachable`, and only a required one refuses
+the document; a body property sends the body whole.
 
 **A body template is read from the model and reaches no request.** The body with
 no per-field flags is the body `--help` cannot describe, so `Body::JsonWhole`
@@ -393,13 +466,13 @@ only if the descent is off the caller's stack.
 would make them public. Nothing in the lint block stops a new `pub` item from
 naming an `openapiv3` type, so review keeps the claim true for it. `overlay`
 stays public because a bless step calls `overlay::parse`, and `overlay::Cause`
-with it because every `OverlayError` variant carries one, and `overlay::Place`
-because `Cause::place` returns it. `required::check` stays public with the
-`PhantomKeys` it returns, and `scalar::Text` stays public because an adopter's
-test names it. A type that a public variant carries is public too, which is why
-`RefError` is re-exported at the root while the rest of `schema` is not.
-`unreachable_pub` is a warning the gate denies, so a `pub` item the crate does
-not export fails it.
+with it because every `OverlayError` variant but `OpenApiVersion` carries one,
+and `overlay::Place` because `Cause::place` returns it. `required::check` stays
+public with the `PhantomKeys` it returns, and `scalar::Text` stays public
+because an adopter's test names it. A type that a public variant carries is
+public too, which is why `RefError` is re-exported at the root while the rest of
+`schema` is not. `unreachable_pub` is a warning the gate denies, so a `pub` item
+the crate does not export fails it.
 
 **Every public item is documented, and no `allow` goes on an error.**
 `#![warn(missing_docs)]` is in `src/lib.rs`, and the gate's `-D warnings` makes
@@ -432,7 +505,10 @@ before it decodes a byte, so a blob of another build is `Unstamped` or `Stale`
 and a blob of this layout that does not decode is `Blob`. Any change to what
 `postcard` writes for `Document` or a type inside it, such as a field added,
 removed, reordered or retyped, a variant added, removed or moved, or the argument
-of a generic, bumps `MODEL_LAYOUT` in the same change. Then
+of a generic, bumps `MODEL_LAYOUT` in the same change. So does a load that
+writes something different for the same document with no type changed, such as a
+name that `names::spelled` refuses or spells another way; `tests/layout.json`
+then differs in `model_layout` only. Then
 `TYPED_OPENAPI_WRITE_LAYOUT=1 cargo nextest run -p typed-openapi --test layout`
 writes `tests/layout.json` again, and `just bless` writes the blob again.
 `tests/layout.rs` fails on a layout that moved under the same number and says
