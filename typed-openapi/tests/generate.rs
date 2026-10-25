@@ -588,7 +588,7 @@ fn a_document_that_is_not_yaml_is_named_with_its_line_and_column() {
 
 /// A document whose second operation breaks the OpenAPI model, read by the bless
 /// step. The model says "expected a boolean" and stops at `paths`, so the report
-/// is the node the reduction found by reading the operations one at a time.
+/// is the node the reduction found by reading the path items one at a time.
 #[test]
 fn a_document_the_openapi_model_refuses_is_named_by_its_operation() {
     let dir = out("not-openapi");

@@ -874,9 +874,9 @@ pub enum GenerateError {
     #[error("the overlaid document is not an OpenAPI 3 document: refused at `{at}`")]
     NotOpenApi {
         /// The first node that the OpenAPI model refuses, from the root of the
-        /// document: `info.title`, `components.schemas.Voucher`, or an
-        /// operation as `paths[/vouchers].get` with the node inside it after.
-        /// `.` is the document itself.
+        /// document: `info.title`, `components.schemas.Voucher`, or a node
+        /// inside a path item as `paths[/vouchers].get.deprecated`. `.` is the
+        /// document itself.
         at: String,
         /// `serde_json`'s message.
         #[source]

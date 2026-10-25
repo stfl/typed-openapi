@@ -88,8 +88,7 @@ pub enum LoadError {
         /// The index of the layer in the `overlays` argument of
         /// [`Document::load`], counted from 0.
         layer: usize,
-        /// What stopped the layer: its syntax, its shape or an action that
-        /// matched nothing.
+        /// What stopped the layer.
         #[source]
         source: crate::overlay::OverlayError,
     },
@@ -97,9 +96,9 @@ pub enum LoadError {
     #[error("the overlaid document is not an OpenAPI 3 document: refused at `{at}`")]
     Shape {
         /// The first node that the OpenAPI model refuses, from the root of the
-        /// document: `info.title`, `components.schemas.Voucher`, or an
-        /// operation as `paths[/vouchers].get` with the node inside it after.
-        /// `.` is the document itself.
+        /// document: `info.title`, `components.schemas.Voucher`, or a node
+        /// inside a path item as `paths[/vouchers].get.deprecated`. `.` is the
+        /// document itself.
         at: String,
         /// `serde_json`'s message.
         #[source]
@@ -278,17 +277,18 @@ pub enum LoadError {
     /// an Overlay a reviewer can read.
     #[error(transparent)]
     Phantom(#[from] crate::required::PhantomKeys),
-    /// A path item that is a `$ref`. This crate follows none, so the item is
-    /// refused with its path and the reference it holds.
-    #[error("{path}: the path item is a `$ref` that cannot be followed")]
+    /// A path item that is a `$ref`. This crate follows none, whether the
+    /// reference leads anywhere or not, so the item is refused with its path
+    /// and the reference it holds, and no cause is given: the reference was
+    /// never tried.
+    #[error("{path}: the path item is the `$ref` `{reference}`, which this crate does not follow")]
     PathItem {
         /// The path template, as the document spells it.
         path: String,
-        /// The reference that could not be followed.
-        #[source]
-        source: RefError,
+        /// The reference, as the document spells it.
+        reference: String,
     },
-    /// A parameter that is a `$ref` to nothing. There is no parameter yet to
+    /// A parameter whose `$ref` cannot be followed. There is no parameter yet to
     /// name it by, so the operation that lists it is named.
     #[error("{op}: a parameter is a `$ref` that cannot be followed")]
     ParameterRef {
@@ -570,9 +570,7 @@ impl Document {
                 ReferenceOr::Reference { reference } => {
                     return Err(LoadError::PathItem {
                         path: path.clone(),
-                        source: RefError::Missing {
-                            reference: reference.clone(),
-                        },
+                        reference: reference.clone(),
                     });
                 }
             };

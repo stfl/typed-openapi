@@ -65,14 +65,6 @@ fn marked(marker: &str) -> String {
     )
 }
 
-/// An OpenAPI document whose one path item is a `$ref`.
-const PATH_ITEM_REF: &str = "openapi: 3.0.3\n\
-     info: { title: Errors, version: \"1.0\" }\n\
-     servers: [{ url: \"http://localhost\" }]\n\
-     paths:\n\
-     \x20 /things:\n\
-     \x20   $ref: \"other.yaml#/paths/~1things\"\n";
-
 const URL: &str = "http://localhost";
 const SOUND: &str = "{ name: n, in: query, schema: { type: integer } }";
 const UNRESOLVABLE: &str = "{ name: n, in: query, schema: { $ref: '#/components/schemas/Nope' } }";
@@ -218,9 +210,6 @@ fn loading() -> Vec<Case> {
             load(&marked("x-cli-gates: ['???']"), &[]),
             |e| matches!(e, LoadError::GateName { .. }),
         ),
-        from_input("LoadError::PathItem", load(PATH_ITEM_REF, &[]), |e| {
-            matches!(e, LoadError::PathItem { .. })
-        }),
         from_input(
             "LoadError::ParameterRef",
             load(

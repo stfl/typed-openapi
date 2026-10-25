@@ -14,8 +14,9 @@ use thiserror::Error;
 #[error("the {origin} `{raw}` does not kebab-case into [a-z0-9-]")]
 pub struct NameError {
     /// What the name was read off, so the message says where to go and look:
-    /// a path segment, the whole path where it has no segment to read, or the
-    /// `x-cli-` marker that overrode it.
+    /// a path segment, the whole path where it has no segment to read, the
+    /// `x-cli-` marker that overrode it, or the word an adopter gave for the
+    /// confirmation flag.
     pub origin: &'static str,
     /// The name, as the document spells it.
     pub raw: String,
