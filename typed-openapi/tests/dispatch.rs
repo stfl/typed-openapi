@@ -163,7 +163,7 @@ fn a_value_the_documents_rule_refuses_never_becomes_a_request() {
         "{refused}"
     );
     assert!(
-        refused.contains(r"`1,50` does not match ^-?[0-9]+(\.[0-9]{1,2})?$"),
+        refused.contains(r"`1,50` is not a match for ^-?[0-9]+(\.[0-9]{1,2})?$"),
         "{refused}"
     );
 

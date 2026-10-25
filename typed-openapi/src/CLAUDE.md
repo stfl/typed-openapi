@@ -131,20 +131,49 @@ example to its own convention.
 
 **Every rule the document states about a value is enforced, in one place.**
 `Scalar` carries what the schema said — `pattern`, `minLength`/`maxLength`, the
-bounds, `multipleOf` — and `Scalar::parse` is the only thing that checks any of
-them. `Scalar::wire` is the text of a parameter that goes on the wire, and it
-asks `parse`'s own reading of a number, so there is no second check: the number
-that is checked is the number that is sent, and `Invocation::new` keeps the
-text. An `f64` reads the nearest float of its digits, so a number is refused
-when that float is another number (`exact` compares decimal numbers, not text),
-and an integer past `i64` is out of range and not "not an integer". A rule that
-reaches `--help` and not the parser is the defect this invariant exists to
-prevent, so `Scalar::note` and the refusal are one rendering. `pattern` runs on
-`regress`, the engine typify puts inside a generated newtype's `FromStr`, so a
-value the command line accepts is a value the generated type accepts by
-construction. No `format` is special-cased: a format names a rule and is not
-one, and a document that wants a rule states it in JSON Schema everything can
-read.
+bounds, `multipleOf`, and an `enum` of strings, numbers or booleans — and
+`Scalar::parse` is the only thing that checks any of them. `Scalar::wire` is the
+text of a parameter that goes on the wire, and it asks `parse`'s own reading of
+a number, so there is no second check: the number that is checked is the number
+that is sent, and `Invocation::new` keeps the text. An `f64` reads the nearest
+float of its digits, so a number is refused when that float is another number
+(`exact` compares decimal numbers, not text), and an integer past `i64` is out of
+range and not "not an integer". A numeric `enum` admits a value and not a
+spelling (`+200` for `200`), and a boolean `enum` of both values is `None`,
+because it states what `type: boolean` states.
+
+A rule that reaches `--help` and not the parser is the defect this invariant
+exists to prevent, so a rule has one note, the words that finish "is not …", and
+its refusal is those words after "is not" (`ScalarError::refusal`). A refusal
+that is worded on its own is a second rendering that can drift from the first. A
+string `enum` is the one rule with no note, because the flag lists its values and
+clap's parser enforces them as `parse` does. `ScalarError::Choice` is every
+`enum`'s refusal, and it and the note spell the list once (`one_of`).
+
+`multipleOf` is decided on digits and never in `f64`: the value is the text
+`exact` accepted and the step the shortest text that reads back as the float,
+both as `Decimal`, and the quotient is whole when the digits of the step divide
+the digits of the value once the powers of ten are lined up
+(`Decimal::is_multiple_of`). A float quotient refuses `0.07` against `0.01` and
+admits `1e17` against `3`. An integer's remainder is `checked_rem`, so no value
+makes `parse` panic, whatever step a hand-built `Scalar` holds.
+
+A list parameter's `minItems`, `maxItems` and `uniqueItems` are one value,
+`Items`, in the `List` that `Shape::Flag` carries beside the `Join`. A scalar
+cannot hold them because no one value breaks them. `Items::check` is the only
+place they are enforced and `Items::note` the only rendering, and its refusal is
+the note after "is not a list of". `Invocation::new` asks it (`listed`) for each
+parameter given at least once, after every value has met the rules of `items`, so
+the command line and the typed call are refused alike (`ValueError::BadList`).
+`uniqueItems` compares what the items' rule reads, so `1` and `01` are one
+integer. A list rule that is stated for a body's array belongs to the generated
+type, and `Items` is read for parameters only.
+
+`pattern` runs on `regress`, the engine typify puts inside a generated newtype's
+`FromStr`, so a value the command line accepts is a value the generated type
+accepts by construction. No `format` is special-cased: a format names a rule and
+is not one, and a document that wants a rule states it in JSON Schema everything
+can read.
 
 `Scalar` reads the document, and that is deliberate rather than incidental.
 progenitor decides the same question the other way — `cli.rs` asks typify
@@ -192,7 +221,14 @@ name alone does not say where the value goes.
 the document saying something this crate has no reading for, so both are a
 `LoadError` naming the operation and the thing that could not be read — guessing
 what the vendor meant is a correction, and a correction is the adopter's to
-write in an Overlay where a reviewer can see it.
+write in an Overlay where a reviewer can see it. `Scalar::runnable` asks the
+rules of a value that run but not as the vendor means: a `pattern` with `\p{`,
+`\P{` or `\u{`, which has another meaning with the Unicode flag than without it,
+and the generated type cannot be given the flag, and a `multipleOf` that is not
+more than 0. Both are `LoadError::Unrunnable`, whose cause prints the pattern or
+the step. The escape is found by reading the pattern, a backslash taking the
+character after it, so `\\p{3}` is not one. Compiling both sides with the flag is
+the alternative that is out of scope, because it is a change to typify.
 
 **A document is read as the version it says, or refused by name.**
 `Document::load_with` asks the vendor's `openapi` right after it reads the

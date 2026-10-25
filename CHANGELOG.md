@@ -647,6 +647,65 @@ the crate follows [Semantic Versioning][semver].
   where the field was dropped from the body in silence. `ArgError` is
   `#[non_exhaustive]`, so both are no break. Repair: declare the flag as text,
   which is what `values` reads, and type a value that the field's rule accepts.
+- **A numeric or boolean `enum`, and a list's `minItems`, `maxItems` and
+  `uniqueItems`, are enforced on flags.** `--status 7` against
+  `enum: [100, 200]` was sent, `--help` listed no value, and the generated type
+  refused the `7` that the flag sent. `--ids 1 --ids 1 --ids 3` against
+  `maxItems: 2` was sent too. `Scalar::parse` checks the enum and
+  `Scalar::note` renders it (`one of 100, 200`), as a bound is, and a value is
+  admitted whatever its spelling (`+200`). A list is held to its rules in
+  `Invocation::new`, so the command line and the typed call are refused alike,
+  as `ValueError::BadList { op, name }` with the values as they were given in
+  its cause (`` `1, 1, 3` is not a list of at most 2 values ``). `ValueError`
+  is `#[non_exhaustive]`, so the variant is no break. sevdesk-cli has 14 numeric
+  enums in its corrected document, and four of them are query parameters
+  (`GET /Invoice`, `/Order` and `/Voucher` `status`, and
+  `getTotalDataExportCount`'s required `status`): its CLI enforces them when it
+  moves its rev. The model changes, so this is a break of three public shapes
+  and of the blob:
+  - `Scalar::Boolean` is `Scalar::Boolean(Option<bool>)`, with the one value that
+    an `enum` of `type: boolean` lists, and `None` where there is none or it
+    lists both. Repair: match `Boolean(_)`, and build `Boolean(None)`.
+  - `scalar::Bounds<T>` gains `allowed: Vec<T>`, the `enum` in the document's
+    order, and is no longer `Copy`. Repair: build it with `..Bounds::default()`,
+    and clone where you copied.
+  - `Shape::Flag`'s `join: Option<Join>` is `list: Option<List>`, where
+    `List { join: Join, items: scalar::Items }` and `Items { min, max, unique }`
+    hold the three rules of the array. `Shape::repeatable` is unchanged. Repair:
+    read `list.map(|list| list.join)` where you read `join`.
+  - `Document::MODEL_LAYOUT` is 6. Repair: run the bless step again and commit
+    `src/model.postcard`; a blob of layout 5 is `DocumentError::Stale`.
+- **A refusal is worded from the note of its rule.** The sentences that
+  `Scalar::parse` gives for a length and a `pattern` are the note of the rule
+  after "is not", as those for a bound already were:
+  `` `EU` is shorter than 3 characters `` is `` `EU` is not at least 3 characters ``,
+  `longer than` is `is not at most`, and `` does not match ^[A-Z]+$ `` is
+  `` is not a match for ^[A-Z]+$ ``. The note on the help line reads `a match for
+  ^[A-Z]+$` where it read `matches ^[A-Z]+$`. The variant is `ScalarError::Rule`
+  as before. Repair: none for a user; a test or a script that matches the old
+  sentence reads the new one.
+- **`multipleOf` is decided on the digits of the value and of the step.** A
+  binary float divides `0.07` by `0.01` to `7.000000000000001`, so 159 of the
+  first 1000 amounts in cents, `0.07` and `0.29` among them, were refused with a
+  false reason, and `1e17` was admitted as a multiple of `3`. The digits
+  are exact, so `0.07`, `0.29` and `19.99` are multiples of `0.01`, and the
+  remainder of an integer cannot panic. Repair: none; a value that the flag
+  refused wrongly is accepted.
+- **A `pattern` with `\p{`, `\P{` or `\u{` is refused while the document is
+  reduced.** Without the Unicode flag `\p{L}` is the text `p{L}`, and with it a
+  letter, and the command line and the generated type run a `pattern` without the
+  flag. A vendor's server that runs it with the flag disagrees with both about
+  `Müller` and `p{L}`. The document is refused as
+  `LoadError::Unrunnable { op, name, source }`, and the cause prints the pattern
+  and the escape. A backslash takes the character after it, so `\\p{3}` loads.
+  sevdesk-cli's 43 patterns use none. Repair: an Overlay that states the pattern
+  another way, such as `[A-Za-zÀ-ÿ]` for a letter.
+- **A `multipleOf` that is not more than 0 is refused while the document is
+  reduced.** A step of 0 refused every value, and `multipleOf: -1` with the value
+  `i64::MIN` made `Scalar::parse` panic. The document is refused as
+  `LoadError::Unrunnable { op, name, source }`, as a `pattern` that no engine
+  reads is. sevdesk-cli states no `multipleOf`. Repair: an Overlay that removes
+  the keyword or states the step as a positive number.
 
 ### Removed
 

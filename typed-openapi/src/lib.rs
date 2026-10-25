@@ -99,7 +99,8 @@ pub use bon;
 pub use client::{Call, Client, NoContent};
 pub use model::{
     Body, COMMIT, COMMIT_ID, Carrier, Document, DocumentError, Effect, Field, Gate, JSON_BODY,
-    JSON_BODY_TEMPLATE, Join, Location, Operation, Param, Place, RAW_BODY, Shape, Unsupported,
+    JSON_BODY_TEMPLATE, Join, List, Location, Operation, Param, Place, RAW_BODY, Shape,
+    Unsupported,
 };
 #[cfg(feature = "document")]
 pub use model::{ConfirmationError, LoadError, Loading};

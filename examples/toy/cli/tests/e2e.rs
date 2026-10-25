@@ -1095,12 +1095,56 @@ fn the_document_refuses_bad_values_before_a_request_is_built() {
         vec![
             "toy", "raw", "vouchers", "update", "--id", "5", "--total", "12.50",
         ],
+        // A VAT rate that the `enum` of `0`, `7` and `19` does not list.
+        vec![
+            "toy",
+            "raw",
+            "ledger",
+            "entries",
+            "--account",
+            "4400",
+            "--amount",
+            "12.50",
+            "--vat-rate",
+            "5",
+        ],
     ] {
         assert!(
             app::root(&api).try_get_matches_from(&args).is_err(),
             "{args:?} should not parse"
         );
     }
+}
+
+/// The rates an operator may type are on the help page, because the same code
+/// that refuses `5` writes that line.
+#[test]
+fn the_help_of_a_numeric_enum_lists_its_values() {
+    let api = api();
+    let page = app::root(&api)
+        .try_get_matches_from(["toy", "raw", "ledger", "entries", "--help"])
+        .expect_err("--help stops the parse")
+        .to_string();
+    assert!(
+        page.contains("VAT rate in percent (one of 0, 7, 19)"),
+        "{page}"
+    );
+    assert!(
+        app::root(&api)
+            .try_get_matches_from([
+                "toy",
+                "raw",
+                "ledger",
+                "entries",
+                "--account",
+                "4400",
+                "--amount",
+                "12.50",
+                "--vat-rate",
+                "19",
+            ])
+            .is_ok()
+    );
 }
 
 /// A directory of this test binary's own, without taking a dependency for it.

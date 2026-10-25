@@ -29,15 +29,15 @@ use openapiv3::{
 use thiserror::Error;
 
 use super::{
-    Body, COMMIT, Document, Effect, Field, Gate, Join, Location, Operation, Param, Place, SPENT,
-    Shape, Unmet, Unsupported, first_collision, gate_on_read, spends, spends_command, unmet,
+    Body, COMMIT, Document, Effect, Field, Gate, Join, List, Location, Operation, Param, Place,
+    SPENT, Shape, Unmet, Unsupported, first_collision, gate_on_read, spends, spends_command, unmet,
 };
 use crate::markers::{COMMAND, GATES, GROUP, REQUIRES, WRITES};
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
 use crate::openapi::Misfit;
 use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
-use crate::scalar::Scalar;
+use crate::scalar::{Items, Scalar};
 use crate::schema::{
     RefError, description_of, format_of, is_json, is_media_type, is_multipart, resolve,
     resolve_schema, scalar_of, template,
@@ -1566,9 +1566,9 @@ fn shape_of(
     // whichever schema describes the value is the one everything about that
     // value is read off — so a list's rules and its declared kind are its
     // items', which is where a list of days says that a day is what it holds.
-    let (value, repeats) = match under(items_of(schema, components), op, &data.name)? {
-        Some(items) => (Cow::Owned(items), true),
-        None => (Cow::Borrowed(schema), false),
+    let (value, rules) = match under(items_of(schema, components), op, &data.name)? {
+        Some((items, rules)) => (Cow::Owned(items), Some(rules)),
+        None => (Cow::Borrowed(schema), None),
     };
     let Some(scalar) = under(scalar_of(&value, components), op, &data.name)? else {
         return Ok(Shape::Unreachable(Unsupported::Structured));
@@ -1607,7 +1607,7 @@ fn shape_of(
             .map_err(|clash| clashed(&clash, op, "parameter", &data.name))?,
         location,
         scalar,
-        join: repeats.then_some(join),
+        list: rules.map(|items| List { join, items }),
         format: under(format_of(&value, components), op, &data.name)?,
     })
 }
@@ -1658,20 +1658,29 @@ fn query_join(style: &QueryStyle, explode: Option<bool>) -> Result<Join, &'stati
 }
 
 /// The schema a `type: array` parameter's values are described by, when the
-/// document says what its items are.
+/// document says what its items are, and what the array states about the values
+/// taken together.
 ///
 /// Everything a list parameter's values are — the rules they are held to and
-/// the kind the document calls them — is stated here rather than on the array,
-/// which only says how many of them there are.
+/// the kind the document calls them — is stated by the items rather than on the
+/// array, which only says how many of them there are and whether they differ.
 fn items_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
-) -> Result<Option<ReferenceOr<Schema>>, RefError> {
+) -> Result<Option<(ReferenceOr<Schema>, Items)>, RefError> {
     let schema = resolve_schema(schema, components)?;
     let SchemaKind::Type(openapiv3::Type::Array(array)) = &schema.schema_kind else {
         return Ok(None);
     };
-    Ok(array.items.clone().map(ReferenceOr::unbox))
+    let rules = Items {
+        min: array.min_items,
+        max: array.max_items,
+        unique: array.unique_items,
+    };
+    Ok(array
+        .items
+        .clone()
+        .map(|items| (ReferenceOr::unbox(items), rules)))
 }
 
 impl Body {

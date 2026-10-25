@@ -119,6 +119,14 @@ fn bad_value() -> ValueError {
         .expect_err("`s3cr3t-value` is not an integer")
 }
 
+/// A list parameter that takes each value once, given a value twice.
+fn bad_list() -> ValueError {
+    let list = "{ name: n, in: query, schema: { type: array, uniqueItems: true, items: { type: integer } } }";
+    let doc = Document::load(&document(URL, list), &[]).expect("a document");
+    let op = doc.get("listThings").expect("the one operation");
+    Invocation::new(op, Values::new().each("n", [7, 7])).expect_err("`7` is given twice")
+}
+
 /// A verb of the adopter's own that declares `--n` with a parser that stores an
 /// `i64`, where `values` reads a `String` whatever type the document gives `n`.
 fn flag_type() -> ArgError {
@@ -283,6 +291,9 @@ fn requesting() -> Vec<Case> {
     vec![
         from_input("ValueError::BadValue", bad_value(), |e| {
             matches!(e, ValueError::BadValue { .. })
+        }),
+        from_input("ValueError::BadList", bad_list(), |e| {
+            matches!(e, ValueError::BadList { .. })
         }),
         case(
             "PlanError::Request",

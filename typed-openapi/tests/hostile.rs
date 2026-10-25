@@ -563,7 +563,7 @@ fn a_body_stated_inline_keeps_every_rule_its_refs_carry() {
     );
 
     assert!(
-        long_help(&op).contains("matches ^0[1-9][0-9]?$"),
+        long_help(&op).contains("a match for ^0[1-9][0-9]?$"),
         "the `pattern` the `$ref` leads to is the rule the flag is held to:\n{}",
         long_help(&op)
     );

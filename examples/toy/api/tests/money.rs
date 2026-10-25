@@ -94,7 +94,7 @@ fn money_reads_exactly_what_the_documents_pattern_admits() {
     let rule = rule();
     // A rule that says nothing would make every row below pass on both sides.
     assert!(
-        rule.note().is_some_and(|note| note.contains("matches")),
+        rule.note().is_some_and(|note| note.contains("a match for")),
         "`--total` carries no `pattern`, so this test can no longer tell the \
          two apart: the document has stopped stating what an amount is"
     );

@@ -242,6 +242,13 @@ paths:
                   description: Decimal amount as a string
                 memo:
                   $ref: "#/components/schemas/Memo"
+                vatRate:
+                  type: integer
+                  enum:
+                  - 0
+                  - 7
+                  - 19
+                  description: VAT rate in percent
       responses:
         "201":
           description: Created

@@ -2524,7 +2524,7 @@ fn a_flat_body_stated_inline_still_grows_a_flag_per_field() {
         panic!("a body of scalars is taken apart into flags");
     };
     let named: Vec<&str> = fields.iter().map(typed_openapi::Field::name).collect();
-    assert_eq!(named, ["account", "amount", "memo"]);
+    assert_eq!(named, ["account", "amount", "memo", "vatRate"]);
 }
 
 /// Three schemas that differ in what they say about further properties, and an

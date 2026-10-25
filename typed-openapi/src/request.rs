@@ -94,6 +94,20 @@ pub enum ValueError {
         #[source]
         source: ScalarError,
     },
+    /// The values given for a list parameter, taken together, that the parameter's
+    /// array schema refuses: too few, too many, or one value twice. The cause
+    /// says which rule, in the document's own numbers, and the values as they
+    /// were given.
+    #[error("{op}: `{name}` was given a list the document refuses")]
+    BadList {
+        /// The `operationId` of the operation the values were checked against.
+        op: String,
+        /// The parameter, as the document spells it on the wire.
+        name: String,
+        /// The rule of the parameter's array schema that the list broke.
+        #[source]
+        source: ScalarError,
+    },
     /// A path parameter whose value is empty, `.` or `..`. A server reads such
     /// a segment as a step along the path and not as a name, and a client may
     /// drop it before it sends, so the request would reach another resource than
@@ -385,6 +399,9 @@ impl<'a> Invocation<'a> {
                     given,
                 });
             }
+            if given > 0 {
+                listed(op, param, &values)?;
+            }
             if given > 0
                 && let Some(requires) = param
                     .requires()
@@ -587,7 +604,7 @@ impl<'a> Invocation<'a> {
         let mut out: Vec<Sent<'_>> = Vec::new();
         for (name, value) in &self.params {
             let Some(Shape::Flag {
-                location: at, join, ..
+                location: at, list, ..
             }) = self.op.param(name).map(Param::shape)
             else {
                 continue;
@@ -599,7 +616,7 @@ impl<'a> Invocation<'a> {
                 Some(sent) => sent.values.push(value),
                 None => out.push(Sent {
                     name,
-                    join: *join,
+                    join: list.map(|list| list.join),
                     values: vec![value],
                 }),
             }
@@ -646,6 +663,33 @@ fn rendered(op: &Operation, values: &Values) -> Result<Vec<(String, String)>, Va
         }
     }
     Ok(params)
+}
+
+/// Hold the values given for a list parameter to what the document states about
+/// the list. Every value has met its own rules before this runs, so this is the
+/// only place that asks the rules which no one value can break.
+fn listed(op: &Operation, param: &Param, values: &Values) -> Result<(), ValueError> {
+    let Shape::Flag {
+        scalar,
+        list: Some(list),
+        ..
+    } = param.shape()
+    else {
+        return Ok(());
+    };
+    let raws: Vec<&str> = values
+        .params()
+        .iter()
+        .filter(|(wire, _)| wire == param.name())
+        .map(|(_, raw)| raw.as_str())
+        .collect();
+    list.items
+        .check(scalar, &raws)
+        .map_err(|source| ValueError::BadList {
+            op: op.id().to_owned(),
+            name: param.name().to_owned(),
+            source,
+        })
 }
 
 /// Does the body the caller brought match the body the operation asks for?

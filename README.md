@@ -52,12 +52,13 @@ the same regex engine, so they cannot disagree about what a value is either:
 
 ```console
 $ toy vouchers create --total 1,50 --currency EUR --status open
-error: invalid value '1,50' for '--total <STRING>': `1,50` does not match ^-?[0-9]+(\.[0-9]{1,2})?$
+error: invalid value '1,50' for '--total <STRING>': `1,50` is not a match for ^-?[0-9]+(\.[0-9]{1,2})?$
 ```
 
 Every rule the document states about a value is enforced, in the document's own
-numbers — `pattern`, the lengths, the bounds, `multipleOf` — on both roads. What
-that costs is a fifth of the binary: [docs/validation.md][val].
+numbers — `pattern`, the lengths, the bounds, `multipleOf`, an `enum` of numbers
+or booleans, and a list's `minItems`, `maxItems` and `uniqueItems` — on both
+roads. What that costs is a fifth of the binary: [docs/validation.md][val].
 
 ## The gate
 

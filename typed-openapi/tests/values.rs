@@ -1413,7 +1413,7 @@ fn a_field_the_verb_read_with_no_rule_is_refused_with_the_documents_rule() {
     );
     assert_eq!(
         error.source().map(ToString::to_string).as_deref(),
-        Some(r"`1,50` does not match ^-?[0-9]+(\.[0-9]{1,2})?$")
+        Some(r"`1,50` is not a match for ^-?[0-9]+(\.[0-9]{1,2})?$")
     );
 }
 

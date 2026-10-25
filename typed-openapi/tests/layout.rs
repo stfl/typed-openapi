@@ -140,13 +140,13 @@ fn arguments(scalar: &Scalar) {
         Scalar::Number(bounds) => {
             let _: &Bounds<f64> = bounds;
         }
-        Scalar::Text(_) | Scalar::Boolean | Scalar::Choice(_) => {}
+        Scalar::Text(_) | Scalar::Boolean(_) | Scalar::Choice(_) => {}
     }
 }
 
 /// The layout of the model, as this build has it.
 fn traced() -> Description {
-    arguments(&Scalar::Boolean);
+    arguments(&Scalar::Boolean(None));
     Description {
         model_layout: Document::MODEL_LAYOUT,
         traces: BTreeMap::from([
