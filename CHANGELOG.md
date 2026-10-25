@@ -318,9 +318,10 @@ the crate follows [Semantic Versioning][semver].
   - a gate in `x-cli-gates` (`GateName`). Repair: write the gate with an ASCII
     word in `x-cli-gates`, in an Overlay that removes the list and writes it
     again, because an `update` appends to a list;
-  - a required parameter (`Parameter`). Repair: drop its `required` in an
-    Overlay, where the parameter is not in the path; the message says which
-    repair loads;
+  - a required parameter (`Parameter`). Repair: for a parameter that is not in
+    the path, drop its `required` in an Overlay. For a path parameter, rename it
+    and its variable in the path together, in an Overlay that moves the path
+    item. The message says which repair loads;
   - the word of `Loading::commit` and `Settings::commit_word`
     (`ConfirmationError::Spelling`). Repair: an ASCII word.
 
@@ -461,13 +462,18 @@ the crate follows [Semantic Versioning][semver].
   that typed `--param-ref` loses the flag.
 - **`LoadError::Parameter` says where the parameter is, and names a repair that
   loads.** The message named "correct the parameter in an Overlay, or drop its
-  `required`" for every refusal, but a path parameter that is not `required` is
-  refused too (`OptionalPathParameter`), so for a path parameter the second half
-  was no repair. The variant has a new field, `place: Place`, so a pattern on it
+  `required`" for every refusal. `OptionalPathParameter` (below) refuses a path
+  parameter that is not `required`, so the message names dropping `required` only
+  off the path. The variant has a new field, `place: Place`, so a pattern on it
   with no `..` stops compiling; `LoadError` is `#[non_exhaustive]`, which does
   not cover a field. The message now names:
   - for a parameter off the path, to correct it or to drop its `required`;
-  - for a path parameter, to correct it;
+  - for a path parameter, to correct it. For one whose name has no spelling it
+    names a rename of the parameter and its variable in the path together, in an
+    Overlay that writes the path item again under the new path and removes the
+    old one, because the template names the parameter and no `update` of the
+    parameter alone loads. The request is the same, because the name of a path
+    parameter never goes on the wire;
   - for a name that another parameter has, to remove that parameter, and for a
     parameter off the path whose namesake is a path parameter, to drop its
     `required`, because the template needs the namesake.

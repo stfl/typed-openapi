@@ -404,6 +404,35 @@ getVoucher: `/vouchers/{id}` has the variable `{id}`, and the operation declares
         - { name: id, in: path, required: true, schema: { type: string } }
 ```
 
+A path parameter whose name has no spelling as a flag, such as `straße`. A path
+parameter is `required`, so there is nothing to drop, and the template names it,
+so an `update` of the parameter alone leaves the parameter and its variable with
+two names. The name of a path parameter never goes on the wire, only its value in
+place of the variable, so the parameter and its variable are renamed together,
+and the request does not change. No action renames a key, so one action writes
+the path item again under the new path and another removes the old one:
+
+```
+getThing: parameter `straße` is named with a character outside ASCII, or in a way that does not kebab-case into [a-z0-9-], and the document requires it; rename the parameter and its variable in the path together, in an Overlay that writes the path item again under the new path and removes the old one
+```
+
+```yaml
+  - target: $.paths
+    description: The path item again, under the name that has a spelling.
+    update:
+      /things/{strasse}:
+        get:
+          operationId: getThing
+          parameters:
+            - { name: strasse, in: path, required: true, schema: { type: string } }
+          responses:
+            "200": { description: OK }
+
+  - target: "$.paths['/things/{straße}']"
+    description: Remove the path item under the old name.
+    remove: true
+```
+
 A content type that is not one. A media type is `type/subtype`, so a body
 declared under the bare key `form-data` names none, and there is nothing to
 send that body under. `typed-openapi` refuses the document while it reduces it

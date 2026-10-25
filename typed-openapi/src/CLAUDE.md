@@ -365,17 +365,27 @@ document, and both would contradict spec F-10 ("the one the document lists
 later"). The values under a name are the first parameter's, so
 `Invocation::new` counts the given values of a parameter with a flag only. The
 generator reads the same list: `entry_of_flag` finds the entry that a flag was
-read from by its name and place in what `declared` returns, so a wrapper's
-argument is typed by the entry that won, inline or by a `$ref`, and the
-generator keeps no second copy of the merge.
+read from in what `declared` returns, which is the first entry with the flag's
+name, because the first entry keeps the name and no later one has a flag. So a
+wrapper's argument is typed by the entry that won, inline or by a `$ref`, and
+the generator keeps no second copy of the merge.
 
 `LoadError::Parameter` says where the refused parameter is (`place`), because
-the repair depends on it. `repair` names only a repair that loads: a path
-parameter that is not `required` is refused (`OptionalPathParameter`), so
-dropping the `required` of one is never named; a namesake is mended by removing
-the other parameter, unless the other is a path parameter, which the template
-needs. Each row has a test in `tests/wire.rs` that loads the document with the
-Overlay the words name, and a new reason adds a row.
+the repair depends on it. `repair` names a repair that loads the document when
+the parameter is the one fault in it. A document with more faults is refused for
+one at a time, and each repair ends its own refusal and brings back none that an
+earlier repair ended. A path parameter that is not `required` is refused
+(`OptionalPathParameter`), so dropping the `required` of one is never named. A
+path parameter whose name has no spelling is renamed together with its
+variable, because the template names it and no `update` of the parameter alone
+loads; no Overlay action renames a key, so the Overlay writes the path item
+again under the new path and removes the old one, and the request is the same,
+because the name of a path parameter never goes on the wire. A namesake is
+mended by removing the other parameter, unless the refused parameter is off the
+path and the other is a path parameter, which the template needs: the refused
+one drops its `required`. Each repair that `repair` names has a test in
+`tests/wire.rs` that loads the document with the Overlay the words name, and a
+new reason or place adds one.
 
 `reconcile` holds the path template to the path parameters, and refuses a
 variable with no path parameter, a path parameter with no variable and a path

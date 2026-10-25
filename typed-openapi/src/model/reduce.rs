@@ -459,10 +459,16 @@ pub enum LoadError {
     /// subcommand that is guaranteed to build a request the server refuses.
     ///
     /// The repair is an Overlay, and which one depends on where the parameter
-    /// is. A parameter that is not in the path can drop its `required`. A path
-    /// parameter cannot, because [`LoadError::OptionalPathParameter`] refuses it
-    /// then. A name that another parameter has is mended by removing that
-    /// parameter, which gives this one its flag.
+    /// is and why it has no flag. A parameter that is not in the path can drop
+    /// its `required`. A path parameter cannot, because
+    /// [`LoadError::OptionalPathParameter`] refuses it then, so its shape is
+    /// corrected, and a name with no spelling is renamed together with its
+    /// variable in the path: an Overlay moves the path item to the new path, and
+    /// the request is the same, because the name of a path parameter never goes
+    /// on the wire. A name that another parameter has is mended by removing that
+    /// parameter, which gives this one its flag. The exception is a parameter
+    /// off the path whose namesake is a path parameter: the template needs the
+    /// namesake, so this one drops its `required`.
     #[error(
         "{op}: parameter `{name}` is {why}, and the document requires it; {}",
         repair(*.place, .name, .why)
@@ -556,31 +562,50 @@ pub enum LoadError {
 }
 
 /// The repair that [`LoadError::Parameter`] names, and only a repair that loads
-/// the document.
+/// the document when the parameter is the one fault in it. A document with more
+/// than one fault is refused for one at a time, and each repair ends its own
+/// refusal without bringing back one that an earlier repair ended.
 ///
-/// Dropping `required` mends a parameter off the path only: for a path
-/// parameter it gives [`LoadError::OptionalPathParameter`]. A name that another
-/// parameter has is mended by removing that parameter, which is also the one
-/// repair that gives this one its flag. The exception is a path parameter as the
-/// namesake: the template names it, and without it the document is refused for
-/// the variable ([`LoadError::UnboundVariable`]).
+/// One arm for each case of the place and the reason:
+/// - Dropping `required` mends a parameter off the path only: for a path
+///   parameter it gives [`LoadError::OptionalPathParameter`].
+/// - A path parameter whose name has no spelling is renamed together with its
+///   variable, because the template names it and no correction of the parameter
+///   alone loads. No Overlay action renames a key, so the path item is written
+///   again under the new path and the old one is removed.
+/// - A name that another parameter has is mended by removing that parameter,
+///   which is also the one repair that gives this one its flag. The exception is
+///   a parameter off the path whose namesake is a path parameter: the template
+///   names the namesake, and without it the document is refused for the
+///   variable ([`LoadError::UnboundVariable`]).
 fn repair(place: Place, name: &str, why: &Unsupported) -> String {
-    let off_the_path = place != Place::Path;
-    let mend = match why {
-        Unsupported::Shared(Place::Path) if off_the_path => None,
-        Unsupported::Shared(other) => Some(format!(
-            "remove the `{other}` parameter `{name}` in an Overlay"
-        )),
-        Unsupported::Cookie
-        | Unsupported::Encoded
-        | Unsupported::Structured
-        | Unsupported::Style(_)
-        | Unsupported::Unspellable => Some("correct the parameter in an Overlay".to_owned()),
-    };
-    match (mend, off_the_path) {
-        (Some(mend), true) => format!("{mend}, or drop its `required`"),
-        (Some(mend), false) => mend,
-        (None, _) => "drop its `required` in an Overlay".to_owned(),
+    match (place, why) {
+        (Place::Path, Unsupported::Shared(other)) => {
+            format!("remove the `{other}` parameter `{name}` in an Overlay")
+        }
+        (Place::Path, Unsupported::Unspellable) => "rename the parameter and its variable in the \
+             path together, in an Overlay that writes the path item again under the new path and \
+             removes the old one"
+            .to_owned(),
+        (
+            Place::Path,
+            Unsupported::Cookie
+            | Unsupported::Encoded
+            | Unsupported::Structured
+            | Unsupported::Style(_),
+        ) => "correct the parameter in an Overlay".to_owned(),
+        (_, Unsupported::Shared(Place::Path)) => "drop its `required` in an Overlay".to_owned(),
+        (_, Unsupported::Shared(other)) => {
+            format!("remove the `{other}` parameter `{name}` in an Overlay, or drop its `required`")
+        }
+        (
+            _,
+            Unsupported::Cookie
+            | Unsupported::Encoded
+            | Unsupported::Structured
+            | Unsupported::Style(_)
+            | Unsupported::Unspellable,
+        ) => "correct the parameter in an Overlay, or drop its `required`".to_owned(),
     }
 }
 
@@ -1032,18 +1057,18 @@ pub(crate) fn declared<'d>(
         .collect())
 }
 
-/// The entry of `declared` that a flag was read from: the one with the flag's
-/// name that goes where the flag's value goes.
+/// The entry of `declared` that the flag of this name was read from: the first
+/// entry with the name.
+///
+/// The first entry keeps the name even when it has no flag itself, and every
+/// later entry with the name has none (`namesake`), so a flag is always the
+/// first entry's and the place of the flag needs no asking.
 #[cfg(feature = "generate")]
-pub(crate) fn entry_of_flag<'d>(
-    declared: &[&'d Parameter],
-    name: &str,
-    location: Location,
-) -> Option<&'d Parameter> {
-    declared.iter().copied().find(|param| {
-        param.parameter_data_ref().name == name
-            && sent_in(param).is_some_and(|(sent, _)| sent == location)
-    })
+pub(crate) fn entry_of_flag<'d>(declared: &[&'d Parameter], name: &str) -> Option<&'d Parameter> {
+    declared
+        .iter()
+        .copied()
+        .find(|param| param.parameter_data_ref().name == name)
 }
 
 /// The variables of a path template, in the order the path writes them. A `{`

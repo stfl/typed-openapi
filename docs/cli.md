@@ -336,8 +336,8 @@ ASCII, such as `straße`, has no spelling either: it is not kebab-cased to
 
 The parameters of an operation are one list. It holds the path item's
 parameters in the order the path item lists them, with a parameter of the
-operation that has the name and the place of one of them in that one's place,
-and then the operation's other parameters in the order the operation lists them.
+operation that has the name and the place of one of them in its slot, and then
+the operation's other parameters in the order the operation lists them.
 A path-level `id` that an operation overrides is one `--id`, held to the rules
 the operation's entry states, and it keeps its place in the wrapper's arguments
 and on the help page.
@@ -348,15 +348,9 @@ by its name alone, on the command line and in the typed wrapper alike, so of
 two parameters with one name the one that comes first in the list has the flag
 and the one that comes later has none.
 
-That rule has two costs. A required path parameter that comes after its
-namesake refuses the document, because it is required and has no flag. And a
-parameter that can have no flag, an `in: cookie` or a `content` one, still holds
-its name, so a later query or header parameter with that name has none either.
-The repair of both is an Overlay that removes the namesake that comes first.
-
-None of them refuses the document. The parameter stays in the reduction, the
-subcommand grows nothing for it, and its long help carries a line of its own
-below the method, the path and the `operationId`:
+A parameter with no flag does not refuse the document. The parameter stays in
+the reduction, the subcommand grows nothing for it, and its long help carries a
+line of its own below the method, the path and the `operationId`:
 
 ```
 `filter` has no flag: it is neither a value nor a list of values. The request
@@ -372,12 +366,25 @@ naming the parameter, the reason and where it is when the document is read, and
 an [Overlay](overlay.md) is the way out. The error names a repair that loads:
 
 - Off the path, correct the parameter or drop its `required`.
-- A path parameter is always required (see below), so only the correction is
-  named for one.
+- A path parameter is always required (see below), so its `required` is never
+  named, and the correction is. A name with no spelling, such as `straße`, is
+  corrected by renaming the parameter and its variable in the path together,
+  because the template names the parameter: an Overlay writes the path item again
+  under the new path and removes the old one, and
+  [docs/overlay.md](overlay.md#1-plain-corrections) shows the actions. The name
+  of a path parameter never goes on the wire, only its value in place of the
+  variable, so the request does not change.
 - A name that another parameter has is mended by removing that parameter from
   wherever the document declares it, which also gives this one its flag. When
   the other is a path parameter the template needs it, so a required query or
   header parameter with that name can only drop its `required`.
+
+The rule for a shared name has two costs. A required path parameter that comes
+after its namesake refuses the document, because it is required and has no flag.
+And a parameter that can have no flag, an `in: cookie` or a `content` one, still
+holds its name, so a later query or header parameter with that name has none
+either. The repair of both is an Overlay that removes the namesake that comes
+first.
 
 An object is refused a spelling rather than given a guessed one. OpenAPI says
 how a *flat* object serialises under `deepObject` and says nothing about a

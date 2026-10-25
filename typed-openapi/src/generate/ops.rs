@@ -21,7 +21,7 @@ use syn::visit_mut::VisitMut as _;
 
 use super::GenerateError;
 use super::names::{JsonBody, Names, Site};
-use crate::model::{Body, Location, Shape, declared, entry_of_flag};
+use crate::model::{Body, Shape, declared, entry_of_flag};
 use crate::{Document, Operation};
 
 /// What one operation contributes to the generated file.
@@ -108,8 +108,8 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
             // fail.
             let emitted = || {
                 // The parameters as the reduction read them, so that a wrapper's
-                // argument is typed by the entry that won and not by one that a
-                // path-level or operation-level entry replaced.
+                // argument is typed by the entry that won and not by the path
+                // item's entry that the operation's entry replaced.
                 let declared = declared(path_item, operation, components).map_err(|source| {
                     unsupported(format!("a parameter cannot be followed: {source}"))
                 })?;
@@ -601,8 +601,8 @@ fn add_param(
     declared: &[&Parameter],
     names: &Names,
 ) -> Result<(), GenerateError> {
-    let (join, location) = match param.shape() {
-        Shape::Flag { join, location, .. } => (join, *location),
+    let join = match param.shape() {
+        Shape::Flag { join, .. } => join,
         Shape::Unreachable(why) => {
             out.notes.push(format!(
                 "The document's `{}` parameter is not an argument: it is {why}. \
@@ -624,7 +624,7 @@ fn add_param(
         &word,
         &format!("sends the document's `{}`", param.name()),
     );
-    let schema = param_schema(declared, param.name(), location)?;
+    let schema = param_schema(declared, param.name())?;
     let wire = param.name();
     if join.is_some() {
         // A list parameter is the wire name given once per value, which is the
@@ -658,9 +658,8 @@ fn multipart_note(parts: &Ident, names: &[String]) -> String {
 fn param_schema<'d>(
     declared: &[&'d Parameter],
     name: &str,
-    location: Location,
 ) -> Result<&'d ReferenceOr<Schema>, GenerateError> {
-    let entry = entry_of_flag(declared, name, location)
+    let entry = entry_of_flag(declared, name)
         .ok_or_else(|| unsupported(format!("`{name}` is not declared on this operation")))?;
     let openapiv3::ParameterSchemaOrContent::Schema(schema) = &entry.parameter_data_ref().format
     else {
