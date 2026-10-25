@@ -80,6 +80,16 @@ with a character outside ASCII, such as the `ä` of `/kontakte/änderungen`,
 gives the operation no name, and the document is refused until a marker names
 it.
 
+So does a name that clap has spent. clap declares a `help` subcommand on the tree
+and on every group, so a group or a command that comes out as `help` is two
+subcommands with one spelling. A path such as `/help/articles` is refused, and
+so is `/articles/help`, with the `operationId` and the marker that mends it
+(`x-cli-group` or `x-cli-command`) in the message:
+
+```
+listHelpArticles: the group `help` is a subcommand that clap declares itself; name it with `x-cli-group` in an Overlay
+```
+
 ## Mounting the tree
 
 Where you hang the tree is yours.
@@ -393,8 +403,11 @@ $ toy raw vouchers update --help
 ```
 
 Each subcommand's namespace starts with `json-body`, `json-body-template`,
-`raw-body`, `file` and `field` already spent, so a document that names a field
-`raw-body` gets `--body-raw-body` instead of colliding at startup.
+`raw-body`, `file`, `field` and `help` already spent, so a document that names a
+field `raw-body` gets `--body-raw-body` instead of colliding at startup, and a
+parameter or a property that the vendor calls `help` gets `--param-help` or
+`--body-help`. `--help` stays clap's, and the request still carries the vendor's
+word.
 [`src/names.rs`](../typed-openapi/src/names.rs) holds the rule: a name still
 taken after the first prefix gains a counter, `body-id`, `body-id-3`. A global
 flag the surrounding CLI adds — `toy`'s `--base-url`, for instance — is not in
@@ -454,7 +467,10 @@ something other than what a confirmed run sends.
 Which operations write is the document's answer, not a guess from the method: a
 safe method is a read unless the operation carries `x-cli-writes: true`, and
 everything else is a write. The marker can only add writes, never remove them,
-so the gate is default-closed. `renderVoucher` is a `GET` that stores a PDF,
+so the gate is default-closed. It is the boolean `true` or it is not there:
+`"true"`, `yes`, `1`, `[true]` and `false` are each a `LoadError`, because the
+one reading left for them is no marker at all, and that sends a writing `GET` on
+sight. `renderVoucher` is a `GET` that stores a PDF,
 and it is gated:
 
 ```console
@@ -504,7 +520,9 @@ safe method is a `LoadError` at bless time, because a request that is sent on
 sight has nothing for a gate to hold.
 
 What a word means is yours. `typed-openapi` carries it, offers it and demands
-it, and never reads anything into it.
+it, and never reads anything into it. A gate named `help`, or like one of the
+flags above, is a `LoadError`: `--help` is the flag somebody types to read, and
+it must never answer the word that stands in front of a write.
 
 ```console
 $ toy raw vouchers enshrine --help

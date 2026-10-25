@@ -269,7 +269,7 @@ fn listed(nodes: &[Phantom]) -> String {
 /// One step of the way down to a node, kept as it was taken rather than as a
 /// rendered string, so that a path is spelled once — where a finding lands.
 #[derive(Debug, Clone, Copy)]
-enum Step<'d> {
+pub(crate) enum Step<'d> {
     Key(&'d str),
     Index(usize),
 }
@@ -690,7 +690,7 @@ fn pointed_at<'d>(doc: &'d Value, reference: &str) -> Option<&'d Value> {
 /// A bare word is written after a dot and everything else is quoted in
 /// brackets, which is how a key with a `/` in it — every path, and every media
 /// type — comes back as something an adopter can paste.
-fn spelled(at: &[Step<'_>]) -> String {
+pub(crate) fn spelled(at: &[Step<'_>]) -> String {
     let mut out = String::from("$");
     for step in at {
         match *step {

@@ -26,8 +26,15 @@ field spelled like one refuses the load — `GateTakenByName`, `CommitTakenByNam
 and go on the wire; a confirmation answerable by a flag somebody typed for
 another reason is not a confirmation. Each word moves on the side that owns it:
 a gate in the adopter's `x-cli-gates`, the confirmation through
-`Loading::commit` or `Settings::commit_word`. The five body flags in `TRANSPORT`
-are not consent and still yield, to `--body-<name>`.
+`Loading::commit` or `Settings::commit_word`. `help` and the five body flags in
+`TRANSPORT` are not consent and still yield, to `--param-<name>` or
+`--body-<name>`. They are spent in every `Namespace`, and a gate or the
+confirmation that wears one of the six is refused (`ReservedGate`,
+`ConfirmationError::Taken`): `--help` is typed to read a page, and a word that
+`--help` answers is a write that somebody sent by asking for help. A group or a
+command called `help` is refused for the same collision with clap's own
+subcommand (`LoadError::NameSpent`), and `x-cli-group` or `x-cli-command` is the
+repair.
 
 The confirmation is guarded on writes only, because only a write declares it,
 and a gate on a read is refused while the document is reduced: a request sent on
@@ -52,6 +59,32 @@ out, and they are read in the same place the rule runs. Whether a path
 addresses one resource, which makes a `GET` a `get` and not a `list`, is read
 from the segments below the group only: a template above the group names a
 value the caller supplies for every operation under it.
+
+**This crate owns the `x-cli-` prefix, and a marker is read where it stands or
+the load is refused.** `src/markers.rs` holds the five keys, the places each is
+read, and the scan that `Document::load_with` runs on the overlaid document
+before the object model reads it, because the model drops a key beside a `$ref`
+without a word. The four on an operation are read on a method of a path item
+under `paths`, and `x-cli-requires` on a parameter that is not a `$ref`: a path
+item's, an operation's, or one under `components.parameters`. An `x-cli-` key
+that nothing reads is `UnknownMarker`, one that stands where nothing reads it is
+`MisplacedMarker`, and each names the key and the node that holds it, spelled as
+an Overlay names a target. A new key joins `READ` and the place table in the same
+change. The value of a marker is judged where it is read (`named`, `listed`,
+`requires_of` and `effect_of` in `src/model/reduce.rs`), and `x-cli-writes` is
+the boolean `true` or it is `Writes`: the marker adds a write and never removes
+one, so `false` says something it cannot do.
+
+A scan that refuses a name is wrong in the other direction. A property, a
+component, a media type and a response header may be spelled `x-cli-writes`, and
+so may a value under an `example`, a `default`, an `enum`, a `const`, the `value`
+of an Example Object or an extension of the vendor's own. The scan knows which
+keys lead to a map of names somebody chose and reads no key of the map, and it
+reads nothing under data; the Paths Object and the Responses Object, which a
+vendor also extends, are the two maps whose `x-…` keys it does read. A place that
+the scan takes for a name or for data and the specification gives fixed fields is
+a marker missed, never a document wrongly refused, and a place added to the
+tables is added with a row in the tests of `src/markers.rs`.
 
 **Corrections are an ordered list of Overlays, and the library reads nothing
 into it.** `Settings::overlay` and `Document::load` take layers and apply them
@@ -530,14 +563,14 @@ and then the names two operations share. An operation is asked whole before the
 next one, and the names two operations share after every operation. The error
 names the operation, or both of two, except for the document's own confirmation
 word, which has none. Each rule is asked in one place that the load and the check
-share: `spends`, `gate_on_read`, `first_collision`, `Effect::of_method` and
-`unmet` in `src/model.rs`, because `reduce` is behind the `document` feature and
+share: `spends`, `spends_command`, `gate_on_read`, `first_collision`,
+`Effect::of_method` and `unmet` in `src/model.rs`, because `reduce` is behind the `document` feature and
 `blob` is not, and `names::is_spelled`. `first_collision` makes one pass over the
 operations, because the check runs at every start-up of a shipped binary and the
-number of operations is the document's. `spends_command` is beside them and only
-the check asks it: the load accepts a group or a command called `help`.
-`check_requires` matches `Unmet` with no `_` arm, so a new way for a `requires`
-to fail stops compiling until the decode names it.
+number of operations is the document's. `spends_command` is beside them, and
+`placement` in `src/model/reduce.rs` asks it of the group and the command, as
+`check_names` does. `check_requires` matches `Unmet` with no `_` arm, so a new
+way for a `requires` to fail stops compiling until the decode names it.
 
 The flags of an operation share one namespace: the confirmation word of a write,
 the gates, the parameters that have a flag and the properties of a body, with
@@ -578,8 +611,12 @@ all. Three rules are repeated whatever their breaks, because F-70, the finding
 that asked for the check, names them: the confirmation word, which is the
 validation of `Loading::commit`, the spelling of each flag, and each `requires`.
 The spelling of a flag and the confirmation word of a write have breaks inside
-the line (a word with a leading `-` makes a debug build panic), and no break of
-the document's own confirmation word or of a `requires` is. A slice that adds a
+the line (a word with a leading `-` makes a debug build panic), and so has a
+`requires` that names its own parameter (`RequiresItself`: clap refuses an
+argument that requires itself). The other two breaks of a `requires`, a name the
+operation does not declare and one that has no flag, cost the run only, because
+`companion_flags` in `src/tree.rs` leaves them out of the command. No break of
+the document's own confirmation word is inside the line. A slice that adds a
 refusal at load asks whether a value in the blob can break it, reads what a
 binary does with the blob that does, and adds the check when the answer is
 inside the line.

@@ -554,10 +554,10 @@ fn a_flag_declared_twice_is_refused_and_names_the_operation_and_the_flag() {
 }
 
 /// The words every subcommand declares before the document has a say: the five
-/// flags that carry a body, which the reduction moves a document name aside
-/// from, and `--help`, which clap declares and a load does not guard. They are
-/// written out here, because a constant that changed would change the test with
-/// it.
+/// flags that carry a body and `--help`, which clap declares. The reduction
+/// moves a parameter or a property aside from each of the six and refuses a gate
+/// or a confirmation that wears one. They are written out here, because a
+/// constant that changed would change the test with it.
 const SPENT: [&str; 6] = [
     "help",
     "json-body",
@@ -1048,6 +1048,29 @@ fn a_requirement_on_a_parameter_the_operation_does_not_declare_is_refused() {
         "{error:?}"
     );
     assert!(error.to_string().contains("getVoucher"), "{error}");
+}
+
+/// A parameter that requires itself asks for nothing, and clap refuses an
+/// argument that requires itself, so the tree of a debug build panics.
+#[test]
+fn a_parameter_that_requires_itself_is_refused() {
+    let edit: Edit = |value| {
+        parameter(operation(value, "getVoucher"), "id")["requires"] = json!(["id"]);
+    };
+    assert!(clap_panics(&forged(edit)), "the tree panics");
+
+    let error = refusal(&blob_edited(edit));
+    assert!(
+        matches!(
+            &error,
+            DocumentError::RequiresItself { op, name } if op == "getVoucher" && name == "id"
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "getVoucher: `id` requires itself; run the bless step again"
+    );
 }
 
 /// Gives `listVouchers` a cookie parameter `session`, which has no flag, and

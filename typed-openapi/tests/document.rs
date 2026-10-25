@@ -15,7 +15,9 @@
 )]
 
 use std::error::Error;
+use std::fmt::Write as _;
 
+use http::Method;
 use typed_openapi::model::Body;
 use typed_openapi::request::ValueError;
 use typed_openapi::scalar::ScalarError;
@@ -855,7 +857,7 @@ fn a_parameter_that_requires_another_is_refused_without_it() {
 /// that refuses every run giving it.
 #[test]
 fn a_requirement_no_request_could_meet_is_refused_while_the_document_is_reduced() {
-    let refused = |parameters: &str| {
+    let refusal = |parameters: &str| {
         Document::load(
             &synthetic(&format!(
                 "  /positions:\n\
@@ -867,8 +869,8 @@ fn a_requirement_no_request_could_meet_is_refused_while_the_document_is_reduced(
             &[],
         )
         .expect_err("the document asks for a companion nothing can supply")
-        .to_string()
     };
+    let refused = |parameters: &str| refusal(parameters).to_string();
 
     assert_eq!(
         refused(
@@ -891,6 +893,23 @@ fn a_requirement_no_request_could_meet_is_refused_while_the_document_is_reduced(
              \x20       - { name: 'voucher[objectName]', in: query, schema: { type: string } }\n"
         ),
         "listPositions: `x-cli-requires` on `voucher[id]` is not a list of parameter names"
+    );
+
+    // A parameter that lists itself asks for nothing, and clap refuses an
+    // argument that requires itself (F-34).
+    let itself = refusal(
+        "\x20       - { name: a, in: query, schema: { type: string }, x-cli-requires: [a, b] }\n\
+         \x20       - { name: b, in: query, schema: { type: string }, x-cli-requires: [a] }\n",
+    );
+    assert!(
+        matches!(&itself, LoadError::RequiresItself { op, name }
+            if op == "listPositions" && name == "a"),
+        "{itself:?}"
+    );
+    assert_eq!(
+        itself.to_string(),
+        "listPositions: `a` lists itself in `x-cli-requires`; \
+         list only the other parameters it needs"
     );
 }
 
@@ -1797,11 +1816,7 @@ fn synthetic(paths: &str) -> String {
 
 /// What the tree calls every operation, in document order.
 fn placements(document: &str) -> Vec<String> {
-    Document::load(document, &[])
-        .expect("a document")
-        .iter()
-        .map(|op| format!("{} {}", op.group(), op.command()))
-        .collect()
+    placements_of(&Document::load(document, &[]).expect("a document"))
 }
 
 /// A segment every path shares tells nothing apart, so it is not the group: a
@@ -2186,4 +2201,659 @@ fn an_override_that_is_not_spellable_names_itself() {
         cause(&error),
         "the x-cli-group `???` does not kebab-case into [a-z0-9-]"
     );
+}
+
+/// The parameter half of the rule a body field keeps. A parameter spelled like a
+/// gate is refused as a property is, by the same variant and with the same way
+/// out. The refusal is on the flag, so a parameter the document spells in
+/// another case wants the same `--enshrine`.
+#[test]
+fn a_parameter_that_collides_with_a_gate_refuses_the_document() {
+    for spelling in ["enshrine", "Enshrine"] {
+        let error = Document::load(
+            &synthetic(&format!(
+                "  /vouchers/{{id}}/enshrine:\n\
+                 \x20   post:\n\
+                 \x20     operationId: enshrineVoucher\n\
+                 \x20     x-cli-gates: [enshrine]\n\
+                 \x20     parameters:\n\
+                 \x20       - {{ name: {spelling}, in: query, schema: {{ type: string }} }}\n\
+                 \x20     responses: {{ \"200\": {{ description: OK }} }}\n"
+            )),
+            &[],
+        )
+        .expect_err("the parameter and the gate both want --enshrine");
+
+        assert!(
+            matches!(&error, LoadError::GateTakenByName { op, what: "parameter", name, gate }
+                if op == "enshrineVoucher" && name == spelling && gate == "enshrine"),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "enshrineVoucher: the parameter `{spelling}` and the gate `enshrine` both want \
+                 `--enshrine`; rename the gate in `x-cli-gates`, to `gate-enshrine` or another word"
+            )
+        );
+    }
+}
+
+/// The same for the confirmation, whose word is the one the document is loaded
+/// with: a parameter that wants the default word and one that wants the word an
+/// adopter chose are both refused, and each message names the word in question.
+#[test]
+fn a_parameter_that_collides_with_the_confirmation_refuses_the_document() {
+    for word in ["commit", "yes"] {
+        let error = Document::load_with(
+            &synthetic(&format!(
+                "  /vouchers/{{id}}:\n\
+                 \x20   put:\n\
+                 \x20     operationId: updateVoucher\n\
+                 \x20     parameters:\n\
+                 \x20       - {{ name: {word}, in: query, schema: {{ type: string }} }}\n\
+                 \x20     responses: {{ \"200\": {{ description: OK }} }}\n"
+            )),
+            &[],
+            &Loading::new()
+                .commit(word)
+                .expect("a word nobody else spends"),
+        )
+        .expect_err("the parameter and the confirmation both want the word");
+
+        assert!(
+            matches!(&error, LoadError::CommitTakenByName { op, what: "parameter", name, commit }
+                if op == "updateVoucher" && name == word && commit == word),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "updateVoucher: the parameter `{word}` and the confirmation both want \
+                 `--{word}`; confirm with another word — `Loading::commit`, or \
+                 `Settings::commit_word` where a bless step generates"
+            )
+        );
+    }
+}
+
+/// `--help` is the flag somebody types to read, so a word that carried consent
+/// and was spelled `help` would be answered by a person who asked for a help
+/// page. The gate is refused as the body flags are, and for the same reason.
+#[test]
+fn a_gate_named_help_is_refused_as_a_flag_every_subcommand_spends() {
+    for gate in ["help", "Help"] {
+        let error = Document::load(
+            &synthetic(&format!(
+                "  /g:\n\
+                 \x20   post:\n\
+                 \x20     operationId: gateHelp\n\
+                 \x20     x-cli-gates: [{gate}]\n\
+                 \x20     responses: {{ \"200\": {{ description: ok }} }}\n"
+            )),
+            &[],
+        )
+        .expect_err("`--help` is clap's");
+
+        assert!(
+            matches!(&error, LoadError::ReservedGate { op, gate }
+                if op == "gateHelp" && gate.as_str() == "help"),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "gateHelp: the gate `help` is one of the flags every subcommand already spends"
+        );
+    }
+}
+
+/// A write and a read, each with a parameter the vendor spells `help`, and the
+/// write with a property of that name too.
+const SPELLS_HELP: &str = "  /notes:\n\
+     \x20   post:\n\
+     \x20     operationId: addNote\n\
+     \x20     parameters:\n\
+     \x20       - { name: help, in: query, schema: { type: string } }\n\
+     \x20     requestBody:\n\
+     \x20       content:\n\
+     \x20         application/json:\n\
+     \x20           schema:\n\
+     \x20             type: object\n\
+     \x20             properties:\n\
+     \x20               help: { type: string }\n\
+     \x20               note: { type: string }\n\
+     \x20     responses: { \"200\": { description: OK } }\n\
+     \x20 /search:\n\
+     \x20   get:\n\
+     \x20     operationId: search\n\
+     \x20     parameters:\n\
+     \x20       - { name: help, in: query, schema: { type: string } }\n\
+     \x20     responses: { \"200\": { description: OK } }\n";
+
+/// A parameter or a property that the vendor spells `help` is data, and data
+/// moves aside for the flag clap writes itself, as it does for the flags that
+/// carry a body.
+#[test]
+fn a_parameter_or_a_property_spelled_help_moves_aside_for_the_help_flag() {
+    let doc = Document::load(&synthetic(SPELLS_HELP), &[])
+        .expect("a name that wants `--help` moves aside, and the document loads");
+    let flag_of = |id: &str| match doc
+        .get(id)
+        .and_then(|op| op.param("help"))
+        .map(Param::shape)
+    {
+        Some(Shape::Flag { flag, .. }) => flag.clone(),
+        other => panic!("`{id}` takes `help` as a flag: {other:?}"),
+    };
+    assert_eq!(flag_of("addNote"), "param-help");
+    assert_eq!(flag_of("search"), "param-help", "a read moves it aside too");
+
+    let fields = doc.get("addNote").expect("the document describes it");
+    let flags: Vec<(&str, &str, bool)> = fields
+        .body()
+        .fields()
+        .iter()
+        .map(|field| (field.name(), field.flag(), field.renamed()))
+        .collect();
+    assert_eq!(
+        flags,
+        [("help", "body-help", true), ("note", "note", false)],
+        "the property moves and says so; a name nobody spends keeps its flag"
+    );
+}
+
+/// What moved is still what the vendor calls it: the request carries `help`, and
+/// the help page keeps clap's own flag beside the one that moved and names the
+/// wire name the moved one sends.
+#[test]
+fn the_flag_that_moved_aside_from_help_still_sends_the_vendors_word() {
+    let doc = Document::load(&synthetic(SPELLS_HELP), &[]).expect("a document");
+    let search = doc.get("search").expect("the document describes it");
+
+    let request = Invocation::new(search, Values::new().param("help", "x"))
+        .expect("the value satisfies the operation")
+        .request(doc.base())
+        .expect("a request");
+    assert_eq!(request.uri().query(), Some("help=x"));
+
+    for op in &doc {
+        let mut command = tree::command(op);
+        command.clone().debug_assert();
+        let long = command.render_long_help().to_string();
+        assert!(long.contains("--param-help"), "{long}");
+        assert!(long.contains("(sends `help`)"), "{long}");
+        assert!(long.contains("-h, --help"), "clap's own flag stays: {long}");
+    }
+}
+
+/// A path whose first segment is `help`: the group would be `help`.
+const HELP_GROUP: &str = "  /help/articles:\n\
+     \x20   get:\n\
+     \x20     operationId: listHelpArticles\n\
+     \x20     responses: { \"200\": { description: OK } }\n\
+     \x20 /things:\n\
+     \x20   get:\n\
+     \x20     operationId: listThings\n\
+     \x20     responses: { \"200\": { description: OK } }\n";
+
+/// A path whose last literal segment is `help`: the command would be `help`.
+const HELP_COMMAND: &str = "  /articles:\n\
+     \x20   get:\n\
+     \x20     operationId: listArticles\n\
+     \x20     responses: { \"200\": { description: OK } }\n\
+     \x20 /articles/help:\n\
+     \x20   get:\n\
+     \x20     operationId: showHelp\n\
+     \x20     responses: { \"200\": { description: OK } }\n";
+
+/// Two subcommands of one name are one too many, and clap's `help` is spent
+/// before the document is read. An operation whose group or command comes out as
+/// `help` is refused by name, with the marker that mends it.
+#[test]
+fn a_group_or_a_command_named_help_is_refused_by_name() {
+    let group = Document::load(&synthetic(HELP_GROUP), &[]).expect_err("a group named `help`");
+    assert!(
+        matches!(&group, LoadError::NameSpent { op, what: "group", name }
+            if op == "listHelpArticles" && name == "help"),
+        "{group:?}"
+    );
+    assert_eq!(
+        group.to_string(),
+        "listHelpArticles: the group `help` is a subcommand that clap declares itself; \
+         name it with `x-cli-group` in an Overlay"
+    );
+
+    let command =
+        Document::load(&synthetic(HELP_COMMAND), &[]).expect_err("a command named `help`");
+    assert!(
+        matches!(&command, LoadError::NameSpent { op, what: "command", name }
+            if op == "showHelp" && name == "help"),
+        "{command:?}"
+    );
+    assert_eq!(
+        command.to_string(),
+        "showHelp: the command `help` is a subcommand that clap declares itself; \
+         name it with `x-cli-command` in an Overlay"
+    );
+
+    // A marker that says `help` is the same two subcommands with one spelling.
+    let marked = Document::load(
+        &synthetic(&HELP_COMMAND.replace(
+            "operationId: listArticles",
+            "operationId: listArticles\n      x-cli-group: help",
+        )),
+        &[],
+    )
+    .expect_err("the marker names the group `help`");
+    assert!(
+        matches!(&marked, LoadError::NameSpent { op, what: "group", .. } if op == "listArticles"),
+        "{marked:?}"
+    );
+}
+
+/// The marker is the repair, written the way the message says: in an Overlay.
+/// The tree it makes is one clap accepts.
+#[test]
+fn the_marker_a_refusal_of_help_names_mends_the_document() {
+    let overlay = |target: &str, marker: &str| {
+        format!(
+            "overlay: 1.1.0\n\
+             info: {{ title: cli, version: \"1\" }}\n\
+             actions:\n\
+             \x20 - target: {target}\n\
+             \x20   update:\n\
+             \x20     {marker}\n"
+        )
+    };
+    let regrouped = Document::load(
+        &synthetic(HELP_GROUP),
+        &[&overlay(
+            "$.paths['/help/articles'].get",
+            "x-cli-group: topics",
+        )],
+    )
+    .expect("the marker names the group");
+    let renamed = Document::load(
+        &synthetic(HELP_COMMAND),
+        &[&overlay(
+            "$.paths['/articles/help'].get",
+            "x-cli-command: topic",
+        )],
+    )
+    .expect("the marker names the command");
+
+    assert_eq!(
+        placements_of(&regrouped),
+        ["topics articles", "things list"]
+    );
+    assert_eq!(placements_of(&renamed), ["articles list", "articles topic"]);
+    for doc in [&regrouped, &renamed] {
+        clap::Command::new("probe")
+            .subcommands(tree::commands(doc))
+            .debug_assert();
+    }
+}
+
+/// What the tree calls every operation of a loaded document, in order.
+fn placements_of(doc: &Document) -> Vec<String> {
+    doc.iter()
+        .map(|op| format!("{} {}", op.group(), op.command()))
+        .collect()
+}
+
+/// The method of the path item decides the effect, one arm to a method. A
+/// method that fell through to `GET` would be a read sent on sight, so each of
+/// the eight is held to the method it names and to the verdict it is owed.
+#[test]
+fn each_method_a_path_item_names_is_that_method_and_only_the_safe_ones_read() {
+    let methods = [
+        ("get", Method::GET, Effect::Read),
+        ("put", Method::PUT, Effect::Write),
+        ("post", Method::POST, Effect::Write),
+        ("delete", Method::DELETE, Effect::Write),
+        ("options", Method::OPTIONS, Effect::Read),
+        ("head", Method::HEAD, Effect::Read),
+        ("patch", Method::PATCH, Effect::Write),
+        ("trace", Method::TRACE, Effect::Read),
+    ];
+    let mut paths = String::from("  /things:\n");
+    for (name, _, _) in &methods {
+        write!(
+            paths,
+            "    {name}:\n\
+             \x20     operationId: {name}Things\n\
+             \x20     responses: {{ \"200\": {{ description: OK }} }}\n"
+        )
+        .expect("a string takes text");
+    }
+    let doc = Document::load(&synthetic(&paths), &[]).expect("a path item with every method");
+
+    for (name, method, effect) in methods {
+        let op = doc
+            .get(&format!("{name}Things"))
+            .expect("the document describes it");
+        assert_eq!(op.method(), method, "{name}");
+        assert_eq!(op.effect(), effect, "{name}");
+    }
+}
+
+/// `x-cli-writes` is the one marker that can only add: it is the boolean `true`
+/// or it is not there. Every other reading of it is no marker at all, which
+/// sends a writing `GET` on sight, so each one is refused by name.
+#[test]
+fn an_x_cli_writes_that_is_not_the_boolean_true_is_refused() {
+    let load = |method: &str, marker: &str| {
+        Document::load(
+            &synthetic(&format!(
+                "  /render/{{id}}:\n\
+                 \x20   {method}:\n\
+                 \x20     operationId: renderIt\n\
+                 \x20     x-cli-writes: {marker}\n\
+                 \x20     responses: {{ \"200\": {{ description: ok }} }}\n"
+            )),
+            &[],
+        )
+    };
+
+    // The spellings of the probe, and the two that say "no write".
+    for marker in ["\"true\"", "yes", "1", "[true]", "false", "null"] {
+        let error = load("get", marker).expect_err(marker);
+        assert!(
+            matches!(&error, LoadError::Writes { op } if op == "renderIt"),
+            "{marker}: {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "renderIt: `x-cli-writes` is not the boolean `true`; \
+             it marks a write, so write `true` or leave the marker out",
+            "{marker}"
+        );
+    }
+    // A method that writes is held to it as well: the marker cannot take a
+    // write back, and does not pretend to.
+    let error = load("post", "false").expect_err("`false` on a POST");
+    assert!(
+        matches!(&error, LoadError::Writes { op } if op == "renderIt"),
+        "{error:?}"
+    );
+
+    // `true` is the marker, and what it marks is a write.
+    let doc = load("get", "true").expect("the boolean is the marker");
+    let render = doc.get("renderIt").expect("the document describes it");
+    assert_eq!(render.effect(), Effect::Write);
+}
+
+/// A `GET` that writes, with a marker `KEY: VALUE` on the path item and
+/// another on the operation, to be filled in by the test.
+const RENDER: &str = "  /render/{id}:\n\
+     \x20   PATH_ITEM\n\
+     \x20   get:\n\
+     \x20     operationId: renderIt\n\
+     \x20     parameters:\n\
+     \x20       - { name: id, in: path, required: true, schema: { type: string }, PARAMETER }\n\
+     \x20     OPERATION\n\
+     \x20     responses: { \"200\": { description: ok } }\n";
+
+/// A document of `RENDER` with the three slots filled in: markers, or a vendor
+/// extension that nothing reads.
+fn render_with(path_item: &str, parameter: &str, operation: &str) -> LoadError {
+    let filled = RENDER
+        .replace("PATH_ITEM", path_item)
+        .replace("PARAMETER", parameter)
+        .replace("OPERATION", operation);
+    Document::load(&synthetic(&filled), &[]).expect_err(&filled)
+}
+
+/// An `x-cli-` key that this crate reads, standing where it does not read it,
+/// is a gate the adopter wrote and the CLI does not have. The refusal names the
+/// key and the node that holds it, spelled as an Overlay names a target.
+#[test]
+fn an_x_cli_key_on_a_path_item_is_refused_by_key_and_place() {
+    // Both keys of the probe's `pathitem.yaml`: the first one the document lists
+    // is the one named.
+    let error = render_with(
+        "x-cli-writes: true\n    x-cli-gates: [render]",
+        "x-p: 1",
+        "x-o: 1",
+    );
+    assert!(
+        matches!(&error, LoadError::MisplacedMarker { key, at }
+            if key == "x-cli-writes" && at == "$.paths['/render/{id}']"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "`x-cli-writes` stands on `$.paths['/render/{id}']`, where this crate does not \
+         read it; it reads that key on an operation"
+    );
+
+    for key in [
+        "x-cli-gates: [render]",
+        "x-cli-group: g",
+        "x-cli-command: c",
+    ] {
+        let error = render_with(key, "x-p: 1", "x-o: 1");
+        assert!(
+            matches!(&error, LoadError::MisplacedMarker { key: found, at }
+                if key.starts_with(found.as_str()) && at == "$.paths['/render/{id}']"),
+            "{key}: {error:?}"
+        );
+    }
+}
+
+/// `x-cli-requires` is read on a parameter and the other four on an operation, so
+/// each is refused on the other's node, and a gate on a parameter is read by
+/// nothing.
+#[test]
+fn an_x_cli_key_on_the_wrong_kind_of_node_is_refused_by_key_and_place() {
+    let on_operation = render_with("x-p: 1", "x-q: 1", "x-cli-requires: [other]");
+    assert!(
+        matches!(&on_operation, LoadError::MisplacedMarker { key, at }
+            if key == "x-cli-requires" && at == "$.paths['/render/{id}'].get"),
+        "{on_operation:?}"
+    );
+    assert_eq!(
+        on_operation.to_string(),
+        "`x-cli-requires` stands on `$.paths['/render/{id}'].get`, where this crate does \
+         not read it; it reads `x-cli-requires` on a parameter, and not beside a `$ref`"
+    );
+
+    let on_parameter = render_with("x-p: 1", "x-cli-gates: [render]", "x-o: 1");
+    assert!(
+        matches!(&on_parameter, LoadError::MisplacedMarker { key, at }
+            if key == "x-cli-gates" && at == "$.paths['/render/{id}'].get.parameters[0]"),
+        "{on_parameter:?}"
+    );
+}
+
+/// A parameter that is a `$ref`, with a slot beside the reference and a slot on
+/// the component it names, to be filled in by the test.
+const REFERRING: &str = "  /a:\n\
+     \x20   get:\n\
+     \x20     operationId: a\n\
+     \x20     parameters:\n\
+     \x20       - $ref: '#/components/parameters/Id'\n\
+     \x20         BESIDE\n\
+     \x20       - { name: 'voucher[objectName]', in: query, schema: { type: string } }\n\
+     \x20     responses: { \"200\": { description: OK } }\n\
+     components:\n\
+     \x20 parameters:\n\
+     \x20   Id: { name: 'voucher[id]', in: query, schema: { type: string }ON_COMPONENT }\n";
+
+/// A `$ref` is read instead of the node it stands in, and the model drops
+/// whatever stands beside it. A requirement written there is a requirement the
+/// parameter does not have, and the document is refused for it.
+#[test]
+fn an_x_cli_requires_beside_a_ref_is_refused() {
+    let requires = "x-cli-requires: ['voucher[objectName]']";
+    let beside = REFERRING
+        .replace("BESIDE", requires)
+        .replace("ON_COMPONENT", "");
+
+    let error = Document::load(&synthetic(&beside), &[]).expect_err("beside a `$ref`");
+    assert!(
+        matches!(&error, LoadError::MisplacedMarker { key, at }
+            if key == "x-cli-requires" && at == "$.paths['/a'].get.parameters[0]"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "`x-cli-requires` stands on `$.paths['/a'].get.parameters[0]`, where this crate does \
+         not read it; it reads `x-cli-requires` on a parameter, and not beside a `$ref`"
+    );
+}
+
+/// Where the parameter is, the requirement is read: on the component the
+/// reference names, which every use of it gets.
+#[test]
+fn an_x_cli_requires_on_the_component_a_ref_names_is_read() {
+    let on_component = REFERRING
+        .replace("BESIDE", "x-vendor: 1")
+        .replace("ON_COMPONENT", ", x-cli-requires: ['voucher[objectName]']");
+
+    let doc =
+        Document::load(&synthetic(&on_component), &[]).expect("the marker stands on the component");
+    let read = doc.get("a").and_then(|op| op.param("voucher[id]"));
+    assert_eq!(
+        read.expect("the reference resolves").requires(),
+        ["voucher[objectName]"]
+    );
+}
+
+/// This crate owns the prefix. A key under it that nothing reads is a typo of
+/// one of the five, or an extension that belongs under another prefix, and the
+/// refusal names the key and says which.
+#[test]
+fn an_x_cli_key_this_crate_has_no_reading_for_is_refused_by_key_and_place() {
+    let typo = render_with("x-p: 1", "x-q: 1", "x-cli-write: true");
+    assert!(
+        matches!(&typo, LoadError::UnknownMarker { key, at }
+            if key == "x-cli-write" && at == "$.paths['/render/{id}'].get"),
+        "{typo:?}"
+    );
+    assert_eq!(
+        typo.to_string(),
+        "`x-cli-write` stands on `$.paths['/render/{id}'].get`, \
+         and this crate reads no such key; it owns the `x-cli-` prefix and reads \
+         `x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes` and \
+         `x-cli-requires`; spell the key as one of them, or give an extension of \
+         your own another prefix"
+    );
+
+    // The same key on the other nodes of the document, and beside the five.
+    let gate = render_with(
+        "x-p: 1",
+        "x-q: 1",
+        "x-cli-writes: true\n      x-cli-gate: [render]",
+    );
+    assert!(
+        matches!(&gate, LoadError::UnknownMarker { key, .. } if key == "x-cli-gate"),
+        "{gate:?}"
+    );
+    let on_parameter = render_with("x-p: 1", "x-cli-note: 1", "x-o: 1");
+    assert!(
+        matches!(&on_parameter, LoadError::UnknownMarker { key, at }
+            if key == "x-cli-note" && at == "$.paths['/render/{id}'].get.parameters[0]"),
+        "{on_parameter:?}"
+    );
+}
+
+/// The prefix is owned in the parts of the document that carry no operation too:
+/// a schema, and the document itself.
+#[test]
+fn an_x_cli_key_in_a_schema_or_at_the_root_is_refused_by_key_and_place() {
+    let load = |tail: &str| {
+        let document = format!("{}{tail}", synthetic(""));
+        Document::load(&document, &[]).expect_err(tail)
+    };
+
+    let schema =
+        load("components:\n  schemas:\n    Voucher:\n      type: object\n      x-cli-note: 1\n");
+    assert!(
+        matches!(&schema, LoadError::UnknownMarker { key, at }
+            if key == "x-cli-note" && at == "$.components.schemas.Voucher"),
+        "{schema:?}"
+    );
+    let root = load("x-cli-note: 1\n");
+    assert!(
+        matches!(&root, LoadError::UnknownMarker { key, at } if key == "x-cli-note" && at == "$"),
+        "{root:?}"
+    );
+}
+
+/// Position is what tells a marker from a name or from data. The same spelling
+/// is a property, a component, a media type, a response header, a value of the
+/// vendor's own and an example, and none of them is a marker, so none of them
+/// is refused. A vendor's extension under a prefix of its own is the vendor's.
+#[test]
+fn an_x_cli_spelling_that_is_a_name_or_data_is_no_marker() {
+    let doc = Document::load(
+        &synthetic(
+            "  /vouchers:\n\
+             \x20   x-total: { x-cli-writes: yes }\n\
+             \x20   get:\n\
+             \x20     operationId: listVouchers\n\
+             \x20     x-vendor: { x-cli-gates: [a] }\n\
+             \x20     responses:\n\
+             \x20       \"200\":\n\
+             \x20         description: OK\n\
+             \x20         headers:\n\
+             \x20           x-cli-writes: { schema: { type: string } }\n\
+             \x20         content:\n\
+             \x20           x-cli-writes/v1:\n\
+             \x20             schema:\n\
+             \x20               $ref: '#/components/schemas/x-cli-writes'\n\
+             \x20             example: { x-cli-writes: yes, x-cli-other: 1 }\n\
+             components:\n\
+             \x20 schemas:\n\
+             \x20   x-cli-writes:\n\
+             \x20     type: object\n\
+             \x20     default: { x-cli-writes: no }\n\
+             \x20     properties:\n\
+             \x20       x-cli-writes: { type: boolean }\n\
+             \x20       properties: { type: object, properties: { x-cli-gates: { type: string } } }\n\
+             \x20 responses:\n\
+             \x20   x-cli-writes: { description: a response of that name }\n",
+        ),
+        &[],
+    )
+    .expect("a name, an example and a vendor's own JSON are not markers");
+
+    let listing = doc.get("listVouchers").expect("the document describes it");
+    assert_eq!(listing.effect(), Effect::Read, "and nothing changed");
+}
+
+/// `x-cli-requires` is read on every parameter a request is built from: a path
+/// item's, an operation's, and one a `$ref` takes from the components. Each is
+/// a place the marker is allowed, and each is read.
+#[test]
+fn x_cli_requires_is_read_on_each_parameter_a_request_is_built_from() {
+    let doc = Document::load(
+        &synthetic(
+            "  /positions:\n\
+             \x20   parameters:\n\
+             \x20     - { name: a, in: query, schema: { type: string }, x-cli-requires: [b] }\n\
+             \x20     - { name: b, in: query, schema: { type: string } }\n\
+             \x20   get:\n\
+             \x20     operationId: listPositions\n\
+             \x20     parameters:\n\
+             \x20       - { name: c, in: query, schema: { type: string }, x-cli-requires: [b] }\n\
+             \x20       - $ref: '#/components/parameters/D'\n\
+             \x20     responses: { \"200\": { description: OK } }\n\
+             components:\n\
+             \x20 parameters:\n\
+             \x20   D: { name: d, in: query, schema: { type: string }, x-cli-requires: [b] }\n",
+        ),
+        &[],
+    )
+    .expect("every marker stands where it is read");
+
+    let op = doc.get("listPositions").expect("the document describes it");
+    for name in ["a", "c", "d"] {
+        assert_eq!(
+            op.param(name).expect("the parameter is there").requires(),
+            ["b"],
+            "{name}"
+        );
+    }
 }

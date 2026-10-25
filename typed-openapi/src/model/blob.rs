@@ -211,6 +211,10 @@ impl Operation {
     fn check_requires(&self) -> Result<(), DocumentError> {
         match unmet(&self.params) {
             None => Ok(()),
+            Some(Unmet::Itself { name }) => Err(DocumentError::RequiresItself {
+                op: self.id.clone(),
+                name: name.to_owned(),
+            }),
             Some(Unmet::Unknown { name, requires }) => Err(DocumentError::RequiresUnknown {
                 op: self.id.clone(),
                 name: name.to_owned(),

@@ -61,6 +61,8 @@
 pub mod tree;
 
 #[cfg(feature = "document")]
+mod markers;
+#[cfg(feature = "document")]
 mod openapi;
 #[cfg(feature = "document")]
 pub mod overlay;

@@ -35,20 +35,20 @@ the crate follows [Semantic Versioning][semver].
   declarations that take one flag (any two of a parameter, a body property, a
   gate and, on a write, the confirmation word, and a gate named twice), a gate
   on a read, a method that writes held as a read, a group or a command called
-  `help`, and a `requires` that names a parameter the operation does not declare
-  or one that has no flag. It refuses two operations under one
-  `<group> <command>`. A blob like that used to decode. In a debug build of the
-  binary, clap panicked at start-up on a flag declared twice, on a flag or a
-  confirmation word that begins with `-`, on `help` or a body flag that the
-  subcommand declares already, on two operations under one name and on a group
-  or command called `help`; in a release build one declaration took the place of
-  the other. A write held as a read, a `GET` that names a gate among them, was
+  `help`, and a `requires` that names its own parameter, a parameter the
+  operation does not declare or one that has no flag. It refuses two operations
+  under one `<group> <command>`. A blob like that used to decode. In a debug
+  build of the binary, clap panicked at start-up on a flag declared twice, on a
+  flag or a confirmation word that begins with `-`, on `help` or a body flag
+  that the subcommand declares already, on two operations under one name, on a
+  group or command called `help` and on a parameter that requires itself; in a
+  release build one declaration took the place of the other. A write held as a read, a `GET` that names a gate among them, was
   sent without `--commit`. The other refusals stopped no build.
-  Eleven variants carry these refusals: `DocumentError::{Confirmation,
+  Twelve variants carry these refusals: `DocumentError::{Confirmation,
   OperationConfirmation, Flag, FlagSpent, FlagTwice, GatedRead, WriteAsRead,
-  NameSpent, DuplicateCommand, RequiresUnknown, RequiresUnreachable}`. Nine name
-  the operation, `DuplicateCommand` names both of two, and `Confirmation` names
-  the document's confirmation word. Repair: run the bless step again. A blob that
+  NameSpent, DuplicateCommand, RequiresItself, RequiresUnknown,
+  RequiresUnreachable}`. Ten name the operation, `DuplicateCommand` names both
+  of two, and `Confirmation` names the document's confirmation word. Repair: run the bless step again. A blob that
   a load wrote never meets them. Only `from_blob` applies these rules; a
   `Document` read through `Deserialize` in another format is not held to them.
 - **`OverlayError::Shape`.** An Overlay that is YAML or JSON and has the wrong
@@ -327,6 +327,52 @@ the crate follows [Semantic Versioning][semver].
   which sends the whole body through `--json-body`. No Overlay gives such a
   parameter its flag back, because its name is the name on the wire. A script
   that typed `--stra-e` no longer finds the flag.
+- **A gate, a group or a command named `help` is refused.** clap declares
+  `--help` on every subcommand and a `help` subcommand on every group, and
+  nothing can move either. `x-cli-gates: [help]` loaded, and in a release build
+  `--help` answered the gate: `create --commit --help` sent the write and
+  `create --help` printed a dry run in place of a help page. A path such as
+  `/help/articles` or `/articles/help` loaded and mounted a subcommand that
+  clap's own shadows, and a debug build panicked at start-up. The gate is
+  `LoadError::ReservedGate`, as for the flags that carry a body. The group or
+  the command is the new `LoadError::NameSpent { op, what, name }`, whose
+  `what` is `group` or `command` and whose message names the marker that mends
+  it. `LoadError` is `#[non_exhaustive]`, so a new variant is no break. Repair:
+  rename the gate in `x-cli-gates`, and name the group or the command with
+  `x-cli-group` or `x-cli-command` in an Overlay.
+- **A parameter or a property named `help` moves to `--param-help` or
+  `--body-help`.** It took `--help`: a debug build panicked at start-up, and a
+  release build lost the subcommand's help page. `help` is spent in every
+  subcommand beside the five flags that carry a body, so the parameter or the
+  property moves aside as a field named `raw-body` does, the flag says which wire
+  name it carries, and the request still sends `help`. The flag that moved is
+  in the model blob, so a bless step writes `param-help` where it wrote `help`.
+  Repair: run the bless step again, and type `--param-help` where a script typed
+  `--help` for that parameter.
+- **An `x-cli-writes` that is not the boolean `true` is refused.**
+  `LoadError::Writes { op }`. `"true"`, `yes`, `1`, `[true]` and `false` each
+  read as no marker, so a `GET` the document meant to gate was sent on sight, in
+  silence. The marker adds a write and never removes one, so `false` is refused
+  too, and `null` with it. Repair: write `true`, or remove the marker.
+- **An `x-cli-` key that this crate reads nowhere, or reads where it does not
+  stand, is refused.** This crate owns the prefix. `x-cli-command`,
+  `x-cli-gates`, `x-cli-group` and `x-cli-writes` are read on an operation, a
+  method of a path item under `paths`, and `x-cli-requires` on a parameter that
+  is not a `$ref`. Every other key under the prefix is
+  `LoadError::UnknownMarker { key, at }`, and a key of the five anywhere else is
+  `LoadError::MisplacedMarker { key, at }`, among them `x-cli-writes` on a path
+  item, `x-cli-requires` on an operation and `x-cli-requires` beside a `$ref`.
+  `at` is the node that holds the key, spelled as an Overlay names a target, such
+  as `$.paths['/vouchers/{id}/render']`. Each used to load and read as no
+  marker, so a typo such as `x-cli-write: true` left a writing `GET` sent on
+  sight. A name or a value spelled like a marker, such as a property called
+  `x-cli-writes` or an `example` that holds one, is not a marker and is not
+  read. Repair: spell the key as one of the five, move it to where it is read,
+  or give an extension of your own another prefix.
+- **An `x-cli-requires` that names its own parameter is refused.**
+  `LoadError::RequiresItself { op, name }`. It loaded, and a debug build of the
+  binary panicked at start-up, because clap does not let an argument require
+  itself. Repair: list only the other parameters the parameter needs.
 - **`GET /{tenant}/vouchers` is `vouchers list`.** Whether a path addresses one
   resource is read from the segments below the group, as `docs/cli.md` says, and
   not from a template above it. A `GET` with a template above the group and none

@@ -10,8 +10,9 @@
 # document has written by accident: schema names that differ only in case,
 # parameters named after Rust keywords, one wire name in two places, a property
 # whose name has no letters in it, a description whose list markers Markdown
-# reads as code, a body that is an array, a body with no properties, and five
-# parameters this crate cannot spell. The vocabulary is deliberately nothing
+# reads as code, a body that is an array, a body with no properties, five
+# parameters this crate cannot spell, and three spellings of `help`, which is
+# clap's before it is anyone's. The vocabulary is deliberately nothing
 # this repository uses anywhere else, because half of what is being tested is
 # whether a name survives the trip from the document to a flag and to Rust.
 #
@@ -77,6 +78,12 @@ paths:
           schema:
             type: integer
             format: sagger-count
+        # A parameter that wants the flag clap writes itself. `--help` stays
+        # clap's and the parameter moves aside to `--param-help`; the wire still
+        # carries `help`.
+        - name: help
+          in: query
+          schema: { type: string }
       responses:
         "200":
           description: OK
@@ -106,6 +113,9 @@ paths:
                 bare_cone:
                   type: string
                   format: cone-number
+                # The same word as a property: `--body-help`.
+                help:
+                  type: string
       responses:
         "201":
           description: Created
@@ -238,6 +248,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/glaze_recipe'
+  # A path whose first segment is clap's own subcommand. Left alone it names the
+  # group `help` and the document is refused; the marker is the repair, the line
+  # an Overlay writes, and it stands here so that the tree mounts.
+  /help/kiln-notes:
+    get:
+      operationId: listKilnNotes
+      summary: List the notes pinned to the kiln
+      x-cli-group: kiln-help
+      responses:
+        "200":
+          description: OK
 components:
   schemas:
     # Three names in three casings that do not reduce to one Rust type, which is

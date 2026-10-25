@@ -82,17 +82,22 @@ pub(crate) const TRANSPORT: [&str; 5] = [
 ];
 
 /// `--help`, which clap declares on every subcommand whether or not anyone
-/// asked. Nothing here can move it, so it is a name the confirmation may not
-/// take.
-const HELP: &str = "help";
+/// asked, beside the five flags in [`TRANSPORT`].
+///
+/// A parameter or a body field that wants it moves aside, as it does for those
+/// five. A gate or the confirmation that wants it is refused: `--help` is a
+/// flag that somebody types to read, so a word that answers it would be
+/// answered by a person who asked for no more than a help page.
+pub(crate) const HELP: &str = "help";
 
 /// Whether a word is one that no flag of a subcommand may take: the five flags
 /// that carry a body, and `--help`.
 ///
 /// clap declares `--help` on every subcommand, and the tree declares each body
-/// flag on the subcommands whose body takes it. None of them can move, so the
-/// confirmation is what gives way when it wants one. The reduction refuses such
-/// a word and a decoded blob is refused for holding one, and both ask here.
+/// flag on the subcommands whose body takes it. None of them can move, so a
+/// gate or the confirmation is refused when it wants one, and a parameter or a
+/// property moves aside. The reduction asks here for the first, a decoded blob
+/// is refused for holding any of them, and both ask here.
 pub(crate) fn spends(word: &str) -> bool {
     TRANSPORT.contains(&word) || word == HELP
 }
@@ -101,7 +106,9 @@ pub(crate) fn spends(word: &str) -> bool {
 /// that has subcommands.
 ///
 /// Nothing can move it, so a group or a command that wears the name is two
-/// subcommands with one spelling. A decoded blob is refused for holding one.
+/// subcommands with one spelling. The reduction refuses a document that places
+/// an operation under one, and a decoded blob is refused for holding one, and
+/// both ask here.
 pub(crate) fn spends_command(name: &str) -> bool {
     name == HELP
 }
@@ -682,10 +689,11 @@ pub enum DocumentError {
         /// The method of the operation, as the blob spells it.
         method: String,
     },
-    /// A group or a command is named `help`. clap declares a `help` subcommand
-    /// on every command that has subcommands, so a debug build of the binary
-    /// panics when it builds the command tree, and a release build lets one
-    /// take the place of the other.
+    /// A group or a command is named `help`. A load refuses a document that
+    /// places an operation under one. clap declares a `help` subcommand on every
+    /// command that has subcommands, so a debug build of the binary panics when
+    /// it builds the command tree, and a release build lets one take the place
+    /// of the other.
     #[error(
         "{op}: the {what} `{name}` is a subcommand that clap declares itself; \
          run the bless step again"
@@ -714,6 +722,16 @@ pub enum DocumentError {
         first: String,
         /// The `operationId` of the later one.
         second: String,
+    },
+    /// A parameter requires its own name. A load refuses a document that says
+    /// so, and a debug build of the binary panics when it builds the command
+    /// tree, because clap does not let an argument require itself.
+    #[error("{op}: `{name}` requires itself; run the bless step again")]
+    RequiresItself {
+        /// The `operationId` of the operation that declares the parameter.
+        op: String,
+        /// The parameter that requires itself, as the document spells it.
+        name: String,
     },
     /// A parameter requires a name the operation declares no parameter under.
     #[error(
@@ -1196,6 +1214,9 @@ impl Param {
 /// answer.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Unmet<'p> {
+    /// The parameter lists its own name. It asks for nothing, and clap refuses
+    /// an argument that requires itself.
+    Itself { name: &'p str },
     /// The parameter that `requires` lists is not one the operation declares.
     Unknown { name: &'p str, requires: &'p str },
     /// The parameter that `requires` lists has no flag.
@@ -1212,6 +1233,9 @@ pub(crate) fn unmet(params: &[Param]) -> Option<Unmet<'_>> {
     params.iter().find_map(|param| {
         param.requires().iter().find_map(|requires| {
             let name = param.name();
+            if requires == name {
+                return Some(Unmet::Itself { name });
+            }
             match params.iter().find(|other| other.name() == requires) {
                 None => Some(Unmet::Unknown { name, requires }),
                 Some(other) => match other.shape() {

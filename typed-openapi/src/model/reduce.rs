@@ -28,9 +28,10 @@ use openapiv3::{
 use thiserror::Error;
 
 use super::{
-    Body, COMMIT, Document, Effect, Field, Gate, Join, Location, Operation, Param, Shape,
-    TRANSPORT, Unmet, Unsupported, first_collision, gate_on_read, spends, unmet,
+    Body, COMMIT, Document, Effect, Field, Gate, HELP, Join, Location, Operation, Param, Shape,
+    TRANSPORT, Unmet, Unsupported, first_collision, gate_on_read, spends, spends_command, unmet,
 };
+use crate::markers::{COMMAND, GATES, GROUP, REQUIRES, WRITES};
 use crate::names::{Clash, CommandName, Grouping, NameError, Namespace, Protected, spelled};
 use crate::openapi::Misfit;
 use crate::scalar::Scalar;
@@ -38,27 +39,6 @@ use crate::schema::{
     RefError, description_of, format_of, is_json, is_media_type, is_multipart, resolve,
     resolve_schema, scalar_of, template,
 };
-
-/// The four extensions this crate reads, all of them an adopter's say over
-/// something the document alone cannot settle. An Overlay is where they are
-/// written.
-///
-/// HTTP cannot say "this GET writes", so the document has to.
-const WRITES: &str = "x-cli-writes";
-/// The command name to mount an operation under, where the path spells one
-/// badly — or where two operations reduce to the same name.
-const COMMAND: &str = "x-cli-command";
-/// The group to mount an operation under, where the path's own segment is not
-/// the resource the operation belongs to.
-const GROUP: &str = "x-cli-group";
-/// The hazards an operation stands behind by name, beside the write gate
-/// itself. One list rather than one marker per name, so a gate an adoption
-/// invents costs an Overlay line and not a release of this crate.
-const GATES: &str = "x-cli-gates";
-/// The other parameters a parameter needs beside it, by wire name. OpenAPI
-/// cannot say that two parameters only mean something together, so the marker
-/// sits on the parameter that needs the other.
-const REQUIRES: &str = "x-cli-requires";
 
 /// What a refusal calls the request body.
 ///
@@ -176,6 +156,35 @@ pub enum LoadError {
         op: String,
         /// The marker, `x-cli-command` or `x-cli-group`.
         key: &'static str,
+    },
+    /// An `x-cli-writes` that is present and is not the boolean `true`. Refused
+    /// rather than passed over, for the reason a gate list is: a marker that
+    /// reads as no marker leaves a writing `GET` sent on sight, which is the one
+    /// outcome a default-closed gate must never reach by accident. `false` is
+    /// refused too, because the marker adds a write and never removes one.
+    #[error(
+        "{op}: `{WRITES}` is not the boolean `true`; \
+         it marks a write, so write `true` or leave the marker out"
+    )]
+    Writes {
+        /// The `operationId` of the operation that carries the marker.
+        op: String,
+    },
+    /// A group or a command named `help`. clap declares a `help` subcommand on
+    /// every command that has subcommands, and nothing can move it, so an
+    /// operation under that name is two subcommands with one spelling. The
+    /// markers are the repair, whichever of the two the name is.
+    #[error(
+        "{op}: the {what} `{name}` is a subcommand that clap declares itself; \
+         name it with `x-cli-{what}` in an Overlay"
+    )]
+    NameSpent {
+        /// The `operationId` of the operation under the name.
+        op: String,
+        /// Which of the two names it is: `group` or `command`.
+        what: &'static str,
+        /// The name, as the grouping rule or the marker spells it.
+        name: String,
     },
     /// Two operations that reduce to one `<group> <command>`.
     #[error(
@@ -296,6 +305,37 @@ pub enum LoadError {
     /// an Overlay a reviewer can read.
     #[error(transparent)]
     Phantom(#[from] crate::required::PhantomKeys),
+    /// An `x-cli-` key that this crate reads, standing where it does not read
+    /// it: an `x-cli-writes` on a path item, or an `x-cli-requires` beside a
+    /// `$ref`. The object model drops such a key without a word, so the gate the
+    /// adopter wrote is not there, and nothing says so.
+    #[error(
+        "`{key}` stands on `{at}`, where this crate does not read it; {}",
+        crate::markers::reading(.key)
+    )]
+    MisplacedMarker {
+        /// The key, as the document spells it.
+        key: String,
+        /// The node that holds the key, spelled as an Overlay names a target:
+        /// `$.paths['/vouchers/{id}']`.
+        at: String,
+    },
+    /// An `x-cli-` key that this crate reads nowhere. The crate owns the prefix,
+    /// so a key under it is either one of the five it reads, spelled wrong, or
+    /// an extension that belongs under another prefix.
+    #[error(
+        "`{key}` stands on `{at}`, and this crate reads no such key; \
+         it owns the `x-cli-` prefix and reads {}; \
+         spell the key as one of them, or give an extension of your own another prefix",
+        crate::markers::vocabulary()
+    )]
+    UnknownMarker {
+        /// The key, as the document spells it.
+        key: String,
+        /// The node that holds the key, spelled as an Overlay names a target:
+        /// `$.paths['/vouchers/{id}'].get`.
+        at: String,
+    },
     /// A path item that is a `$ref`. This crate follows none, whether the
     /// reference leads anywhere or not, so the item is refused with its path
     /// and the reference it holds, and no cause is given: the reference was
@@ -391,6 +431,16 @@ pub enum LoadError {
         op: String,
         /// The parameter that carries the `x-cli-requires`, as the document
         /// spells it.
+        name: String,
+    },
+    /// A parameter whose `x-cli-requires` lists the parameter itself. It asks
+    /// for nothing, and clap refuses an argument that requires itself, so the
+    /// command line would panic at the first start of a debug build.
+    #[error("{op}: `{name}` lists itself in `{REQUIRES}`; list only the other parameters it needs")]
+    RequiresItself {
+        /// The `operationId` of the operation that declares the parameter.
+        op: String,
+        /// The parameter that lists itself, as the document spells it.
         name: String,
     },
     /// A parameter that requires a name the operation declares no parameter
@@ -582,6 +632,9 @@ impl Document {
         // vendor wrote: the object model below normalises away shapes — an
         // inline body's schema among them — that this reading needs to see.
         crate::required::check(&doc)?;
+        // On the raw document too, because the object model drops a marker
+        // standing beside a `$ref` without a word.
+        crate::markers::check(&doc)?;
         let doc = crate::openapi::model_of(&doc)
             .map_err(|Misfit { at, source }| LoadError::Shape { at, source })?;
         Self::from_openapi(&doc, &loading.commit)
@@ -683,7 +736,7 @@ impl Operation {
             })?;
         let method = method_of(method);
         let (group, command) = placement(op, id, path, &method, whole.grouping)?;
-        let effect = effect_of(&method, op);
+        let effect = effect_of(&method, op, id)?;
         // The gates are read before the namespace exists, because their flags
         // belong in it: a body field the vendor happens to spell `enshrine`
         // moves aside rather than shadowing the word that stands in front of
@@ -693,7 +746,8 @@ impl Operation {
         // One namespace per subcommand. The words that carry consent — this
         // operation's gates and the confirmation — are guarded, so a document
         // name that wants one refuses the load instead of pushing it aside.
-        // The flags that carry the body are merely spent, and move over.
+        // The flags that carry the body and `--help` are merely spent, and
+        // move over.
         //
         // The confirmation is guarded on a write and nowhere else, because a
         // read declares no confirmation to clash with: a document is free to
@@ -706,7 +760,7 @@ impl Operation {
                 .iter()
                 .map(|gate| (gate.as_str(), Protected::Gate))
                 .chain(confirmation),
-            TRANSPORT,
+            TRANSPORT.into_iter().chain([HELP]),
         );
         let params = params
             .map(|p| Param::build(id, p, whole.components, &mut flags))
@@ -773,6 +827,15 @@ fn placement(
         None => grouping.leaf(path, method),
     }
     .map_err(unplaced)?;
+    for (what, name) in [("group", &group), ("command", &command)] {
+        if spends_command(name.as_str()) {
+            return Err(LoadError::NameSpent {
+                op: id.to_owned(),
+                what,
+                name: name.as_str().to_owned(),
+            });
+        }
+    }
     Ok((group, command))
 }
 
@@ -823,7 +886,7 @@ fn gates_of(
                 gate,
             });
         }
-        if TRANSPORT.contains(&gate.as_str()) {
+        if spends(gate.as_str()) {
             return Err(LoadError::ReservedGate {
                 op: id.to_owned(),
                 gate,
@@ -900,11 +963,16 @@ fn method_of(name: &str) -> Method {
 
 /// A GET the document marks as writing is a write; so is anything but a safe
 /// method. Default-closed: the marker can only add writes, never remove them.
-fn effect_of(method: &Method, op: &openapiv3::Operation) -> Effect {
-    if op.extensions.get(WRITES) == Some(&serde_json::Value::Bool(true)) {
-        return Effect::Write;
+///
+/// A marker that is present and is not `true` is refused, because the one
+/// reading that is left for it is no marker at all, and that sends a writing
+/// `GET` on sight.
+fn effect_of(method: &Method, op: &openapiv3::Operation, id: &str) -> Result<Effect, LoadError> {
+    match op.extensions.get(WRITES) {
+        None => Ok(Effect::of_method(method)),
+        Some(serde_json::Value::Bool(true)) => Ok(Effect::Write),
+        Some(_) => Err(LoadError::Writes { op: id.to_owned() }),
     }
-    Effect::of_method(method)
 }
 
 impl Param {
@@ -967,6 +1035,10 @@ fn requires_of(op: &str, data: &ParameterData) -> Result<Vec<String>, LoadError>
 fn companions(op: &str, params: &[Param]) -> Result<(), LoadError> {
     match unmet(params) {
         None => Ok(()),
+        Some(Unmet::Itself { name }) => Err(LoadError::RequiresItself {
+            op: op.to_owned(),
+            name: name.to_owned(),
+        }),
         Some(Unmet::Unknown { name, requires }) => Err(LoadError::RequiresUnknown {
             op: op.to_owned(),
             name: name.to_owned(),
