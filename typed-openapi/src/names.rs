@@ -38,7 +38,8 @@ pub struct CommandName(String);
 
 impl CommandName {
     /// `renderVoucher` becomes `render-voucher`; anything that will not reduce to
-    /// `[a-z0-9-]` is rejected rather than mangled.
+    /// `[a-z0-9-]` is rejected rather than mangled, and so is a name with a
+    /// letter or a digit outside ASCII, which nothing here transliterates.
     ///
     /// `origin` is what the raw name was read off, and it is there for the
     /// error: a document whose own words cannot be spelled is told which word.
@@ -121,13 +122,10 @@ impl Grouping {
     /// below the group, or — where the path has none left to spend — whatever
     /// its method makes of it.
     pub(crate) fn leaf(self, path: &str, method: &Method) -> Result<CommandName, NameError> {
-        match segments(path)
-            .skip(self.depth + 1)
-            .filter(|segment| !templated(segment))
-            .last()
-        {
+        let below = || segments(path).skip(self.depth + 1);
+        match below().filter(|segment| !templated(segment)).last() {
             Some(last) => CommandName::new("path segment", last),
-            None => CommandName::new("method", verb(method, segments(path).any(templated))),
+            None => CommandName::new("method", verb(method, below().any(templated))),
         }
     }
 }
@@ -299,10 +297,17 @@ pub(crate) fn renamed(flag: &str, wire_name: &str) -> bool {
 /// second rule the moment one of them is loosened. `origin` is what the raw
 /// name was read off, and it is there for the error: a document whose own words
 /// cannot be spelled is told which word.
+///
+/// A letter or a digit outside ASCII refuses the name. [`kebab`] would turn it
+/// into a separator, so `straße` would become `stra-e`: a flag that is not the
+/// vendor's word, which nobody can guess from it. Nothing is transliterated,
+/// because `strasse` is a choice, and a choice is the adopter's to write in an
+/// Overlay.
 pub(crate) fn spelled(origin: &'static str, raw: &str) -> Result<String, NameError> {
     let name = kebab(raw);
     let allowed = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
-    if name.is_empty() || !name.bytes().all(allowed) {
+    let outside_ascii = |c: char| !c.is_ascii() && c.is_alphanumeric();
+    if name.is_empty() || !name.bytes().all(allowed) || raw.chars().any(outside_ascii) {
         return Err(NameError {
             origin,
             raw: raw.to_owned(),
@@ -385,6 +390,44 @@ mod tests {
         );
     }
 
+    /// `straße` used to become `stra-e`: kebab-casing took the `ß` for a
+    /// separator, and the flag was no word of the vendor's. Nothing is
+    /// transliterated either, because `strasse` is a choice the adopter makes.
+    #[test]
+    fn a_letter_or_a_digit_outside_ascii_is_refused_and_nothing_is_transliterated() {
+        for raw in [
+            "straße",
+            "größe",
+            "änderungen",
+            "café",
+            "日本",
+            "x٣",
+            "Ünit",
+        ] {
+            let error = CommandName::new("path segment", raw).expect_err(raw);
+            assert_eq!(
+                error,
+                NameError {
+                    origin: "path segment",
+                    raw: raw.to_owned(),
+                },
+                "{raw}"
+            );
+            assert!(!is_spelled(raw), "{raw}");
+        }
+    }
+
+    /// A mark that is no letter and no digit separates words outside ASCII as it
+    /// does inside, so only a name that would lose a letter is refused.
+    #[test]
+    fn a_mark_outside_ascii_that_is_no_letter_is_a_separator() {
+        let name = CommandName::new("path segment", "list—all");
+        assert_eq!(
+            name.map(|n| n.as_str().to_owned()),
+            Ok("list-all".to_owned())
+        );
+    }
+
     #[cfg(feature = "document")]
     #[test]
     fn the_group_is_the_segment_that_first_tells_operations_apart() {
@@ -427,6 +470,26 @@ mod tests {
                 .map(|name| name.as_str().to_owned()),
             Ok("v1".to_owned())
         );
+    }
+
+    /// A template above the group names a value the caller supplies, and says
+    /// nothing about whether the path addresses one resource.
+    #[cfg(feature = "document")]
+    #[test]
+    fn a_template_above_the_group_does_not_make_a_path_address_one_resource() {
+        let grouping = Grouping::of(&[
+            "/{tenant}/vouchers",
+            "/{tenant}/vouchers/{id}",
+            "/{tenant}/contacts",
+        ]);
+        let leaf = |path| {
+            grouping
+                .leaf(path, &Method::GET)
+                .map(|name| name.as_str().to_owned())
+                .expect("a method always spells one")
+        };
+        assert_eq!(leaf("/{tenant}/vouchers"), "list");
+        assert_eq!(leaf("/{tenant}/vouchers/{id}"), "get");
     }
 
     #[cfg(feature = "document")]

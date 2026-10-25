@@ -48,7 +48,10 @@ A shipped binary reads them and derives nothing. Two operations reducing to one
 `<group> <command>` is a `LoadError` naming both `operationId`s — never a silent
 rename, because a name that moves when a *second* operation arrives is a name
 that moved without anyone asking. `x-cli-group` and `x-cli-command` are the way
-out, and they are read in the same place the rule runs.
+out, and they are read in the same place the rule runs. Whether a path
+addresses one resource, which makes a `GET` a `get` and not a `list`, is read
+from the segments below the group only: a template above the group names a
+value the caller supplies for every operation under it.
 
 **Corrections are an ordered list of Overlays, and the library reads nothing
 into it.** `Settings::overlay` and `Document::load` take layers and apply them
@@ -116,6 +119,30 @@ the document saying something this crate has no reading for, so both are a
 what the vendor meant is a correction, and a correction is the adopter's to
 write in an Overlay where a reviewer can see it.
 
+**A document is read as the version it says, or refused by name.**
+`Document::load` asks the overlaid document for its `openapi` before
+`required::check` and before the model reads anything, and a version that is not
+`3.0` or `3.0.x` is `LoadError::Version`, which prints it. 3.1 spells some rules
+another way, and the model refuses those with no place, and it means others that
+3.0 does not have, and the model drops those in silence: a `$ref` keeps its
+sibling `maximum`, and `const` is a rule. Support for 3.1 is out of scope, so
+the refusal names no repair. The version is the overlaid document's, the one
+that is read, so an Overlay can state what an adopter holds a document to, where
+a reviewer reads it. A document with no `openapi`, or with one that is not text,
+has no version to name, and the model refuses it at the key. The bless step
+asks the same question, because `Settings::write_to` loads the document through
+`Document::load_with` before it generates anything.
+
+**A document that leaves out what a request needs is refused with the Overlay
+that adds it.** `NoServer` is a document with no `servers`: OpenAPI reads that
+as `/`, which is relative to wherever the document was served from, and a
+command line has no such place. `NoOperationId` names the method and the path of
+an operation with no `operationId`, because every later refusal and every
+generated wrapper calls the operation by it. A server URL with variables takes
+the `default` of each, which OpenAPI requires for every variable; a variable
+that `variables` does not declare stays in the URL, which is then no URL
+(`ServerUrl`).
+
 **A refusal names its operation and the place it stopped, and its repair only
 where the repair is true.** A `LoadError` from one operation carries the
 `operationId`; one from a path item carries the path (`PathItem`), and one from
@@ -170,6 +197,23 @@ exemption added without a row there is a reading of the specification rather
 than a measurement, and a reading of the specification is what lets a shape the
 generator still spoils onto the list.
 
+Both conditions are necessary. Where the walk can tell whether a name is
+declared, a phantom is refused although typify writes no field for it, and the
+rows measure what a node holds and not where the node stands. SEV-249 measured
+nine positions where typify writes no field: `unevaluatedProperties`, a
+`dependentSchemas` subschema, `propertyNames`, `prefixItems`, `contains`,
+`then`, `contentSchema`, `$defs`, and anywhere below `not`. At each of them the
+walk reads the node and can tell, so a phantom there is refused, and no row
+exempts a position. Eight of the nine are keywords that a 3.0 schema does not
+have, and a document that is not 3.0 is refused first. The ninth, below `not`,
+is rare, and its refusal names an Overlay.
+
+The walk takes its nodes from a work list that shares the `followed` set, and
+makes no call for a hop. A chain of `allOf` hops is as long as the vendor wrote
+it: 7,000 of them aborted the load with a stack overflow when each hop was a
+call. `schema::follow` is a loop for the same reason, so a reference chain adds
+no recursion to either walk.
+
 **A shape this crate cannot spell stops at the operation, not at the document.**
 A parameter that is `in: cookie`, described by `content`, neither a value nor a
 list of values, declaring a `style` this crate does not serialise, or *named* in
@@ -186,6 +230,15 @@ spelled `*` sends its body whole rather than claiming a flag called `""`. The
 body's rule turns on whether a property has a flag and never on why it has none,
 so an unspellable property and a nested one reach the same answer — and the
 `Body::JsonWhole` template is then the one place the key is written down.
+
+`spelled` refuses a name that holds a letter or a digit outside ASCII, and
+transliterates nothing. `kebab` would turn that letter into a separator, so
+`straße` would be the flag `--stra-e`, which is no word of the vendor's and which
+two different names can share. A path segment that holds one needs
+`x-cli-group` or `x-cli-command`, and `Name` says so; a gate or the confirmation
+word is refused; a parameter is `Unreachable`, and only a required one refuses
+the document; a body property sends the body whole. A mark outside ASCII that is
+no letter and no digit separates words, as an ASCII one does.
 
 **A body template is read from the model and reaches no request.** The body with
 no per-field flags is the body `--help` cannot describe, so `Body::JsonWhole`

@@ -27,6 +27,10 @@ the path has none left to spend, the method decides:
 | `PATCH` | either | `patch` |
 | `DELETE` | either | `delete` |
 
+Whether the path addresses one resource is read from the segments below the
+group only. A `{tenant}` above the group says which tenant, for every operation
+under it, so `GET /{tenant}/vouchers` is `vouchers list`.
+
 So `PUT /vouchers/{id}` is `vouchers update` and `GET /vouchers/{id}/render` is
 `vouchers render`, whatever the vendor called them. The name a vendor repeats
 in every `operationId` — `renderVoucher`, `getVoucherById` — is the group, and
@@ -70,6 +74,11 @@ They are also the only way out of a collision. Two operations reducing to one
 
 Never a silent rename: a name that moves because a *second* operation arrived
 is a name that moved without anyone asking.
+
+The markers also name an operation whose path cannot be spelled. A path segment
+with a letter or a digit outside ASCII, such as the `ä` of
+`/kontakte/änderungen`, gives the operation no name, and the document is refused
+until a marker names it.
 
 ## Mounting the tree
 
@@ -311,6 +320,8 @@ front of a single value too.
 The last of the five is the only one that is about the name rather than the
 value. A flag is `[a-z0-9-]` once kebab-cased, the rule a command name and a
 gate also pass, and a parameter named `*` or `()` reduces to nothing under it.
+So does a name with a letter or a digit outside ASCII, such as `straße`: it is
+refused, and not kebab-cased to `stra-e`, and nothing is transliterated.
 
 None of them refuses the document. The parameter stays in the reduction, the
 subcommand grows nothing for it, and its long help carries a line of its own

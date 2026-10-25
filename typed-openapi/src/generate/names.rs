@@ -215,6 +215,9 @@ impl Names {
                     // typify's own spelling of the name, rather than the token
                     // stream's, because this is a sentence an adopter reads.
                     rust: ty.name(),
+                    // The declared schemas are resolved before the inline ones,
+                    // so the later claimant is inline whenever either is.
+                    inline: matches!(origin, Origin::Inline(_)),
                 });
             }
             match origin {

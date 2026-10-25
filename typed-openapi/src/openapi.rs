@@ -25,6 +25,28 @@ pub(crate) struct Misfit {
     pub(crate) source: serde_json::Error,
 }
 
+/// The `openapi` version a document states, when it is one this crate does not
+/// read.
+///
+/// This crate reads OpenAPI 3.0. 3.1 spells some rules differently, which the
+/// model refuses with no place, and means others that 3.0 does not have, which
+/// the model drops in silence: a `$ref` keeps the `maximum` beside it in 3.1, and
+/// `const` is a rule. So the version is asked before anything else reads the
+/// document.
+///
+/// A document with no `openapi` key, or one that is not text, has no version to
+/// name, and the model refuses it at the key.
+pub(crate) fn unread_version(document: &Value) -> Option<&str> {
+    let version = document.get("openapi")?.as_str()?;
+    (!is_openapi_3_0(version)).then_some(version)
+}
+
+/// `3.0`, and `3.0.` with a patch after it: every version of 3.0 the
+/// specification published.
+fn is_openapi_3_0(version: &str) -> bool {
+    version == "3.0" || version.starts_with("3.0.")
+}
+
 /// Read a document into the OpenAPI model, and say where it stopped if the model
 /// refuses it.
 pub(crate) fn model_of(document: &Value) -> Result<OpenAPI, Misfit> {

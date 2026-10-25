@@ -2115,13 +2115,36 @@ fn a_body_stated_inline_that_claims_a_schemas_name_is_refused_by_name() {
         .write_to(&dir)
         .expect_err("one name cannot be two types");
 
+    assert!(
+        matches!(&failure, GenerateError::OneType { inline: true, .. }),
+        "{failure:?}"
+    );
     assert_eq!(
         failure.to_string(),
         "the schema `CreateLedgerEntryBody` and the request body stated inline by \
-         `createLedgerEntry` are both `CreateLedgerEntryBody` in Rust; rename one \
-         of them in an Overlay",
-        "the refusal has to say which of the two is the operation's own"
+         `createLedgerEntry` are both `CreateLedgerEntryBody` in Rust; give an inline \
+         schema a `title` in an Overlay",
+        "the refusal has to say which of the two is the operation's own, and the cheap repair"
     );
+}
+
+/// The repair the refusal names is the smaller one: a `title` on the inline
+/// schema, where the other repair renames a schema the vendor wrote.
+#[test]
+fn a_title_on_the_inline_schema_mends_the_collision_the_refusal_names() {
+    const TITLES_IT: &str = "overlay: 1.1.0\ninfo: { title: t, version: \"1\" }\nactions:\n  - \
+         target: $.paths['/ledger/entries'].post.requestBody.content['application/json'].schema\n    \
+         description: a name for the shape the operation states\n    update:\n      title: \
+         LedgerEntry\n";
+    let dir = out("claimed-then-titled");
+
+    Settings::new(wrote(&dir, "document.yaml", CLAIMED))
+        .overlay(wrote(&dir, "titles.overlay.yaml", TITLES_IT))
+        .write_to(&dir)
+        .expect("a title names the inline schema");
+
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+    assert!(ops.contains("body:&crate::types::LedgerEntry"), "{ops}");
 }
 
 /// The same body, under a name the document gives it.

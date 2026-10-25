@@ -45,6 +45,17 @@ pub enum RefError {
         /// `#/components/schemas/Voucher`.
         reference: String,
     },
+    /// A reference into the inside of a component, such as
+    /// `#/components/schemas/Holder/properties/code`. The pointer is valid, and
+    /// this crate follows a component and goes no further in.
+    #[error(
+        "`{reference}` points inside a component, and this crate follows only \
+         `#/components/<section>/<name>`"
+    )]
+    Inside {
+        /// The `$ref` as the document spells it.
+        reference: String,
+    },
     /// A reference reached a second time while following one chain.
     #[error("`{reference}` is a reference cycle")]
     Cycle {
@@ -106,12 +117,15 @@ fn follow<'c, T>(
                         reference: reference.clone(),
                     });
                 }
-                current = reference
-                    .strip_prefix(&prefix)
-                    .and_then(section)
-                    .ok_or_else(|| RefError::Missing {
+                let named = reference.strip_prefix(&prefix);
+                if named.is_some_and(|name| name.contains('/')) {
+                    return Err(RefError::Inside {
                         reference: reference.clone(),
-                    })?;
+                    });
+                }
+                current = named.and_then(section).ok_or_else(|| RefError::Missing {
+                    reference: reference.clone(),
+                })?;
             }
         }
     }

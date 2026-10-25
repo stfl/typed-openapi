@@ -797,7 +797,7 @@ impl Document {
     /// removed, reordered or retyped, or a variant added, removed or moved,
     /// needs a new number. The crate's own tests trace the layout and fail on a
     /// change that left the number where it was.
-    pub const MODEL_LAYOUT: u32 = 2;
+    pub const MODEL_LAYOUT: u32 = 3;
 
     /// The same reduction, already done and written down.
     ///
@@ -880,7 +880,8 @@ impl Document {
         postcard::to_extend(self, stamp).map_err(DocumentError::Encode)
     }
 
-    /// The server the document names first. A caller may override it.
+    /// The server the document names first, with each variable in its URL
+    /// replaced by the `default` the document gives it. A caller may override it.
     #[must_use]
     pub fn base(&self) -> &Uri {
         &self.base

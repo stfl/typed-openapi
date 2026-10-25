@@ -418,6 +418,19 @@ impl Settings {
     }
 }
 
+/// What [`GenerateError::OneType`] asks an adopter to change.
+///
+/// A `title` on an inline schema gives its type a name of the document's own, so
+/// it is the repair wherever one of the two is inline. Two schemas the document
+/// declares have names the vendor wrote, and one of them is renamed.
+fn repair(inline: bool) -> &'static str {
+    if inline {
+        "give an inline schema a `title` in an Overlay"
+    } else {
+        "rename one of them in an Overlay"
+    }
+}
+
 /// A list as prose: `a`, then `a and b`, then `a, b and c`.
 fn listed(items: &[String]) -> String {
     match items.split_last() {
@@ -917,7 +930,14 @@ pub enum GenerateError {
     /// schema the document declares, or a body or response an operation states
     /// inline — because the two are refused together and a reader needs to know
     /// which is which.
-    #[error("{first} and {second} are both `{rust}` in Rust; rename one of them in an Overlay")]
+    ///
+    /// The cheap repair is a `title` on an inline schema, which typify names the
+    /// type after, so the message names it where one of the two is inline and
+    /// asks for a rename of a schema the document declares where neither is.
+    #[error(
+        "{first} and {second} are both `{rust}` in Rust; {}",
+        repair(*.inline)
+    )]
     OneType {
         /// The sentence naming the shape that claimed the Rust name first.
         first: String,
@@ -925,6 +945,9 @@ pub enum GenerateError {
         second: String,
         /// The Rust name both reduce to, in typify's spelling.
         rust: String,
+        /// Whether either of the two is stated inline by an operation, and not
+        /// declared under `components.schemas`.
+        inline: bool,
     },
     /// A schema whose Rust name is one this crate declares a replaced type
     /// under. Every other named schema becomes a type of its own, so this one

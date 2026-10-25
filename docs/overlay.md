@@ -311,6 +311,41 @@ An operation the vendor ships and documents nowhere:
             "200": { description: OK }
 ```
 
+A document with no `servers`. OpenAPI reads that as `/`, a place relative to
+wherever the document was served from, and a command line has none, so
+`typed-openapi` refuses the document and the Overlay is where the host goes:
+
+```
+the document lists no `servers` entry to send requests to; add one in an Overlay
+```
+
+```yaml
+  - target: $
+    description: Where requests go.
+    update:
+      servers:
+        - url: https://api.example.com/v1
+```
+
+A server URL may hold variables, as in `https://{tenant}.example.com/v1`. The
+`default` that OpenAPI requires for each one fills it in. A name that `variables`
+does not declare has no default, and the URL that is left is not one.
+
+An operation with no `operationId`. The id is what every refusal and every
+generated wrapper calls the operation by, so the document is refused with the
+operation's method and path:
+
+```
+get /vouchers has no operationId; add one in an Overlay
+```
+
+```yaml
+  - target: "$.paths['/vouchers'].get"
+    description: Name the operation.
+    update:
+      operationId: listVouchers
+```
+
 A content type that is not one. A media type is `type/subtype`, so a body
 declared under the bare key `form-data` names none, and there is nothing to
 send that body under. `typed-openapi` refuses the document while it reduces it

@@ -247,6 +247,70 @@ the crate follows [Semantic Versioning][semver].
     `$ref` that cannot be followed loaded with no part names. It is
     `LoadError::Unresolvable { op, name: "requestBody", source }`, as for any
     other body schema. Repair: correct the `$ref` in an Overlay.
+- **A document that is not OpenAPI 3.0 is refused, and the refusal names the
+  version.** `LoadError::Version { version }` is asked before anything else
+  reads the document, and its message is ``the document says `openapi: 3.1.0`,
+  and this crate reads OpenAPI 3.0 only``. `3.0` and `3.0.` with a patch after
+  it are read. A 3.1 document used to load when none of its spellings was one
+  that the model refuses, and then the reduction dropped the rules that 3.1
+  means and 3.0 does not: a `$ref` keeps the `maximum` beside it, and `const` is
+  a rule. The rest were refused with serde's message, which names a spelling and
+  not the version. The version is the overlaid document's, the one that is
+  read. There is no repair that makes 3.1 readable; support for it is out of
+  scope. A document that says 3.1 and uses nothing but what 3.0 has can be held
+  to 3.0 by an Overlay that sets `openapi`, and that Overlay is then the
+  adopter's claim. The README says "OpenAPI 3.0".
+- **A server URL with variables loads, and the two refusals that remain name
+  their repair.** The first server's URL takes the `default` of each variable
+  in `variables`, which OpenAPI requires, and `Document::base` holds the result.
+  It was refused as `LoadError::ServerUrl`. A variable that `variables` does not
+  declare stays in the URL, which is still `ServerUrl`. A document with no
+  `servers` is `LoadError::NoServer`, whose message is now ``the document lists
+  no `servers` entry to send requests to; add one in an Overlay``. An operation
+  with no `operationId` is `LoadError::NoOperationId`, whose message is now
+  ``<method> <path> has no operationId; add one in an Overlay``. Both are
+  refused as before. Repair: the Overlay each message names, shown in
+  `docs/overlay.md`. The README's *What it does not do* lists both.
+- **A name with a letter or a digit outside ASCII is refused and not mangled.**
+  `names::spelled` kept the ASCII letters of such a name and made a separator of
+  the rest, so `straße` was the flag `--stra-e` and `/kontakte/änderungen` the
+  group `kontakte nderungen`. It refuses the name and transliterates nothing. A
+  document that loaded is refused where the name is a path segment (`Name`,
+  whose repair is `x-cli-group` and `x-cli-command` in an Overlay), a gate in
+  `x-cli-gates` (`GateName`), a required parameter (`Parameter`: correct it in
+  an Overlay or drop its `required`), or the word of `Loading::commit` and
+  `Settings::commit_word` (`ConfirmationError::Spelling`). It loads and changes
+  where the name is an optional parameter, which is carried with no flag and
+  named on the subcommand's help, or a property of a flat body, which sends the
+  whole body through `--json-body`. A script that typed `--stra-e` no longer
+  finds the flag. A mark outside ASCII that is no letter and no digit is still
+  a separator.
+- **`GET /{tenant}/vouchers` is `vouchers list`.** Whether a path addresses one
+  resource is read from the segments below the group, as `docs/cli.md` says, and
+  not from a template above it. A `GET` with a template above the group and none
+  below it was `get`, and a document with `getVoucher` beside it was refused as
+  `DuplicateCommand`. Repair: use the new name, or keep the old one with
+  `x-cli-command: get` in an Overlay.
+- **`RefError::Inside { reference }`.** A `$ref` into the inside of a component,
+  such as `#/components/schemas/Holder/properties/code`, was `Missing` and
+  printed that it does not resolve, though the pointer is valid. It is `Inside`,
+  and its message says that this crate follows only
+  `#/components/<section>/<name>`. `RefError` is not `#[non_exhaustive]`, so a
+  `match` on it with no `_` arm stops compiling. Repair: add an arm for
+  `Inside`. The document was refused before and is refused now, and only the
+  reason changed. Repair for the document: point the `$ref` at the component.
+- **`GenerateError::OneType` has the field `inline`, and its repair is a
+  `title`.** Where one of the two shapes that reduce to one Rust name is stated
+  inline by an operation, the message ends ``give an inline schema a `title` in
+  an Overlay``, which names a type for the shape and renames no schema of the
+  vendor's. The message for two declared schemas is unchanged. `inline` is true
+  when either shape is inline. Repair: a `match` that binds the fields of
+  `OneType` adds `inline` or `..`.
+- **A chain of `allOf` hops does not overflow the stack.** The check for a
+  required name that nothing declares followed each hop with a call, and a chain
+  of about 7,000 hops aborted the bless step with a stack overflow. It walks a
+  work list now, and the chain loads. Nothing else changes: the check refuses
+  the same documents.
 - **Eight error enums are `#[non_exhaustive]`:** `LoadError`, `ValueError`,
   `client::Error`, `DispatchError`, `ArgError`, `PlanError`, `OverlayError` and
   `DocumentError`. A `match` on one needs a `_` arm, and a refusal added later

@@ -23,7 +23,7 @@ use std::borrow::Cow;
 use http::{Method, Uri};
 use openapiv3::{
     Components, OpenAPI, Parameter, ParameterData, ParameterSchemaOrContent, PathStyle, QueryStyle,
-    ReferenceOr, Schema, SchemaKind,
+    ReferenceOr, Schema, SchemaKind, Server,
 };
 use thiserror::Error;
 
@@ -92,6 +92,15 @@ pub enum LoadError {
         #[source]
         source: crate::overlay::OverlayError,
     },
+    /// The overlaid document says it is a version of OpenAPI that this crate
+    /// does not read. 3.1 spells some rules differently from 3.0 and means others
+    /// that 3.0 does not have, so reading it as 3.0 would drop a rule in silence
+    /// or refuse a spelling with no place. Support for 3.1 is out of scope.
+    #[error("the document says `openapi: {version}`, and this crate reads OpenAPI 3.0 only")]
+    Version {
+        /// The `openapi` key as the document spells it.
+        version: String,
+    },
     /// The overlaid document is not an OpenAPI 3 document.
     #[error("the overlaid document is not an OpenAPI 3 document: refused at `{at}`")]
     Shape {
@@ -104,10 +113,15 @@ pub enum LoadError {
         #[source]
         source: serde_json::Error,
     },
-    /// The document lists no server, so a request has nowhere to go.
-    #[error("no `servers` entry to send requests to")]
+    /// The document lists no server, so a request has nowhere to go. OpenAPI
+    /// reads a missing `servers` as `/`, which is relative to wherever the
+    /// document was served from, and a command line has no such place. An Overlay
+    /// adds the server.
+    #[error("the document lists no `servers` entry to send requests to; add one in an Overlay")]
     NoServer,
-    /// The first server's URL is not a URL.
+    /// The first server's URL is not a URL, once each variable in it is replaced
+    /// by its default. A variable the server does not declare has no default
+    /// and stays in the URL as it is written.
     #[error("`servers[0].url` ({url}) is not a URL")]
     ServerUrl {
         /// `servers[0].url` as the document spells it.
@@ -117,8 +131,8 @@ pub enum LoadError {
         source: http::uri::InvalidUri,
     },
     /// An operation without an `operationId`, which is the name every later
-    /// refusal and every generated wrapper uses for it.
-    #[error("{method} {path} has no operationId")]
+    /// refusal and every generated wrapper uses for it. An Overlay adds one.
+    #[error("{method} {path} has no operationId; add one in an Overlay")]
     NoOperationId {
         /// The method of the operation, lowercase, as the path item spells it.
         method: String,
@@ -478,6 +492,9 @@ impl Document {
     /// ones before it produced, so the order they are given in is the order
     /// they happen. An empty list runs a document that is already corrected.
     ///
+    /// The document is OpenAPI 3.0. The overlaid document's `openapi` is asked
+    /// first, and any version but `3.0` and `3.0.x` is [`LoadError::Version`].
+    ///
     /// This is the expensive door, and the `document` feature is what opens it.
     /// A bless step calls it once and writes [`Document::to_blob`] beside the
     /// rest of what it generates; a shipped binary compiles without the feature
@@ -537,6 +554,15 @@ impl Document {
             doc = crate::overlay::apply(doc, overlay)
                 .map_err(|source| LoadError::Layer { layer, source })?;
         }
+        // The version first: a document that is not 3.0 is refused for what it
+        // is, and not for the first spelling of it that the readers below trip
+        // on, or worse, read as 3.0 and drop a rule from. It is the overlaid
+        // document's version, the one that is read.
+        if let Some(version) = crate::openapi::unread_version(&doc) {
+            return Err(LoadError::Version {
+                version: version.to_owned(),
+            });
+        }
         // Against the corrected document, so that an adopter's own Overlay is
         // what repairs a contradiction, and while it is still the text the
         // vendor wrote: the object model below normalises away shapes — an
@@ -549,7 +575,7 @@ impl Document {
 
     fn from_openapi(doc: &OpenAPI, commit: &str) -> Result<Self, LoadError> {
         let server = doc.servers.first().ok_or(LoadError::NoServer)?;
-        let base = Uri::try_from(&server.url).map_err(|source| LoadError::ServerUrl {
+        let base = Uri::try_from(filled(server)).map_err(|source| LoadError::ServerUrl {
             url: server.url.clone(),
             source,
         })?;
@@ -587,6 +613,39 @@ impl Document {
             commit: commit.to_owned(),
             ops,
         })
+    }
+}
+
+/// The server's URL with each `{name}` in it replaced by the `default` of the
+/// variable that `variables` declares under that name.
+///
+/// OpenAPI requires a default for every variable, and it is the value the
+/// document says to send when the caller supplies none. A name that `variables`
+/// does not declare has no default, so it stays as it is written and the URL
+/// that results is not one.
+fn filled(server: &Server) -> String {
+    let mut url = String::with_capacity(server.url.len());
+    let mut rest = server.url.as_str();
+    loop {
+        let Some((before, after)) = rest.split_once('{') else {
+            url.push_str(rest);
+            return url;
+        };
+        url.push_str(before);
+        let Some((name, tail)) = after.split_once('}') else {
+            url.push('{');
+            url.push_str(after);
+            return url;
+        };
+        let declared = server.variables.as_ref().and_then(|all| all.get(name));
+        if let Some(variable) = declared {
+            url.push_str(&variable.default);
+        } else {
+            url.push('{');
+            url.push_str(name);
+            url.push('}');
+        }
+        rest = tail;
     }
 }
 
