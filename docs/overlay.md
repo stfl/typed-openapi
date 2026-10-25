@@ -436,11 +436,16 @@ getThing: parameter `straße` is named with a character outside ASCII, or in a w
 
 The same two actions mend a path parameter and a parameter off the path that
 share a name, such as `ref` in the path and `ref` in the query. Rename the path
-parameter and its variable, and the query parameter keeps `ref`, its flag and
-its place in the request. The message names that rename first. It names the
-other repairs after it, because each gives a parameter or its `required` up:
-removing the other parameter, or dropping the `required` of a parameter off the
-path.
+parameter and its variable: the document keeps both parameters, the path
+parameter has the flag of its new name, and the query parameter has the flag
+`--ref`, which it had already or which it gets now. A cookie parameter or one
+described by `content` has no flag, so the request does not carry it. The
+message names that rename first, and then the repair that gives a part of the
+document up. For a path parameter that is the removal of the query parameter.
+For a query parameter that is the drop of its own `required`, and the message
+says that it is the `required` of the query parameter and not of the path
+parameter. [docs/cli.md](cli.md#parameters-with-no-flag) has the repairs of the
+other cases.
 
 A content type that is not one. A media type is `type/subtype`, so a body
 declared under the bare key `form-data` names none, and there is nothing to

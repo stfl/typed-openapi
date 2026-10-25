@@ -379,9 +379,10 @@ an [Overlay](overlay.md) is the way out. The error names a repair that loads:
   comes first where it applies, because it gives nothing up, and the message
   names it before the others:
   - When one of the two is a path parameter and the other is not, rename the path
-    parameter and its variable together, as above. The request still carries
-    every parameter the document declares, and the parameter that was refused has
-    its flag.
+    parameter and its variable together, as above. The document keeps every
+    parameter it declares, and the refused parameter gets its flag. A namesake
+    that can have no flag, an `in: cookie` or a `content` one, still has none,
+    so the request does not carry it.
   - Remove the other parameter from wherever the document declares it. That gives
     the refused one its flag, and the document no longer declares the removed
     one. The template needs a path parameter, so a required query or header
@@ -390,11 +391,21 @@ an [Overlay](overlay.md) is the way out. The error names a repair that loads:
     gives up the requirement.
 
   The message names the last two after the rename because each gives up a part of
-  the document, and only you know if that part is the vendor's mistake. Where no
-  rename applies, the message names these two without it: two path parameters are
-  not parted by a rename, because the template has one variable for both, and two
-  parameters off the path both go on the wire, so a rename would change the
-  request.
+  the document, and only you know if that part is the vendor's mistake. It says
+  whose `required` is dropped, because it names two parameters of one name, and
+  the `required` of the other one does not mend the refusal. It names the
+  repairs that apply to the refused parameter:
+  - A path parameter whose namesake is a path parameter: the removal only. A
+    rename does not part them, because the template has one variable for both.
+  - A path parameter whose namesake is off the path: the rename, then the
+    removal.
+  - A parameter off the path whose namesake is a path parameter: the rename,
+    then the drop of the `required` of the refused parameter. The template needs
+    the namesake, so the message does not name the removal.
+  - A parameter off the path whose namesake is off the path too: the removal,
+    then the drop of the `required` of the refused parameter. Both names go on
+    the wire, so a rename would change the request. Where both have one place,
+    the message calls them the earlier one and the later one.
 
 The rule for a shared name has two costs. A required path parameter that comes
 after its namesake refuses the document, because it is required and has no flag.

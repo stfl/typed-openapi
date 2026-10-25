@@ -479,14 +479,16 @@ the crate follows [Semantic Versioning][semver].
     variable in the path together, as above, whichever of the two was refused.
     The rename gives up no parameter, so it comes first. After it the message
     names the repairs that give a part of the document up: to remove the other
-    parameter, and for a parameter off the path to drop its `required`. A
-    parameter off the path whose namesake is a path parameter is not told to
-    remove it, because the template needs the namesake;
+    parameter, and for a parameter off the path to drop its own `required`. The
+    message says whose `required` it is, because it names two parameters of one
+    name. A parameter off the path whose namesake is a path parameter is not
+    told to remove it, because the template needs the namesake;
   - for a name that two path parameters have, to remove the earlier one, because
     the template has one variable for both and no rename parts them;
   - for a name that two parameters off the path have, to remove the other
-    parameter or to drop its `required`, because both names go on the wire and a
-    rename would change the request.
+    parameter or to drop the `required` of the refused one, because both names
+    go on the wire and a rename would change the request. Where both have one
+    place, the message calls them the earlier one and the later one.
 
   Repair: add `..` or `place` to the pattern.
 - **A path template and its path parameters must agree.** A request went out

@@ -389,13 +389,18 @@ declares is named first. A repair that also ends the fault by giving up a part
 of the document is named after it, because only the adopter knows if that part
 is the vendor's mistake: removing the namesake, which gives the refused
 parameter its flag, or dropping the `required` of a parameter off the path. No
-repair is named that does not load, so a namesake that is a path parameter is
-never removed, because the template names it. Two cases get no rename. Both
-names go on the wire when neither parameter is in the path, so a rename changes
-the request and is no correction. Two path parameters of one name have one
-variable in the template, so no rename parts them. Each repair that `repair`
-names has a test in `tests/wire.rs` that loads the document with the Overlay the
-words name, and a new reason or place adds one.
+repair is named that does not load, so a parameter off the path is never told to
+remove a namesake that is a path parameter, because the template names it. Two
+cases get no rename. Both names go on the wire when neither parameter is in the
+path, so a rename changes the request and is no correction. Two path parameters
+of one name have one variable in the template, so no rename parts them, and the
+later one is told to remove the earlier. A message with two parameters of one
+name says which parameter each repair acts on (`parameter`: its place and its
+name, and "earlier" and "later" where the place is the same), and never writes
+"its" for either one: the `required` of the namesake is no repair, and a
+pronoun reads as the parameter named last. Each repair that `repair` names has a
+test in `tests/wire.rs` that loads the document with the Overlay the words name,
+and a new reason or place adds one.
 
 `reconcile` holds the path template to the path parameters, and refuses a
 variable with no path parameter, a path parameter with no variable and a path

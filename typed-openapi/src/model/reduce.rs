@@ -476,12 +476,18 @@ pub enum LoadError {
     /// fault also ends when a part of the document is given up, the message names
     /// that after it, because only the adopter knows if that part is the vendor's
     /// mistake: the namesake is removed, which gives this parameter its flag, or
-    /// the `required` of a parameter off the path is dropped. A namesake that is
-    /// a path parameter is not removed, because the template needs it. A rename
-    /// does not part two parameters that are both off the path, because both
-    /// names go on the wire and the request would change. It does not part two
-    /// path parameters either, because the template has one variable for both,
-    /// and the later one is mended by removing the earlier.
+    /// the `required` of a parameter off the path is dropped. A parameter off the
+    /// path whose namesake is a path parameter is not told to remove it, because
+    /// the template needs it. A rename does not part two parameters that are
+    /// both off the path, because both names go on the wire and the request
+    /// would change. It does not part two path parameters either, because the
+    /// template has one variable for both, and the later one is mended by
+    /// removing the earlier.
+    ///
+    /// A message that names two parameters says which one each repair acts on,
+    /// by its place and its name, and by "earlier" and "later" where the place
+    /// is the same. A pronoun would read as either of them, and the `required`
+    /// of the other one is no repair.
     #[error(
         "{op}: parameter `{name}` is {why}, and the document requires it; {}",
         repair(*.place, .name, .why)
@@ -600,16 +606,18 @@ pub enum LoadError {
 ///   template has one variable for both. Two parameters off the path are not
 ///   either, because both names go on the wire and a rename would change the
 ///   request.
+/// - A repair that names the `required` of a parameter says whose it is
+///   ([`parameter`]), because the `required` of the namesake is no repair.
 fn repair(place: Place, name: &str, why: &Unsupported) -> String {
-    let path_parameter = format!("the `path` parameter `{name}`");
     match (place, why) {
         (Place::Path, Unsupported::Shared(Place::Path)) => {
-            format!("remove the `path` parameter `{name}` in an Overlay")
+            format!("remove {} in an Overlay", parameter(Place::Path, name))
         }
         (Place::Path, Unsupported::Shared(other)) => {
             format!(
-                "{}, or remove the `{other}` parameter `{name}` in an Overlay",
-                rename(&path_parameter)
+                "{}, or remove {} in an Overlay",
+                rename(&parameter(Place::Path, name)),
+                parameter(*other, name)
             )
         }
         (Place::Path, Unsupported::Unspellable) => rename("the parameter"),
@@ -622,12 +630,21 @@ fn repair(place: Place, name: &str, why: &Unsupported) -> String {
         ) => "correct the parameter in an Overlay".to_owned(),
         (_, Unsupported::Shared(Place::Path)) => {
             format!(
-                "{}, or drop its `required` in an Overlay",
-                rename(&path_parameter)
+                "{}, or drop the `required` of {} in an Overlay",
+                rename(&parameter(Place::Path, name)),
+                parameter(place, name)
             )
         }
+        (_, Unsupported::Shared(other)) if *other == place => format!(
+            "remove the earlier `{place}` parameter `{name}` in an Overlay, or drop the \
+             `required` of the later one"
+        ),
         (_, Unsupported::Shared(other)) => {
-            format!("remove the `{other}` parameter `{name}` in an Overlay, or drop its `required`")
+            format!(
+                "remove {} in an Overlay, or drop the `required` of {}",
+                parameter(*other, name),
+                parameter(place, name)
+            )
         }
         (
             _,
@@ -638,6 +655,13 @@ fn repair(place: Place, name: &str, why: &Unsupported) -> String {
             | Unsupported::Unspellable,
         ) => "correct the parameter in an Overlay, or drop its `required`".to_owned(),
     }
+}
+
+/// A parameter as a repair names it, by its place and its name. A message about
+/// a shared name holds two parameters of one name, so a pronoun would read as
+/// either of them; the place says which one a repair acts on.
+fn parameter(place: Place, name: &str) -> String {
+    format!("the `{place}` parameter `{name}`")
 }
 
 /// The repair that renames a path parameter together with its variable. The

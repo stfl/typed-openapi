@@ -72,8 +72,9 @@ fn names(doc: &Document, id: &str) -> Vec<String> {
     op.params().iter().map(|p| p.name().to_owned()).collect()
 }
 
-/// A parameter `ref` that is not in the path, and the request that carries it
-/// beside a path parameter once that has another name.
+/// A parameter `ref` that is not in the path, and the request that is made once
+/// the path parameter has another name. A cookie has no flag, so the request does
+/// not carry it.
 struct Beside {
     /// The `in` of the document.
     spelled: &'static str,
@@ -551,7 +552,7 @@ const NAMESAKES: [Namesakes; 3] = [
         flag: Location::Query,
         words: "listThings: parameter `q` is sharing its name with the `header` parameter, and the \
                 document requires it; remove the `header` parameter `q` in an Overlay, or drop \
-                its `required`",
+                the `required` of the `query` parameter `q`",
     },
     Namesakes {
         first: "{ name: q, in: query, schema: { type: string } }",
@@ -561,7 +562,7 @@ const NAMESAKES: [Namesakes; 3] = [
         flag: Location::Header,
         words: "listThings: parameter `q` is sharing its name with the `query` parameter, and the \
                 document requires it; remove the `query` parameter `q` in an Overlay, or drop \
-                its `required`",
+                the `required` of the `header` parameter `q`",
     },
     Namesakes {
         first: "{ name: q, in: cookie, schema: { type: string } }",
@@ -571,7 +572,7 @@ const NAMESAKES: [Namesakes; 3] = [
         flag: Location::Query,
         words: "listThings: parameter `q` is sharing its name with the `cookie` parameter, and the \
                 document requires it; remove the `cookie` parameter `q` in an Overlay, or drop \
-                its `required`",
+                the `required` of the `query` parameter `q`",
     },
 ];
 
@@ -625,6 +626,61 @@ fn a_required_namesake_off_the_path_is_given_its_flag_by_removing_the_other() {
     }
 }
 
+/// Two required entries of one name and place. The place does not say which of
+/// them a repair acts on, so the words say "earlier" and "later". Removing the
+/// earlier one loads, and so does dropping the `required` of the later one;
+/// dropping the `required` of the earlier one leaves the later one refused.
+#[test]
+fn two_required_entries_of_one_name_and_place_are_told_apart_by_their_order() {
+    const PATHS: &str = "  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: q, in: query, required: true, schema: { type: string } }
+      responses: { \"200\": { description: OK } }
+";
+
+    let error = refused(PATHS);
+
+    assert!(
+        matches!(&error, LoadError::Parameter { op, name, place: Place::Query, why: Unsupported::Shared(Place::Query) }
+            if op == "listThings" && name == "q"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "listThings: parameter `q` is sharing its name with the `query` parameter, and the \
+         document requires it; remove the earlier `query` parameter `q` in an Overlay, or drop \
+         the `required` of the later one"
+    );
+    Document::load(
+        &document(PATHS),
+        &[&removing("$.paths['/things'].get.parameters[0]")],
+    )
+    .expect("the Overlay removes the earlier entry");
+    Document::load(
+        &document(PATHS),
+        &[&updating(
+            "$.paths['/things'].get.parameters[1]",
+            "{ required: false }",
+        )],
+    )
+    .expect("the Overlay drops the `required` of the later entry");
+    let earlier = Document::load(
+        &document(PATHS),
+        &[&updating(
+            "$.paths['/things'].get.parameters[0]",
+            "{ required: false }",
+        )],
+    )
+    .expect_err("the later entry is still required");
+    assert!(
+        matches!(earlier, LoadError::Parameter { .. }),
+        "{earlier:?}"
+    );
+}
+
 /// A path parameter `ref`, then a required parameter `ref` in `spelled`.
 fn path_then(spelled: &str) -> String {
     format!(
@@ -661,9 +717,12 @@ actions:
 }
 
 /// A path parameter and a required parameter off the path of one name. The words
-/// name the rename of the path parameter first: it gives up nothing, both
-/// parameters keep their flags, and the name of a path parameter does not go on
-/// the wire, so the request carries the other parameter as it was declared.
+/// name the rename of the path parameter first: it gives up nothing. The path
+/// parameter gets the flag `--entry`, the refused parameter gets the flag
+/// `--ref`, and the name of a path parameter does not go on the wire, so the
+/// request carries the refused parameter as the document declares it. The drop
+/// of `required` that the words name after the rename is the refused
+/// parameter's.
 #[test]
 fn a_required_namesake_of_a_path_parameter_is_mended_by_renaming_the_path_parameter() {
     for case in [QUERY, HEADER] {
@@ -678,10 +737,14 @@ fn a_required_namesake_of_a_path_parameter_is_mended_by_renaming_the_path_parame
         );
         assert_eq!(
             error.to_string(),
-            "appendLogEntry: parameter `ref` is sharing its name with the `path` parameter, and \
-             the document requires it; rename the `path` parameter `ref` and its variable in the \
-             path together, in an Overlay that writes the path item again under the new path and \
-             removes the old one, or drop its `required` in an Overlay"
+            format!(
+                "appendLogEntry: parameter `ref` is sharing its name with the `path` parameter, \
+                 and the document requires it; rename the `path` parameter `ref` and its \
+                 variable in the path together, in an Overlay that writes the path item again \
+                 under the new path and removes the old one, or drop the `required` of the \
+                 `{0}` parameter `ref` in an Overlay",
+                case.spelled
+            )
         );
         let mended = Document::load(&document(&paths), &[&path_then_renamed(case.spelled)])
             .expect("the Overlay renames the path parameter and its variable");
@@ -794,9 +857,10 @@ actions:
 
 /// A path parameter has no `required` to drop. Its namesake is not in the path,
 /// so the words name the rename of the path parameter and its variable first,
-/// which gives up nothing, and the removal of the namesake after it. The
-/// namesake keeps its flag after the rename, except a cookie, which has none,
-/// and the request is what the document declares.
+/// which gives up nothing, and the removal of the namesake after it. After the
+/// rename the path parameter has the flag `--entry`. The namesake keeps its flag
+/// and the request carries it, except a cookie, which has no flag and is not in
+/// the request.
 #[test]
 fn a_path_parameter_that_shares_its_name_is_mended_by_renaming_it() {
     for case in [QUERY, HEADER, COOKIE] {
@@ -827,9 +891,10 @@ fn a_path_parameter_that_shares_its_name_is_mended_by_renaming_it() {
     }
 }
 
-/// The removal of the namesake follows the rename in the words and loads too. It
-/// leaves the path parameter, which keeps its flag. Dropping the `required` of a
-/// path parameter is no repair.
+/// The removal of the namesake follows the rename in the words and loads too. The
+/// path parameter is the refused one and has no flag before it, and the removal
+/// gives it the flag `--ref`. Dropping the `required` of a path parameter is no
+/// repair.
 #[test]
 fn a_path_parameter_that_shares_its_name_is_also_mended_by_removing_the_other() {
     for case in [QUERY, HEADER, COOKIE] {
