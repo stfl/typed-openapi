@@ -554,13 +554,17 @@ pub enum LoadError {
         /// The `content` key as the document spells it.
         media_type: String,
     },
-    /// A rule the document states about a parameter or a body property that
-    /// cannot be run as the document means it: a `pattern` that no regex engine
-    /// here reads, a `pattern` that holds `\p{`, `\P{` or `\u{`, a `multipleOf`
-    /// that is not more than 0, or an `enum` that lists `null` and no other value.
-    /// Refused while the document is reduced, because the flag would refuse every
-    /// value, admit every value, or read a rule that the vendor's server reads
-    /// another way.
+    /// A rule the document states about a value that cannot be run as the
+    /// document means it: a `pattern` that no regex engine here reads, a
+    /// `pattern` that holds `\p{`, `\P{` or `\u{`, a `multipleOf` that is not more
+    /// than 0, or an `enum` that lists `null` and no other value. The value is one
+    /// that `runnable_scalar` reads, with a flag or without one: a parameter sent
+    /// in the path, the query or a header with a `schema` (its items, for a list),
+    /// or a property of a JSON body whose schema is an object. Refused while the
+    /// document is reduced, because a flag would refuse every value, admit every
+    /// value, or read a rule that the vendor's server reads another way, and
+    /// refused for a value that gets no flag too, so that the verdict does not
+    /// depend on its style, its name or its siblings.
     #[error("{op}: `{name}` states a rule that cannot run")]
     Unrunnable {
         /// The `operationId` of the operation that states the rule.
@@ -574,15 +578,17 @@ pub enum LoadError {
         #[source]
         source: crate::scalar::ScalarError,
     },
-    /// A `pattern` of a schema that holds `\p{`, `\P{` or `\u{`, in a place whose
-    /// flag does not carry the `pattern`: a response, a property of a nested
-    /// body, a named schema, or a value whose flag keeps its `enum` and drops the
-    /// `pattern`. It means one thing with the Unicode flag and another without
-    /// it, and the generated type cannot be given the flag, so the type refuses
-    /// the vendor's own responses that a server running the pattern with the
-    /// flag accepts. The walk reads every schema that the object model reads, and
-    /// the model reads nothing beside a `$ref`. `Unrunnable` is the same refusal
-    /// for the `pattern` that a flag carries.
+    /// A `pattern` of a schema that holds `\p{`, `\P{` or `\u{`, where no scalar
+    /// that `runnable_scalar` reads carries it: a response, a named schema, the
+    /// items of an array body, a property of a nested object, a cookie
+    /// parameter, or a value whose scalar keeps its `enum` and drops the
+    /// `pattern`. `Unrunnable` is the same refusal for the `pattern` that such a
+    /// scalar carries. It means one thing with the Unicode flag and another
+    /// without it, and the generated type cannot be given the flag, so the type
+    /// refuses the vendor's own responses that a server running the pattern with
+    /// the flag accepts. The walk reads every schema that the object model
+    /// reads, and the model reads nothing beside a `$ref` that is text, in an
+    /// object that can be a reference.
     #[error("{}`{at}` states a rule that cannot run", crate::patterns::held_by(.op.as_deref()))]
     UnrunnablePattern {
         /// The `operationId` of the operation the schema stands in, and `None`
@@ -909,9 +915,9 @@ impl Document {
         let model = crate::openapi::model_of(&doc)
             .map_err(|Misfit { at, source }| LoadError::Shape { at, source })?;
         let loaded = Self::from_openapi(&model, &loading.commit)?;
-        // After the reduction, so that a `pattern` which a flag carries is
-        // refused there, with the parameter that holds it. This reads every other
-        // schema the model reads.
+        // After the reduction, so that a `pattern` which `runnable_scalar` read
+        // is refused there, with the value that holds it. This reads the
+        // `pattern` of every other schema the model reads.
         crate::patterns::check(&doc)?;
         Ok(loaded)
     }

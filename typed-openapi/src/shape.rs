@@ -270,13 +270,18 @@ impl Kind {
     ///
     /// `openapiv3` reads such a node as `ReferenceOr::Reference` and drops every
     /// other key, as OpenAPI 3.0.3 says of the Reference Object: "any properties
-    /// added SHALL be ignored". So a walk that reaches what the model reads stops
-    /// at one, and what stands beside the `$ref` is no part of the document. A
-    /// `$ref` that is not text is no reference, and the node is the object it is.
+    /// added SHALL be ignored". So the walk of `patterns.rs`, which reaches what
+    /// the model reads, stops at one, and what stands beside the `$ref` is no
+    /// part of the document. A `$ref` that is not text is no reference, and the
+    /// node is the object it is.
     ///
     /// A path item is not in the list. The model reads one as a reference under
     /// `paths` only, and the load refuses a path item that is a `$ref`
-    /// (`LoadError::PathItem`) before a walk that reads the model asks.
+    /// (`LoadError::PathItem`) before a walk that reads the model asks. A
+    /// callback is in the list for `components.callbacks` only: an operation
+    /// holds `Callback`s and not references to them, so the load refuses a
+    /// callback of an operation that is a `$ref` (`LoadError::Shape`) before a
+    /// walk asks, and the walk need not tell the two places apart.
     pub(crate) fn is_read_as_reference(self, fields: &Map<String, Value>) -> bool {
         let referable = match self {
             Self::Schema
@@ -286,6 +291,7 @@ impl Kind {
             | Self::Response
             | Self::Link
             | Self::Example
+            // Under `components.callbacks` only, as the doc above says.
             | Self::Callback
             | Self::SecurityScheme => true,
             Self::Root

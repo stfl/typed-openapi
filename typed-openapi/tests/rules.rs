@@ -20,7 +20,7 @@ use clap::{ArgMatches, Command};
 use typed_openapi::request::ValueError;
 use typed_openapi::scalar::ScalarError;
 use typed_openapi::tree::{self, Asked, DispatchError};
-use typed_openapi::{Document, Invocation, LoadError, Plan, PlanError, Values};
+use typed_openapi::{Document, Invocation, LoadError, Plan, PlanError, RefError, Values};
 
 /// A document with one server and whatever the case puts under `paths`.
 fn document(paths: &str) -> String {
@@ -431,6 +431,51 @@ fn a_unicode_pattern_that_becomes_a_flag_is_refused_with_its_property() {
     );
 }
 
+/// The line between the two refusals of a `pattern` with `\p{` is whether the
+/// scalar that `runnable_scalar` reads carries it, and not whether the value gets
+/// a flag. A parameter that gets no flag for its style or its name has such a
+/// scalar, so its `pattern` is `Unrunnable` and names the parameter. A cookie
+/// parameter has none, and a string whose `enum` the scalar keeps drops the
+/// `pattern`, so each is `UnrunnablePattern` and names the schema.
+#[test]
+fn a_unicode_pattern_is_refused_by_the_scalar_that_carries_it_and_not_by_the_flag() {
+    let pattern = r"^\p{L}+$";
+    let schema = format!("{{ type: string, pattern: '{pattern}' }}");
+    for (name, parameter) in [
+        (
+            "n",
+            format!("{{ name: n, in: query, style: deepObject, schema: {schema} }}"),
+        ),
+        (
+            "straße",
+            format!("{{ name: straße, in: query, schema: {schema} }}"),
+        ),
+    ] {
+        let error = Document::load(&reading(&parameter, "description: OK"), &[])
+            .expect_err("the pattern cannot run, flag or not");
+        assert!(
+            matches!(&error, LoadError::Unrunnable { op, name: held, .. }
+                if op == "listEntries" && held == name),
+            "{parameter}: {error:?}"
+        );
+    }
+    for parameter in [
+        format!("{{ name: c, in: cookie, schema: {schema} }}"),
+        format!(
+            "{{ name: n, in: query, schema: {{ type: string, enum: [a], pattern: '{pattern}' }} }}"
+        ),
+    ] {
+        let error = Document::load(&reading(&parameter, "description: OK"), &[])
+            .expect_err("the pattern is refused in the schema that holds it");
+        assert!(
+            matches!(&error, LoadError::UnrunnablePattern { op, at, .. }
+                if op.as_deref() == Some("listEntries")
+                    && at == "$.paths['/entries'].get.parameters[0].schema"),
+            "{parameter}: {error:?}"
+        );
+    }
+}
+
 /// Four rules that cannot run, each as the schema of a body property: a step with
 /// no multiples, an `enum` that names no value a flag can send, a `pattern` that
 /// no engine reads, and a `pattern` that the Unicode flag reads another way.
@@ -441,24 +486,41 @@ const UNRUNNABLE: &[&str] = &[
     "{ type: string, pattern: '^\\p{L}+$' }",
 ];
 
-/// A body with the properties as listed, `k` and a nested `o` among them.
+/// The two kinds of property that have no flag, and so send the body whole
+/// through `--json-body`: a nested object, and a name with no spelling.
+const WHOLE: &[&str] = &[
+    "o: { type: object, properties: { id: { type: integer } } }",
+    "straße: { type: string }",
+];
+
+/// A body with the properties as listed, `k` and a property that sends the body
+/// whole among them.
 fn properties_in_order(first: &str, then: &str) -> String {
     format!("{{ type: object, properties: {{ {first}, {then} }} }}")
 }
 
+/// Every body that lists `key` beside a property that sends the body whole, with
+/// `key` first and with `key` last.
+fn bodies_with(key: &str) -> Vec<String> {
+    WHOLE
+        .iter()
+        .flat_map(|whole| {
+            [
+                properties_in_order(key, whole),
+                properties_in_order(whole, key),
+            ]
+        })
+        .collect()
+}
+
 /// Whether a property is refused for a rule that cannot run does not depend on
-/// whether a nested property comes before it. The body goes whole through
-/// `--json-body` at the first nested property, and the rules of a property
-/// listed after it are asked all the same.
+/// whether a property with no flag comes before it. The body goes whole through
+/// `--json-body` at the first such property, and the rules of a property listed
+/// after it are asked all the same.
 #[test]
 fn a_rule_that_cannot_run_refuses_a_body_whatever_the_order_of_its_properties() {
-    let nested = "o: { type: object, properties: { id: { type: integer } } }";
     for schema in UNRUNNABLE {
-        let key = format!("k: {schema}");
-        for body in [
-            properties_in_order(&key, nested),
-            properties_in_order(nested, &key),
-        ] {
+        for body in bodies_with(&format!("k: {schema}")) {
             let error = Document::load(&holding(&body, PLAIN, ""), &[])
                 .expect_err("the rule cannot run, wherever the property stands");
             assert!(
@@ -470,43 +532,73 @@ fn a_rule_that_cannot_run_refuses_a_body_whatever_the_order_of_its_properties() 
     }
 }
 
-/// A `$ref` that leads nowhere is refused by name wherever its property stands.
-/// typify panics on it at the bless, so a document that held it after a nested
-/// property used to load and then end the bless step.
+/// The components that the `$ref`s below lead into: a cycle, and a component with
+/// a property.
+const FOLLOWED_BADLY: &str = "components:\n  schemas:\n    Loop: { $ref: '#/components/schemas/Back' }\n    \
+     Back: { $ref: '#/components/schemas/Loop' }\n    \
+     Holder: { type: object, properties: { code: { type: string } } }\n";
+
+// A `$ref` that leads nowhere, one that is a cycle, and one that points inside a
+// component.
+const NOWHERE: &str = "#/components/schemas/Nope";
+const LOOP: &str = "#/components/schemas/Loop";
+const INSIDE: &str = "#/components/schemas/Holder/properties/code";
+
+/// Each `$ref` that the reduction cannot follow, and what it says of it.
+fn unfollowable() -> [(&'static str, RefError); 3] {
+    [
+        (
+            NOWHERE,
+            RefError::Missing {
+                reference: NOWHERE.to_owned(),
+            },
+        ),
+        (
+            LOOP,
+            RefError::Cycle {
+                reference: LOOP.to_owned(),
+            },
+        ),
+        (
+            INSIDE,
+            RefError::Inside {
+                reference: INSIDE.to_owned(),
+            },
+        ),
+    ]
+}
+
+/// A `$ref` that the reduction cannot follow is refused by name wherever its
+/// property stands. typify panics on one that leads nowhere at the bless step,
+/// and the reduction cannot read a cycle or a path into a component.
 #[test]
-fn a_ref_that_does_not_resolve_is_refused_wherever_its_property_stands() {
-    let nested = "o: { type: object, properties: { id: { type: integer } } }";
-    let key = "k: { $ref: '#/components/schemas/Nope' }";
-    for body in [
-        properties_in_order(key, nested),
-        properties_in_order(nested, key),
-    ] {
-        let error = Document::load(&holding(&body, PLAIN, ""), &[])
-            .expect_err("the reference leads nowhere");
-        assert!(
-            matches!(&error, LoadError::Unresolvable { op, name, .. }
-                if op == "holdsPattern" && name == "k"),
-            "{body}: {error:?}"
-        );
+fn a_ref_that_cannot_be_followed_is_refused_wherever_its_property_stands() {
+    for (reference, cause) in unfollowable() {
+        for body in bodies_with(&format!("k: {{ $ref: '{reference}' }}")) {
+            let error = Document::load(&holding(&body, PLAIN, FOLLOWED_BADLY), &[])
+                .expect_err("the reference cannot be followed");
+            assert!(
+                matches!(&error, LoadError::Unresolvable { op, name, source }
+                    if op == "holdsPattern" && name == "k" && *source == cause),
+                "{body}: {error:?}"
+            );
+        }
     }
 }
 
-/// The control of the case above: a rule that runs loads in either order, so the
-/// refusal is about the rule and not about the nested property.
+/// The control of
+/// `a_rule_that_cannot_run_refuses_a_body_whatever_the_order_of_its_properties`: a
+/// rule that runs loads in either order, so the refusal is about the rule and not
+/// about the property that sends the body whole.
 #[test]
 fn a_rule_that_runs_loads_wherever_the_property_stands() {
-    let nested = "o: { type: object, properties: { id: { type: integer } } }";
     for schema in [
         "{ type: integer, multipleOf: 5 }",
         "{ type: integer, enum: [1, 2] }",
         "{ type: integer, nullable: true, enum: [null, 1] }",
         "{ type: string, pattern: '^[a-z]+$' }",
     ] {
-        let key = format!("k: {schema}");
-        for body in [
-            properties_in_order(&key, nested),
-            properties_in_order(nested, &key),
-        ] {
+        for body in bodies_with(&format!("k: {schema}")) {
             Document::load(&holding(&body, PLAIN, ""), &[])
                 .unwrap_or_else(|error| panic!("{body}: {error:?}"));
         }
@@ -518,7 +610,7 @@ fn a_rule_that_runs_loads_wherever_the_property_stands() {
 const REFERRED_TO: &str = "components:\n  schemas:\n    Plain: { type: string }\n  parameters:\n    \
      N: { name: n, in: query, schema: { type: string } }\n  responses:\n    R: { description: OK }\n";
 
-/// A `$ref` with a `pattern` or a `properties` map beside it.
+/// A `$ref` with a `pattern` beside it.
 const REF_WITH_PATTERN: &str = "{ $ref: '#/components/schemas/Plain', pattern: '^\\p{L}+$' }";
 
 /// A read with one parameter and the answer it gives, and the components that
@@ -530,7 +622,7 @@ fn reading(parameter: &str, answer: &str) -> String {
     ))
 }
 
-/// The six places in which a `pattern` stands beside a `$ref`, each with a
+/// The seven places in which a `pattern` stands beside a `$ref`, each with a
 /// `^\p{L}+$` that the model never reads: it keeps a node that holds a string
 /// `$ref` as the reference alone, as OpenAPI 3.0.3 says of the Reference Object.
 fn beside_a_ref() -> Vec<(&'static str, String)> {
@@ -539,6 +631,13 @@ fn beside_a_ref() -> Vec<(&'static str, String)> {
     let holder = format!(
         "components:\n  schemas:\n    Plain: {{ type: string }}\n    Holder:\n      type: object\n      \
          properties:\n        s: {REF_WITH_PATTERN}\n"
+    );
+    // An operation holds its callbacks as callbacks and not as references, so a
+    // callback is a reference under the components only.
+    let callback = format!(
+        "components:\n  callbacks:\n    C:\n      $ref: '#/components/callbacks/D'\n      \
+         '{{$request.body#/url}}':\n        post:\n          responses:\n            '200':\n              \
+         description: OK\n              content: {{ application/json: {{ schema: {NAME} }} }}\n"
     );
     vec![
         ("a component property", holding(PLAIN, PLAIN, &holder)),
@@ -577,6 +676,10 @@ fn beside_a_ref() -> Vec<(&'static str, String)> {
                 ),
             ),
         ),
+        (
+            "a callback of the components that is a reference",
+            holding(PLAIN, PLAIN, &callback),
+        ),
     ]
 }
 
@@ -585,6 +688,72 @@ fn a_pattern_beside_a_ref_is_no_schema_of_the_document() {
     for (place, document) in beside_a_ref() {
         Document::load(&document, &[]).unwrap_or_else(|error| panic!("{place}: {error:?}"));
     }
+}
+
+/// Three objects that the model reads whole, whatever keys they hold: an
+/// operation, the path item of a callback and an encoding. A `$ref` among their
+/// keys makes none of them a reference, so the schema below each is read. Each is
+/// a document, the `operationId` that holds the schema, and where the schema is.
+fn ref_key_of_no_reference() -> [(String, &'static str, &'static str); 3] {
+    let answer =
+        format!("{{ description: OK, content: {{ application/json: {{ schema: {NAME} }} }} }}");
+    [
+        (
+            document(&format!(
+                "  /a:\n    get:\n      operationId: getA\n      $ref: '#/nowhere'\n      \
+                 responses:\n        '200': {answer}\n"
+            )),
+            "getA",
+            "$.paths['/a'].get.responses['200'].content['application/json'].schema",
+        ),
+        (
+            document(&format!(
+                "  /a:\n    post:\n      operationId: postA\n      callbacks:\n        cb:\n          \
+                 '{{$request.body#/url}}':\n            $ref: '#/nowhere'\n            post:\n              \
+                 responses:\n                '200': {answer}\n      \
+                 responses:\n        '200': {{ description: OK }}\n"
+            )),
+            "postA",
+            "$.paths['/a'].post.callbacks.cb['{$request.body#/url}'].post.responses['200']\
+             .content['application/json'].schema",
+        ),
+        (
+            document(&format!(
+                "  /a:\n    post:\n      operationId: postA\n      requestBody:\n        content:\n          \
+                 multipart/form-data:\n            schema: {{ type: object, properties: {{ f: {{ type: string }} }} }}\n            \
+                 encoding:\n              f:\n                $ref: '#/nowhere'\n                \
+                 headers:\n                  X-Name: {{ schema: {NAME} }}\n      \
+                 responses:\n        '200': {{ description: OK }}\n"
+            )),
+            "postA",
+            "$.paths['/a'].post.requestBody.content['multipart/form-data'].encoding.f\
+             .headers['X-Name'].schema",
+        ),
+    ]
+}
+
+#[test]
+fn a_ref_key_in_an_object_that_is_no_reference_leaves_the_schema_beside_it_read() {
+    for (document, operation, place) in ref_key_of_no_reference() {
+        let error = Document::load(&document, &[]).expect_err("the pattern is read");
+        assert!(
+            matches!(&error, LoadError::UnrunnablePattern { op, at, .. }
+                if op.as_deref() == Some(operation) && *at == place),
+            "{place}: {error:?}"
+        );
+    }
+}
+
+/// An operation holds its callbacks as callbacks and not as references to them,
+/// so the object model refuses a callback of an operation that is a `$ref`. A
+/// callback is a reference under `components.callbacks` only, which is why
+/// `Kind::is_read_as_reference` need not tell the two places apart.
+#[test]
+fn a_callback_of_an_operation_is_no_reference() {
+    let paths = "  /a:\n    post:\n      operationId: postA\n      callbacks:\n        cb:\n          \
+         $ref: '#/components/callbacks/C'\n      responses:\n        '200': { description: OK }\n";
+    let error = Document::load(&document(paths), &[]).expect_err("the model refuses it");
+    assert!(matches!(&error, LoadError::Shape { .. }), "{error:?}");
 }
 
 /// The flag of a parameter that is a `$ref` is read from the parameter it names,

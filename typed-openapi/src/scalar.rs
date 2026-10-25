@@ -474,8 +474,9 @@ fn a_match_for(pattern: &str) -> String {
 }
 
 /// Refuse a `pattern` that means one thing with the Unicode flag and another
-/// without it, naming the escape. The reduction asks it of every `pattern` that a
-/// flag carries, and `patterns` asks it of every schema the model reads.
+/// without it, naming the escape. The reduction asks it of every `pattern` that
+/// the scalar of a value carries, and `patterns` asks it of every schema the
+/// model reads.
 pub(crate) fn unflagged(pattern: &str) -> Result<(), ScalarError> {
     match flagged_escape(pattern) {
         Some(escape) => Err(ScalarError::rule(

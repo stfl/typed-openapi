@@ -1,22 +1,26 @@
 //! Refusing a `pattern` that the Unicode flag reads another way, wherever a
 //! schema states one.
 //!
-//! The reduction refuses it on a `pattern` that a flag carries
-//! (`Scalar::runnable`), and a flag is one place out of many. typify builds a type from every named
-//! schema, from an inline body and from an inline response, and writes
+//! The reduction refuses it on a `pattern` that a scalar carries
+//! (`runnable_scalar`: a parameter, or a property of a JSON body), and those are
+//! a few places out of many. typify builds a type from every named schema, from
+//! an inline body and from an inline response, and writes
 //! `Regex::new("^\\p{L}+$")` into each `pattern` it meets: a type that decides
 //! `Müller` the other way from a vendor's server that runs the pattern with the
 //! flag, and so refuses the vendor's own responses that carry a name. So the
 //! walk here judges every schema the object model reads by the `pattern` it
-//! holds, and not by whether a flag or a type is made of it.
+//! holds, and not by whether a scalar or a type is made of it. It runs after the
+//! reduction, so a `pattern` that a scalar carries is refused there, with the
+//! value that holds it, and the walk refuses every other.
 //!
 //! It reaches what OpenAPI 3.0.3 defines, as the model does, and so as typify
 //! does: a schema stated under a key the model drops is no schema of the
-//! document, and neither is anything that stands beside a `$ref`, which the model
-//! reads as the reference alone. That reaches a few schemas that no type and no
-//! flag is made of, such as the schema of an error response. The pattern in one
-//! is the same disagreement, and the Overlay line that repairs it is the line
-//! that repairs the others.
+//! document. Neither is anything that stands beside a `$ref` that is text, in an
+//! object that can be a reference, which the model reads as the reference alone.
+//! In any other object a `$ref` is a key like any other. The walk reaches a few
+//! schemas that no type and no flag is made of, such as the schema of an error
+//! response. The pattern in one is the same disagreement, and the Overlay line
+//! that repairs it is the line that repairs the others.
 
 use serde_json::{Map, Value};
 
@@ -229,16 +233,19 @@ mod tests {
         }
     }
 
-    /// A `$ref` stands for the node it names only in an object of a kind that
-    /// can be a reference, and only when it is text. Anywhere else it is a key
-    /// like any other, and the schema below it is a schema of the document.
-    #[test]
-    fn a_ref_that_is_no_reference_leaves_the_schema_beside_it_read() {
+    /// Documents in which a `$ref` is a key like any other, and the schema beside it
+    /// is a schema of the document: a `$ref` that is not text, and a `$ref` in an
+    /// object that cannot be a reference (the Components Object, a media type, an
+    /// operation, the path item of a callback and an encoding). Each is the
+    /// document, the operation that holds the schema and where the schema is.
+    fn refs_that_are_no_reference() -> Vec<(String, Option<&'static str>, &'static str)> {
         let schema = "{ type: string, pattern: '^\\p{L}+$' }";
-        for (document, op, at) in [
+        let answer = format!(
+            "{{ description: OK, content: {{ application/json: {{ schema: {schema} }} }} }}"
+        );
+        vec![
             (
-                "components:\n  $ref: '#/nowhere'\n  schemas:\n    P: { type: string, pattern: '^\\p{L}+$' }\n"
-                    .to_owned(),
+                format!("components:\n  $ref: '#/nowhere'\n  schemas:\n    P: {schema}\n"),
                 None,
                 "$.components.schemas.P",
             ),
@@ -250,6 +257,32 @@ mod tests {
                 Some("getA"),
                 "$.paths['/a'].get.responses['200'].content['application/json'].schema",
             ),
+            (
+                format!(
+                    "{HEAD}      $ref: '#/nowhere'\n      responses:\n        '200': {answer}\n"
+                ),
+                Some("getA"),
+                "$.paths['/a'].get.responses['200'].content['application/json'].schema",
+            ),
+            (
+                format!(
+                    "{HEAD}      callbacks:\n        cb:\n          '{{$request.body#/url}}':\n            \
+                     $ref: '#/nowhere'\n            post:\n              responses:\n                '200': {answer}\n"
+                ),
+                Some("getA"),
+                "$.paths['/a'].get.callbacks.cb['{$request.body#/url}'].post.responses['200']\
+                 .content['application/json'].schema",
+            ),
+            (
+                format!(
+                    "{HEAD}      requestBody:\n        content:\n          multipart/form-data:\n            \
+                     encoding:\n              f:\n                $ref: '#/nowhere'\n                \
+                     headers: {{ X-Name: {{ schema: {schema} }} }}\n"
+                ),
+                Some("getA"),
+                "$.paths['/a'].get.requestBody.content['multipart/form-data'].encoding.f\
+                 .headers['X-Name'].schema",
+            ),
             // A `$ref` that is not text is no reference: the model reads the
             // node as the schema it is.
             (
@@ -258,7 +291,12 @@ mod tests {
                 None,
                 "$.components.schemas.Odd",
             ),
-        ] {
+        ]
+    }
+
+    #[test]
+    fn a_ref_that_is_no_reference_leaves_the_schema_beside_it_read() {
+        for (document, op, at) in refs_that_are_no_reference() {
             assert_found(&document, op, at);
         }
     }
@@ -292,7 +330,9 @@ mod tests {
             "paths:\n  /a:\n    get:\n      responses:\n        '200':\n          $ref: '#/components/responses/R'\n          content: { application/json: { schema: { type: string, pattern: '\\p{L}' } } }\n",
             "paths:\n  /a:\n    post:\n      requestBody:\n        $ref: '#/components/requestBodies/B'\n        content: { application/json: { schema: { type: string, pattern: '\\p{L}' } } }\n",
             "paths:\n  /a:\n    get:\n      responses:\n        '200':\n          description: ok\n          headers:\n            X-Name:\n              $ref: '#/components/headers/H'\n              schema: { type: string, pattern: '\\p{L}' }\n",
-            "paths:\n  /a:\n    post:\n      callbacks:\n        cb:\n          $ref: '#/components/callbacks/C'\n          '{$request.body#/url}': { post: { parameters: [{ name: n, in: query, schema: { type: string, pattern: '\\p{L}' } }] } }\n",
+            // An operation holds its callbacks as callbacks and not as references,
+            // so a callback is a reference under the components only.
+            "components:\n  callbacks:\n    C:\n      $ref: '#/components/callbacks/D'\n      '{$request.body#/url}': { post: { parameters: [{ name: n, in: query, schema: { type: string, pattern: '\\p{L}' } }] } }\n",
         ] {
             assert_eq!(found(document), None, "{document}");
         }

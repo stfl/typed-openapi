@@ -115,13 +115,18 @@ because a generated type is made of nothing that the model drops. A route that
 the table gains for the schema walk alone gets a row in `tests/required.rs` and
 one in the marker test of the keys that 3.0.3 does not define.
 
-An object that holds a string `$ref` is, to the model, the reference alone, and
-OpenAPI 3.0.3 says of the Reference Object that "any properties added SHALL be
-ignored". `Kind::is_read_as_reference` answers it for the kinds the model reads
-as a `ReferenceOr`, and the walk of `src/patterns.rs` judges nothing in such an
-object and enters none of its other keys. A `pattern` beside a `$ref` is not a
-`pattern` of the document, and refusing it would refuse a document for data that
-nobody reads.
+An object of a kind that can be a reference, and that holds a string `$ref`, is
+to the model the reference alone, and OpenAPI 3.0.3 says of the Reference Object
+that "any properties added SHALL be ignored". `Kind::is_read_as_reference`
+answers it for the kinds the model reads as a `ReferenceOr`, and the walk of
+`src/patterns.rs` judges nothing in such an object and enters none of its other
+keys. A `pattern` beside a `$ref` there is not a `pattern` of the document, and
+refusing it would refuse a document for data that nobody reads. In an object
+that cannot be a reference (a media type, an operation, the path item of a
+callback, an encoding) a `$ref` is a key like any other, and the schema beside
+it is read. A callback is a reference under `components.callbacks` only, because
+the model refuses a callback of an operation that is a `$ref`
+(`LoadError::Shape`), so the kind needs no second answer.
 
 A list of what is entered fails toward a marker missed, which the docs accept. A
 list of what is not entered fails toward a document wrongly refused at each
@@ -247,29 +252,42 @@ not one. Compiling both sides with the flag is the alternative that is out of
 scope, because it is a change to typify.
 
 The escape rule is asked of every schema the model reads, and not only of the
-`pattern` that a flag carries, because the generated types are made of the named
-schemas, the inline body and the inline response, and each of them runs its
-`pattern` without the flag. `src/patterns.rs` walks the overlaid document by the
-table of `src/shape.rs` at `Reach::Defined`, after the reduction, so that a
-`pattern` which a flag carries keeps the refusal that names its parameter and
-every other schema is `LoadError::UnrunnablePattern`: a place whose flag does
-not carry the `pattern`, because it has no flag or because the flag keeps the
-`enum` and drops the `pattern`. It names the operation where the schema stands in
-one and the schema as an Overlay names a target. A component that operations
-reach names none, because one schema serves many and the repair is made at the
-component. The walk reaches a few schemas that no type is made of, such as an
-error response's. Both ask `scalar::unflagged`, so the rule is written once.
+`pattern` that a scalar carries, because the generated types are made of the
+named schemas, the inline body and the inline response, and each of them runs its
+`pattern` without the flag. The line between the two refusals is
+`runnable_scalar` and not the flag. A `pattern` that the scalar of
+`runnable_scalar` carries is `LoadError::Unrunnable`, which names the value, and
+it is that with a flag or without one: a body property listed after a nested
+one, a parameter with a `deepObject` style, a parameter whose name has no
+spelling. `src/patterns.rs` walks the overlaid document by the table of
+`src/shape.rs` at `Reach::Defined`, after the reduction, and every other
+`pattern` is `LoadError::UnrunnablePattern`: one in a schema that
+`runnable_scalar` does not read (a response, a named schema, the items of an
+array body, a property of a nested object, a cookie parameter), and one that the
+scalar drops because it keeps the `enum`. It names the operation where the
+schema stands in one and the schema as an Overlay names a target. A component
+that operations reach names none, because one schema serves many and the repair
+is made at the component. The walk reaches a few schemas that no type is made
+of, such as an error response's. Both ask `scalar::unflagged`, so the rule is
+written once.
 
 `runnable_scalar` in `src/model/reduce.rs` is where the rules of a value are
-asked, `Scalar::runnable` and the `enum` of `null` alone among them, and it is
-asked of every value that reads as a scalar: a parameter, the items of a list and
-each property of a body. `json_body` sends the whole body through `--json-body`
-at the first property that is not a scalar, so it reads every property
-(`properties_of`) before it decides whether the body is flat. A rule asked only
-of the properties listed before the nested one would make a document that loads
-depend on which property comes first. A rule of this kind that is added for a
-value is added in `runnable_scalar`, which the three places share, and a rule of
-every schema is added to the walk.
+asked, `Scalar::runnable` and the `enum` of `null` alone among them. It reads the
+values that the reduction reads for a scalar, with a flag or without one: a
+parameter that `declared` keeps and that is sent in the path, the query or a
+header with a `schema` (its items, for a list), and a property of a JSON body
+whose schema is an object. `json_body` sends the whole body through
+`--json-body` at the first property that has no flag, a nested one or one whose
+name has no spelling, so it reads every property (`properties_of`) before it
+decides whether the body is flat. A rule asked only of the properties listed
+before that one would make a document that loads depend on which property comes
+first. A cookie parameter, a parameter stated with `content`, a property of a
+form or multipart body or of a body whose schema is an `allOf`, and the items of
+an array body are not read by it. The walk asks them the escape rule and nothing
+else, so a `multipleOf` of 0 or a `pattern` that no engine reads loads there. A
+rule of this kind that is added for a value is added in `runnable_scalar`, which
+`shape_of` and `properties_of` share, and a rule of every schema is added to the
+walk.
 
 **A document is read as the version it says, or refused by name.**
 `Document::load_with` asks the vendor's `openapi` right after it reads the

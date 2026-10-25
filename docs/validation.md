@@ -141,11 +141,17 @@ listVouchers: `since` states a rule that cannot run
   caused by: `[unterminated` is not a regular expression: Unbalanced bracket
 ```
 
-A rule that cannot run refuses the document wherever its value stands: a
-parameter, the items of a list, and every property of a body. A body goes whole
-through `--json-body` at its first nested property and has no flag per property,
-and a property listed after the nested one is read for its rules all the same, so
-the verdict does not depend on the order of the properties.
+A rule that cannot run refuses the document wherever its value stands, for each
+value that the reduction reads for its rules: a path, query or header parameter
+with a `schema` (its items, for a list; `Accept`, `Content-Type` and
+`Authorization` are not parameters, as OpenAPI says), and a property of a JSON
+body whose schema is an object. A body goes whole through `--json-body` at its
+first property that has no flag, a nested one or one whose name has no spelling,
+and a property listed after it is read for its rules all the same, so the
+verdict does not depend on the order of the properties. A cookie parameter, a
+parameter stated with `content`, a property of a form, a multipart or an `allOf`
+body and the items of an array body are not read that way. Only the escape below
+is asked of them.
 
 **A `pattern` with `\p{`, `\P{` or `\u{` is refused the same way.** Without the
 Unicode flag `\p{L}` is the text `p{L}` and `\u{41}` is the letter `u` forty-one
@@ -166,11 +172,14 @@ listPeople: `surname` states a rule that cannot run
 A flag is one place out of many, because the generated types are made of every
 named schema, of an inline body and of an inline response, and each of them runs
 its `pattern` without the flag too. So the refusal reads every schema that the
-object model reads, and a schema whose flag does not carry the `pattern` is
-refused as `LoadError::UnrunnablePattern`. It names the operation where the
-schema stands in one, and the schema as an Overlay names a target. A component
-that operations reach names none, because one schema serves many operations and
-the Overlay line is made at the component:
+object model reads. A `pattern` of a value in the list above is refused as above,
+with a flag or without one. A `pattern` in any other schema is refused as
+`LoadError::UnrunnablePattern`: a response, a named schema, the items of an array
+body, a property of a nested object, a cookie parameter, and a string whose
+`enum` the flag keeps and whose `pattern` it drops. It names the operation where
+the schema stands in one, and the schema as an Overlay names a target. A
+component that operations reach names none, because one schema serves many
+operations and the Overlay line is made at the component:
 
 ```
 getPerson: `$.paths['/people/{id}'].get.responses['200'].content['application/json'].schema.properties.surname` states a rule that cannot run
@@ -179,9 +188,13 @@ getPerson: `$.paths['/people/{id}'].get.responses['200'].content['application/js
 
 That reaches the schema of an error response and of a callback, which no type is
 made of; the `pattern` there is the same disagreement, and the Overlay line that
-repairs it is the one the others need. A schema that stands beside a `$ref` is not
-read: the object model keeps the reference alone, as OpenAPI 3.0.3 says of the
-Reference Object, so a `pattern` there is no part of the document.
+repairs it is the one the others need. A schema that stands beside a `$ref` that
+is text, in an object that can be a reference (a schema, a parameter, a header, a
+request body, a response, or a callback under `components`), is not read: the
+object model keeps the reference alone, as OpenAPI 3.0.3 says of the Reference
+Object, so a `pattern` there is no part of the document. In any other object (a
+media type, an operation, an encoding) a `$ref` is a key like any other, and the
+schema beside it is read.
 
 ## Where each rule runs
 
