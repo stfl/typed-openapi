@@ -318,6 +318,7 @@ fn two_parameters_that_spell_one_identifier_bind_two_arguments() {
             "kiln_state",
             "crazing",
             "saggar_tally",
+            "help",
         ],
         "`Self` moves aside from the `self_` the document's `self` spent"
     );
@@ -346,9 +347,9 @@ fn no_generated_wrapper_binds_one_identifier_twice() {
     let named = wrappers(&ops);
     assert_eq!(
         named.len(),
-        14,
+        16,
         "two wrappers per operation — the plain one and the builder that \
-         delegates to it — over seven operations: {named:?}"
+         delegates to it — over eight operations: {named:?}"
     );
     for wrapper in named {
         let bound = arguments(&ops, &wrapper);
@@ -557,6 +558,7 @@ fn a_body_stated_inline_keeps_every_rule_its_refs_carry() {
             ("cone", "cone", true, Some("cone-number")),
             ("soak", "soak", true, None),
             ("bare_cone", "bare-cone", false, Some("cone-number")),
+            ("help", "body-help", false, None),
         ]
     );
 
@@ -1237,6 +1239,119 @@ paths:
     );
 }
 
+// ------------------------------------------------------------ clap's own word
+
+/// `help` is clap's before it is anyone's. A vendor who spells a parameter or a
+/// property that way gets `--param-help` and `--body-help`, a vendor whose path
+/// begins with it gets the group the marker names, and `--help` still prints a
+/// help page and runs nothing.
+#[test]
+fn a_vendors_help_moves_aside_and_the_help_flag_still_prints_help() {
+    let doc = document();
+    let listing = operation(&doc, "listFirings");
+    assert_eq!(flag_of(&listing, "help").as_deref(), Some("param-help"));
+    assert!(
+        unwrapped(&listing)
+            .contains("--param-help <STRING> The `help` query parameter (sends `help`)"),
+        "the flag that moved says which wire name it carries:\n{}",
+        long_help(&listing)
+    );
+
+    let starting = operation(&doc, "startFiring");
+    let Body::JsonFields(fields) = starting.body() else {
+        panic!("every property of this body is a value, so it is flat");
+    };
+    let help = fields
+        .iter()
+        .find(|field| field.name() == "help")
+        .expect("the document declares the property");
+    assert_eq!(help.flag(), "body-help");
+    assert!(help.renamed(), "and it says so in its help line");
+
+    let notes = operation(&doc, "listKilnNotes");
+    assert_eq!(
+        (notes.group().as_str(), notes.command().as_str()),
+        ("kiln-help", "kiln-notes"),
+        "the marker names the group that the path would have called `help`"
+    );
+
+    let root = clap::Command::new("saggar")
+        .subcommand_required(true)
+        .subcommands(typed_openapi::tree::commands(&doc));
+    for args in [
+        ["saggar", "firings", "list", "--help"],
+        ["saggar", "firings", "create", "--help"],
+        ["saggar", "kiln-help", "kiln-notes", "--help"],
+    ] {
+        let asked = root
+            .clone()
+            .try_get_matches_from(args)
+            .expect_err("`--help` asks for a page and runs no command");
+        assert_eq!(
+            asked.kind(),
+            clap::error::ErrorKind::DisplayHelp,
+            "{args:?}"
+        );
+    }
+}
+
+/// The three spellings the control document cannot hold, because a document
+/// holding one is refused. Each is the control document itself with one edit,
+/// so what is refused is the control document's own vocabulary and not a toy
+/// beside it.
+#[test]
+fn the_control_document_is_refused_for_a_help_that_carries_consent_or_names_a_subcommand() {
+    // The document with `from` written as `to`. `from` is in it exactly once, so
+    // an edit that stopped matching fails here and not as a quiet pass.
+    let edited = |from: &str, to: &str| {
+        assert_eq!(HOSTILE.matches(from).count(), 1, "`{from}` in the fixture");
+        HOSTILE.replace(from, to)
+    };
+
+    // The group `help`: the path's own first segment, without the marker.
+    let group = Document::load(&edited("      x-cli-group: kiln-help\n", ""), &[])
+        .expect_err("a path whose first segment is clap's own subcommand");
+    assert!(
+        matches!(&group, LoadError::NameSpent { op, what: "group", name }
+            if op == "listKilnNotes" && name == "help"),
+        "{group:?}"
+    );
+    assert_eq!(
+        group.to_string(),
+        "listKilnNotes: the group `help` is a subcommand that clap declares itself; \
+         name it with `x-cli-group` in an Overlay"
+    );
+
+    // The command `help`: the last literal segment of a path below a group.
+    let command = Document::load(&edited("/wadding/tallies:", "/wadding/help:"), &[])
+        .expect_err("a command named for clap's own subcommand");
+    assert!(
+        matches!(&command, LoadError::NameSpent { op, what: "command", name }
+            if op == "tallyWadding" && name == "help"),
+        "{command:?}"
+    );
+
+    // The gate `help`: `--help` would answer the gate that stands in front of a
+    // write, and `--commit --help` would send it.
+    let gate = Document::load(
+        &edited(
+            "      operationId: startFiring\n",
+            "      operationId: startFiring\n      x-cli-gates: [help]\n",
+        ),
+        &[],
+    )
+    .expect_err("a gate that `--help` answers");
+    assert!(
+        matches!(&gate, LoadError::ReservedGate { op, gate }
+            if op == "startFiring" && gate.as_str() == "help"),
+        "{gate:?}"
+    );
+    assert_eq!(
+        gate.to_string(),
+        "startFiring: the gate `help` is one of the flags every subcommand already spends"
+    );
+}
+
 // --------------------------------------------------------- the whole thing
 
 /// The command tree the control document mounts is one clap will not panic on.
@@ -1256,24 +1371,24 @@ fn the_control_document_mounts_as_a_command_tree_clap_accepts() {
 /// Every count an adopter would be tempted to write down, taken off the model.
 ///
 /// The numbers are here so that a shape added to the fixture has to be
-/// accounted for rather than absorbed: a seventh operation or a sixth
+/// accounted for rather than absorbed: a ninth operation or a sixth
 /// unspellable parameter fails this test before it reaches whichever test was
 /// meant to cover it.
 #[test]
 fn the_reduction_of_the_control_document_counts_what_is_in_it() {
     let summary = document().summary();
-    assert_eq!(summary.operations(), 7);
+    assert_eq!(summary.operations(), 8);
     assert_eq!(
         summary
             .groups()
             .iter()
             .map(CommandName::as_str)
             .collect::<Vec<_>>(),
-        ["firings", "wadding", "glaze-recipes"]
+        ["firings", "wadding", "glaze-recipes", "kiln-help"]
     );
-    assert_eq!(summary.reads(), 1);
+    assert_eq!(summary.reads(), 2);
     assert_eq!(summary.writes(), 6);
-    assert_eq!(summary.bodiless(), 2);
+    assert_eq!(summary.bodiless(), 3);
     // Four rather than the three bodies that are `JsonWhole`: a flat body of no
     // properties offers a command line `--json-body` and nothing else, which is
     // what the count is about.

@@ -827,9 +827,15 @@ components:
     );
 }
 
-/// One phantom in every position the specification puts a schema in: one per
-/// key the walk's table spells, down to each of the eight methods and each of
-/// the two spellings of a definitions map.
+/// One phantom in every position the walk reads a schema in: one per key the
+/// walk's table spells, down to each of the eight methods and each of the two
+/// spellings of a definitions map.
+///
+/// The table spells positions that OpenAPI 3.0.3 does not define as well:
+/// `webhooks`, `components.pathItems`, the keywords of a later draft, a key of
+/// `paths` that is no path and a key of the responses that is no status code.
+/// Each is a row, because the walk judges a schema by what it holds and not by
+/// where it stands, and the model drops each of them without a word.
 ///
 /// Four of the keywords carry their phantom one level further down, under a
 /// `properties` of their own. `not`, `if`, `then` and `else` exempt everything
@@ -882,6 +888,11 @@ const EVERYWHERE: &str = r"paths:
                   spare:
                     type: object
                     additionalProperties: { type: object, required: [onAdditional] }
+        foo:
+          description: no status code
+          content:
+            application/json:
+              schema: { type: object, required: [onNoStatusCode] }
       callbacks:
         settled:
           '{$request.body#/url}':
@@ -909,6 +920,8 @@ const EVERYWHERE: &str = r"paths:
       parameters: [{ name: n, in: query, schema: { type: object, required: [onPatch] } }]
     trace:
       parameters: [{ name: n, in: query, schema: { type: object, required: [onTrace] } }]
+  vouchers:
+    parameters: [{ name: n, in: query, schema: { type: object, required: [onNoPath] } }]
 webhooks:
   settled:
     post:
@@ -1024,6 +1037,8 @@ const EVERY_PHANTOM: &[&str] = &[
      .properties.rows.items requires `onItems`",
     "$.paths['/ledger'].post.responses['200'].content['application/json'].schema\
      .properties.spare.additionalProperties requires `onAdditional`",
+    "$.paths['/ledger'].post.responses.foo.content['application/json'].schema \
+     requires `onNoStatusCode`",
     "$.paths['/ledger'].post.callbacks.settled['{$request.body#/url}'].post.requestBody\
      .content['application/json'].schema requires `onCallbackBody`",
     "$.paths['/methods'].get.parameters[0].schema requires `onGet`",
@@ -1034,6 +1049,7 @@ const EVERY_PHANTOM: &[&str] = &[
     "$.paths['/methods'].head.parameters[0].schema requires `onHead`",
     "$.paths['/methods'].patch.parameters[0].schema requires `onPatch`",
     "$.paths['/methods'].trace.parameters[0].schema requires `onTrace`",
+    "$.paths.vouchers.parameters[0].schema requires `onNoPath`",
     "$.webhooks.settled.post.requestBody.content['application/json'].schema \
      requires `onWebhook`",
     "$.components.parameters.Period.schema requires `onComponentParameter`",

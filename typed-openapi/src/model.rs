@@ -60,48 +60,54 @@ pub const COMMIT: &str = "commit";
 /// a generated subcommand.
 pub const COMMIT_ID: &str = "cli:commit";
 
-/// The five flags that carry a request's body, spent by every subcommand
-/// before the document has a say.
+/// The six words that no flag of a subcommand may take: the five flags that
+/// carry a request's body, which the tree declares itself, and `--help`, which
+/// clap declares on every subcommand whether or not anyone asked.
 ///
-/// A parameter or a body field that wants one of these moves aside for it, and
-/// a gate that names one is refused. Nothing here is a person saying yes, which
-/// is why these yield where a gate and the confirmation do not: a
-/// `--body-json-body` is ugly and harmless, where a confirmation nobody typed
-/// is neither.
+/// A parameter or a body field that wants one moves aside for it, and a gate or
+/// the confirmation that wants one is refused. Nothing here is a person saying
+/// yes, which is why a parameter yields where a gate and the confirmation do
+/// not: a `--body-json-body` is ugly and harmless, where a confirmation nobody
+/// typed is neither. `--help` is the plainest case, because somebody types it to
+/// read, so a word that answers it would be answered by a person who asked for
+/// no more than a help page.
 ///
 /// Spending a word here changes the reduced model of any document that declares
 /// a field spelled the same way, which is the point: the field moves aside at
 /// bless time, where a reviewer sees it, rather than shadowing a flag the CLI
-/// needs.
-pub(crate) const TRANSPORT: [&str; 5] = [
+/// needs. The six are written once: the load puts them in every `Namespace`,
+/// and [`spends`] asks them of a decoded blob.
+pub(crate) const SPENT: [&str; 6] = [
     JSON_BODY,
     JSON_BODY_TEMPLATE,
     RAW_BODY,
     FILE_PART,
     FIELD_PART,
+    HELP,
 ];
 
-/// `--help`, which clap declares on every subcommand whether or not anyone
-/// asked. Nothing here can move it, so it is a name the confirmation may not
-/// take.
-const HELP: &str = "help";
+/// The word clap spends twice: `--help` on every subcommand, and the `help`
+/// subcommand that it adds to every command that has subcommands.
+pub(crate) const HELP: &str = "help";
 
-/// Whether a word is one that no flag of a subcommand may take: the five flags
-/// that carry a body, and `--help`.
+/// Whether a word is one that no flag of a subcommand may take, one of the
+/// [`SPENT`] six.
 ///
-/// clap declares `--help` on every subcommand, and the tree declares each body
-/// flag on the subcommands whose body takes it. None of them can move, so the
-/// confirmation is what gives way when it wants one. The reduction refuses such
-/// a word and a decoded blob is refused for holding one, and both ask here.
+/// None of them can move, so a gate or the confirmation is refused when it wants
+/// one, and a parameter or a property moves aside. The reduction asks here for
+/// the first, a decoded blob is refused for holding any of them, and both ask
+/// here.
 pub(crate) fn spends(word: &str) -> bool {
-    TRANSPORT.contains(&word) || word == HELP
+    SPENT.contains(&word)
 }
 
 /// Whether clap declares a subcommand of this name itself, on every command
 /// that has subcommands.
 ///
 /// Nothing can move it, so a group or a command that wears the name is two
-/// subcommands with one spelling. A decoded blob is refused for holding one.
+/// subcommands with one spelling. The reduction refuses a document that places
+/// an operation under one, and a decoded blob is refused for holding one, and
+/// both ask here.
 pub(crate) fn spends_command(name: &str) -> bool {
     name == HELP
 }
@@ -682,10 +688,11 @@ pub enum DocumentError {
         /// The method of the operation, as the blob spells it.
         method: String,
     },
-    /// A group or a command is named `help`. clap declares a `help` subcommand
-    /// on every command that has subcommands, so a debug build of the binary
-    /// panics when it builds the command tree, and a release build lets one
-    /// take the place of the other.
+    /// A group or a command is named `help`. A load refuses a document that
+    /// places an operation under one. clap declares a `help` subcommand on every
+    /// command that has subcommands, so a debug build of the binary panics when
+    /// it builds the command tree, and a release build lets one take the place
+    /// of the other.
     #[error(
         "{op}: the {what} `{name}` is a subcommand that clap declares itself; \
          run the bless step again"
@@ -714,6 +721,16 @@ pub enum DocumentError {
         first: String,
         /// The `operationId` of the later one.
         second: String,
+    },
+    /// A parameter requires its own name. A load refuses a document that says
+    /// so, and a debug build of the binary panics when it builds the command
+    /// tree, because clap does not let an argument require itself.
+    #[error("{op}: `{name}` requires itself; run the bless step again")]
+    RequiresItself {
+        /// The `operationId` of the operation that declares the parameter.
+        op: String,
+        /// The parameter that requires itself, as the document spells it.
+        name: String,
     },
     /// A parameter requires a name the operation declares no parameter under.
     #[error(
@@ -802,7 +819,7 @@ impl Document {
     /// for the same document and no type changed. The crate's own tests trace
     /// the layout and fail on a change to a type that left the number where it
     /// was.
-    pub const MODEL_LAYOUT: u32 = 3;
+    pub const MODEL_LAYOUT: u32 = 4;
 
     /// The same reduction, already done and written down.
     ///
@@ -1188,14 +1205,18 @@ impl Param {
     }
 }
 
-/// A requirement among the parameters of one operation that no request could
-/// meet.
+/// A requirement among the parameters of one operation that cannot be mounted:
+/// it names the parameter itself, a parameter the operation does not declare, or
+/// one that has no flag.
 ///
 /// The load and the decode of a blob both refuse such a requirement, each in
 /// its own error, so the question is asked here once and each caller words the
 /// answer.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Unmet<'p> {
+    /// The parameter lists its own name. It asks for nothing, and a debug build
+    /// of clap refuses an argument that requires itself.
+    Itself { name: &'p str },
     /// The parameter that `requires` lists is not one the operation declares.
     Unknown { name: &'p str, requires: &'p str },
     /// The parameter that `requires` lists has no flag.
@@ -1206,12 +1227,15 @@ pub(crate) enum Unmet<'p> {
     },
 }
 
-/// The first requirement among `params` that no request could meet, in the
-/// order the parameters are listed.
+/// The first requirement among `params` that cannot be mounted, in the order the
+/// parameters are listed.
 pub(crate) fn unmet(params: &[Param]) -> Option<Unmet<'_>> {
     params.iter().find_map(|param| {
         param.requires().iter().find_map(|requires| {
             let name = param.name();
+            if requires == name {
+                return Some(Unmet::Itself { name });
+            }
             match params.iter().find(|other| other.name() == requires) {
                 None => Some(Unmet::Unknown { name, requires }),
                 Some(other) => match other.shape() {

@@ -26,8 +26,16 @@ field spelled like one refuses the load — `GateTakenByName`, `CommitTakenByNam
 and go on the wire; a confirmation answerable by a flag somebody typed for
 another reason is not a confirmation. Each word moves on the side that owns it:
 a gate in the adopter's `x-cli-gates`, the confirmation through
-`Loading::commit` or `Settings::commit_word`. The five body flags in `TRANSPORT`
-are not consent and still yield, to `--body-<name>`.
+`Loading::commit` or `Settings::commit_word`. `help` and the five body flags are
+not consent and still yield, to `--param-<name>` or `--body-<name>`. They are
+the six words of `SPENT` in `src/model.rs`, which the load puts in every
+`Namespace` and `spends` asks of a decoded blob, and a gate or the confirmation
+that wears one of the six is refused (`ReservedGate`,
+`ConfirmationError::Taken`): `--help` is typed to read a page, and a word that
+`--help` answers is a write that somebody sent by asking for help. A group or a
+command called `help` is refused for the same collision with clap's own
+subcommand (`LoadError::NameSpent`), and `x-cli-group` or `x-cli-command` is the
+repair.
 
 The confirmation is guarded on writes only, because only a write declares it,
 and a gate on a read is refused while the document is reduced: a request sent on
@@ -52,6 +60,62 @@ out, and they are read in the same place the rule runs. Whether a path
 addresses one resource, which makes a `GET` a `get` and not a `list`, is read
 from the segments below the group only: a template above the group names a
 value the caller supplies for every operation under it.
+
+**This crate owns the `x-cli-` prefix, and a marker is read where it stands or
+the load is refused.** `src/markers.rs` holds the five keys, what each is read
+off, and the scan that `Document::load_with` runs on the overlaid document
+before the object model reads it, because the model drops a key beside a `$ref`
+without a word. The four on an operation are read on a method of a path item
+under `paths`, and `x-cli-requires` on a parameter that is not a `$ref`: a path
+item's, an operation's, or one under `components.parameters`, which is a place
+the key is read whether or not the `$ref` of an operation names it. An `x-cli-`
+key that nothing reads is `UnknownMarker`, one that stands where nothing reads
+it is `MisplacedMarker`, and each names the key and the node that holds it,
+spelled as an Overlay names a target. A new key joins `READ` with the subject it
+is read off, and the wording of both refusals follows from that table. The value
+of a marker is judged where it is read (`named`, `listed`, `requires_of` and
+`effect_of` in `src/model/reduce.rs`), and `x-cli-writes` is the boolean `true`
+or it is `Writes`: the marker adds a write and never removes one, so `false`
+says something it cannot do.
+
+**The scan enters what OpenAPI 3.0.3 defines, and the table it reads is
+shared.** `src/shape.rs` says which key of which kind of object leads to another
+object, to a list of them or to a map of them, and what the keys of a map are.
+The scan enters a value only where the table leads and 3.0.3 defines the route,
+and reads nothing under any other key: a field of type Any (`example`,
+`default`, `enum`, the `value` of an Example Object, the `parameters` values and
+the `requestBody` of a Link Object), the value of an extension, and a key that
+3.0.3 does not define. The last is one class: a field of a later version
+(`webhooks`, `components.pathItems`), a keyword of a later draft (`$defs`, `if`,
+`dependencies`), and a key that no version defines (a key of `paths` that does
+not start with `/`, and a key of a Responses Object that is neither `default`
+nor a status code that `openapiv3::StatusCode` reads). The model drops each of
+them and nothing builds a request or a flag from what stands there. A scan that
+entered them would read a 3.0 document as 3.1, and refuse a document for data
+that nobody reads. An `x-…` key of an object it enters is an extension. A
+property, a component, a media type and a response header may be spelled
+`x-cli-writes`, so the keys of a map of names somebody chose are names and are
+not read; the Paths Object and the Responses Object are the two maps whose `x-…`
+keys are extensions.
+
+A route is one that 3.0.3 defines or one that only the schema walk enters
+(`Reach::Defined` and `Reach::Whole`), and each has one place in the table. A
+map added for a route that 3.0.3 defines is added for both walks. The schema
+walk also enters the rest, because `required::check` judges a schema by what it
+holds and not by where it stands: wherever it can tell that a name is declared
+nowhere it refuses the phantom, although typify writes no type there (F-81), and
+the refusal names an Overlay. A marker is judged by where it stands, so the scan
+stops at what the model reads. A route that the table gains for the schema walk
+alone gets a row in `tests/required.rs` and one in the marker test of the keys
+that 3.0.3 does not define.
+
+A list of what is entered fails toward a marker missed, which the docs accept. A
+list of what is not entered fails toward a document wrongly refused at each
+field that nobody put on it, which they forbid. So an object that the table
+leaves out and the specification gives fixed fields is a marker missed, and a
+kind added to the table is added with a row in the tests of `src/markers.rs`.
+`required::check` judges only `Kind::Schema`, so a kind that holds no schema
+changes none of its answers.
 
 **Corrections are an ordered list of Overlays, and the library reads nothing
 into it.** `Settings::overlay` and `Document::load` take layers and apply them
@@ -160,7 +224,10 @@ spells it and as it was refused, with the defaults in it).
 where the repair is true.** A `LoadError` from one operation carries the
 `operationId`; one from a path item carries the path (`PathItem`), and one from
 an Overlay carries the index of the layer in the list `Document::load` was given
-(`Layer`). A name that cannot be spelled is `Name` for a group or a command,
+(`Layer`). A refusal of an `x-cli-` key (`UnknownMarker`, `MisplacedMarker`)
+carries the node that holds the key and no `operationId`: the scan runs before
+any operation is reduced, and the key may stand on an object that is no
+operation. A name that cannot be spelled is `Name` for a group or a command,
 whose repair is `x-cli-group` and `x-cli-command`, and `GateName` for a gate,
 whose repair is `x-cli-gates`, because the first repair mends nothing in a gate.
 A path with no segment to name a group after, the root `/`, is named whole.
@@ -190,13 +257,13 @@ review finding that found it.
 exemptions are measured against the generator.** `required::check` in
 `src/required.rs` reads the *overlaid* document, before the OpenAPI object model
 normalises an inline body away, and names every node whose `required` lists a
-name neither it nor anything it composes with declares. The reduced document is
-the vendor's plus the adopter's Overlays — the one that has to be right — so a
-name nothing describes is a vendor mistake the adopter repairs in an Overlay,
-where the correction is a line a reviewer reads. What a miss costs is measured
-rather than argued: typify writes `pub b: ::serde_json::Value`, required and
-with no `serde(default)`, so the generated type refuses the vendor's own
-responses.
+name neither it nor anything it composes with declares, walking the whole table
+of `src/shape.rs`. The reduced document is the vendor's plus the adopter's
+Overlays — the one that has to be right — so a name nothing describes is a
+vendor mistake the adopter repairs in an Overlay, where the correction is a line
+a reviewer reads. What a miss costs is measured rather than argued: typify
+writes `pub b: ::serde_json::Value`, required and with no `serde(default)`, so
+the generated type refuses the vendor's own responses.
 
 A node is exempt only where the walk cannot tell whether a name is declared
 *and* typify writes no such field either — a `$ref` leading out of the document,
@@ -218,8 +285,10 @@ nine positions where typify writes no field: `unevaluatedProperties`, a
 `then`, `contentSchema`, `$defs`, and anywhere below `not`. At each of them the
 walk reads the node and can tell, so a phantom there is refused, and no row
 exempts a position. Eight of the nine are keywords that a 3.0 schema does not
-have, and a document that is not 3.0 is refused first. The ninth, below `not`,
-is rare, and its refusal names an Overlay.
+have, and a document that is not 3.0 is refused first. A 3.0 document that
+carries one is read all the same: the walk reads the keyword and refuses a
+phantom under it, although the model drops it, and the refusal names an Overlay.
+So it does below `not`, which is rare.
 
 The walk takes its nodes from a work list that shares the `followed` set, and
 makes no call for a hop. A chain of `allOf` hops is as long as the vendor wrote
@@ -529,23 +598,23 @@ each operation, its names, its effect, its gates, its flags and each `requires`,
 and then the names two operations share. An operation is asked whole before the
 next one, and the names two operations share after every operation. The error
 names the operation, or both of two, except for the document's own confirmation
-word, which has none. Each rule is asked in one place that the load and the check
-share: `spends`, `gate_on_read`, `first_collision`, `Effect::of_method` and
-`unmet` in `src/model.rs`, because `reduce` is behind the `document` feature and
-`blob` is not, and `names::is_spelled`. `first_collision` makes one pass over the
-operations, because the check runs at every start-up of a shipped binary and the
-number of operations is the document's. `spends_command` is beside them and only
-the check asks it: the load accepts a group or a command called `help`.
-`check_requires` matches `Unmet` with no `_` arm, so a new way for a `requires`
-to fail stops compiling until the decode names it.
+word, which has none. Each rule is asked in one place that the load and the
+check share: `spends`, `spends_command`, `gate_on_read`, `first_collision`,
+`Effect::of_method` and `unmet` in `src/model.rs`, because `reduce` is behind
+the `document` feature and `blob` is not, and `names::is_spelled`.
+`first_collision` makes one pass over the operations, because the check runs at
+every start-up of a shipped binary and the number of operations is the
+document's. `spends_command` is beside them, and `placement` in
+`src/model/reduce.rs` asks it of the group and the command, as `check_names`
+does. `check_requires` matches `Unmet` with no `_` arm, so a new way for a
+`requires` to fail stops compiling until the decode names it.
 
 The flags of an operation share one namespace: the confirmation word of a write,
 the gates, the parameters that have a flag and the properties of a body, with
-`help` and the five `TRANSPORT` words spent. `Namespace::guarding` and
-`gates_of` in `src/model/reduce.rs` keep it at load and
-`Operation::check_flags` keeps it on the way in, so a rule added to one is added
-to the other. A read declares no confirmation word, so a parameter of a read may
-be spelled like it.
+the six `SPENT` words spent. `Namespace::guarding` and `gates_of` in
+`src/model/reduce.rs` keep it at load and `Operation::check_flags` keeps it on
+the way in, so a rule added to one is added to the other. A read declares no
+confirmation word, so a parameter of a read may be spelled like it.
 
 The blob holds two facts of the document only in part, and the check cannot find
 what the blob does not hold. It holds the effect and not `x-cli-writes`, so the
@@ -578,8 +647,12 @@ all. Three rules are repeated whatever their breaks, because F-70, the finding
 that asked for the check, names them: the confirmation word, which is the
 validation of `Loading::commit`, the spelling of each flag, and each `requires`.
 The spelling of a flag and the confirmation word of a write have breaks inside
-the line (a word with a leading `-` makes a debug build panic), and no break of
-the document's own confirmation word or of a `requires` is. A slice that adds a
+the line (a word with a leading `-` makes a debug build panic), and so has a
+`requires` that names its own parameter (`RequiresItself`: clap refuses an
+argument that requires itself). The other two breaks of a `requires`, a name the
+operation does not declare and one that has no flag, cost the run only, because
+`companion_flags` in `src/tree.rs` leaves them out of the command. No break of
+the document's own confirmation word is inside the line. A slice that adds a
 refusal at load asks whether a value in the blob can break it, reads what a
 binary does with the blob that does, and adds the check when the answer is
 inside the line.

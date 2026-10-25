@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use typed_openapi::generate::{GenerateError, Settings};
 use typed_openapi::overlay::{self, OverlayError, Place};
-use typed_openapi::{Document, LoadError};
+use typed_openapi::{Document, Effect, LoadError};
 
 const TOY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml");
 const CORRECTIONS: &str = concat!(
@@ -146,6 +146,33 @@ fn the_written_model_is_the_written_documents_reduction() {
         shipped == fresh,
         "the reduction a binary reads is not the written document's"
     );
+}
+
+/// The confirmation word an adopter chooses is the word the blob confirms with,
+/// on the document and on every operation. A shipped binary reads the blob and
+/// nothing else, so a bless step that dropped the word would write a blob that
+/// confirms with `commit` while the adopter's help and scripts say `yes`.
+#[test]
+fn the_confirmation_word_an_adopter_chooses_is_the_word_the_blob_confirms_with() {
+    let chosen = layered()
+        .commit_word("yes")
+        .expect("`yes` is a word nobody spends");
+    for (settings, word) in [(layered(), "commit"), (chosen, "yes")] {
+        let dir = out(&format!("confirms-{word}"));
+        let written = settings.write_to(&dir).expect("the fixtures generate");
+        let blob = std::fs::read(&written[3]).expect("the reduced model");
+        let shipped = Document::from_blob(&blob).expect("the written blob is a reduction");
+
+        assert_eq!(shipped.commit(), word, "the document");
+        let writes: Vec<_> = shipped
+            .iter()
+            .filter(|op| op.effect() == Effect::Write)
+            .collect();
+        assert!(!writes.is_empty(), "the fixtures have writes to confirm");
+        for op in writes {
+            assert_eq!(op.commit(), word, "{}", op.id());
+        }
+    }
 }
 
 /// The page is the written model's own count, and it says where that count

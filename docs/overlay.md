@@ -556,10 +556,27 @@ and it is last because nothing else has any use for what is in it.
 | `x-cli-command: <name>` | an operation | call it this rather than what its path and method name |
 | `x-cli-requires: [<parameter>, …]` | a parameter | refuse it unless each named parameter of the same operation is given too |
 
-The last two are also the only way out of a name collision — two operations
-reducing to one `<group> <command>` is a `LoadError` at bless time naming both
-`operationId`s, never a silent rename. [docs/cli.md](cli.md#the-shape-of-the-tree)
-has the rule they overrule.
+This crate owns the `x-cli-` prefix, and a marker is read where it stands or the
+document is refused. The four on an operation are read on an operation, a method
+of a path item under `paths`, and `x-cli-requires` on a parameter under `paths`
+or `components.parameters`, and not beside a `$ref`, which the OpenAPI model
+drops in silence. The same key on a path item, or any other `x-cli-` key on an
+object of the document, is a `LoadError` that names the key and the node that
+holds it:
+
+```
+`x-cli-writes` stands on `$.paths['/vouchers/{id}/render']`, where this crate does not read it; it reads that key on a method of a path item under `paths`
+```
+
+An extension of your own goes under another prefix. A name or a value that
+happens to be spelled like a marker, such as a property called `x-cli-writes` or
+an `example`, is no marker and is not read. Nothing under a key that OpenAPI 3.0
+does not define is read either, such as `webhooks` or a schema's `$defs`.
+
+`x-cli-group` and `x-cli-command` are also the only way out of a name collision
+— two operations reducing to one `<group> <command>` is a `LoadError` at bless
+time naming both `operationId`s, never a silent rename.
+[docs/cli.md](cli.md#the-shape-of-the-tree) has the rule they overrule.
 
 ```yaml
   - target: $.paths['/vouchers/{id}/enshrine'].post
@@ -603,7 +620,8 @@ alone with a `400` is one the document should hold to both:
 The requirement runs one way, from the parameter carrying the marker. The
 command line refuses the flag without its companion, and `Invocation::new`
 refuses the same `Values` a typed wrapper builds. A name that is not a parameter
-of the operation, or names one this crate cannot send, is a `LoadError`.
+of the operation, one that names a parameter this crate cannot send, and the
+parameter's own name are each a `LoadError`.
 
 ## Owning the type yourself
 

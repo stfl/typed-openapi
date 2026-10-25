@@ -1268,6 +1268,123 @@ fn a_flag_that_requires_another_is_refused_by_the_parser_without_it() {
     );
 }
 
+/// A `DELETE` and a `PATCH` write by their method alone, and nothing in the
+/// document marks either. Each is a dry run until the confirmation is typed and
+/// goes out as the method it names once it is. A method that fell through to a
+/// read would be sent on sight, and no document says so.
+#[test]
+fn a_delete_and_a_patch_are_dry_runs_until_they_are_confirmed() {
+    const DOC: &str = "openapi: 3.0.3\n\
+         info: { title: t, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+         \x20 /vouchers/{id}:\n\
+         \x20   delete:\n\
+         \x20     operationId: deleteVoucher\n\
+         \x20     parameters:\n\
+         \x20       - { name: id, in: path, required: true, schema: { type: integer } }\n\
+         \x20     responses: { \"200\": { description: OK } }\n\
+         \x20   patch:\n\
+         \x20     operationId: patchVoucher\n\
+         \x20     parameters:\n\
+         \x20       - { name: id, in: path, required: true, schema: { type: integer } }\n\
+         \x20     responses: { \"200\": { description: OK } }\n";
+
+    let doc = Document::load(DOC, &[]).expect("a document with a DELETE and a PATCH");
+    for (command, method) in [("delete", Method::DELETE), ("patch", Method::PATCH)] {
+        let client = Recorder::new().answering(StatusCode::OK, &json!({}));
+
+        let unconfirmed = parse(&doc, &["toy", "vouchers", command, "--id", "5"]);
+        let outcome = tree::dispatch(&doc, doc.base(), &client, &unconfirmed)
+            .expect("a write without the confirmation dispatches");
+        let Outcome::DryRun(request) = outcome else {
+            panic!("{command}: a write without --commit is a dry run");
+        };
+        assert_eq!(request.method(), method, "{command}: the dry run");
+        assert!(
+            client.take().is_empty(),
+            "{command}: a dry run reaches the client with nothing"
+        );
+
+        let confirmed = parse(&doc, &["toy", "vouchers", command, "--id", "5", "--commit"]);
+        let outcome = tree::dispatch(&doc, doc.base(), &client, &confirmed)
+            .expect("a confirmed write dispatches");
+        assert!(matches!(outcome, Outcome::Sent(_)), "{command}");
+        let sent = only(&client);
+        assert_eq!(
+            sent.method(),
+            method,
+            "{command}: the request that went out"
+        );
+        assert_eq!(sent.uri().path(), "/vouchers/5", "{command}");
+    }
+}
+
+/// `--help` prints a help page and sends nothing, whatever the document spells.
+/// A parameter and a property that the vendor calls `help` move to `--param-help`
+/// and `--body-help`, so clap's flag stays clap's and the vendor's values still
+/// reach the wire under the vendor's name.
+#[test]
+fn help_prints_help_and_sends_nothing_where_the_document_spells_a_help_of_its_own() {
+    const DOC: &str = "openapi: 3.0.3\n\
+         info: { title: t, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+         \x20 /notes:\n\
+         \x20   post:\n\
+         \x20     operationId: addNote\n\
+         \x20     parameters:\n\
+         \x20       - { name: help, in: query, schema: { type: string } }\n\
+         \x20     requestBody:\n\
+         \x20       content:\n\
+         \x20         application/json:\n\
+         \x20           schema:\n\
+         \x20             type: object\n\
+         \x20             properties:\n\
+         \x20               help: { type: string }\n\
+         \x20     responses: { \"200\": { description: OK } }\n";
+
+    let doc = Document::load(DOC, &[]).expect("a document that spells a help of its own");
+    root(&doc).debug_assert();
+
+    for args in [
+        ["toy", "notes", "create", "--help"],
+        ["toy", "notes", "create", "-h"],
+    ] {
+        let asked = root(&doc)
+            .try_get_matches_from(args)
+            .expect_err("`--help` asks for a help page and no command runs");
+        assert_eq!(
+            asked.kind(),
+            clap::error::ErrorKind::DisplayHelp,
+            "{args:?}"
+        );
+        let page = asked.to_string();
+        assert!(page.contains("--param-help <STRING>"), "{page}");
+        assert!(page.contains("--body-help <STRING>"), "{page}");
+    }
+
+    let client = Recorder::new().answering(StatusCode::OK, &json!({}));
+    let matches = parse(
+        &doc,
+        &[
+            "toy",
+            "notes",
+            "create",
+            "--param-help",
+            "a",
+            "--body-help",
+            "b",
+            "--commit",
+        ],
+    );
+    let outcome = tree::dispatch(&doc, doc.base(), &client, &matches).expect("dispatches");
+    assert!(matches!(outcome, Outcome::Sent(_)));
+    let sent = only(&client);
+    assert_eq!(sent.uri().query(), Some("help=a"));
+    assert_eq!(sent.body().as_slice(), br#"{"help":"b"}"#);
+}
+
 /// A file under `CARGO_TARGET_TMPDIR`, named for this test binary's process so
 /// that two runs do not meet in one file.
 fn scratch(name: &str, text: &str) -> std::path::PathBuf {
