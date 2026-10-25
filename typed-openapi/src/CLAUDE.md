@@ -135,14 +135,14 @@ overlaid value once, and where serde stopped at `paths` it reads the value again
 one path item at a time, in document order, and names the first item that fails
 and the node inside it (`paths[/b].get.deprecated`). The re-read refuses only
 what the model refuses, with the model's cause: it tries the keys that start
-with `/` and no others, as `openapiv3` does, and reads each item as a
-`PathItem`, which reads the item's keys in the order it lists them, as the model
-does. Anywhere else serde's own place is kept. The bless step's `NotOpenApi`
-calls the same function. A read that returns a `RefError` passes it on through
-`under`, a body's multipart schema included: a schema that cannot be followed is
-never a body with no parts. `ParameterRef` and `PathItem` are the two variants
-that do not go through `under`: `ParameterRef` names the operation that lists
-the parameter itself, and `PathItem` has no `RefError` to pass on.
+with `/` and no others, as `openapiv3` does, and reads each item as an
+`openapiv3::PathItem`, which reads the item's keys in the order it lists them,
+as the model does. Anywhere else serde's own place is kept. The bless step's
+`NotOpenApi` calls the same function. A read that returns a `RefError` passes it
+on through `under`, a body's multipart schema included: a schema that cannot be
+followed is never a body with no parts. `ParameterRef` and `PathItem` are the
+two variants that do not go through `under`: `ParameterRef` names the operation
+that lists the parameter itself, and `PathItem` has no `RefError` to pass on.
 `tests/refusals.rs` holds a case for each, from the input of the probe or the
 review finding that found it.
 

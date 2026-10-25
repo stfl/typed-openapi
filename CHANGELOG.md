@@ -197,10 +197,13 @@ the crate follows [Semantic Versioning][semver].
   - `LoadError::Shape` is `Shape { at, source }`, and `GenerateError::NotOpenApi`
     is `NotOpenApi { at, source }`. At 0.0.2 each held a `serde_json::Error` and
     said nothing of a place, because the OpenAPI model drops the path inside
-    `paths`. `at` is the first node that the model refuses, found by reading
-    each path item alone, in the order the document lists them, and the node
-    inside it: `paths[/b].get.deprecated`, `paths[/b].parameters[0]`,
-    `info.title`, or `.` for the document itself. The message is
+    `paths`. `at` is the first node that the model refuses. For a fault inside
+    `paths` the document is read again one path item at a time, in the order it
+    lists them, and `at` is the item and the node inside it: `paths[/b]` for an
+    item that is no object, `paths[/b].get.deprecated`, or
+    `paths[/b].parameters[0]`. For a fault anywhere else `at` is the place the
+    model gives, such as `info.title` or `components.schemas.Voucher`, or `.`
+    for the document itself. The message is
     ``the overlaid document is not an OpenAPI 3 document: refused at `<at>` ``,
     and serde's reason is the cause. Repair: match `Shape { .. }` and
     `NotOpenApi { .. }`, and print `at`.
@@ -216,24 +219,30 @@ the crate follows [Semantic Versioning][semver].
     spelled as a flag is the new `GateName { op, source }`, whose repair is
     `x-cli-gates`. The root path `/` has no segment, so its cause reads
     ``the path `/` does not kebab-case into [a-z0-9-]`` and not "the path
-    segment". Repair: match `Name { .. }` and `GateName { .. }` where you
-    matched `Name(_)`. To mend the document, write the two markers on the
-    operation, or correct the gate, in an Overlay.
+    segment". The message of `GateName` is ``<op>: a gate in `x-cli-gates` is
+    not a word that can be a flag; correct it in an Overlay``. Repair: match
+    `Name { .. }` and `GateName { .. }` where you matched `Name(_)`. To mend the
+    document, write the two markers on the operation, or correct the gate, in an
+    Overlay.
   - `LoadError::Reference(RefError)` is gone. A path item that is a `$ref` is
     `PathItem { path, reference }`, and a parameter whose `$ref` cannot be
     followed is `ParameterRef { op, source }`. A path item said
     `` `paths[/a]` does not resolve ``, a place the document does not spell,
     and said it of a reference that resolves as well. This crate follows no
-    path item's `$ref`, so `PathItem` holds the reference and no cause. Repair:
-    match the two new variants.
+    path item's `$ref`, so `PathItem` holds the reference and no cause. Its
+    message is ``<path>: the path item is the `$ref` `<reference>`, which this
+    crate does not follow``. The message of `ParameterRef` is ``<op>: a
+    parameter is a `$ref` that cannot be followed``, and its cause is the
+    `RefError`. Repair: match the two new variants.
   - `LoadError` no longer implements `From<OverlayError>`, `From<NameError>` or
     `From<RefError>`. A `?` that turned one of them into a `LoadError` does not
     compile. Each of the three is now one variant among several, and the
-    variant says which operation or layer it came from. Repair: build the
-    variant with `map_err`: `LoadError::Overlay` for the vendor's document,
-    `Layer { layer, source }` for an Overlay layer, `Name { op, source }` or
-    `GateName { op, source }` for a name, and `ParameterRef { op, source }` or
-    `Unresolvable { op, name, source }` for a reference.
+    variant says which document, layer or operation it came from. Repair:
+    build the variant with `map_err`: `LoadError::Overlay` for the vendor's
+    document, `Layer { layer, source }` for an Overlay layer,
+    `Name { op, source }` or `GateName { op, source }` for a name, and
+    `ParameterRef { op, source }` or `Unresolvable { op, name, source }` for a
+    reference.
   - **A document that loaded is refused.** A multipart body whose schema is a
     `$ref` that cannot be followed loaded with no part names. It is
     `LoadError::Unresolvable { op, name: "requestBody", source }`, as for any
