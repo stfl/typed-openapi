@@ -318,7 +318,9 @@ fn json_body_type(
     names: &Names,
 ) -> Result<Option<TokenStream>, GenerateError> {
     match op.body() {
-        Body::JsonFields(_) | Body::JsonWhole { .. } => body_type(op, operation, names).map(Some),
+        Body::JsonFields { .. } | Body::JsonWhole { .. } => {
+            body_type(op, operation, names).map(Some)
+        }
         Body::None | Body::Opaque { .. } | Body::Multipart { .. } => Ok(None),
     }
 }
@@ -566,7 +568,7 @@ fn signature_of(
     }
     match op.body() {
         Body::None => {}
-        Body::JsonFields(_) | Body::JsonWhole { .. } => {
+        Body::JsonFields { .. } | Body::JsonWhole { .. } => {
             let ty = body_type(op, operation, names)?;
             let body = out.argument(&format_ident!("body"), "body", "is the request body");
             out.args.push(quote! { #body: &#ty });

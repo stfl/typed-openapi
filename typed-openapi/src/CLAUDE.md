@@ -234,20 +234,34 @@ answering. `Carrier` is what makes one list out of two — both halves name
 themselves with a `&str`, and `Values` keeps parameters and body apart, so the
 name alone does not say where the value goes.
 
+**A JSON body goes out under the `content` key it was declared under.**
+`Body::JsonFields` and `Body::JsonWhole` carry the key as the document spells it,
+parameters included, as `Body::Opaque` does, and `Invocation::request` sends it.
+So the command line and the typed call send one `Content-Type`, and `Values` has
+no way to name one. The key that is sent among several is picked in
+`Body::build` and nowhere else: the first that `is_json`, wherever it stands, and
+else the first of all, so a multipart key is no better than another. Only that
+key is read, so only that key can be refused (`MediaType`, `MediaRange`), and a
+range beside a JSON key loads. A media range is a `*` in the type or in the
+subtype (`is_media_range`), `application/*+json` among them. `is_json` reads a
+`+json` suffix and not a range, so that key is the one that is sent only when no
+concrete JSON key stands beside it. `docs/validation.md` states the rule and
+`tests/media.rs` pins it.
+
 **A shape the reduction cannot read is refused by name, never approximated.** A
-`pattern` no engine runs and a `content` key that is not a media type are both
-the document saying something this crate has no reading for, so both are a
-`LoadError` naming the operation and the thing that could not be read — guessing
-what the vendor meant is a correction, and a correction is the adopter's to
-write in an Overlay where a reviewer can see it. `Scalar::runnable` asks the
-rules of a value that run but not as the vendor means: a `pattern` with `\p{`,
-`\P{` or `\u{`, which has another meaning with the Unicode flag than without it,
-and the generated type cannot be given the flag, and a `multipleOf` that is not
-more than 0. Both are `LoadError::Unrunnable`, whose cause prints the pattern or
-the step, and so is an `enum` that lists `null` and no other value, which
-`runnable_scalar` in `src/model/reduce.rs` asks beside it because `Scalar` holds
-no `null` and the rule would otherwise read as no rule. The escape is found by
-reading the pattern, a backslash taking the character after it, so `\\p{3}` is
+`pattern` no engine runs, a `content` key that is not a media type and one that
+is a media range are each the document saying something this crate has no reading
+for, so each is a `LoadError` naming the operation and the thing that could not
+be read — guessing what the vendor meant is a correction, and a correction is the
+adopter's to write in an Overlay where a reviewer can see it. `Scalar::runnable`
+asks the rules of a value that run but not as the vendor means: a `pattern` with
+`\p{`, `\P{` or `\u{`, which has another meaning with the Unicode flag than
+without it, and the generated type cannot be given the flag, and a `multipleOf`
+that is not more than 0. Both are `LoadError::Unrunnable`, whose cause prints the
+pattern or the step, and so is an `enum` that lists `null` and no other value,
+which `runnable_scalar` in `src/model/reduce.rs` asks beside it because `Scalar`
+holds no `null` and the rule would otherwise read as no rule. The escape is found
+by reading the pattern, a backslash taking the character after it, so `\\p{3}` is
 not one. Compiling both sides with the flag is the alternative that is out of
 scope, because it is a change to typify.
 

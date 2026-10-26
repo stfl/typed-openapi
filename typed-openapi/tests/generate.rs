@@ -2516,7 +2516,7 @@ fn a_flat_body_stated_inline_still_grows_a_flag_per_field() {
     let document = read(Path::new(TOY));
     let doc = Document::load(&document, &[CORRECTIONS, CLI]).expect("the fixtures reduce");
 
-    let typed_openapi::model::Body::JsonFields(fields) = doc
+    let typed_openapi::model::Body::JsonFields { fields, .. } = doc
         .get("createLedgerEntry")
         .expect("createLedgerEntry")
         .body()

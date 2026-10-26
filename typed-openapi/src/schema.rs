@@ -560,6 +560,23 @@ pub(crate) fn is_media_type(media_type: &str) -> bool {
         .is_some_and(|(ty, subtype)| is_token(ty) && is_token(subtype))
 }
 
+/// Whether this is a media range — `*/*`, `image/*` — and so a set of types and
+/// not one.
+///
+/// A `content` key may be one, because the document can say that a body is
+/// anything that the range admits. A request is sent under one type, and the
+/// range does not name it: `*` is a `token` character, so a range passes
+/// [`is_media_type`] and, sent as it stands, is a `Content-Type` that no server
+/// reads. The `*` is looked for in the type and the subtype and nowhere else,
+/// because a parameter after the `;` is the vendor's to spell. No registered
+/// media type has a `*` in its name, so `application/*+json` is a pattern too,
+/// and a range in the same sense: the vendor means a family, and this crate
+/// cannot choose the member.
+#[must_use]
+pub(crate) fn is_media_range(media_type: &str) -> bool {
+    essence(media_type).contains('*')
+}
+
 /// RFC 9110's `token`: one or more of the characters a field value carries
 /// unquoted. `/` is not one of them, which is what makes the split above the
 /// whole of the parse.
@@ -572,9 +589,14 @@ fn is_token(word: &str) -> bool {
 
 /// `application/json`, `application/merge-patch+json`, and anything with
 /// parameters after the essence.
+///
+/// A range is no JSON type: `application/*+json` ends in `+json` and names a
+/// family, so a body declared under it and under `application/json` is sent
+/// under the second.
 #[must_use]
 pub(crate) fn is_json(media_type: &str) -> bool {
-    essence(media_type) == "application/json" || essence(media_type).ends_with("+json")
+    !is_media_range(media_type)
+        && (essence(media_type) == "application/json" || essence(media_type).ends_with("+json"))
 }
 
 /// A media type this crate can assemble from `--file` and `--field` parts.
@@ -623,12 +645,32 @@ mod tests {
     }
 
     #[test]
+    fn a_range_has_a_star_in_its_type_or_its_subtype_and_nowhere_else() {
+        assert!(is_media_range("*/*"));
+        assert!(is_media_range("image/*"));
+        assert!(is_media_range("*/json"));
+        assert!(is_media_range("application/*+json"));
+        assert!(is_media_range("Image/*; q=0.5"));
+
+        assert!(!is_media_range("image/png"));
+        assert!(!is_media_range("application/vnd.api+json"));
+        // A parameter is the vendor's to spell, and is read no further than the
+        // `;` that starts it.
+        assert!(!is_media_range(r#"multipart/form-data; boundary="*""#));
+        // Not a media type, which is another refusal and asked first.
+        assert!(!is_media_range("form-data"));
+    }
+
+    #[test]
     fn json_is_recognised_through_suffixes_and_parameters() {
         assert!(is_json("application/json"));
         assert!(is_json("application/json; charset=utf-8"));
         assert!(is_json("application/merge-patch+json"));
         assert!(!is_json("form-data"));
         assert!(!is_json("multipart/form-data"));
+        // A family of types is not one of them.
+        assert!(!is_json("application/*+json"));
+        assert!(!is_json("*/*"));
     }
 
     #[test]

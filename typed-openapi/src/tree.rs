@@ -672,7 +672,7 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
             .map(|path| read_bytes(path).map(Payload::Raw))
             .transpose(),
         Body::Multipart { .. } => parts(matches).map(|parts| parts.map(Payload::Multipart)),
-        Body::JsonFields(fields) => Ok(Some(Payload::Json(assembled(fields, matches)?))),
+        Body::JsonFields { fields, .. } => Ok(Some(Payload::Json(assembled(fields, matches)?))),
     }
 }
 
@@ -890,7 +890,7 @@ fn wire(renamed: bool, name: &str) -> Option<String> {
 fn body_args(cmd: Command, body: &Body) -> Command {
     match body {
         Body::None => cmd,
-        Body::JsonFields(fields) => json_field_args(cmd, fields),
+        Body::JsonFields { fields, .. } => json_field_args(cmd, fields),
         // The flag that asks what this body looks like is `apart`'s to add,
         // once every other flag of the subcommand is there for it to name.
         Body::JsonWhole { required, .. } => cmd.arg(file_arg(JSON_BODY, *required).help(

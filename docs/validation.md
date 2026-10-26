@@ -311,6 +311,42 @@ refuses (`X Bad`), refuses the document: `LoadError::HeaderName`, and an Overlay
 corrects the name or removes the parameter. A header parameter with no flag sends
 nothing, so its name is not asked.
 
+**The `Content-Type` is the document's.** A JSON body goes out under the
+`content` key it was declared under, spelled as the document spells it and with
+its parameters: `application/merge-patch+json` is sent as that and not as
+`application/json`, and
+`application/vnd.api+json; profile="https://example.com/Profiles/Timestamps"` is
+sent with its `profile`. A server reads a merge patch and a JSON:API document by
+that type. `Body::JsonFields` and `Body::JsonWhole` carry the key, as
+`Body::Opaque` does, so the command line and the typed call send one
+`Content-Type`, and a caller sets none: `Values` has no way to name a media
+type.
+
+**One key is sent, and this is the rule that picks it.** A body may be declared
+under several `content` keys, and a request goes out under one. The key is the
+first, in the order of the overlaid document, that names JSON
+(`application/json` or a subtype that ends in `+json`, and no media range),
+wherever it stands among the others. Where none names JSON it is the first key
+of all, whatever it names, so a `multipart/form-data` key is no better than
+another and `application/x-www-form-urlencoded` listed before it is sent as raw
+bytes. An Overlay that removes a key takes it out of the choice.
+`tests/media.rs` pins each case.
+
+The key that is sent is the only one the reduction reads, and so the only one it
+can refuse. A key beside it is the vendor's business: it is not sent, and a
+document that has one the crate would refuse still loads.
+
+**A media range is refused.** A `content` key with a `*` in its type or in its
+subtype, such as `*/*`, `image/*` or `application/*+json`, names a set of types,
+and a request goes out under one. Sent as it stands the range would be the
+request's `Content-Type`, which no server reads, and the crate cannot choose the
+member the vendor means. The refusal is `LoadError::MediaRange`, which names the
+operation and the key, when the range is the key that is sent. The repair is the
+one for a key that is no media type at all, an Overlay that removes the range and
+states the type the vendor's server reads
+([overlay.md](overlay.md#1-plain-corrections)). A `*` in a parameter after the
+`;` is the vendor's to spell and is not read.
+
 A base URL is the scheme, the host and the path of every request, and nothing
 else of it is kept. One with userinfo (`user:password@`) or a query is refused
 when a request is built (`RequestError::Base`), whoever names it: the document's

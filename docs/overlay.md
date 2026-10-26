@@ -480,6 +480,19 @@ its document says, so the repair is true of the API: a TypeScript generator, a
 mock server and a request validator all want it, and it is a correction worth
 handing back — the document is the thing that is wrong.
 
+A media range is refused the same way, when it is the key the body would be sent
+under. A body declared under `*/*` or `image/*` says that the server reads any
+type the range admits, and a request goes out under one:
+
+```
+upload: `*/*` is a media range, and a body is sent under one media type; an Overlay is where a document's content type is corrected
+```
+
+The two actions are the ones above: `remove` takes the range out, and `update`
+puts in the type the server reads, which is a judgement of yours and, where the
+server really reads several, a choice. A range that stands beside a key that
+names JSON is not read, because the JSON key is the one that is sent.
+
 A rule the vendor names and never states. There are two ways to name one
 without stating it, and the toy document has both.
 

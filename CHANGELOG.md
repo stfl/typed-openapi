@@ -750,6 +750,41 @@ the crate follows [Semantic Versioning][semver].
   way or removes it, or that makes the `$ref` name a component schema
   (`#/components/schemas/<name>`) that does not lead back to itself.
 
+- **A body goes out under the media type that the document declares.** A JSON
+  body was sent as `application/json` whatever its `content` key said, so a body
+  declared as `application/merge-patch+json` or `application/vnd.api+json`
+  reached its server under another type, which answers 415 or reads it with the
+  semantics of the other. The `Content-Type` is the key as the document spells
+  it, parameters included, on the command line and in the typed call alike. A
+  document that declares `application/json` sends what it sent, and so does
+  sevdesk-cli's, whose 76 JSON bodies all declare it. The model carries the key,
+  so two variants of `Body` change:
+  - `Body::JsonFields` is the struct variant `JsonFields { media_type, fields }`,
+    where it was the tuple variant `JsonFields(Vec<Field>)`;
+  - `Body::JsonWhole` has the field `media_type` beside `required` and
+    `template`.
+
+  `Document::MODEL_LAYOUT` is 7. Repair: a `match` that binds `JsonFields(fields)`
+  binds `JsonFields { fields, .. }`, and one that binds the fields of `JsonWhole`
+  by name adds `media_type` or `..`. Run the bless step again and commit
+  `model.postcard`: a blob of layout 6 is `DocumentError::Stale`. A body that
+  is declared under several `content` keys is sent under the first that names
+  JSON, wherever it stands, and else under the first of all. That is the rule
+  the crate applied; `docs/validation.md` states it and `tests/media.rs` pins it.
+- **A `content` key that is a media range is refused while the document is
+  reduced.** `*/*` and `image/*` were media types to the check and became the
+  request's `Content-Type`, which no server reads. A key with a `*` in its type
+  or its subtype, when it is the key that the body is sent under, is refused as
+  the new `LoadError::MediaRange { op, media_type }`, which names the operation
+  and the key. That includes `application/*+json`, which the check took for JSON
+  and which names JSON no more than `*/*` does. A range beside a key that names
+  JSON is not the key that is sent, and the document loads as it did.
+  sevdesk-cli declares none: its other 6 bodies are `multipart/form-data` (2)
+  and `application/x-www-form-urlencoded` (4). `LoadError` is
+  `#[non_exhaustive]`, so the variant is no break. Repair: an Overlay that
+  removes the range and states the type the server reads, as for a key that is
+  no media type ([docs/overlay.md](docs/overlay.md#1-plain-corrections)).
+
 ### Removed
 
 - **Items that no caller outside the crate used are private to it.** No

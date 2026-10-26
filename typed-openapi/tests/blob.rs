@@ -398,7 +398,7 @@ fn a_flag_a_load_could_not_spell_is_refused_on_a_parameter() {
 fn a_flag_a_load_could_not_spell_is_refused_on_a_body_field() {
     for flag in UNSPELLED {
         let blob = blob_edited(|value| {
-            let fields = &mut operation(value, "createVoucher")["body"]["JsonFields"];
+            let fields = &mut operation(value, "createVoucher")["body"]["JsonFields"]["fields"];
             fields[0]["flag"] = json!(flag);
         });
         let error = refusal(&blob);
@@ -426,7 +426,7 @@ fn set_parameter_flag(value: &mut Value, op: &str, name: &str, flag: &str) {
 
 /// Sets the flag of the body property at `index` of the operation `op`.
 fn set_field_flag(value: &mut Value, op: &str, index: usize, flag: &str) {
-    operation(value, op)["body"]["JsonFields"][index]["flag"] = json!(flag);
+    operation(value, op)["body"]["JsonFields"]["fields"][index]["flag"] = json!(flag);
 }
 
 /// Sets the gates of the operation `op`.
@@ -1007,18 +1007,24 @@ fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {
 
     // `Unrunnable`: a `pattern` that no engine runs refuses every value.
     let doc = read(|value| {
-        let account = &mut operation(value, "createLedgerEntry")["body"]["JsonFields"][0];
+        let account = &mut operation(value, "createLedgerEntry")["body"]["JsonFields"]["fields"][0];
         account["scalar"]["Text"]["pattern"] = json!("(");
     });
     let op = doc.get("createLedgerEntry").expect("the fixture has it");
     let account = op.body().fields().first().expect("the first property");
     assert!(account.scalar().parse("1234").is_err());
 
-    // `MediaType`: a `Content-Type` that is no header value builds no request.
+    // `MediaType`: a `Content-Type` that is no header value builds no request,
+    // whichever kind of body carries it.
     let doc = read(|value| {
         operation(value, "uploadDocument")["body"]["Opaque"]["media_type"] = json!("a\nb");
     });
     let sent = request(&doc, "uploadDocument", Values::new().raw(vec![1]));
+    assert!(sent.expect("the values satisfy it").is_err());
+    let doc = read(|value| {
+        operation(value, "createVoucher")["body"]["JsonFields"]["media_type"] = json!("a\nb");
+    });
+    let sent = request(&doc, "createVoucher", Values::new().json(json!({})));
     assert!(sent.expect("the values satisfy it").is_err());
 
     // `ServerUrl`: a server with no scheme builds no request.

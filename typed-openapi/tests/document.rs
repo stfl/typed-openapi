@@ -51,7 +51,7 @@ fn document() -> Document {
 fn the_overlay_adds_what_the_vendor_left_out() {
     let doc = document();
     assert!(doc.get("archiveVoucher").is_some(), "the added operation");
-    let Body::JsonFields(fields) = doc.get("createVoucher").unwrap().body() else {
+    let Body::JsonFields { fields, .. } = doc.get("createVoucher").unwrap().body() else {
         panic!("createVoucher takes a flat JSON body");
     };
     assert!(
@@ -130,7 +130,7 @@ fn every_body_is_exactly_one_flag_set() {
     let doc = document();
     let body = |id: &str| doc.get(id).unwrap_or_else(|| panic!("{id}")).body().clone();
     assert!(matches!(body("getVoucher"), Body::None));
-    assert!(matches!(body("createVoucher"), Body::JsonFields(_)));
+    assert!(matches!(body("createVoucher"), Body::JsonFields { .. }));
     // `Contact.address` is nested, so there are no per-field flags at all —
     // rather than dead ones beside a required `--json-body`.
     assert!(matches!(
@@ -192,7 +192,7 @@ fn a_property_is_demanded_only_where_the_document_demands_the_body_holding_it() 
 
     let doc = Document::load(&synthetic(EITHER_WAY), &[]).expect("a document");
     let demanded = |id: &str| {
-        let Body::JsonFields(fields) = doc.get(id).expect(id).body() else {
+        let Body::JsonFields { fields, .. } = doc.get(id).expect(id).body() else {
             panic!("`{id}` states a flat body");
         };
         fields
@@ -298,7 +298,7 @@ fn a_body_field_moves_aside_for_a_path_parameter_of_the_same_name() {
     let doc = document();
     let update = doc.get("updateVoucher").unwrap();
     assert_eq!(flag_of(update.param("id").unwrap()), "id");
-    let Body::JsonFields(fields) = update.body() else {
+    let Body::JsonFields { fields, .. } = update.body() else {
         panic!("updateVoucher takes a flat JSON body");
     };
     let id = fields.iter().find(|f| f.name() == "id").unwrap();
@@ -320,7 +320,7 @@ fn a_body_field_spelled_like_the_template_flag_moves_aside() {
          \x20                 type: string\n",
     );
     let doc = Document::load(&document, &[]).expect("a document");
-    let Body::JsonFields(fields) = doc.get("createNote").expect("createNote").body() else {
+    let Body::JsonFields { fields, .. } = doc.get("createNote").expect("createNote").body() else {
         panic!("a body of scalars is flat");
     };
     let field = fields
@@ -587,7 +587,7 @@ fn a_flat_body_has_its_flags_to_say_what_it_wants_and_carries_no_template() {
     let doc = document();
     assert!(matches!(
         doc.get("createVoucher").expect("createVoucher").body(),
-        Body::JsonFields(_)
+        Body::JsonFields { .. }
     ));
 }
 
@@ -735,7 +735,7 @@ fn a_path_value_cannot_smuggle_a_segment_into_the_url() {
 #[test]
 fn a_rule_a_named_schema_states_reaches_the_property_pointing_at_it() {
     let doc = document();
-    let Body::JsonFields(fields) = doc.get("updateVoucher").unwrap().body() else {
+    let Body::JsonFields { fields, .. } = doc.get("updateVoucher").unwrap().body() else {
         panic!("updateVoucher takes a flat JSON body");
     };
     let total = fields.iter().find(|f| f.name() == "total").unwrap();
@@ -1111,7 +1111,7 @@ fn a_single_element_all_of_is_read_as_the_schema_it_wraps() {
         &[],
     )
     .expect("a document");
-    let Body::JsonFields(fields) = doc.get("createNote").unwrap().body() else {
+    let Body::JsonFields { fields, .. } = doc.get("createNote").unwrap().body() else {
         panic!("both properties are scalars, so both are flags");
     };
     let field = |name: &str| {
@@ -1292,7 +1292,7 @@ fn an_operation_names_the_values_of_a_kind_the_document_declares() {
 #[test]
 fn the_sentence_is_the_fields_own_and_the_kind_is_the_named_schemas() {
     let doc = postings();
-    let Body::JsonFields(fields) = doc.get("createPosting").unwrap().body() else {
+    let Body::JsonFields { fields, .. } = doc.get("createPosting").unwrap().body() else {
         panic!("every property of the body is a scalar");
     };
     let field = |name: &str| {
@@ -2109,7 +2109,7 @@ fn each_word_moves_on_the_side_that_owns_it() {
         .expect("the document describes it");
     assert_eq!(op.commit(), "yes");
 
-    let Body::JsonFields(fields) = op.body() else {
+    let Body::JsonFields { fields, .. } = op.body() else {
         panic!("enshrineVoucher takes a flat JSON body");
     };
     for name in ["enshrine", "commit"] {

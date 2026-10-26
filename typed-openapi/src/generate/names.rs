@@ -256,7 +256,7 @@ pub(super) fn sites<'a>(api: &'a OpenAPI, model: &Document) -> Vec<(Site, &'a Sc
         let Some((_, operation)) = find(api, op) else {
             continue;
         };
-        if matches!(op.body(), Body::JsonFields(_) | Body::JsonWhole { .. })
+        if matches!(op.body(), Body::JsonFields { .. } | Body::JsonWhole { .. })
             && let JsonBody::Stated(ReferenceOr::Item(schema)) = json_body(operation)
         {
             found.push((Site::body(op.id()), schema));

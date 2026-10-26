@@ -519,16 +519,26 @@ impl<'a> Invocation<'a> {
     /// The `Content-Type` and the bytes, or `None` for a body-less request.
     fn body(&self) -> Option<(String, Vec<u8>)> {
         match self.body.as_ref()? {
-            Payload::Json(value) => Some((
-                "application/json".to_owned(),
-                value.to_string().into_bytes(),
-            )),
+            Payload::Json(value) => {
+                // The media type is the document's, never the caller's: a server
+                // reads a merge patch and a JSON:API document by the type they
+                // were declared under.
+                let media_type = match self.op.body() {
+                    Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
+                        media_type.clone()
+                    }
+                    Body::None | Body::Multipart { .. } | Body::Opaque { .. } => {
+                        "application/json".to_owned()
+                    }
+                };
+                Some((media_type, value.to_string().into_bytes()))
+            }
             Payload::Raw(bytes) => {
                 // The media type is the document's, never the caller's.
                 let media_type = match self.op.body() {
                     Body::Opaque { media_type, .. } => media_type.clone(),
                     Body::None
-                    | Body::JsonFields(_)
+                    | Body::JsonFields { .. }
                     | Body::JsonWhole { .. }
                     | Body::Multipart { .. } => "application/octet-stream".to_owned(),
                 };
@@ -699,7 +709,7 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
     match (op.body(), body) {
         (
             Body::None
-            | Body::JsonFields(_)
+            | Body::JsonFields { .. }
             | Body::JsonWhole {
                 required: false, ..
             }
@@ -711,7 +721,7 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
             },
             None,
         )
-        | (Body::JsonFields(_) | Body::JsonWhole { .. }, Some(Payload::Json(_)))
+        | (Body::JsonFields { .. } | Body::JsonWhole { .. }, Some(Payload::Json(_)))
         | (Body::Multipart { .. }, Some(Payload::Multipart(_)))
         | (Body::Opaque { .. }, Some(Payload::Raw(_))) => Ok(()),
         (Body::None, Some(_)) => Err(ValueError::UnexpectedBody { op: name() }),
@@ -721,7 +731,7 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
             | Body::Opaque { required: true, .. },
             None,
         ) => Err(ValueError::MissingBody { op: name() }),
-        (Body::JsonFields(_) | Body::JsonWhole { .. }, Some(_)) => wrong("JSON"),
+        (Body::JsonFields { .. } | Body::JsonWhole { .. }, Some(_)) => wrong("JSON"),
         (Body::Multipart { .. }, Some(_)) => wrong("multipart/form-data"),
         (Body::Opaque { media_type, .. }, Some(_)) => wrong(media_type),
     }

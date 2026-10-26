@@ -546,7 +546,14 @@ pub enum Body {
     /// per property, each with the rules its schema states. A second rendering
     /// of the same facts in a second notation would be the one place the two
     /// could come to disagree.
-    JsonFields(Vec<Field>),
+    JsonFields {
+        /// The `Content-Type` the body goes out under, as the document spells the
+        /// `content` key, parameters included: `application/merge-patch+json` goes
+        /// out as that.
+        media_type: String,
+        /// The properties, one flag each, in document order.
+        fields: Vec<Field>,
+    },
     /// JSON this CLI will not take apart — a nested object, an array, anything
     /// but an object of scalars. `--json-body` only, and no dead per-field
     /// flags beside it.
@@ -557,6 +564,9 @@ pub enum Body {
     /// while the document was reduced. `None` where the document describes no
     /// shape to render, and then the subcommand grows no flag to ask for one.
     JsonWhole {
+        /// The `Content-Type` the body goes out under, as the document spells the
+        /// `content` key.
+        media_type: String,
         /// Whether the document requires the body.
         required: bool,
         /// The JSON skeleton of the body, rendered while the document was
@@ -576,8 +586,8 @@ pub enum Body {
     },
     /// A media type this CLI does not assemble. `--raw-body FILE` sends the
     /// bytes verbatim under this `Content-Type` — and a media type is what it
-    /// is, because a `content` key that is not one is refused while the
-    /// document is reduced rather than carried here.
+    /// is, because a `content` key that is not one, or that is a media range, is
+    /// refused while the document is reduced rather than carried here.
     Opaque {
         /// The `Content-Type` the bytes go out under, as the document spells
         /// the media type.
@@ -896,7 +906,7 @@ impl Document {
     /// for the same document and no type changed. The crate's own tests trace
     /// the layout and fail on a change to a type that left the number where it
     /// was.
-    pub const MODEL_LAYOUT: u32 = 6;
+    pub const MODEL_LAYOUT: u32 = 7;
 
     /// The same reduction, already done and written down.
     ///
@@ -1395,7 +1405,7 @@ impl Body {
     pub fn present(&self) -> bool {
         match self {
             Self::None => false,
-            Self::JsonFields(_)
+            Self::JsonFields { .. }
             | Self::JsonWhole { .. }
             | Self::Multipart { .. }
             | Self::Opaque { .. } => true,
@@ -1415,7 +1425,7 @@ impl Body {
     pub fn whole(&self) -> bool {
         match self {
             Self::None => false,
-            Self::JsonFields(fields) => fields.is_empty(),
+            Self::JsonFields { fields, .. } => fields.is_empty(),
             Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => true,
         }
     }
@@ -1440,7 +1450,7 @@ impl Body {
     #[must_use]
     pub fn fields(&self) -> &[Field] {
         match self {
-            Self::JsonFields(fields) => fields,
+            Self::JsonFields { fields, .. } => fields,
             Self::None | Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => {
                 &[]
             }

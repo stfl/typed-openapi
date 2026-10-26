@@ -39,8 +39,8 @@ use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
 use crate::scalar::{Items, Scalar, ScalarError};
 use crate::schema::{
-    RefError, description_of, format_of, is_json, is_media_type, is_multipart, lists_only_null,
-    resolve, resolve_schema, scalar_of, template,
+    RefError, description_of, format_of, is_json, is_media_range, is_media_type, is_multipart,
+    lists_only_null, resolve, resolve_schema, scalar_of, template,
 };
 
 /// What a refusal calls the request body.
@@ -549,6 +549,21 @@ pub enum LoadError {
          an Overlay is where a document's content type is corrected"
     )]
     MediaType {
+        /// The `operationId` of the operation that declares the body.
+        op: String,
+        /// The `content` key as the document spells it.
+        media_type: String,
+    },
+    /// A `requestBody` whose `content` key is a media range — `*/*` or `image/*`
+    /// — and is the key the operation would be sent under. Refused while the
+    /// document is reduced, because a range names a set of types and a request
+    /// goes out under one, so the alternative is a `Content-Type` that is the
+    /// range itself.
+    #[error(
+        "{op}: `{media_type}` is a media range, and a body is sent under one media type; \
+         an Overlay is where a document's content type is corrected"
+    )]
+    MediaRange {
         /// The `operationId` of the operation that declares the body.
         op: String,
         /// The `content` key as the document spells it.
@@ -1743,8 +1758,8 @@ impl Body {
             BODY,
         )?;
         let required = body.required;
-        // The JSON entry if the document offers one, else whatever it offers
-        // first.
+        // The first key that names JSON, wherever it stands, and else the first
+        // key of all, whatever it names. `docs/validation.md` states the rule.
         let entry = body
             .content
             .iter()
@@ -1762,6 +1777,12 @@ impl Body {
                 media_type: media_type.clone(),
             });
         }
+        if is_media_range(media_type) {
+            return Err(LoadError::MediaRange {
+                op: id.to_owned(),
+                media_type: media_type.clone(),
+            });
+        }
         if is_multipart(media_type) {
             return Ok(Self::Multipart {
                 names: under(part_names(media, components), id, BODY)?,
@@ -1774,8 +1795,22 @@ impl Body {
                 required,
             });
         }
-        json_body(id, media.schema.as_ref(), required, components, flags)
+        let entry = Entry {
+            media_type,
+            schema: media.schema.as_ref(),
+            required,
+        };
+        json_body(id, &entry, components, flags)
     }
+}
+
+/// The `content` entry a JSON body is read from: the key it stands under, as the
+/// document spells it, which is the `Content-Type` the body goes out under, the
+/// schema beside the key, and whether the body is required.
+struct Entry<'a> {
+    media_type: &'a str,
+    schema: Option<&'a ReferenceOr<Schema>>,
+    required: bool,
 }
 
 /// What a JSON body is worth on a command line: one flag per property, or one
@@ -1790,19 +1825,26 @@ impl Body {
 /// walk that decided it has already seen the shape.
 fn json_body(
     id: &str,
-    schema: Option<&ReferenceOr<Schema>>,
-    required: bool,
+    entry: &Entry<'_>,
     components: &Components,
     flags: &mut Namespace,
 ) -> Result<Body, LoadError> {
+    let Entry {
+        media_type,
+        schema,
+        required,
+    } = *entry;
+    let media_type = media_type.to_owned();
     let Some(schema) = schema else {
         return Ok(Body::JsonWhole {
+            media_type,
             required,
             template: None,
         });
     };
     let whole = || {
         Ok(Body::JsonWhole {
+            media_type: media_type.clone(),
             required,
             template: under(template(schema, components), id, BODY)?,
         })
@@ -1846,7 +1888,7 @@ fn json_body(
             description: under(description_of(&property, components), id, name)?,
         });
     }
-    Ok(Body::JsonFields(fields))
+    Ok(Body::JsonFields { media_type, fields })
 }
 
 /// A property of a body and the scalar its schema states, once every rule it
