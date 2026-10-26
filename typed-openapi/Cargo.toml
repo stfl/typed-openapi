@@ -65,6 +65,10 @@ name = "layout"
 required-features = []
 
 [[test]]
+name = "media"
+required-features = ["document", "clap"]
+
+[[test]]
 name = "reading"
 required-features = ["document"]
 

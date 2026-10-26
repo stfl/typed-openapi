@@ -151,7 +151,7 @@ fn adding_or_removing_an_unrelated_field_passes_the_bless() {
         "        note:\n          type: string\n        currency:\n",
     );
     let doc = Document::load(&added, OVERLAYS).expect("the document still loads");
-    let typed_openapi::model::Body::JsonFields(fields) =
+    let typed_openapi::model::Body::JsonFields { fields, .. } =
         doc.get("createVoucher").expect("createVoucher").body()
     else {
         panic!("createVoucher takes a flat JSON body");

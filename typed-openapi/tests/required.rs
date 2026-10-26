@@ -101,7 +101,8 @@ fn a_required_key_nothing_declares_is_refused_and_named_where_it_stands() {
     );
 
     let repaired = Document::load(&document(LEDGER), &[REPAIR]).expect("the Overlay repairs it");
-    let Body::JsonFields(fields) = repaired.get("postEntry").expect("postEntry").body() else {
+    let Body::JsonFields { fields, .. } = repaired.get("postEntry").expect("postEntry").body()
+    else {
         panic!("every property of `Entry` is a scalar");
     };
     let period = fields
@@ -281,7 +282,7 @@ fn a_required_request_body_is_not_a_required_key() {
             .get("postEntry")
             .expect("postEntry")
             .body(),
-        Body::JsonFields(_)
+        Body::JsonFields { .. }
     ));
 }
 

@@ -1,5 +1,5 @@
 {
-  "model_layout": 6,
+  "model_layout": 7,
   "traces": {
     "Bounds<f64>": {
       "Bounds": {
@@ -53,16 +53,26 @@
           },
           "1": {
             "JsonFields": {
-              "NEWTYPE": {
-                "SEQ": {
-                  "TYPENAME": "Field"
+              "STRUCT": [
+                {
+                  "media_type": "STR"
+                },
+                {
+                  "fields": {
+                    "SEQ": {
+                      "TYPENAME": "Field"
+                    }
+                  }
                 }
-              }
+              ]
             }
           },
           "2": {
             "JsonWhole": {
               "STRUCT": [
+                {
+                  "media_type": "STR"
+                },
                 {
                   "required": "BOOL"
                 },

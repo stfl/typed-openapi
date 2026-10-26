@@ -516,7 +516,7 @@ fn a_hanging_list_marker_keeps_its_item_at_a_gap_of_four_columns() {
 fn the_flag_carries_the_vendors_sentence_exactly_as_written() {
     let doc = document();
     let op = operation(&doc, "startFiring");
-    let Body::JsonFields(fields) = op.body() else {
+    let Body::JsonFields { fields, .. } = op.body() else {
         panic!("`startFiring` states a flat body inline");
     };
     let soak = fields
@@ -545,7 +545,7 @@ fn the_flag_carries_the_vendors_sentence_exactly_as_written() {
 fn a_body_stated_inline_keeps_every_rule_its_refs_carry() {
     let doc = document();
     let op = operation(&doc, "startFiring");
-    let Body::JsonFields(fields) = op.body() else {
+    let Body::JsonFields { fields, .. } = op.body() else {
         panic!("every property of this body is a value, so it is flat");
     };
     let named: Vec<(&str, &str, bool, Option<&str>)> = fields
@@ -581,7 +581,10 @@ fn a_body_stated_inline_keeps_every_rule_its_refs_carry() {
 fn one_nested_ref_sends_the_body_whole_and_leaves_a_skeleton_behind() {
     let doc = document();
     let op = operation(&doc, "appendLogEntry");
-    let Body::JsonWhole { required, template } = op.body() else {
+    let Body::JsonWhole {
+        required, template, ..
+    } = op.body()
+    else {
         panic!("`entry` is an object, so the body goes out whole");
     };
     assert!(*required);
@@ -598,7 +601,10 @@ fn one_nested_ref_sends_the_body_whole_and_leaves_a_skeleton_behind() {
 fn a_body_that_is_a_list_goes_whole_and_its_skeleton_holds_one_element() {
     let doc = document();
     let body = operation(&doc, "tallyWadding").body().clone();
-    let Body::JsonWhole { required, template } = body else {
+    let Body::JsonWhole {
+        required, template, ..
+    } = body
+    else {
         panic!("a list is not an object");
     };
     assert!(required);
@@ -613,7 +619,7 @@ fn a_body_that_is_a_list_goes_whole_and_its_skeleton_holds_one_element() {
 fn an_object_with_no_properties_is_a_flat_body_with_no_flags() {
     let doc = document();
     let op = operation(&doc, "fileGlazeRecipe");
-    let Body::JsonFields(fields) = op.body() else {
+    let Body::JsonFields { fields, .. } = op.body() else {
         panic!("an object is a flat body whether or not it declares anything");
     };
     assert_eq!(fields.as_slice(), []);
@@ -639,7 +645,10 @@ fn an_object_with_no_properties_is_a_flat_body_with_no_flags() {
 fn a_property_whose_name_has_no_letters_sends_the_body_whole() {
     let doc = document();
     let op = operation(&doc, "packWadding");
-    let Body::JsonWhole { required, template } = op.body() else {
+    let Body::JsonWhole {
+        required, template, ..
+    } = op.body()
+    else {
         panic!("`*` is a property with no flag, so the body goes out whole");
     };
     assert!(*required);
@@ -754,7 +763,7 @@ fn a_replaced_format_wraps_whatever_the_schema_holding_it_is_called() {
 fn a_replaced_value_keeps_the_documents_rule_on_the_command_line() {
     let doc = document();
     let op = operation(&doc, "startFiring");
-    let Body::JsonFields(fields) = op.body() else {
+    let Body::JsonFields { fields, .. } = op.body() else {
         panic!("`startFiring` states a flat body");
     };
     let cone = fields
@@ -1258,7 +1267,7 @@ fn a_vendors_help_moves_aside_and_the_help_flag_still_prints_help() {
     );
 
     let starting = operation(&doc, "startFiring");
-    let Body::JsonFields(fields) = starting.body() else {
+    let Body::JsonFields { fields, .. } = starting.body() else {
         panic!("every property of this body is a value, so it is flat");
     };
     let help = fields

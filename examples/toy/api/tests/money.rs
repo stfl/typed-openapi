@@ -74,7 +74,7 @@ const VALUES: &[(&str, bool)] = &[
 fn rule() -> Scalar {
     let document = Document::load(DOCUMENT, &[]).expect("the embedded document");
     let operation = document.get("updateVoucher").expect("updateVoucher");
-    let Body::JsonFields(fields) = operation.body() else {
+    let Body::JsonFields { fields, .. } = operation.body() else {
         panic!("updateVoucher takes a flat JSON body");
     };
     fields

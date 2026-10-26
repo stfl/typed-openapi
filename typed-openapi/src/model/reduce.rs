@@ -39,8 +39,8 @@ use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
 use crate::scalar::{Items, Scalar, ScalarError};
 use crate::schema::{
-    RefError, description_of, format_of, is_json, is_media_type, is_multipart, lists_only_null,
-    resolve, resolve_schema, scalar_of, template,
+    RefError, description_of, format_of, is_content_type, is_json, is_media_range, is_media_type,
+    is_multipart, lists_only_null, resolve, resolve_schema, scalar_of, template,
 };
 
 /// What a refusal calls the request body.
@@ -541,14 +541,35 @@ pub enum LoadError {
         why: Unsupported,
     },
     /// A `requestBody` whose `content` key names no media type — `form-data`
-    /// where `multipart/form-data` was meant. Refused while the document is
-    /// reduced, because the alternative is a request sent under a
-    /// `Content-Type` no server can read.
+    /// where `multipart/form-data` was meant — or, for a key that goes out as the
+    /// request's `Content-Type`, is none that a header carries: an ASCII control
+    /// character other than a tab, or a white space other than a space and a tab
+    /// before its type or after its subtype. Refused while the document is
+    /// reduced, because the alternative is a request sent under a `Content-Type`
+    /// no server can read, or no request at all. The message spells the key as
+    /// the document does, so that an Overlay's target can match it, and writes a
+    /// character that does not show as its code point (`\u{a0}`).
     #[error(
-        "{op}: `{media_type}` is not a media type; \
-         an Overlay is where a document's content type is corrected"
+        "{op}: `{}` is not a media type; \
+         an Overlay is where a document's content type is corrected",
+        with_code_points(.media_type)
     )]
     MediaType {
+        /// The `operationId` of the operation that declares the body.
+        op: String,
+        /// The `content` key as the document spells it.
+        media_type: String,
+    },
+    /// A `requestBody` whose `content` key is a media range — `*/*` or `image/*`
+    /// — and is the key the operation would be sent under. Refused while the
+    /// document is reduced, because a range names a set of types and a request
+    /// goes out under one, so the alternative is a `Content-Type` that is the
+    /// range itself.
+    #[error(
+        "{op}: `{media_type}` is a media range, and a body is sent under one media type; \
+         an Overlay is where a document's content type is corrected"
+    )]
+    MediaRange {
         /// The `operationId` of the operation that declares the body.
         op: String,
         /// The `content` key as the document spells it.
@@ -651,6 +672,28 @@ pub enum LoadError {
         /// Why this crate has no flag for it.
         why: Unsupported,
     },
+}
+
+/// A `content` key as the document spells it, except that a character which does
+/// not show is written as its code point (`\u{a0}`): each character that
+/// [`char::escape_debug`] does not print as itself. That is a control character,
+/// a white space other than a space, a format character such as a zero width
+/// space or a soft hyphen, and a combining mark. A key refused for one would
+/// otherwise read as a media type with no fault in it. A quote and a backslash
+/// are printed as they stand, because an Overlay's target is matched against the
+/// spelling, and so is a space, because a space before the type or after the
+/// subtype is no fault.
+fn with_code_points(media_type: &str) -> String {
+    media_type
+        .chars()
+        .map(|c| {
+            if matches!(c, '"' | '\'' | '\\') || c.escape_debug().eq(std::iter::once(c)) {
+                c.to_string()
+            } else {
+                c.escape_unicode().to_string()
+            }
+        })
+        .collect()
 }
 
 /// The repair that [`LoadError::Parameter`] names, and only a repair that loads
@@ -1743,8 +1786,8 @@ impl Body {
             BODY,
         )?;
         let required = body.required;
-        // The JSON entry if the document offers one, else whatever it offers
-        // first.
+        // The first key that names JSON, wherever it stands, and else the first
+        // key of all, whatever it names. `docs/validation.md` states the rule.
         let entry = body
             .content
             .iter()
@@ -1756,17 +1799,29 @@ impl Body {
         // The key this operation would be sent under, and only that one: a key
         // beside it that nothing here ever reads is the vendor's business, and
         // refusing over it would refuse documents this crate serves correctly.
+        let not_a_media_type = || LoadError::MediaType {
+            op: id.to_owned(),
+            media_type: media_type.clone(),
+        };
         if !is_media_type(media_type) {
-            return Err(LoadError::MediaType {
+            return Err(not_a_media_type());
+        }
+        if is_media_range(media_type) {
+            return Err(LoadError::MediaRange {
                 op: id.to_owned(),
                 media_type: media_type.clone(),
             });
         }
+        // A multipart body writes its own `Content-Type`, with a boundary, so the
+        // key is never sent and is not asked what a header carries.
         if is_multipart(media_type) {
             return Ok(Self::Multipart {
                 names: under(part_names(media, components), id, BODY)?,
                 required,
             });
+        }
+        if !is_content_type(media_type) {
+            return Err(not_a_media_type());
         }
         if !is_json(media_type) {
             return Ok(Self::Opaque {
@@ -1774,8 +1829,23 @@ impl Body {
                 required,
             });
         }
-        json_body(id, media.schema.as_ref(), required, components, flags)
+        let json = JsonEntry {
+            media_type,
+            schema: media.schema.as_ref(),
+            required,
+        };
+        json_body(id, json, components, flags)
     }
+}
+
+/// The `content` entry a JSON body is read from: the key it stands under, as the
+/// document spells it, which is the `Content-Type` the body goes out under, the
+/// schema beside the key, and whether the body is required.
+#[derive(Clone, Copy)]
+struct JsonEntry<'a> {
+    media_type: &'a str,
+    schema: Option<&'a ReferenceOr<Schema>>,
+    required: bool,
 }
 
 /// What a JSON body is worth on a command line: one flag per property, or one
@@ -1790,19 +1860,26 @@ impl Body {
 /// walk that decided it has already seen the shape.
 fn json_body(
     id: &str,
-    schema: Option<&ReferenceOr<Schema>>,
-    required: bool,
+    entry: JsonEntry<'_>,
     components: &Components,
     flags: &mut Namespace,
 ) -> Result<Body, LoadError> {
+    let JsonEntry {
+        media_type,
+        schema,
+        required,
+    } = entry;
+    let media_type = media_type.to_owned();
     let Some(schema) = schema else {
         return Ok(Body::JsonWhole {
+            media_type,
             required,
             template: None,
         });
     };
     let whole = || {
         Ok(Body::JsonWhole {
+            media_type: media_type.clone(),
             required,
             template: under(template(schema, components), id, BODY)?,
         })
@@ -1846,7 +1923,7 @@ fn json_body(
             description: under(description_of(&property, components), id, name)?,
         });
     }
-    Ok(Body::JsonFields(fields))
+    Ok(Body::JsonFields { media_type, fields })
 }
 
 /// A property of a body and the scalar its schema states, once every rule it

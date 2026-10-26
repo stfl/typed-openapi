@@ -750,6 +750,92 @@ the crate follows [Semantic Versioning][semver].
   way or removes it, or that makes the `$ref` name a component schema
   (`#/components/schemas/<name>`) that does not lead back to itself.
 
+- **A body goes out under the media type that the document declares.** A JSON
+  body was sent as `application/json` whatever its `content` key said, so a body
+  declared as `application/merge-patch+json` or `application/vnd.api+json`
+  reached its server under another type, which answers 415 or reads it with the
+  semantics of the other. The `Content-Type` is the key as the document spells
+  it, parameters included and less a space and a tab at its two ends, on the
+  command line and in the typed call alike. A
+  document that declares `application/json` sends what it sent, and so does
+  sevdesk-cli's, whose 76 JSON bodies all declare it. The model carries the key,
+  so two variants of `Body` change:
+  - `Body::JsonFields` is the struct variant `JsonFields { media_type, fields }`,
+    where it was the tuple variant `JsonFields(Vec<Field>)`;
+  - `Body::JsonWhole` has the field `media_type` beside `required` and
+    `template`.
+
+  `Body::media_type()` is new: it answers the key of a JSON body and of a body
+  sent verbatim, and `None` for no body and for `multipart/form-data`, whose
+  `Content-Type` carries a boundary chosen when the parts are encoded.
+  `Document::MODEL_LAYOUT` is 7. Repair: a `match` that binds `JsonFields(fields)`
+  binds `JsonFields { fields, .. }`, and one that binds the fields of `JsonWhole`
+  by name adds `media_type` or `..`. Run the bless step again and commit
+  `model.postcard`: a blob of layout 6 is `DocumentError::Stale`. A body that
+  is declared under several `content` keys is sent under the first that names
+  JSON, wherever it stands, and else under the first of all. That is the rule
+  the crate applied, and it reads `application/*+json` as JSON, as it did;
+  `docs/validation.md` states it and `tests/media.rs` pins it.
+- **A `content` key that is a media range is refused while the document is
+  reduced.** `*/*` and `image/*` were media types to the check and became the
+  request's `Content-Type`, which no server reads. A key with a `*` in its type
+  or its subtype, when it is the key that the body is sent under, is refused as
+  the new `LoadError::MediaRange { op, media_type }`, which names the operation
+  and the key. `LoadError` is `#[non_exhaustive]`, so the variant is no break. A
+  range that is not the key that is sent is not read, and its document loads as it
+  did, for example `*/*` or `image/*` beside a key that names JSON, and any range
+  after a key that does.
+  - `application/*+json` is a range, and it names JSON by its suffix, so the rule
+    that picks the key reads it as JSON. Where it is the first key that names
+    JSON it is the key that is sent, and the document is refused. That is
+    `application/*+json` before `application/json`, and after a key that names no
+    JSON (`text/plain`, `application/x-www-form-urlencoded`,
+    `multipart/form-data`). Such a document loaded before, with the flags of the
+    range's schema and under `application/json`. Where `application/json` or
+    another key that names JSON stands before it, it is not read and the document
+    loads as it did.
+  - sevdesk-cli declares no range: its 76 JSON bodies declare `application/json`,
+    and its other 6 are `multipart/form-data` (2) and
+    `application/x-www-form-urlencoded` (4).
+
+  Repair: an Overlay that removes the range key, which leaves the key that names
+  JSON beside it to be sent, or that removes the range and states the type the
+  server reads, as for a key that is no media type
+  ([docs/overlay.md](docs/overlay.md#1-plain-corrections)).
+- **A `content` key that no header carries is refused as a media type, when it
+  is the key that goes out as the `Content-Type`.** The check read the type and
+  the subtype and nothing else of the key, so these loaded:
+  - an ASCII control character other than a tab in a parameter after the `;`;
+  - a white space other than a space and a tab before the type or after the
+    subtype, which `str::trim` took off before the check: a line feed, vertical
+    tab, form feed or carriage return, a no-break space, or a next-line
+    character, such as `application/json` followed by a no-break space.
+
+  A JSON body ignored the key and went out as `application/json`, so each of
+  them loaded and worked. A body sent verbatim loaded too, and went out with the
+  white space in its `Content-Type`, which is no media type to RFC 9110 (a
+  no-break space is no `token` character and no optional white space), or failed
+  every request with `RequestError::Http` for a control character. A JSON body
+  now goes out under the key, so the load refuses each of them as
+  `LoadError::MediaType`, for a JSON body and a body sent verbatim, when the key
+  is the one that is sent. A C1 control character in a parameter is a byte that a
+  header carries, and it loads as it did. A space and a tab before the type or
+  after the subtype are optional white space in RFC 9110 and are no fault, and
+  the request goes out without them, because RFC 9113 calls a field value that
+  starts or ends with one malformed: a JSON body with such a key went out as
+  `application/json`, and a body sent verbatim went out with them. A space or a
+  tab inside the key, as before the `;`, is sent as the document spells it.
+  A `multipart/form-data` key is not asked what a header carries, because that
+  body writes its own `Content-Type`, with a boundary, and its key is never sent:
+  a document that holds one with such a byte loaded and its requests went out as
+  `multipart/form-data; boundary=…`, and it still does. The message prints the
+  key as the document spells it, and writes each character that does not show as
+  its code point (`\u{a0}`): a control character, a white space other than a
+  space, a format character such as a zero width space, and a combining mark.
+  sevdesk-cli declares no such key: its 82 body keys are `application/json`,
+  `multipart/form-data` and `application/x-www-form-urlencoded`. Repair: an
+  Overlay that replaces the key with the type the server reads.
+
 ### Removed
 
 - **Items that no caller outside the crate used are private to it.** No

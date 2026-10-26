@@ -19,6 +19,7 @@
 
 use std::collections::BTreeSet;
 
+use http::HeaderValue;
 use openapiv3::{
     ArrayType, BooleanType, Components, IntegerType, NumberType, ObjectType, ReferenceOr, Schema,
     SchemaKind, StringType, Type, VariantOrUnknownOrEmpty,
@@ -555,9 +556,51 @@ fn limit<T>(value: Option<T>, exclusive: bool) -> Option<Limit<T>> {
 /// `application/vnd.api+json` and every vendor type anyone coins pass it.
 #[must_use]
 pub(crate) fn is_media_type(media_type: &str) -> bool {
-    essence(media_type)
+    has_type_and_subtype(&essence(media_type))
+}
+
+/// Whether this key can be a request's `Content-Type` as it stands.
+///
+/// [`is_media_type`] reads a key as a person does and is asked of every key that
+/// is picked. This is asked only of a key that goes out as the header, a JSON
+/// body's and one that is sent verbatim: a `multipart/form-data` body writes its
+/// own `Content-Type`, with a boundary, and its key is never sent. The header is
+/// read as RFC 9110 reads it: a space and a tab before the type and after the
+/// subtype are optional white space and are trimmed, and no other white space is,
+/// so a no-break space there is no `token` character and a server reads no type
+/// in it. The whole key must also be a header value, which refuses an ASCII
+/// control character other than a tab, in a parameter as much as in the essence.
+/// The rest of a parameter is not parsed, for the reason that [`is_media_type`]
+/// gives.
+#[must_use]
+pub(crate) fn is_content_type(media_type: &str) -> bool {
+    has_type_and_subtype(before_parameters(media_type).trim_matches([' ', '\t']))
+        && HeaderValue::from_str(media_type).is_ok()
+}
+
+/// Whether the essence is `type/subtype`: two non-empty `token`s either side of
+/// the one `/` that is not a `token` character.
+fn has_type_and_subtype(essence: &str) -> bool {
+    essence
         .split_once('/')
         .is_some_and(|(ty, subtype)| is_token(ty) && is_token(subtype))
+}
+
+/// Whether this is a media range — `*/*`, `image/*` — and so a set of types and
+/// not one.
+///
+/// A `content` key may be one, because the document can say that a body is
+/// anything that the range admits. A request is sent under one type, and the
+/// range does not name it: `*` is a `token` character, so a range passes
+/// [`is_media_type`] and, sent as it stands, is a `Content-Type` that no server
+/// reads. The `*` is looked for in the type and the subtype and nowhere else,
+/// because a parameter after the `;` is the vendor's to spell. No registered
+/// media type has a `*` in its name, so `application/*+json` is a pattern too,
+/// and a range in the same sense: the vendor means a family, and this crate
+/// cannot choose the member.
+#[must_use]
+pub(crate) fn is_media_range(media_type: &str) -> bool {
+    essence(media_type).contains('*')
 }
 
 /// RFC 9110's `token`: one or more of the characters a field value carries
@@ -572,6 +615,10 @@ fn is_token(word: &str) -> bool {
 
 /// `application/json`, `application/merge-patch+json`, and anything with
 /// parameters after the essence.
+///
+/// The suffix is all that is read, so `application/*+json` names JSON too. A
+/// request body and a response pick their `content` key by this, and a request
+/// body that picks a range is refused as one ([`is_media_range`]).
 #[must_use]
 pub(crate) fn is_json(media_type: &str) -> bool {
     essence(media_type) == "application/json" || essence(media_type).ends_with("+json")
@@ -584,12 +631,12 @@ pub(crate) fn is_multipart(media_type: &str) -> bool {
 }
 
 fn essence(media_type: &str) -> String {
-    media_type
-        .split(';')
-        .next()
-        .unwrap_or(media_type)
-        .trim()
-        .to_ascii_lowercase()
+    before_parameters(media_type).trim().to_ascii_lowercase()
+}
+
+/// What stands before the first `;`: the essence and the white space round it.
+fn before_parameters(media_type: &str) -> &str {
+    media_type.split(';').next().unwrap_or(media_type)
 }
 
 #[cfg(test)]
@@ -622,6 +669,73 @@ mod tests {
         assert!(!is_media_type("application/json charset=utf-8"));
     }
 
+    /// A key that goes out as the `Content-Type` is a header value, so a byte
+    /// that no header carries is no part of one, in a parameter as much as in the
+    /// essence.
+    #[test]
+    fn a_content_type_is_a_header_value() {
+        assert!(!is_content_type("application/json; x=\"a\u{1}b\""));
+        assert!(!is_content_type("application/json; x=\"a\nb\""));
+        assert!(!is_content_type("application/json;x=\u{7f}"));
+        // A tab is one a header carries, and so is a byte past ASCII, a C1
+        // control character among them.
+        assert!(is_content_type("text/plain; x=\"a\tb\""));
+        assert!(is_content_type("text/plain; x=\"é\""));
+        assert!(is_content_type("text/plain; x=\"a\u{85}b\""));
+        // `is_media_type` leaves a parameter unread, so a multipart key with such
+        // a byte is a media type: the key is never sent and is not held to the
+        // header.
+        assert!(is_media_type("multipart/form-data; x=\"a\u{1}b\""));
+    }
+
+    /// RFC 9110's optional white space is a space and a tab. `str::trim`, which
+    /// `is_media_type` reads the essence with, takes every Unicode white space, so
+    /// a key with another before its type or after its subtype is a media type
+    /// and no content type.
+    #[test]
+    fn a_content_type_is_trimmed_of_a_space_and_a_tab_and_no_other_white_space() {
+        assert!(is_content_type(" text/plain\t"));
+        assert!(is_content_type("application/json ; charset=utf-8"));
+
+        for key in [
+            "application/json\u{a0}",
+            "\u{a0}application/json",
+            "\u{85}application/json",
+            "application/json\u{3000}",
+            "application/merge-patch+json\u{a0}",
+            "text/plain\u{2003}; charset=utf-8",
+            // A vertical tab, a form feed and a carriage return are control
+            // characters, and a header refuses them in the essence too.
+            "application/json\u{b}",
+            "application/json\u{c}",
+            "application/json\r",
+        ] {
+            assert!(!is_content_type(key), "{key:?}");
+        }
+        // `is_media_type` and `is_json` trim every Unicode white space, and the
+        // pick of a key and the typing of a response read through them, so
+        // neither depends on this question.
+        assert!(is_media_type("application/json\u{a0}"));
+        assert!(is_json("application/json\u{a0}"));
+    }
+
+    #[test]
+    fn a_range_has_a_star_in_its_type_or_its_subtype_and_nowhere_else() {
+        assert!(is_media_range("*/*"));
+        assert!(is_media_range("image/*"));
+        assert!(is_media_range("*/json"));
+        assert!(is_media_range("application/*+json"));
+        assert!(is_media_range("Image/*; q=0.5"));
+
+        assert!(!is_media_range("image/png"));
+        assert!(!is_media_range("application/vnd.api+json"));
+        // A parameter is the vendor's to spell, and is read no further than the
+        // `;` that starts it.
+        assert!(!is_media_range(r#"multipart/form-data; boundary="*""#));
+        // Not a media type, which is another refusal and asked first.
+        assert!(!is_media_range("form-data"));
+    }
+
     #[test]
     fn json_is_recognised_through_suffixes_and_parameters() {
         assert!(is_json("application/json"));
@@ -629,6 +743,11 @@ mod tests {
         assert!(is_json("application/merge-patch+json"));
         assert!(!is_json("form-data"));
         assert!(!is_json("multipart/form-data"));
+        assert!(!is_json("*/*"));
+        // The suffix is all that is read, so a range that ends in it is read as
+        // JSON: it is the key a request body is picked under and then refused,
+        // and the key a response is typed from.
+        assert!(is_json("application/*+json"));
     }
 
     #[test]

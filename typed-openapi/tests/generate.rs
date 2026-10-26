@@ -218,6 +218,85 @@ fn an_integer_format_types_a_body_property_and_leaves_a_parameter_an_i64() {
     );
 }
 
+/// A body declared under three keys, the first that names JSON being
+/// `application/vnd.api+json`, and a success response under a range that ends in
+/// `+json`.
+const SEVERAL_KEYS: &str = r#"
+openapi: 3.0.3
+info: { title: Several, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    post:
+      operationId: createThing
+      requestBody:
+        required: true
+        content:
+          text/csv: { schema: { type: string } }
+          application/vnd.api+json:
+            schema: { type: object, properties: { first: { type: string } } }
+          application/json:
+            schema: { type: object, properties: { second: { type: string } } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/*+json:
+              schema: { type: object, properties: { answer: { type: string } } }
+"#;
+
+/// `docs/validation.md` says which key a body is sent under. The type of the
+/// wrapper's argument is read from that entry, so the argument holds a caller to
+/// the schema of the body that goes out and not to another entry's.
+#[test]
+fn the_argument_is_typed_by_the_entry_the_body_is_sent_under() {
+    let dir = out("several-keys");
+    let document = wrote(&dir, "several.yaml", SEVERAL_KEYS);
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the document generates");
+
+    let types = read(&dir.join("src/types.rs"));
+    let ops = read(&dir.join("src/ops.rs"));
+
+    assert!(
+        types.contains("pub first:"),
+        "the body is not typed by the first key that names JSON:\n{types}"
+    );
+    assert!(
+        !types.contains("pub second:"),
+        "a key beside the one that is sent is typed:\n{types}"
+    );
+    assert!(
+        ops.contains("body: &crate::types::CreateThingBody"),
+        "the wrapper takes no body of the type that was generated:\n{ops}"
+    );
+}
+
+/// A response is read for its type by the rule that reads a `+json` suffix, and
+/// a range that ends in one names JSON by it, so the wrapper returns the type of
+/// that schema and not `NoContent`.
+#[test]
+fn a_response_under_a_range_that_ends_in_json_is_typed() {
+    let dir = out("several-keys-response");
+    let document = wrote(&dir, "several.yaml", SEVERAL_KEYS);
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the document generates");
+
+    let types = read(&dir.join("src/types.rs"));
+    let ops = read(&dir.join("src/ops.rs"));
+
+    assert!(
+        types.contains("pub answer:"),
+        "the response is not typed:\n{types}"
+    );
+    assert!(
+        ops.contains("Call<'_, crate::types::CreateThingResponse>"),
+        "the wrapper does not return the type of the response:\n{ops}"
+    );
+}
+
 /// A `{id}` path with the path item's parameters in `ITEM`, an operation that
 /// names `#/components/parameters/Id`, and that component in `COMPONENT`.
 const REFERRED: &str = r##"
@@ -2516,7 +2595,7 @@ fn a_flat_body_stated_inline_still_grows_a_flag_per_field() {
     let document = read(Path::new(TOY));
     let doc = Document::load(&document, &[CORRECTIONS, CLI]).expect("the fixtures reduce");
 
-    let typed_openapi::model::Body::JsonFields(fields) = doc
+    let typed_openapi::model::Body::JsonFields { fields, .. } = doc
         .get("createLedgerEntry")
         .expect("createLedgerEntry")
         .body()
