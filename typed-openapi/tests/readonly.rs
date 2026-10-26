@@ -618,6 +618,90 @@ fn an_example_under_a_reference_that_leads_nowhere_is_taken_whole() {
     assert!(read_only.is_empty(), "{read_only:?}");
 }
 
+/// The named schemas that the documents of `examples_the_walk_does_not_enter`
+/// point at, each with a read-only property.
+const WALK_SCHEMAS: &str = "    Pet:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+    Address:
+      type: object
+      properties:
+        aid: { type: integer, readOnly: true }
+        street: { type: string }
+    Sub:
+      type: object
+      properties:
+        sid: { type: integer, readOnly: true }
+        s: { type: string }
+";
+
+/// The documents in which the example walk does not go: the schema beside the
+/// example is a composition (an `allOf` of two schemas, an `anyOf`, a `oneOf` at a
+/// property), an object that `openapiv3` holds as `AnySchema`, or the example has a
+/// key that `properties` does not declare. Each is the label, the document and the
+/// example, which the template is.
+fn examples_the_walk_does_not_enter() -> Vec<(&'static str, String, Value)> {
+    let named = |schema: &str| creating(schema, WALK_SCHEMAS);
+    vec![
+        (
+            "an allOf of two schemas",
+            named(
+                "{ allOf: [{ $ref: '#/components/schemas/Pet' }, { type: object, properties: \
+                 { note: { type: string } } }], example: { id: 7, name: Rex, note: x } }",
+            ),
+            json!({ "id": 7, "name": "Rex", "note": "x" }),
+        ),
+        (
+            "an anyOf",
+            named(
+                "{ anyOf: [{ $ref: '#/components/schemas/Pet' }], example: { id: 7, name: Rex } }",
+            ),
+            json!({ "id": 7, "name": "Rex" }),
+        ),
+        (
+            "a oneOf at a property",
+            named(
+                "{ type: object, required: [addr], example: { addr: { aid: 1, street: Main } }, \
+                 properties: { addr: { oneOf: [{ $ref: '#/components/schemas/Address' }] } } }",
+            ),
+            json!({ "addr": { "aid": 1, "street": "Main" } }),
+        ),
+        (
+            "an object that openapiv3 holds as AnySchema",
+            named(
+                "{ type: object, enum: [], required: [id, name], example: { id: 7, name: Rex }, \
+                 properties: { id: { type: integer, readOnly: true }, name: { type: string } } }",
+            ),
+            json!({ "id": 7, "name": "Rex" }),
+        ),
+        (
+            "a key that properties does not declare",
+            named(
+                "{ type: object, required: [name], example: { name: Rex, foo: { sid: 1, s: a } }, \
+                 properties: { name: { type: string }, nested: { type: object } }, \
+                 additionalProperties: { $ref: '#/components/schemas/Sub' } }",
+            ),
+            json!({ "name": "Rex", "foo": { "sid": 1, "s": "a" } }),
+        ),
+    ]
+}
+
+/// The example walk goes through an object and a list that this crate reads, and
+/// into the keys that `properties` declares. Everywhere else the example is the
+/// template as the document has it, a `readOnly` key in it included, and no path
+/// is named: the template is a skeleton to read, and the walk refuses nothing it
+/// cannot follow.
+#[test]
+fn an_example_stays_as_the_document_has_it_where_the_walk_does_not_go() {
+    for (label, text, example) in examples_the_walk_does_not_enter() {
+        let (template, read_only) = template_of(&loaded(&text));
+        assert_eq!(template, example, "{label}");
+        assert!(read_only.is_empty(), "{label}: {read_only:?}");
+    }
+}
+
 /// A property no flag could carry is read for no rule. A step of 0 is the one
 /// rule that only a flag runs, so a read-only property that states it loads; the
 /// same body with the property sent is refused.
