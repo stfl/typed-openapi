@@ -22,6 +22,7 @@ use syn::visit_mut::VisitMut as _;
 use super::GenerateError;
 use super::names::{JsonBody, Names, Site};
 use crate::model::{Body, Shape, declared, entry_of_flag};
+use crate::schema::typed;
 use crate::{Document, Operation};
 
 /// What one operation contributes to the generated file.
@@ -759,15 +760,16 @@ fn param_schema<'d>(
 
 /// The Rust spelling of a list parameter's items.
 ///
-/// Only an inline `type: array` has one here. Following a `$ref` to an array
-/// schema would mean resolving against `components`, which this generator does
-/// not carry, so the parameter names itself rather than being guessed at.
+/// Only an inline `type: array` has one here, in a wrapper of one element or
+/// out of it. Following a `$ref` to an array schema would mean resolving against
+/// `components`, which this generator does not carry, so the parameter names
+/// itself rather than being guessed at.
 fn list_type(
     name: &str,
     schema: &ReferenceOr<Schema>,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let ReferenceOr::Item(schema) = schema else {
+    let ReferenceOr::Item(schema) = wrapped(schema) else {
         return Err(unsupported(format!(
             "`{name}` is a list, and a list parameter must declare `items` inline"
         )));
@@ -787,7 +789,12 @@ fn list_type(
 
 /// A scalar schema's Rust spelling. A `$ref` to a named schema keeps its name,
 /// so an enumerated parameter is the generated enum rather than a string.
+///
+/// The schema is read as the reduction reads the value that became a flag, so the
+/// argument has the type of the flag. A wrapper of one element is the schema it
+/// wraps, and a scalar that `openapiv3` holds as `AnySchema` has the type it names.
 fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStream, GenerateError> {
+    let schema = wrapped(schema);
     if let Some(name) = ref_name(schema) {
         return names.get(name).cloned();
     }
@@ -796,10 +803,9 @@ fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStrea
             "only `#/components/schemas/` references are followed",
         ));
     };
-    let SchemaKind::Type(kind) = &schema.schema_kind else {
-        return Err(unsupported("only `type:` schemas have a scalar spelling"));
-    };
-    Ok(match kind {
+    let kind = typed(&schema.schema_kind)
+        .map_err(|why| unsupported(format!("no scalar spelling for a schema that is {why}")))?;
+    Ok(match &*kind {
         Type::String(_) => quote!(&str),
         Type::Integer(_) => quote!(i64),
         Type::Number(_) => quote!(f64),
@@ -864,6 +870,25 @@ fn named_or_stated(
         .at(site)
         .cloned()
         .ok_or_else(|| unsupported("the schema it states inline has no Rust spelling"))
+}
+
+/// The schema that a wrapper of one element stands for, with no reference
+/// followed.
+///
+/// A `$ref` erases what is written beside it, so an `allOf` of one element is how
+/// a document keeps a sentence beside a reference, and the reduction reads it as
+/// the schema it wraps. The generator has no `components` to follow a reference
+/// in, and wants the name of a named schema where it stops, so it unwraps the
+/// elements that are stated and leaves the `$ref` for `ref_name`.
+fn wrapped(schema: &ReferenceOr<Schema>) -> &ReferenceOr<Schema> {
+    let mut current = schema;
+    while let ReferenceOr::Item(item) = current
+        && let SchemaKind::AllOf { all_of } = &item.schema_kind
+        && let [only] = all_of.as_slice()
+    {
+        current = only;
+    }
+    current
 }
 
 fn ref_name(schema: &ReferenceOr<Schema>) -> Option<&str> {

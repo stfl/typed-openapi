@@ -417,18 +417,23 @@ pub enum Join {
 
 /// Why a parameter carries no flag.
 ///
-/// Six shapes, one answer, because they cost a document the same thing: an
+/// Eight shapes, one answer, because they cost a document the same thing: an
 /// operation nobody can express sits beside a hundred that are expressible, and
 /// refusing the document for it makes those hundred unreachable too. So an
 /// unsupported parameter is carried rather than refused, and only a *required*
 /// one — an operation that could never be invoked correctly — is named as a
 /// `LoadError` while the document is reduced.
 ///
-/// Four of the six are the document describing a value this CLI cannot put on
+/// Six of the eight are the document describing a value this CLI cannot put on
 /// a flag. [`Unsupported::Unspellable`] and [`Unsupported::Shared`] are the other
 /// half of the same question: the value is ordinary and it is the *name* that no
 /// flag can carry, because the CLI cannot spell it or because another parameter
 /// already has it.
+///
+/// The reason is the true one. A schema that is an object or an array is
+/// [`Unsupported::Structured`], a schema that says a keyword this crate cannot
+/// read as a value names it ([`Unsupported::Keyword`]), and a schema that says
+/// nothing of what it is ([`Unsupported::Untyped`]) is that.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Unsupported {
     /// `in: cookie`. This CLI sends no cookies.
@@ -446,6 +451,22 @@ pub enum Unsupported {
     /// parameters. A rendering this crate invented would produce a request that
     /// looks sent and is not read, which is worse than one that was never built.
     Structured,
+    /// A schema that states a keyword this crate cannot read as a value, named
+    /// as the document spells it: a composition (`oneOf`, `anyOf`, an `allOf` of
+    /// more than one schema, `not`), a keyword that the schema's scalar `type`
+    /// does not have (`allOf` or `pattern` beside `type: integer`), an `enum` that
+    /// lists a value of another type, an integer's bound that is no whole number
+    /// a double states exactly, or a `type` that is none of the six.
+    ///
+    /// Reading the value anyway would be a guess at what the vendor meant, and a
+    /// correction is the adopter's to write in an Overlay where a reviewer can
+    /// see it. Only a schema `openapiv3` holds as `AnySchema` or as a
+    /// composition is this: a scalar it holds as a type is read.
+    Keyword(String),
+    /// A schema that states no `type` and no composition, so it can be any value
+    /// and a flag needs to know which: `{}`, or only an `enum`, a `pattern` or
+    /// `properties`.
+    Untyped,
     /// A `style` this crate does not serialise, named as the document spells
     /// it. Writing it out as some other style would put the value on the wire
     /// in a shape the server does not read.
@@ -485,6 +506,13 @@ impl std::fmt::Display for Unsupported {
                 out.write_str("described by `content`, which this CLI does not encode")
             }
             Self::Structured => out.write_str("neither a value nor a list of values"),
+            Self::Keyword(keyword) => write!(
+                out,
+                "stated with `{keyword}`, which this CLI does not read as a value"
+            ),
+            Self::Untyped => {
+                out.write_str("stated with no `type`, so this CLI cannot tell what it is")
+            }
             Self::Style(style) => {
                 write!(
                     out,
@@ -539,8 +567,10 @@ pub struct Field {
 pub enum Body {
     /// The document asks for no body.
     None,
-    /// A JSON object whose every property is a scalar: one flag per property,
-    /// plus `--json-body` as a base document to merge them over.
+    /// A JSON object whose every property is a scalar or is set by the API: one
+    /// flag per scalar, plus `--json-body` as a base document to merge them
+    /// over. A property the schema marks `readOnly` has no flag and is no
+    /// scalar to be, so it never sends the body whole.
     ///
     /// No template: the per-field flags already say what goes in the body, one
     /// per property, each with the rules its schema states. A second rendering
@@ -558,6 +588,9 @@ pub enum Body {
         required: bool,
         /// The properties, one flag each, in document order.
         fields: Vec<Field>,
+        /// The properties the schema marks `readOnly`, in document order. None
+        /// has a flag: the API sets it, and a request leaves it out.
+        read_only: Vec<String>,
     },
     /// JSON this CLI will not take apart — a nested object, an array, anything
     /// but an object of scalars. `--json-body` only, and no dead per-field
@@ -577,6 +610,10 @@ pub enum Body {
         /// The JSON skeleton of the body, rendered while the document was
         /// reduced, and `None` where the document describes no shape to render.
         template: Option<String>,
+        /// The properties of the body's own object that the schema marks
+        /// `readOnly`, in document order. The template leaves them out, and a
+        /// request should too.
+        read_only: Vec<String>,
     },
     /// `multipart/form-data`: assembled from `--file name=@path` and
     /// `--field name=value`. `names` is what the document declares, for the
@@ -911,7 +948,7 @@ impl Document {
     /// for the same document and no type changed. The crate's own tests trace
     /// the layout and fail on a change to a type that left the number where it
     /// was.
-    pub const MODEL_LAYOUT: u32 = 8;
+    pub const MODEL_LAYOUT: u32 = 9;
 
     /// The same reduction, already done and written down.
     ///
@@ -1461,6 +1498,21 @@ impl Body {
             Self::None | Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => {
                 &[]
             }
+        }
+    }
+
+    /// The properties of the body that the schema marks `readOnly`, in document
+    /// order: the API sets each of them, so none has a flag and a request should
+    /// leave each out.
+    ///
+    /// Only the properties of the body's own object are named. A body that is no
+    /// object, and every other kind of body, answers with nothing, as
+    /// [`Body::fields`] does.
+    #[must_use]
+    pub fn read_only(&self) -> &[String] {
+        match self {
+            Self::JsonFields { read_only, .. } | Self::JsonWhole { read_only, .. } => read_only,
+            Self::None | Self::Multipart { .. } | Self::Opaque { .. } => &[],
         }
     }
 

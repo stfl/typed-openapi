@@ -75,10 +75,23 @@
 //! refusal of an undeclared property is what that check is for, and `false`
 //! stays what typify closes with `deny_unknown_fields`.
 //!
+//! # A property the API sets is not required of a request
+//!
+//! OpenAPI 3.0.3 says of a `readOnly` property that "the required will take
+//! effect on the response only", and that a request "SHOULD NOT" send it. One
+//! schema serves a create and a read, and typify makes it one struct, so a
+//! `required` that names the property makes a request that leaves it out a value
+//! that cannot be built. [`NotRequired`] takes such a name off the `required` of
+//! every type that a request body reaches: the schemas a body names or states,
+//! and every schema those refer to ([`reached`]). A type that only responses
+//! reach keeps the document's `required`, because there it takes effect, and so
+//! the generated type still refuses a response that lacks what the API promised.
+//!
 //! [`with_conversion`]: typify::TypeSpaceSettings::with_conversion
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use openapiv3::{OpenAPI, ReferenceOr};
 use proc_macro2::Span;
 use quote::quote;
 use schemars::schema::{Schema, SchemaObject};
@@ -90,6 +103,7 @@ use typify::{TypeSpace, TypeSpaceImpl, TypeSpaceSettings};
 use super::GenerateError;
 use super::names::{Names, Site};
 use crate::Document;
+use crate::schema::read_only_of;
 
 /// One schema of the document, under its own name, in typify's dialect.
 type Definition = (String, Value);
@@ -153,15 +167,15 @@ pub(super) fn emit(
         definitions.push((owned.placeholder.clone(), Value::Bool(true)));
     }
 
+    let mut definitions = schemas(definitions)?;
+    let mut stated = inline(stated)?;
+    set_by_the_api(api, model, &mut definitions, &mut stated);
+
     let mut space = TypeSpace::new(&settings);
     space
-        .add_ref_types(schemas(definitions)?)
+        .add_ref_types(definitions)
         .map_err(|error| GenerateError::Typify(Box::new(error)))?;
-    let names = Names::read(
-        &mut space,
-        declared.iter().map(String::as_str),
-        inline(stated)?,
-    )?;
+    let names = Names::read(&mut space, declared.iter().map(String::as_str), stated)?;
 
     let mut file: syn::File =
         syn::parse2(space.to_stream()).map_err(|source| GenerateError::NotRust {
@@ -400,6 +414,174 @@ fn typify_schema(value: Value) -> Result<Schema, serde_json::Error> {
     let mut schema: Schema = serde_json::from_value(value)?;
     OpenWithAMap.visit_schema(&mut schema);
     Ok(schema)
+}
+
+/// Takes the property the API sets off the `required` of every type that a
+/// request body reaches.
+///
+/// `readOnly` is read as the reduction reads it ([`read_only_of`]), so the flag
+/// that a property loses on the command line and the requirement it loses in the
+/// type are one decision. The reduction reads the document's own schemas and
+/// typify the schemas as `schemars` holds them, so the two are held together by a
+/// test over every spelling of `readOnly` that the reduction reads.
+fn set_by_the_api(
+    api: &OpenAPI,
+    model: &Document,
+    definitions: &mut [(String, Schema)],
+    stated: &mut [(Site, Schema)],
+) {
+    let read_only = read_only_schemas(api);
+    let reached = reached(api, model, definitions, stated);
+    let mut relax = NotRequired(&read_only);
+    for (_, schema) in definitions
+        .iter_mut()
+        .filter(|(name, _)| reached.contains(name))
+    {
+        relax.visit_schema(schema);
+    }
+    for (_, schema) in stated.iter_mut().filter(|(site, _)| site.is_body()) {
+        relax.visit_schema(schema);
+    }
+}
+
+/// The names of the schemas of `components.schemas` that say they are read-only,
+/// wherever a property points at them.
+///
+/// A schema that cannot be followed is not read-only here. The reduction refuses
+/// the ones an operation reaches, and typify meets the rest next.
+fn read_only_schemas(api: &OpenAPI) -> BTreeSet<String> {
+    let Some(components) = &api.components else {
+        return BTreeSet::new();
+    };
+    components
+        .schemas
+        .keys()
+        .filter(|name| {
+            let schema = ReferenceOr::Reference {
+                reference: format!("#/components/schemas/{name}"),
+            };
+            read_only_of(&schema, components).unwrap_or(false)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Every named schema that a request body reaches: the ones its schema refers to,
+/// and the ones those refer to in turn.
+///
+/// A reference is read off the schema as `schemars` holds it, and not off the
+/// JSON, which also holds an `example` or a `default` that spells a `$ref` and
+/// refers to nothing.
+fn reached(
+    api: &OpenAPI,
+    model: &Document,
+    definitions: &[(String, Schema)],
+    stated: &[(Site, Schema)],
+) -> BTreeSet<String> {
+    let defined: BTreeMap<&str, &Schema> = definitions
+        .iter()
+        .map(|(name, schema)| (name.as_str(), schema))
+        .collect();
+    let mut pending: Vec<String> = super::names::bodies(api, model)
+        .into_iter()
+        .flat_map(|(site, body)| match body {
+            ReferenceOr::Reference { reference } => reference
+                .strip_prefix(COMPONENTS)
+                .map(str::to_owned)
+                .into_iter()
+                .collect(),
+            ReferenceOr::Item(_) => stated
+                .iter()
+                .filter(|(at, _)| *at == site)
+                .flat_map(|(_, schema)| refers_to(schema))
+                .collect::<Vec<_>>(),
+        })
+        .collect();
+    let mut reached = BTreeSet::new();
+    while let Some(name) = pending.pop() {
+        if !reached.insert(name.clone()) {
+            continue;
+        }
+        if let Some(schema) = defined.get(name.as_str()) {
+            pending.extend(refers_to(schema));
+        }
+    }
+    reached
+}
+
+/// Where the named schemas are in the document, and in typify's dialect.
+const COMPONENTS: &str = "#/components/schemas/";
+const DEFINITIONS: &str = "#/definitions/";
+
+/// The names of the schemas that `schema` refers to, at any depth.
+fn refers_to(schema: &Schema) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    Refers(&mut names).visit_schema(&mut schema.clone());
+    names
+}
+
+/// Collects the name of every `$ref` the schema holds.
+struct Refers<'n>(&'n mut BTreeSet<String>);
+
+impl Visitor for Refers<'_> {
+    fn visit_schema_object(&mut self, schema: &mut SchemaObject) {
+        if let Some(name) = schema
+            .reference
+            .as_deref()
+            .and_then(|reference| reference.strip_prefix(DEFINITIONS))
+        {
+            self.0.insert(name.to_owned());
+        }
+        schemars::visit::visit_schema_object(self, schema);
+    }
+}
+
+/// Takes the name of every property that the API sets off the `required` of the
+/// object that lists it, at every depth.
+struct NotRequired<'n>(&'n BTreeSet<String>);
+
+impl Visitor for NotRequired<'_> {
+    fn visit_schema_object(&mut self, schema: &mut SchemaObject) {
+        if let Some(object) = schema.object.as_mut() {
+            let set_by_the_api: Vec<String> = object
+                .properties
+                .iter()
+                .filter(|(_, property)| says_read_only(property, self.0))
+                .map(|(name, _)| name.clone())
+                .collect();
+            for name in &set_by_the_api {
+                object.required.remove(name);
+            }
+        }
+        schemars::visit::visit_schema_object(self, schema);
+    }
+}
+
+/// Whether a property says it is read-only: it is marked, it is a reference to a
+/// schema that is, or it is the `allOf` of one element that is. These are the
+/// three places [`read_only_of`] looks, and a reference is answered by `named`,
+/// which the reduction's own reading filled.
+fn says_read_only(property: &Schema, named: &BTreeSet<String>) -> bool {
+    let Schema::Object(property) = property else {
+        return false;
+    };
+    let marked = property
+        .metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.read_only);
+    let referred = property
+        .reference
+        .as_deref()
+        .and_then(|reference| reference.strip_prefix(DEFINITIONS))
+        .is_some_and(|name| named.contains(name));
+    let wrapped = matches!(
+        property
+            .subschemas
+            .as_ref()
+            .and_then(|subschemas| subschemas.all_of.as_deref()),
+        Some([only]) if says_read_only(only, named)
+    );
+    marked || referred || wrapped
 }
 
 /// Says `additionalProperties: true` as `additionalProperties: {}`, at every

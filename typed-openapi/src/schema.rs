@@ -17,17 +17,19 @@
 //! `--help` cannot state — so the walk that decided the body was not flat also
 //! writes down what it saw, as the JSON skeleton a user fills in.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use http::HeaderValue;
 use openapiv3::{
-    ArrayType, BooleanType, Components, IntegerType, NumberType, ObjectType, ReferenceOr, Schema,
-    SchemaKind, StringType, Type, VariantOrUnknownOrEmpty,
+    AnySchema, ArrayType, BooleanType, Components, IntegerType, NumberType, ObjectType,
+    ReferenceOr, Schema, SchemaKind, StringType, Type, VariantOrUnknownOrEmpty,
 };
 use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::model::Unsupported;
 use crate::scalar::{Bounds, Limit, Scalar, Text};
 
 /// A `$ref` this crate cannot follow to what it names.
@@ -168,7 +170,11 @@ fn schemas<'c>(components: &'c Components) -> impl Fn(&str) -> Option<&'c Refere
 ///
 /// One element is where this stops. An `allOf` of two schemas is a real
 /// composition, and a composition is not a scalar: it comes back as itself, and
-/// [`scalar_of`] answers `None` for it.
+/// [`scalar_of`] reads it as one that names `allOf`.
+///
+/// This is the one reader of a schema that a list's items, a JSON body and a
+/// multipart body are read through, as a parameter's and a property's are, so a
+/// wrapper is a wrapper wherever it stands.
 ///
 /// Unwrapping and following are one walk, so they share one set of the
 /// references taken: a schema whose only member leads back to the schema is a
@@ -176,14 +182,28 @@ fn schemas<'c>(components: &'c Components) -> impl Fn(&str) -> Option<&'c Refere
 /// and a set spanning both is what meets it. Nothing bounds the number of
 /// wrappers, because every one of them that is not a reference is a step
 /// further into a document that is finite.
-fn stated<'c>(
+pub(crate) fn stated<'c>(
     schema: &'c ReferenceOr<Schema>,
     components: &'c Components,
+) -> Result<&'c Schema, RefError> {
+    unwrapped(schema, components, |_| ())
+}
+
+/// [`stated`], and each schema the walk passes on the way, the stated one last.
+///
+/// What a wrapper says beside its element is about the value the wrapper stands
+/// for, so a reading that wants it, such as `readOnly`, takes it from the schemas
+/// passed and not from the one stated.
+fn unwrapped<'c>(
+    schema: &'c ReferenceOr<Schema>,
+    components: &'c Components,
+    mut passed: impl FnMut(&'c Schema),
 ) -> Result<&'c Schema, RefError> {
     let schemas = schemas(components);
     let mut seen = BTreeSet::new();
     let mut current = follow(schema, &schemas, "schemas", &mut seen)?;
     loop {
+        passed(current);
         let SchemaKind::AllOf { all_of } = &current.schema_kind else {
             return Ok(current);
         };
@@ -194,22 +214,243 @@ fn stated<'c>(
     }
 }
 
-/// `Some(scalar)` when this schema fits on one flag, `None` when it does not.
+/// Whether the document marks the value this schema stands for `readOnly`.
+///
+/// `readOnly` is about the value that stands at a property: the API sets it, and
+/// a request "SHOULD NOT" send it (OpenAPI 3.0.3). A `$ref` erases the flag
+/// written beside it, so a vendor who wants a property of a named type read-only
+/// writes the reference in an `allOf` of one element with the flag beside it, and
+/// a named schema that says it is read-only wherever a property points at it. The
+/// answer is yes if any schema [`stated`] passes says so.
+pub(crate) fn read_only_of(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+) -> Result<bool, RefError> {
+    let mut read_only = false;
+    unwrapped(schema, components, |passed| {
+        read_only |= passed.schema_data.read_only;
+    })?;
+    Ok(read_only)
+}
+
+/// Whether one schema fits on a flag.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Fit {
+    /// It fits on one flag.
+    Scalar(Scalar),
+    /// It does not, and this is why.
+    Other(Unsupported),
+}
+
+/// The scalar this schema is, or the reason it is none.
+///
+/// A schema that states a scalar `type` is that scalar, whichever way
+/// `openapiv3` holds it. The crate reads a schema into `Type::String`,
+/// `Type::Number`, `Type::Integer` or `Type::Boolean` when every keyword beside
+/// the `type` has the shape of that type, and into `AnySchema` for the rest. The
+/// rest is not all alike: an integer bound spelled `0.0` or `1e3` has the shape of
+/// a number, and a `string` beside an `allOf` has no scalar's shape at all. So
+/// [`typed`] reads the first kind into the type it would have been, and every
+/// other shape is named by the keyword that stops it, and never by a reason that
+/// is not true of it.
 pub(crate) fn scalar_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
-) -> Result<Option<Scalar>, RefError> {
+) -> Result<Fit, RefError> {
     let schema = stated(schema, components)?;
-    let SchemaKind::Type(ty) = &schema.schema_kind else {
+    Ok(match typed(&schema.schema_kind) {
+        Ok(ty) => match &*ty {
+            Type::String(s) => Fit::Scalar(string_scalar(s)),
+            Type::Number(n) => Fit::Scalar(Scalar::Number(number_bounds(n))),
+            Type::Integer(i) => Fit::Scalar(Scalar::Integer(integer_bounds(i))),
+            Type::Boolean(b) => Fit::Scalar(Scalar::Boolean(only_boolean(b))),
+            Type::Object(_) | Type::Array(_) => Fit::Other(Unsupported::Structured),
+        },
+        Err(why) => Fit::Other(why),
+    })
+}
+
+/// The type a schema states, once what `openapiv3` left as `AnySchema` is read.
+///
+/// `Err` is why there is none: an object or an array that `openapiv3` left as
+/// `AnySchema` is [`Unsupported::Structured`], a composition names its keyword,
+/// and so does every shape of an `AnySchema` that no type has. The generator
+/// types an argument through this too, so a value has the Rust type of the flag
+/// that carries it.
+pub(crate) fn typed(kind: &SchemaKind) -> Result<Cow<'_, Type>, Unsupported> {
+    match kind {
+        SchemaKind::Type(ty) => Ok(Cow::Borrowed(ty)),
+        SchemaKind::Any(any) => any_type(any).map(Cow::Owned),
+        SchemaKind::OneOf { .. } => Err(keyword("oneOf")),
+        SchemaKind::AllOf { .. } => Err(keyword("allOf")),
+        SchemaKind::AnyOf { .. } => Err(keyword("anyOf")),
+        SchemaKind::Not { .. } => Err(keyword("not")),
+    }
+}
+
+fn keyword(keyword: &str) -> Unsupported {
+    Unsupported::Keyword(keyword.to_owned())
+}
+
+/// The keywords a schema of type `string` has, as the document spells them.
+/// Whatever else an `AnySchema` of a scalar type states is a keyword its type
+/// does not have, and it is named.
+const STRING_KEYWORDS: [&str; 5] = ["pattern", "minLength", "maxLength", "enum", "format"];
+
+/// The keywords a schema of type `number` or `integer` has.
+const NUMERIC_KEYWORDS: [&str; 7] = [
+    "multipleOf",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "enum",
+    "format",
+];
+
+/// The keywords a schema of type `boolean` has: `format` names the kind of a
+/// value, and a boolean has only two.
+const BOOLEAN_KEYWORDS: [&str; 1] = ["enum"];
+
+/// What an `AnySchema` is, when its `type` is a scalar and each keyword beside
+/// it is one that the type has.
+///
+/// `openapiv3` holds a schema as `AnySchema` when it cannot hold it as a type, and
+/// the cause of that is a value and not a keyword: an `enum` that lists a value
+/// of another type, or an integer's bound or step that is no `i64`. The first is
+/// refused by the keyword. The second is read when the number is exactly the
+/// integer ([`whole`]), because `openapiv3` holds the bound as an `f64` and a
+/// bound that a double cannot state exactly is not read.
+fn any_type(any: &AnySchema) -> Result<Type, Unsupported> {
+    let belonging = match any.typ.as_deref() {
+        Some("string") => STRING_KEYWORDS.as_slice(),
+        Some("number" | "integer") => NUMERIC_KEYWORDS.as_slice(),
+        Some("boolean") => BOOLEAN_KEYWORDS.as_slice(),
+        Some("object" | "array") => return Err(Unsupported::Structured),
+        Some(_) => return Err(keyword("type")),
+        None => return Err(typeless(any)),
+    };
+    if let Some(foreign) = keywords(any).find(|stated| !belonging.contains(stated)) {
+        return Err(keyword(foreign));
+    }
+    match any.typ.as_deref() {
+        Some("string") => Ok(Type::String(StringType {
+            format: any.format.clone().into(),
+            pattern: any.pattern.clone(),
+            enumeration: listed(&any.enumeration, |value| value.as_str().map(str::to_owned))?,
+            min_length: any.min_length,
+            max_length: any.max_length,
+        })),
+        Some("number") => Ok(Type::Number(NumberType {
+            format: any.format.clone().into(),
+            multiple_of: any.multiple_of,
+            exclusive_minimum: any.exclusive_minimum.unwrap_or_default(),
+            exclusive_maximum: any.exclusive_maximum.unwrap_or_default(),
+            minimum: any.minimum,
+            maximum: any.maximum,
+            enumeration: listed(&any.enumeration, Value::as_f64)?,
+        })),
+        Some("integer") => Ok(Type::Integer(IntegerType {
+            format: any.format.clone().into(),
+            multiple_of: whole("multipleOf", any.multiple_of)?,
+            exclusive_minimum: any.exclusive_minimum.unwrap_or_default(),
+            exclusive_maximum: any.exclusive_maximum.unwrap_or_default(),
+            minimum: whole("minimum", any.minimum)?,
+            maximum: whole("maximum", any.maximum)?,
+            enumeration: listed(&any.enumeration, Value::as_i64)?,
+        })),
+        _ => Ok(Type::Boolean(BooleanType {
+            enumeration: listed(&any.enumeration, Value::as_bool)?,
+        })),
+    }
+}
+
+/// An `AnySchema` with no `type`: the composition keyword it states, else none.
+///
+/// A schema that states nothing of what it is can be any value, and a flag needs
+/// to know which.
+fn typeless(any: &AnySchema) -> Unsupported {
+    keywords(any)
+        .find(|stated| matches!(*stated, "allOf" | "oneOf" | "anyOf" | "not"))
+        .map_or(Unsupported::Untyped, keyword)
+}
+
+/// The keywords an `AnySchema` states other than its `type`, as the document
+/// spells them, in one fixed order with the compositions first. The order is what
+/// makes the keyword a refusal names the same one for the same schema: the object
+/// model keeps no order among the keywords of a schema.
+///
+/// A keyword whose value is empty (`properties: {}`, `enum: []`) is not stated,
+/// because the object model holds it as it holds the absence.
+fn keywords(any: &AnySchema) -> impl Iterator<Item = &'static str> {
+    [
+        ("allOf", !any.all_of.is_empty()),
+        ("oneOf", !any.one_of.is_empty()),
+        ("anyOf", !any.any_of.is_empty()),
+        ("not", any.not.is_some()),
+        ("properties", !any.properties.is_empty()),
+        ("required", !any.required.is_empty()),
+        ("additionalProperties", any.additional_properties.is_some()),
+        ("minProperties", any.min_properties.is_some()),
+        ("maxProperties", any.max_properties.is_some()),
+        ("items", any.items.is_some()),
+        ("minItems", any.min_items.is_some()),
+        ("maxItems", any.max_items.is_some()),
+        ("uniqueItems", any.unique_items.is_some()),
+        ("pattern", any.pattern.is_some()),
+        ("minLength", any.min_length.is_some()),
+        ("maxLength", any.max_length.is_some()),
+        ("minimum", any.minimum.is_some()),
+        ("maximum", any.maximum.is_some()),
+        ("exclusiveMinimum", any.exclusive_minimum.is_some()),
+        ("exclusiveMaximum", any.exclusive_maximum.is_some()),
+        ("multipleOf", any.multiple_of.is_some()),
+        ("enum", !any.enumeration.is_empty()),
+        ("format", any.format.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(keyword, stated)| stated.then_some(keyword))
+}
+
+/// An `enum`'s values as the type reads them, `null` as `None`. A value that the
+/// type does not read is why the schema is an `AnySchema`, and the `enum` is the
+/// keyword that holds it.
+fn listed<T>(
+    values: &[Value],
+    read: impl Fn(&Value) -> Option<T>,
+) -> Result<Vec<Option<T>>, Unsupported> {
+    values
+        .iter()
+        .map(|value| {
+            if value.is_null() {
+                return Ok(None);
+            }
+            read(value).map(Some).ok_or_else(|| keyword("enum"))
+        })
+        .collect()
+}
+
+/// The greatest whole number below which every integer is a double. A double
+/// that is whole and lies below it states one integer, and the bound a document
+/// spelled with more digits does not survive being an `f64` unless it lies there.
+const EXACT: f64 = 9_007_199_254_740_992.0;
+
+/// An integer's bound or step, which `openapiv3` holds as an `f64` once it is no
+/// `i64`: `0.0` and `1e3` are the integers 0 and 1000. A number with a fraction,
+/// and one that a double does not state exactly, is refused by its keyword.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the number is whole and below 2^53 in magnitude, which an i64 holds"
+)]
+fn whole(which: &str, bound: Option<f64>) -> Result<Option<i64>, Unsupported> {
+    let Some(bound) = bound else {
         return Ok(None);
     };
-    Ok(match ty {
-        Type::String(s) => Some(string_scalar(s)),
-        Type::Number(n) => Some(Scalar::Number(number_bounds(n))),
-        Type::Integer(i) => Some(Scalar::Integer(integer_bounds(i))),
-        Type::Boolean(b) => Some(Scalar::Boolean(only_boolean(b))),
-        Type::Object(_) | Type::Array(_) => None,
-    })
+    if bound.fract() == 0.0 && bound.abs() < EXACT {
+        Ok(Some(bound as i64))
+    } else {
+        Err(keyword(which))
+    }
 }
 
 /// Whether this schema's `enum` lists values and every one of them is `null`.
@@ -223,10 +464,10 @@ pub(crate) fn lists_only_null(
     components: &Components,
 ) -> Result<bool, RefError> {
     let schema = stated(schema, components)?;
-    let SchemaKind::Type(ty) = &schema.schema_kind else {
+    let Ok(ty) = typed(&schema.schema_kind) else {
         return Ok(false);
     };
-    Ok(match ty {
+    Ok(match &*ty {
         Type::String(s) => only_null(&s.enumeration),
         Type::Number(n) => only_null(&n.enumeration),
         Type::Integer(i) => only_null(&i.enumeration),
@@ -280,19 +521,18 @@ pub(crate) fn format_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
 ) -> Result<Option<String>, RefError> {
-    Ok(match &stated(schema, components)?.schema_kind {
-        SchemaKind::Type(Type::String(s)) => as_written(&s.format),
-        SchemaKind::Type(Type::Number(n)) => as_written(&n.format),
-        SchemaKind::Type(Type::Integer(i)) => as_written(&i.format),
-        // A format names the kind of a *value*, and none of these is one: an
-        // object and an array hold values rather than being one, a boolean has
-        // only two, and a composition is several schemas rather than a shape.
-        SchemaKind::Type(Type::Object(_) | Type::Array(_) | Type::Boolean(_))
-        | SchemaKind::OneOf { .. }
-        | SchemaKind::AllOf { .. }
-        | SchemaKind::AnyOf { .. }
-        | SchemaKind::Not { .. }
-        | SchemaKind::Any(_) => None,
+    let schema = stated(schema, components)?;
+    // A format names the kind of a *value*, and none of the rest is one: an
+    // object and an array hold values rather than being one, a boolean has only
+    // two, and a composition is several schemas rather than a shape.
+    let Ok(ty) = typed(&schema.schema_kind) else {
+        return Ok(None);
+    };
+    Ok(match &*ty {
+        Type::String(s) => as_written(&s.format),
+        Type::Number(n) => as_written(&n.format),
+        Type::Integer(i) => as_written(&i.format),
+        Type::Object(_) | Type::Array(_) | Type::Boolean(_) => None,
     })
 }
 
@@ -374,7 +614,7 @@ fn skeleton(
     if let Some(example) = example_of(schema, components)? {
         return Ok(example.clone());
     }
-    if let Some(scalar) = scalar_of(schema, components)? {
+    if let Fit::Scalar(scalar) = scalar_of(schema, components)? {
         return Ok(empty(&scalar));
     }
     let node = stated(schema, components)?;
@@ -389,6 +629,10 @@ fn skeleton(
 
 /// The required properties, in the order the document declares them, and
 /// nothing else.
+///
+/// A property the API sets (`readOnly`) is not one the caller supplies, so it is
+/// left out whether or not the schema requires it: a skeleton that carried it
+/// would invite the caller to send what a request should not.
 ///
 /// An optional key carrying an empty value is a key the caller never asked to
 /// send: on a `PUT` it is an empty string written over a field somebody meant
@@ -410,10 +654,11 @@ fn object_skeleton(
         if !object.required.iter().any(|required| required == name) {
             continue;
         }
-        out.insert(
-            name.clone(),
-            skeleton(&property.clone().unbox(), components, depth + 1)?,
-        );
+        let property = property.clone().unbox();
+        if read_only_of(&property, components)? {
+            continue;
+        }
+        out.insert(name.clone(), skeleton(&property, components, depth + 1)?);
     }
     Ok(Value::Object(out))
 }

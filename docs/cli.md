@@ -184,6 +184,7 @@ own type rather than the box `DispatchError::Transport` carries.
 | the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode`, and held to the array's `minItems`, `maxItems` and `uniqueItems` |
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
 | a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE`; a property is required exactly when the body and the property both are, unless `--json-body` is given |
+| a property of a JSON body that the schema marks `readOnly` | nothing: the API sets it, so the subcommand's long help names it, and the body is flat or whole without regard to it |
 | any other JSON body — nested, an array, no schema | `--json-body FILE`, plus `--json-body-template` where the document describes a shape |
 | a JSON body declared under `application/merge-patch+json`, `application/vnd.api+json` or any other `+json` type that is not a range | the same flags, and the body is sent under that key, not under `application/json` |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
@@ -201,6 +202,32 @@ for one is a clap error rather than a value silently dropped. A property whose
 the rule turns on is whether a property has a flag, never why it has none, and
 `--json-body-template` is then where the key that could not be spelled is
 written down.
+
+**A property the API sets has no flag, and it is not asked for.** OpenAPI 3.0.3
+says of a `readOnly` property that it "SHOULD NOT be sent as part of the
+request", and that its `required` "will take effect on the response only". A
+schema that serves a create and a read can list `id` as required and mark it
+read-only. An operator is then not asked to invent an id: there is no `--id`,
+whether or not the schema requires it. Such a property decides nothing about the
+body. It does not send the body whole, and it need not be a scalar. The long help
+names it, as it names a parameter with no flag:
+
+```
+`id` has no flag: it is `readOnly`, so the API sets it and the request should go
+out without it.
+```
+
+A body that goes whole has a line of its own for it: `` `id` is `readOnly`: the
+API sets it, so the body should go out without it. `` Only the properties of the
+body's own object are named. A `readOnly` property of a nested object is left out
+of `--json-body-template` too, and nothing says so.
+
+A property is `readOnly` when its own schema says so, when it points with a
+`$ref` at a named schema that says so, or when it is an `allOf` of one element
+and the flag stands on the wrapper or on the schema it wraps. The last is how a
+vendor puts a flag beside a reference. Nothing refuses a body that carries such a
+property, because the specification says "SHOULD NOT" and a server may want it.
+`writeOnly` is not read, and such a property keeps its flag.
 
 `-` as the path to `--json-body` or `--raw-body` reads stdin.
 
@@ -264,6 +291,7 @@ What is in it:
 | the document says | the template shows |
 |---|---|
 | a required property | the key, with a skeleton of its own schema |
+| a required property that the schema marks `readOnly` | nothing, at any depth: the API sets it |
 | an optional property | nothing |
 | `example` on a property | that value, taken whole |
 | `example` on the schema a property points at | that value, where the property states none of its own |
@@ -359,20 +387,34 @@ nothing lands on them.
 
 ### Parameters with no flag
 
-Six shapes have no command-line spelling: `in: cookie`, a parameter described
-by `content` instead of `schema`, one whose schema is neither a value nor a list
-of values, one declaring a `style` this CLI does not write — `spaceDelimited`,
-`pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — one
-whose *name* has no kebab-case spelling, and one whose name an earlier parameter
-of the operation has (the list is below). The style is read whatever the schema is, because it is
-not only about delimiters: `matrix` puts a `;name=` in front of a single value
-too.
+Eight shapes have no command-line spelling: `in: cookie`, a parameter described
+by `content` instead of `schema`, one whose schema is an object or an array of
+them, one whose schema states a keyword this CLI does not read as a value, one
+whose schema states no `type`, one declaring a `style` this CLI does not write —
+`spaceDelimited`, `pipeDelimited` or `deepObject` in a query, `matrix` or `label`
+in a path — one whose *name* has no kebab-case spelling, and one whose name an
+earlier parameter of the operation has (the list is below). The style is read
+whatever the schema is, because it is not only about delimiters: `matrix` puts a
+`;name=` in front of a single value too.
 
 The last two are about the name rather than the value. A flag is `[a-z0-9-]`
 once kebab-cased, the rule a command name and a gate also pass, and a parameter
 named `*` or `()` reduces to nothing under it. A name with a character outside
 ASCII, such as `straße`, has no spelling either: it is not kebab-cased to
 `stra-e`, and nothing is transliterated.
+
+A scalar keeps its flag however the object model holds it. A `type: integer` with
+a bound spelled `0.0` or `1e3` is an integer with that bound, and a `string`,
+`number`, `integer` or `boolean` whose keywords all belong to its type is that
+scalar. The other shapes are named by the keyword that stops them, and the
+reason is true of the schema: `oneOf`, `anyOf`, an `allOf` of more than one
+schema and `not` are named, and so is a keyword the scalar `type` does not have
+(`allOf` or `pattern` beside `type: integer`), an `enum` that lists a value of
+another type, and an integer's bound or step that is not a whole number below
+2^53 (`openapiv3` holds it as a double, and a double states no more). A schema
+that states no `type` and no composition has the reason "stated with no
+`type`". A single `allOf` element is read as the schema it wraps for a list, a
+JSON body and a multipart body, as it is for a value.
 
 The parameters of an operation are one list. It holds the path item's
 parameters in the order the path item lists them, with a parameter of the
@@ -396,6 +438,10 @@ line of its own below the method, the path and the `operationId`:
 `filter` has no flag: it is neither a value nor a list of values. The request
 goes out without it.
 ```
+
+A keyword is named in the same line: `` `code` has no flag: it is stated with
+`allOf`, which this CLI does not read as a value. The request goes out without
+it. ``
 
 The line for the `ref` in the query gives its reason as sharing its name with
 the `path` parameter.

@@ -148,9 +148,10 @@ with a `schema` (its items, for a list; `Accept`, `Content-Type` and
 body whose schema is an object. A body goes whole through `--json-body` at its
 first property that has no flag, a nested one or one whose name has no spelling,
 and a property listed after it is read for its rules all the same, so the
-verdict does not depend on the order of the properties. A cookie parameter, a
-parameter stated with `content`, a property of a form, a multipart or an `allOf`
-body and the items of an array body are not read that way. Only the escape below
+verdict does not depend on the order of the properties. A property that the
+schema marks `readOnly` is no part of the request, so it is read for none: it
+has no flag, and no flag could have carried its rules. A cookie parameter, a
+parameter stated with `content`, a property of a form, a multipart or a multi-schema `allOf` body and the items of an array body are not read that way. Only the escape below
 is asked of them.
 
 **A `pattern` with `\p{`, `\P{` or `\u{` is refused the same way.** Without the

@@ -150,7 +150,7 @@ they are blessed.
 | Spelling | Outcome |
 |---|---|
 | `update: { $ref: … }` merged over the vendor's keys | **Use this.** A `$ref` wins over everything written beside it, the field keeps its place in `properties`, and the rule the crate reads is the named schema's. |
-| `update: { allOf: [ { $ref: … } ] }` merged over them | Silently neither. Beside a vendor's `type` or `format` the node parses as neither a scalar nor a wrapper, the field stops being a flag, and the whole body falls back to `--json-body`, taking every sibling's flag with it. |
+| `update: { allOf: [ { $ref: … } ] }` merged over them | Silently neither. Beside a vendor's `type` or `format` the node parses as neither a scalar nor a wrapper. A parameter has no flag, and its long help says it is stated with `allOf`. A property stops being a flag, and the whole body falls back to `--json-body`, taking every sibling's flag with it. |
 | `remove` the property, then `update` the parent to re-add it clean | Works, and costs the property its place in `properties`, so `--help` order moves. |
 
 The price of the first is the vendor's own per-field description: a `$ref`'s

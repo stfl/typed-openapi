@@ -341,6 +341,24 @@ fn long_about(op: &Operation) -> String {
             );
         }
     }
+    // A property the API sets is left out of the request for the same reason a
+    // flag is: there is nothing for an operator to give. A flat body says where
+    // the flag went, and a body that goes whole says what to leave out of the
+    // file.
+    for name in op.body().read_only() {
+        let _ = if matches!(op.body(), Body::JsonFields { .. }) {
+            write!(
+                out,
+                "\n\n`{name}` has no flag: it is `readOnly`, so the API sets it and the request \
+                 should go out without it."
+            )
+        } else {
+            write!(
+                out,
+                "\n\n`{name}` is `readOnly`: the API sets it, so the body should go out without it."
+            )
+        };
+    }
     out
 }
 

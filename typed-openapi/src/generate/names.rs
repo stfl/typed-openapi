@@ -117,6 +117,11 @@ impl Site {
         }
     }
 
+    /// Whether this is the request body of an operation, and not its response.
+    pub(super) fn is_body(&self) -> bool {
+        self.role == Role::Body
+    }
+
     /// What this crate suggests the type be called.
     ///
     /// Words rather than an identifier: typify sanitises a name it is given
@@ -256,9 +261,7 @@ pub(super) fn sites<'a>(api: &'a OpenAPI, model: &Document) -> Vec<(Site, &'a Sc
         let Some((_, operation)) = find(api, op) else {
             continue;
         };
-        if let Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } = op.body()
-            && let JsonBody::Stated(ReferenceOr::Item(schema)) = json_body(operation, media_type)
-        {
+        if let Some(ReferenceOr::Item(schema)) = body_of(operation, op) {
             found.push((Site::body(op.id()), schema));
         }
         if let Some(ReferenceOr::Item(schema)) = success(operation) {
@@ -266,6 +269,39 @@ pub(super) fn sites<'a>(api: &'a OpenAPI, model: &Document) -> Vec<(Site, &'a Sc
         }
     }
     found
+}
+
+/// The schema of every JSON request body a wrapper takes, named or stated, and
+/// the site of the operation that takes it.
+///
+/// What a request body reaches is read from here, so the reach is the one the
+/// wrappers have: the entry that is sent, as the model keys it.
+pub(super) fn bodies<'a>(
+    api: &'a OpenAPI,
+    model: &Document,
+) -> Vec<(Site, &'a ReferenceOr<Schema>)> {
+    model
+        .into_iter()
+        .filter_map(|op| {
+            let (_, operation) = find(api, op)?;
+            Some((Site::body(op.id()), body_of(operation, op)?))
+        })
+        .collect()
+}
+
+/// The schema of the JSON body that `op` sends, where the document states one.
+fn body_of<'a>(
+    operation: &'a openapiv3::Operation,
+    op: &Operation,
+) -> Option<&'a ReferenceOr<Schema>> {
+    let (Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. }) = op.body()
+    else {
+        return None;
+    };
+    match json_body(operation, media_type) {
+        JsonBody::Stated(schema) => Some(schema),
+        JsonBody::Referenced | JsonBody::Unkeyed | JsonBody::Shapeless => None,
+    }
 }
 
 /// What an operation says its JSON request body is.

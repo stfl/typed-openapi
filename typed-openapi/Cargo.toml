@@ -33,6 +33,10 @@ required-features = ["document"]
 # beside it. `layout` is the one that wants none: it traces the types of the
 # model, which every build has, and reads no document.
 [[test]]
+name = "anyschema"
+required-features = ["document", "clap"]
+
+[[test]]
 name = "blob"
 required-features = ["document", "clap"]
 
@@ -71,6 +75,10 @@ required-features = ["document", "clap"]
 [[test]]
 name = "optional"
 required-features = ["document", "clap"]
+
+[[test]]
+name = "readonly"
+required-features = ["generate", "clap"]
 
 [[test]]
 name = "reading"

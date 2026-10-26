@@ -331,20 +331,21 @@ of, such as an error response's. Both ask `scalar::unflagged`, so the rule is
 written once.
 
 `runnable_scalar` in `src/model/reduce.rs` is where the rules of a value are
-asked, `Scalar::runnable` and the `enum` of `null` alone among them. It reads the
-values that the reduction reads for a scalar, with a flag or without one: a
+asked, `Scalar::runnable` and the `enum` of `null` alone among them. It reads
+the values that the reduction reads for a scalar, with a flag or without one: a
 parameter that `declared` keeps and that is sent in the path, the query or a
 header with a `schema` (its items, for a list), and a property of a JSON body
 whose schema is an object. `json_body` sends the whole body through
 `--json-body` at the first property that has no flag, a nested one or one whose
 name has no spelling, so it reads every property (`properties_of`) before it
-decides whether the body is flat. A rule asked only of the properties listed
-before that one would make a document that loads depend on which property comes
-first. A cookie parameter, a parameter stated with `content`, a property of a
-form or multipart body or of a body whose schema is an `allOf`, and the items of
-an array body are not read by it. The walk asks them the escape rule and nothing
-else, so a `multipleOf` of 0 or a `pattern` that no engine reads loads there. A
-rule of this kind that is added for a value is added in `runnable_scalar`, which
+decides whether the body is flat. A property the API sets is read for no rule. A
+rule asked only of the properties listed before that one would make a document
+that loads depend on which property comes first. A cookie parameter, a parameter
+stated with `content`, a property of a form or multipart body or of a body whose
+schema is an `allOf` of more than one schema, and the items of an array body are
+not read by it. The walk asks them the escape rule and nothing else, so a
+`multipleOf` of 0 or a `pattern` that no engine reads loads there. A rule of
+this kind that is added for a value is added in `runnable_scalar`, which
 `shape_of` and `properties_of` share, and a rule of every schema is added to the
 walk.
 
@@ -481,22 +482,53 @@ it, and a call per hop overflows the stack at 7,000 of them, on a thread of
 adds no recursion to either walk.
 
 **A shape this crate cannot spell stops at the operation, not at the document.**
-A parameter that is `in: cookie`, described by `content`, neither a value nor a
-list of values, declaring a `style` this crate does not serialise, *named* in a
-way `names::spelled` refuses, or sharing its name with an earlier parameter of
-the operation (`Unsupported::Shared(Place)`), is carried as `Shape::Unreachable` —
-named on the subcommand's long help and in the wrapper's documentation, and
-given no flag, no argument and no place in the request — and only a *required*
-one is a `LoadError`, because an operation that could never build a correct
-request is worth refusing by name. It is the rule a body already follows, where
-one nested property sends the whole body through `--json-body` rather than
-refusing the document that holds it.
+A parameter that is `in: cookie`, described by `content`, an object or an array
+(`Unsupported::Structured`), stated with a keyword this crate does not read as a
+value (`Keyword`) or with no `type` (`Untyped`), declaring a `style` this crate
+does not serialise, *named* in a way `names::spelled` refuses, or sharing its
+name with an earlier parameter of the operation (`Unsupported::Shared(Place)`),
+is carried as `Shape::Unreachable` — named on the subcommand's long help and in
+the wrapper's documentation, and given no flag, no argument and no place in the
+request — and only a *required* one is a `LoadError`, because an operation that
+could never build a correct request is worth refusing by name. It is the rule a
+body already follows, where one nested property sends the whole body through
+`--json-body` rather than refusing the document that holds it.
+
+**A scalar is read however the object model holds it, and any other shape names
+its keyword.** `openapiv3` holds a schema as `AnySchema` when it fits none of
+its scalar types: an integer bound spelled `0.0` or `1e3` is an `f64`, a bound
+past `i64` is one too, and a `string` beside an `allOf` or a `pattern` beside an
+`integer` has the keywords of no type. `typed` in `src/schema.rs` is the one
+place that reads such a schema, and `scalar_of`, `lists_only_null` and
+`format_of` ask it. An `AnySchema` whose `type` is a scalar and whose keywords
+all belong to that type is read as the type `openapiv3` would have made. Every
+other shape is an `Unsupported` that is true of it: `Structured` for an object
+or an array, `Keyword` for a composition, for a keyword the `type` does not
+have, for an `enum` that lists a value of another type and for a `type` that is
+none of the six, and `Untyped` for a schema with no `type` and no composition.
+The keyword is the first the schema states, in one fixed order with the
+compositions first, because the object model keeps no order among them. An
+integer's bound or step is read only where its double is the integer, a whole
+number below 2^53 (`whole`): `openapiv3` has already rounded what the document
+spelled, so a bound that a double does not state is refused by its keyword and
+never rounded again. A parameter takes the reason as its `Unreachable`, and a
+property takes it as the body going whole, as any property with no flag does.
+Neither refuses the document that holds it, and only a required parameter does.
+
+`stated` is the one reader of a value's schema, a list's, a JSON body's and a
+multipart body's. A single-element `allOf` is a `$ref` that kept its siblings
+wherever it stands, so `items_of`, `json_body` and `part_names` unwrap it as
+`scalar_of` does. `resolve_schema` follows a `$ref` and no more, and is for the
+sentence and the example, which are the field's own before they are the named
+schema's.
 
 Every flag a user types passes `names::spelled`, which is why a body property
 spelled `*` sends its body whole rather than claiming a flag called `""`. The
 body's rule turns on whether a property has a flag and never on why it has none,
 so an unspellable property and a nested one reach the same answer — and the
-`Body::JsonWhole` template is then the one place the key is written down.
+`Body::JsonWhole` template is then the one place the key is written down. A
+property the API sets is the one outside that rule: it is no part of the
+request, so it has no flag and decides nothing.
 
 `spelled` refuses a name that holds a character outside ASCII, and
 transliterates nothing. `kebab` would turn that character into a separator, so
@@ -540,18 +572,23 @@ list is `Unsupported::Shared(Place)`, the place of the earlier one, whatever the
 shape or the place of either, and unless it has a reason of its own: a reason of
 its own wins over `Shared`. It claims no flag, and a required one is
 `LoadError::Parameter`. The earlier one keeps the name even when it has no flag
-itself (`in: cookie`, `content`), and a required path parameter that comes
-later refuses the document. `docs/cli.md` says the repairs of both costs. A
-rule by reachability would make `Operation::param` "the first parameter with a
-flag", and a rule by place would add a second order beside the list. Both would
-widen a public seam for a rare document, and both would contradict spec F-10
-("the one the document lists later"). The values under a name are the first parameter's, so
-`Invocation::new` counts the given values of a parameter with a flag only. The
-generator reads the same list: `entry_of_flag` finds the entry that a flag was
-read from in what `declared` returns, which is the first entry with the flag's
-name, because the first entry keeps the name and no later one has a flag. So a
-wrapper's argument is typed by the entry that won, inline or by a `$ref`, and
-the generator keeps no second copy of the merge.
+itself (`in: cookie`, `content`), and a required path parameter that comes later
+refuses the document. `docs/cli.md` says the repairs of both costs. A rule by
+reachability would make `Operation::param` "the first parameter with a flag",
+and a rule by place would add a second order beside the list. Both would widen a
+public seam for a rare document, and both would contradict spec F-10 ("the one
+the document lists later"). The values under a name are the first parameter's,
+so `Invocation::new` counts the given values of a parameter with a flag only.
+The generator reads the same list: `entry_of_flag` finds the entry that a flag
+was read from in what `declared` returns, which is the first entry with the
+flag's name, because the first entry keeps the name and no later one has a flag.
+So a wrapper's argument is typed by the entry that won, inline or by a `$ref`,
+and the generator keeps no second copy of the merge. The entry is read as the
+reduction read it: `wrapped` in `src/generate/ops.rs` unwraps an `allOf` of one
+element and leaves a `$ref` for `ref_name`, which has no `components` to follow
+it in and wants the name of a named schema where it stops, and `scalar_type`
+asks `schema::typed`, so an argument has the type of the flag that carries the
+value.
 
 A header parameter that would claim a flag and whose name `HeaderName` refuses
 is `LoadError::HeaderName`, because no request could carry it. A parameter with
@@ -629,6 +666,36 @@ subcommand, so one spelling of a line would work and the other would not.
 is. `Asked` and `Outcome::Template` are arms rather than a flag left
 lying about: an adopter cannot declare the flag and fail to print it, which is
 the defect progenitor's `cli.rs` ships.
+
+**A property the API sets is no part of the request, and both roads say so.** A
+`readOnly` property has no flag, whether or not the schema requires it: OpenAPI
+3.0.3 says that a request "SHOULD NOT" send it and that its `required` takes
+effect on the response only. `properties_of` in `src/model/reduce.rs` sorts
+every property of a body's object by what a request does with it (`Role`): the
+API sets it, it is a scalar and gets a flag, or it is anything else and the body
+goes whole. The first decides nothing about the body, so it neither sends the
+body whole nor needs to be a scalar, and its rules are read by no flag. The two
+JSON variants of `Body` carry the names (`read_only`), for the long help in
+`tree::long_about`, which says where the flag went, and `object_skeleton` leaves
+the property out of the template at every depth. A property is `readOnly`
+through `schema::read_only_of`, which asks every schema that `stated` passes:
+the property's own, the one a `$ref` leads to, and an `allOf` of one element and
+its element. A `$ref` erases the flag beside it, and the wrapper is the spelling
+that keeps it. `writeOnly` is not read.
+
+The generator makes the same decision for the types (`NotRequired` in
+`src/generate/types.rs`). A type that a request body reaches does not require
+the property, and a type that only responses reach keeps the document's
+`required`, because there it takes effect. A body reaches the schemas it names
+or states and every schema those refer to (`reached`), found on the schemas as
+`schemars` holds them, so an `example` that spells a `$ref` reaches nothing. The
+visitor reads a property as `read_only_of` does, in `schemars` types: the
+property is marked, it refers to a schema that `read_only_of` found read-only,
+or it is an `allOf` of one element that is. `tests/readonly.rs` runs every
+spelling through both roads, so the flag is gone exactly where the type stops
+requiring the property. A `required` that lists a property which another member
+of an `allOf` declares is kept, because the member that lists it does not say
+what the property is.
 
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command

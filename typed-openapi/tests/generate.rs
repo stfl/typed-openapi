@@ -858,6 +858,63 @@ components:
         id: { type: integer }
 "##;
 
+/// A parameter that `openapiv3` holds as `AnySchema` (an integer bound spelled
+/// `0.0`), a one-element `allOf` over a named schema, over an array, and an array
+/// of such wrappers: each has a flag, so each has an argument of the type the
+/// flag carries.
+const SCALARS: &str = r##"
+openapi: 3.0.3
+info: { title: Scalars, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - { name: floor, in: query, schema: { type: integer, minimum: 0.0 } }
+        - { name: code, in: query, schema: { allOf: [{ $ref: "#/components/schemas/Code" }], description: A code. } }
+        - { name: days, in: query, schema: { allOf: [{ type: array, items: { type: string } }], description: Days. } }
+        - { name: codes, in: query, required: true, schema: { type: array, items: { allOf: [{ $ref: "#/components/schemas/Code" }] } } }
+        - { name: ratio, in: query, required: true, schema: { type: number, maximum: 1e3 } }
+        - { name: mixed, in: query, schema: { type: string, allOf: [{ $ref: "#/components/schemas/Code" }] } }
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Code: { type: string, pattern: "^[A-Z]{3}$" }
+"##;
+
+/// The wrapper of an operation takes what the command line takes. A parameter
+/// whose schema `openapiv3` holds as `AnySchema`, or inside a one-element
+/// `allOf`, has a flag, so it has an argument, typed as a bare one is. One that
+/// has no flag is said in the documentation and is no argument.
+#[test]
+fn a_scalar_read_through_a_wrapper_or_an_any_schema_is_an_argument_of_its_type() {
+    let dir = out("scalars");
+    Settings::new(wrote(&dir, "scalars.yaml", SCALARS))
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = read(&dir.join("src/ops.rs"));
+
+    for argument in [
+        "floor: Option<i64>",
+        "code: Option<crate::types::Code>",
+        "days: Vec<&str>",
+        "codes: Vec<crate::types::Code>",
+        "ratio: f64",
+    ] {
+        assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
+    }
+    assert!(!ops.contains("mixed:"), "{ops}");
+    assert!(
+        ops.contains(
+            "The document's `mixed` parameter is not an argument: it is stated with `allOf`, \
+             which this CLI does not read as a value."
+        ),
+        "the wrapper does not say why `mixed` is not an argument:\n{ops}"
+    );
+}
+
 /// A CLI and a Rust caller reach one request builder, so a parameter has to
 /// mean the same thing on both roads: a list is a `Vec` argument filled the way
 /// a repeated flag fills it, and a parameter neither can supply is an argument

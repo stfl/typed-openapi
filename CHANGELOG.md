@@ -883,6 +883,88 @@ the crate follows [Semantic Versioning][semver].
   the optional body of `createInvoiceReminder` because the generator made it a
   required argument. That correction can go.
 
+- **A `readOnly` property gets no flag, and a type that a request reaches does
+  not require it.** OpenAPI 3.0.3 says that a request "SHOULD NOT" send a
+  `readOnly` property and that its `required` "will take effect on the response
+  only". One schema for a create and a read, with `id` required and read-only,
+  made `--id` a required flag, wrote `id` into `--json-body-template`, and made
+  `id` a required field of the generated type, so a caller had to invent an id
+  that the API sets. Now:
+  - A `readOnly` property has no flag, whether or not the schema requires it.
+    It neither sends the body whole nor needs to be a scalar. `--id` is a clap
+    error, where it was demanded. The property is read-only when its own schema
+    says so, when it points with a `$ref` at a schema that says so, and when it
+    is an `allOf` of one element (the spelling that keeps a flag beside a
+    reference) with the flag on the wrapper or on the schema it wraps.
+    `writeOnly` is not read.
+  - `--json-body-template` leaves out a required `readOnly` property, at every
+    depth, and the long help names each `readOnly` property of the body's own
+    object, where its flag would have been.
+  - `Body::JsonFields` and `Body::JsonWhole` have the field `read_only`, the
+    names in document order, and `Body::read_only()` answers it for every kind
+    of body. `Document::MODEL_LAYOUT` is 9. Repair: a `match` that binds every
+    field of either variant adds `read_only` or `..`. Run the bless step again
+    and commit `model.postcard`: a blob of layout 8 is `DocumentError::Stale`.
+  - A generated type that a request body reaches does not require a `readOnly`
+    property: `id: i64` is `id: Option<i64>`, with the `serde` attributes typify
+    writes for an optional field. A request body reaches the schema it names or
+    states and every schema those refer to with a `$ref`. A type that only
+    responses reach keeps the document's `required`, because there it takes
+    effect. Repair: code that builds such a type writes `Some(id)` or leaves the
+    field out, and code that reads it handles `None`. Run the bless step again
+    and commit `types.rs`. A `required` that lists a property which another
+    member of an `allOf` declares keeps it, and so does a type that only a body
+    behind `#/components/requestBodies/` reaches, because the generator follows
+    neither.
+  - A `readOnly` property is read for no rule of a flag, so a `multipleOf` of 0
+    on one loads, where it was `LoadError::Unrunnable`. A `pattern` that no
+    engine runs on one is still refused, as `LoadError::UnrunnablePattern`, which
+    names the schema, where it was `Unrunnable`, which names the operation.
+
+  sevdesk-cli reads the same as before at the level of its flags: of its 30 flat
+  JSON bodies none has a `readOnly` property, so no flag goes, and 8 of its 46
+  bodies that go whole name `readOnly` properties on the long help. Its
+  generated types and wrappers do not change. Its `model.postcard` is written
+  again for the layout.
+- **A scalar that `openapiv3` holds as `AnySchema` keeps its flag, and a shape
+  this crate cannot read names its keyword.** `openapiv3` cannot fit an integer
+  with a bound spelled `0.0` or `1e3`, a `string` beside an `allOf`, a `pattern`
+  beside an `integer` or an `enum` that lists a value of another type in one of
+  its scalar types, and holds each as `AnySchema`. This crate read every such
+  schema as no scalar. A parameter was then "neither a value nor a list of
+  values", which is false of a number, a required one refused the document under
+  that reason, and a body that held one lost every flag. A list parameter or a
+  body inside an `allOf` of one element met the same, because the list's items,
+  the JSON body and the multipart parts did not unwrap it. Now:
+  - An `AnySchema` whose `type` is a scalar and whose keywords all belong to that
+    type is read as that scalar. `{ type: integer, minimum: 0.0 }` is an integer
+    with a lower bound of 0, and a required parameter of that schema loads.
+  - A single-element `allOf` is read as the schema it wraps for a list's items,
+    a JSON body and a multipart body, as it is for a value.
+  - A generated wrapper takes such a parameter as an argument, typed as a bare
+    one is: an integer with a bound spelled `0.0` is `Option<i64>`, and a wrapper
+    over a named schema keeps its type. `Settings::write_to` failed with
+    `GenerateError::Operation`, "only `type:` schemas have a scalar spelling",
+    for a wrapper over a named schema and for the items of a list inside one, and
+    it generates them now. A parameter that had no flag and has one now is a new
+    argument of its wrapper. A multipart body
+    whose `allOf` leads to a reference that does not resolve is
+    `LoadError::Unresolvable`; it was a body with no parts.
+  - Every other shape is `Shape::Unreachable` under a reason that is true of it,
+    and a required parameter is refused under the same words. `Unsupported` has
+    two variants more, and it is not `#[non_exhaustive]`: `Keyword(String)` names
+    a composition (`oneOf`, `anyOf`, an `allOf` of more than one schema, `not`), a
+    keyword the `type` does not have, an `enum` that lists a value of another
+    type, a `type` that is none of the six, and an integer's bound or step that
+    is not a whole number below 2^53, which `openapiv3` has already rounded to a
+    double; `Untyped` is a schema with no `type` and no composition. An object or
+    an array stays `Structured`. `Document::MODEL_LAYOUT` is 9. Repair: a `match`
+    over `Unsupported` adds the two arms. A body property of these shapes sends
+    the body whole, as a nested property does.
+  - A document that was refused for such a parameter and loads now is the
+    required integer above. A document that loaded and is refused now is a
+    multipart body whose `allOf` leads nowhere.
+
 ### Removed
 
 - **Items that no caller outside the crate used are private to it.** No
