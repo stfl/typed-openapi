@@ -801,14 +801,34 @@ the crate follows [Semantic Versioning][semver].
   JSON beside it to be sent, or that removes the range and states the type the
   server reads, as for a key that is no media type
   ([docs/overlay.md](docs/overlay.md#1-plain-corrections)).
-- **A `content` key that no header carries is refused as a media type.** A
-  control character or DEL in the key, in a parameter after the `;` as much as in
-  the type, was no fault to the check. A JSON body ignored the key and went out as
-  `application/json`. A body sent verbatim loaded, and every request for it failed
-  with `RequestError::Http`. The load refuses the key as `LoadError::MediaType`,
-  whichever body it declares, when it is the key that is sent. The message prints
-  the byte as its escape (`\u{1}`). sevdesk-cli declares no such key. Repair: an
-  Overlay that replaces the key with the type the server reads.
+- **A `content` key that no header carries is refused as a media type, when it
+  is the key that goes out as the `Content-Type`.** The check read the type and
+  the subtype and nothing else of the key, so these loaded:
+  - a control character other than a tab, or DEL, in a parameter after the `;`;
+  - a line feed, vertical tab, form feed or carriage return at an end of the type
+    or subtype, which `str::trim` took off before the check;
+  - a white space other than a space and a tab at an end of the type or subtype,
+    such as `application/json` followed by a no-break space, or a next-line
+    character before it.
+
+  A JSON body ignored the key and went out as `application/json`, so each of
+  them loaded and worked. A body sent verbatim loaded too, and went out with the
+  white space in its `Content-Type`, which is no media type to RFC 9110 (a
+  no-break space is no `token` character and no optional white space), or failed
+  every request with `RequestError::Http` for a control character. A JSON body
+  now goes out under the key, so the load refuses each of them as
+  `LoadError::MediaType`, for a JSON body and a body sent verbatim, when the key
+  is the one that is sent. A space and a tab round the type are optional white
+  space in RFC 9110 and are no fault. A `multipart/form-data` key is not asked,
+  because that body writes its own `Content-Type`, with a boundary, and its key is
+  never sent: a document that holds one with such a byte loaded and its requests
+  went out as `multipart/form-data; boundary=…`, and it still does. The message
+  prints the key as the document spells it, and writes a character that does not
+  show, a control character or a white space other than a space, as its code point
+  (`\u{a0}`). sevdesk-cli declares no such key: its 82 body keys are
+  `application/json`, `multipart/form-data` and
+  `application/x-www-form-urlencoded`. Repair: an Overlay that replaces the key
+  with the type the server reads.
 
 ### Removed
 

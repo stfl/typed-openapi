@@ -39,8 +39,8 @@ use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
 use crate::scalar::{Items, Scalar, ScalarError};
 use crate::schema::{
-    RefError, description_of, format_of, is_json, is_media_range, is_media_type, is_multipart,
-    lists_only_null, resolve, resolve_schema, scalar_of, template,
+    RefError, description_of, format_of, is_content_type, is_json, is_media_range, is_media_type,
+    is_multipart, lists_only_null, resolve, resolve_schema, scalar_of, template,
 };
 
 /// What a refusal calls the request body.
@@ -541,16 +541,18 @@ pub enum LoadError {
         why: Unsupported,
     },
     /// A `requestBody` whose `content` key names no media type — `form-data`
-    /// where `multipart/form-data` was meant — or holds a byte that no header
-    /// carries, a control character in a parameter. Refused while the document
-    /// is reduced, because the alternative is a request sent under a
-    /// `Content-Type` no server can read, or no request at all. The message
-    /// prints a control character as its escape, so a key that looks like a
-    /// media type is not refused with nothing to show why.
+    /// where `multipart/form-data` was meant — or, for a key that goes out as the
+    /// request's `Content-Type`, is none that a header carries: a control
+    /// character other than a tab or a DEL, or a white space other than a space
+    /// and a tab at an end of its type or subtype. Refused while the document is
+    /// reduced, because the alternative is a request sent under a `Content-Type`
+    /// no server can read, or no request at all. The message spells the key as
+    /// the document does, so that an Overlay's target can match it, and writes a
+    /// character that does not show as its code point (`\u{a0}`).
     #[error(
         "{op}: `{}` is not a media type; \
          an Overlay is where a document's content type is corrected",
-        .media_type.escape_debug()
+        shown(.media_type)
     )]
     MediaType {
         /// The `operationId` of the operation that declares the body.
@@ -670,6 +672,24 @@ pub enum LoadError {
         /// Why this crate has no flag for it.
         why: Unsupported,
     },
+}
+
+/// A `content` key as the document spells it, except that a character which does
+/// not show is written as its code point. A control character, a no-break space
+/// and a line separator look like nothing or like a space, so a key refused for
+/// one would read as a media type with no fault in it. A space is written as a
+/// space, because a space round the essence is no fault.
+fn shown(media_type: &str) -> String {
+    media_type
+        .chars()
+        .map(|c| {
+            if c.is_control() || (c.is_whitespace() && c != ' ') {
+                c.escape_unicode().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }
 
 /// The repair that [`LoadError::Parameter`] names, and only a repair that loads
@@ -1775,11 +1795,12 @@ impl Body {
         // The key this operation would be sent under, and only that one: a key
         // beside it that nothing here ever reads is the vendor's business, and
         // refusing over it would refuse documents this crate serves correctly.
+        let not_a_media_type = || LoadError::MediaType {
+            op: id.to_owned(),
+            media_type: media_type.clone(),
+        };
         if !is_media_type(media_type) {
-            return Err(LoadError::MediaType {
-                op: id.to_owned(),
-                media_type: media_type.clone(),
-            });
+            return Err(not_a_media_type());
         }
         if is_media_range(media_type) {
             return Err(LoadError::MediaRange {
@@ -1787,11 +1808,16 @@ impl Body {
                 media_type: media_type.clone(),
             });
         }
+        // A multipart body writes its own `Content-Type`, with a boundary, so the
+        // key is never sent and is not asked what a header carries.
         if is_multipart(media_type) {
             return Ok(Self::Multipart {
                 names: under(part_names(media, components), id, BODY)?,
                 required,
             });
+        }
+        if !is_content_type(media_type) {
+            return Err(not_a_media_type());
         }
         if !is_json(media_type) {
             return Ok(Self::Opaque {

@@ -19,7 +19,7 @@
 use serde_json::json;
 use typed_openapi::model::Body;
 use typed_openapi::tree::{self, Asked, Outcome};
-use typed_openapi::{Document, Invocation, JSON_BODY, LoadError, Recorder, Values};
+use typed_openapi::{Document, Invocation, JSON_BODY, LoadError, Part, Recorder, Values};
 
 const MEDIA: &str = include_str!("fixtures/media.yaml");
 
@@ -354,9 +354,9 @@ fn the_overlay_the_words_name_replaces_the_range_with_a_type() {
     );
 }
 
-/// A range that ends in `+json` beside `application/json` is the repair of a
-/// document that declares both: the Overlay removes the range, and the key that
-/// names JSON without a `*` is the one that is sent, with its own schema.
+/// The Overlay that removes a range that ends in `+json` from a body that
+/// declares `application/json` beside it is the repair of that document: the key
+/// that names JSON without a `*` is the one that is sent, with its own schema.
 #[test]
 fn the_overlay_that_removes_a_range_beside_json_leaves_the_json_key_to_be_sent() {
     let both = "          'application/*+json':\n            schema: { type: object, \
@@ -407,17 +407,39 @@ fn a_key_with_no_type_and_subtype_is_no_media_type_and_no_range() {
     }
 }
 
-/// The key is the request's `Content-Type`, so a key that no header carries is
-/// no media type, whichever body it declares. The words print the byte as its
-/// escape: a key that looks like a media type says why it is refused. The inputs
-/// are `application/json; x="a<U+0001>b"`, the same with a newline, and
-/// `application/json;x=<DEL>`, and an opaque body under `text/plain`.
+/// Loads `key` as the one `content` key of `upload`, with `schema`, and asserts
+/// that the document is refused as `LoadError::MediaType` and that the words name
+/// the operation, say "not a media type" and spell the key as `shown`.
+fn assert_refused_as_no_media_type(key: &str, schema: &str, shown: &str) {
+    let content = format!("          {key}:\n            schema: {schema}\n");
+
+    let error = Document::load(&posting(&content), &[]).expect_err(key);
+
+    assert!(
+        matches!(&error, LoadError::MediaType { op, .. } if op == "upload"),
+        "{key}: {error:?}"
+    );
+    let words = error.to_string();
+    assert!(words.contains("upload"), "{words}");
+    assert!(words.contains(shown), "{words}");
+    assert!(words.contains("not a media type"), "{words}");
+    assert!(
+        !words.contains(|c: char| c.is_control() || (c.is_whitespace() && c != ' ')),
+        "{words:?}"
+    );
+}
+
+/// A key that goes out as the `Content-Type` is a header value, so a key that no
+/// header carries is no media type, whether the body is JSON or sent verbatim.
+/// The words write the byte as its code point: a key that looks like a media type
+/// says why it is refused. The inputs are `application/json; x="a<U+0001>b"`, the
+/// same with a newline, `application/json;x=<DEL>`, and a `text/plain` key.
 #[test]
 fn a_key_that_no_header_carries_is_no_media_type() {
     let object = "{ type: object, properties: { a: { type: string } } }";
     for (key, schema, shown) in [
         (r#""application/json; x=\"a\u0001b\"""#, object, r"a\u{1}b"),
-        (r#""application/json; x=\"a\nb\"""#, object, r"a\nb"),
+        (r#""application/json; x=\"a\nb\"""#, object, r"a\u{a}b"),
         (r#""application/json;x=\u007f""#, object, r"x=\u{7f}"),
         (
             r#""text/plain; x=\"a\u0001b\"""#,
@@ -425,17 +447,106 @@ fn a_key_that_no_header_carries_is_no_media_type() {
             r"a\u{1}b",
         ),
     ] {
-        let content = format!("          {key}:\n            schema: {schema}\n");
+        assert_refused_as_no_media_type(key, schema, shown);
+    }
+}
+
+/// A key with a white space other than a space or a tab at an end of its type or
+/// subtype is no media type, because it is not one to RFC 9110: the white space
+/// is no `token` character and no optional white space, and the header would
+/// carry it. The inputs are `application/json<NBSP>`, `<NEL>application/json`,
+/// `application/json<U+3000>`, `application/merge-patch+json<NBSP>` and a
+/// `text/plain<NBSP>` key, which a body sent verbatim holds.
+#[test]
+fn a_key_with_white_space_other_than_a_space_or_a_tab_is_no_media_type() {
+    let object = "{ type: object, properties: { a: { type: string } } }";
+    let text = "{ type: string }";
+    for (key, schema, shown) in [
+        (
+            r#""application/json\u00a0""#,
+            object,
+            r"application/json\u{a0}",
+        ),
+        (
+            r#""\u0085application/json""#,
+            object,
+            r"\u{85}application/json",
+        ),
+        (
+            r#""application/json\u3000""#,
+            object,
+            r"application/json\u{3000}",
+        ),
+        (
+            r#""application/merge-patch+json\u00a0""#,
+            object,
+            r"application/merge-patch+json\u{a0}",
+        ),
+        (r#""text/plain\u00a0""#, text, r"text/plain\u{a0}"),
+    ] {
+        assert_refused_as_no_media_type(key, schema, shown);
+    }
+}
+
+/// A space and a tab are the optional white space round the essence, so a key
+/// with one loads and is sent as the document spells it.
+#[test]
+fn a_space_and_a_tab_round_the_essence_are_no_fault() {
+    let content = "          \"application/json \\t; charset=utf-8\":\n            \
+                   schema: { type: object, properties: { a: { type: string } } }\n";
+
+    let doc = Document::load(&posting(content), &[]).expect("the white space is optional");
+
+    assert_eq!(
+        content_type(&doc, "upload", Values::new().json(json!({ "a": "x" }))),
+        "application/json \t; charset=utf-8"
+    );
+}
+
+/// The words spell the key as the document does, so the target of the Overlay
+/// that repairs it can match: a quote and a backslash are printed as they stand,
+/// and only a character that does not show is written as its code point. The
+/// inputs are `form-data; name="file"` and `form\data`.
+#[test]
+fn the_words_spell_the_key_as_the_document_does() {
+    for (key, spelled) in [
+        (r#"'form-data; name="file"'"#, r#"`form-data; name="file"`"#),
+        (r"'form\data'", r"`form\data`"),
+    ] {
+        let content = format!("          {key}:\n            schema: {{ type: string }}\n");
 
         let error = Document::load(&posting(&content), &[]).expect_err(key);
 
         assert!(
-            matches!(&error, LoadError::MediaType { op, .. } if op == "upload"),
+            matches!(&error, LoadError::MediaType { .. }),
             "{key}: {error:?}"
         );
-        let words = error.to_string();
-        assert!(words.contains(shown), "{words}");
-        assert!(words.contains("not a media type"), "{words}");
-        assert!(!words.contains(|c: char| c.is_control()), "{words:?}");
+        assert!(error.to_string().contains(spelled), "{error}");
+    }
+}
+
+/// A `multipart/form-data` key is never sent: the body is assembled with a
+/// `Content-Type` of its own, boundary and all. So the header is not asked of it,
+/// and a key that no header carries loads and the request goes out as it did. The
+/// inputs are `multipart/form-data; x="a<U+0001>b"` and
+/// `multipart/form-data<NBSP>`.
+#[test]
+fn a_multipart_key_is_not_asked_what_a_header_carries() {
+    let schema = "{ type: object, properties: { note: { type: string } } }";
+    for key in [
+        r#""multipart/form-data; x=\"a\u0001b\"""#,
+        r#""multipart/form-data\u00a0""#,
+    ] {
+        let content = format!("          {key}:\n            schema: {schema}\n");
+
+        let doc = Document::load(&posting(&content), &[]).expect(key);
+
+        assert_eq!(picked(&doc, "upload"), ("multipart", None), "{key}");
+        let values = Values::new().multipart(vec![Part::text("note", "hello")]);
+        let sent = content_type(&doc, "upload", values);
+        assert!(
+            sent.starts_with("multipart/form-data; boundary="),
+            "{key}: {sent}"
+        );
     }
 }

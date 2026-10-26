@@ -354,10 +354,23 @@ key that names JSON and is the first to, as `application/*+json` before
 `application/json`, removing the range leaves the other key to be sent. A `*` in
 a parameter after the `;` is the vendor's to spell and is not read.
 
-**A key that no header carries is no media type.** The key is the request's
-`Content-Type`, so a control character or DEL anywhere in it, in a parameter as
-much as in the type, is refused as `LoadError::MediaType`, which prints the byte
-as its escape. The rest of a parameter is not parsed.
+**A key that goes out as the `Content-Type` is one that a header carries.** A
+JSON body and a body that is sent verbatim go out under the key, so the key is
+read as RFC 9110 reads a header value, and one that is not is refused as
+`LoadError::MediaType`, when it is the key that is sent:
+
+- a control character other than a tab, or DEL, anywhere in it, in a parameter as
+  much as in the type;
+- a white space other than a space and a tab at an end of its type or subtype,
+  such as a no-break space. A space and a tab round the type are the optional
+  white space of RFC 9110 and are no fault.
+
+The rest of a parameter is not parsed. A `multipart/form-data` key is not asked,
+because that body is sent under a `Content-Type` of its own, with the boundary
+that is chosen when the parts are encoded, and the key is never sent: such a
+document loads. The words spell the key as the document does, so that the target
+of an Overlay can match it, and write a character that does not show, a control
+character or a white space other than a space, as its code point (`\u{a0}`).
 
 A base URL is the scheme, the host and the path of every request, and nothing
 else of it is kept. One with userinfo (`user:password@`) or a query is refused
