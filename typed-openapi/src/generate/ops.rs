@@ -318,8 +318,8 @@ fn json_body_type(
     names: &Names,
 ) -> Result<Option<TokenStream>, GenerateError> {
     match op.body() {
-        Body::JsonFields { .. } | Body::JsonWhole { .. } => {
-            body_type(op, operation, names).map(Some)
+        Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
+            body_type(op, media_type, operation, names).map(Some)
         }
         Body::None | Body::Opaque { .. } | Body::Multipart { .. } => Ok(None),
     }
@@ -568,8 +568,8 @@ fn signature_of(
     }
     match op.body() {
         Body::None => {}
-        Body::JsonFields { .. } | Body::JsonWhole { .. } => {
-            let ty = body_type(op, operation, names)?;
+        Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
+            let ty = body_type(op, media_type, operation, names)?;
             let body = out.argument(&format_ident!("body"), "body", "is the request body");
             out.args.push(quote! { #body: &#ty });
             out.builder.push(quote! { .json(crate::to_json(#body)?) });
@@ -723,7 +723,8 @@ fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStrea
     })
 }
 
-/// The type of a JSON request body.
+/// The type of a JSON request body, read from the entry under `media_type`: the
+/// key the model sends the body under.
 ///
 /// A `$ref` keeps the named schema's type and a schema the operation states
 /// inline gets one of its own, so a body the document describes is a body the
@@ -731,12 +732,15 @@ fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStrea
 /// case that earns it: a JSON body the document states no schema for at all.
 fn body_type(
     op: &Operation,
+    media_type: &str,
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    match super::names::json_body(operation) {
+    match super::names::json_body(operation, media_type) {
         JsonBody::Referenced => Err(unsupported("requestBody $refs are not followed")),
-        JsonBody::NotJson => Err(unsupported("no JSON request body")),
+        JsonBody::Unkeyed => Err(unsupported(
+            "no request body entry under the key the model sends",
+        )),
         JsonBody::Shapeless => Ok(quote!(serde_json::Value)),
         JsonBody::Stated(schema) => named_or_stated(schema, &Site::body(op.id()), names),
     }

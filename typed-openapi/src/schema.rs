@@ -19,6 +19,7 @@
 
 use std::collections::BTreeSet;
 
+use http::HeaderValue;
 use openapiv3::{
     ArrayType, BooleanType, Components, IntegerType, NumberType, ObjectType, ReferenceOr, Schema,
     SchemaKind, StringType, Type, VariantOrUnknownOrEmpty,
@@ -545,12 +546,14 @@ fn limit<T>(value: Option<T>, exclusive: bool) -> Option<Limit<T>> {
 /// which makes it a shape to refuse rather than one to carry.
 ///
 /// Only the essence is held to a grammar, and it is RFC 9110's own: two
-/// non-empty `token`s either side of one `/`. That is deliberately the whole
-/// of the rule. The parameters after the `;` are not checked, because a
-/// parameter value may be a quoted string carrying a `;` or a `/`, and a rule
-/// strict enough to judge one would refuse bodies servers accept — the defect
-/// this question exists to catch is a key that was never a media type, not a
-/// parameter spelled unusually. The token rule is the wire's, not a register
+/// non-empty `token`s either side of one `/`. The parameters after the `;` are
+/// not parsed, because a parameter value may be a quoted string carrying a `;`
+/// or a `/`, and a rule strict enough to judge one would refuse bodies servers
+/// accept — the defect this question exists to catch is a key that was never a
+/// media type, not a parameter spelled unusually. The one thing asked of the
+/// whole key is that a header can carry it, because the key is the request's
+/// `Content-Type`: a control character or DEL anywhere in it, a parameter
+/// included, builds no request. The token rule is the wire's, not a register
 /// of types this crate knows: `application/x-www-form-urlencoded`,
 /// `application/vnd.api+json` and every vendor type anyone coins pass it.
 #[must_use]
@@ -558,6 +561,7 @@ pub(crate) fn is_media_type(media_type: &str) -> bool {
     essence(media_type)
         .split_once('/')
         .is_some_and(|(ty, subtype)| is_token(ty) && is_token(subtype))
+        && HeaderValue::from_str(media_type).is_ok()
 }
 
 /// Whether this is a media range — `*/*`, `image/*` — and so a set of types and
@@ -590,13 +594,12 @@ fn is_token(word: &str) -> bool {
 /// `application/json`, `application/merge-patch+json`, and anything with
 /// parameters after the essence.
 ///
-/// A range is no JSON type: `application/*+json` ends in `+json` and names a
-/// family, so a body declared under it and under `application/json` is sent
-/// under the second.
+/// The suffix is all that is read, so `application/*+json` names JSON too. A
+/// request body and a response pick their `content` key by this, and a request
+/// body that picks a range is refused as one ([`is_media_range`]).
 #[must_use]
 pub(crate) fn is_json(media_type: &str) -> bool {
-    !is_media_range(media_type)
-        && (essence(media_type) == "application/json" || essence(media_type).ends_with("+json"))
+    essence(media_type) == "application/json" || essence(media_type).ends_with("+json")
 }
 
 /// A media type this crate can assemble from `--file` and `--field` parts.
@@ -644,6 +647,18 @@ mod tests {
         assert!(!is_media_type("application/json charset=utf-8"));
     }
 
+    /// The key is the request's `Content-Type`, so a byte that no header carries
+    /// is no part of a media type, in a parameter as much as in the essence.
+    #[test]
+    fn a_media_type_is_a_header_value() {
+        assert!(!is_media_type("application/json; x=\"a\u{1}b\""));
+        assert!(!is_media_type("application/json; x=\"a\nb\""));
+        assert!(!is_media_type("application/json;x=\u{7f}"));
+        // A tab is one a header carries, and so is a byte past ASCII.
+        assert!(is_media_type("text/plain; x=\"a\tb\""));
+        assert!(is_media_type("text/plain; x=\"é\""));
+    }
+
     #[test]
     fn a_range_has_a_star_in_its_type_or_its_subtype_and_nowhere_else() {
         assert!(is_media_range("*/*"));
@@ -668,9 +683,11 @@ mod tests {
         assert!(is_json("application/merge-patch+json"));
         assert!(!is_json("form-data"));
         assert!(!is_json("multipart/form-data"));
-        // A family of types is not one of them.
-        assert!(!is_json("application/*+json"));
         assert!(!is_json("*/*"));
+        // The suffix is all that is read, so a range that ends in it is read as
+        // JSON: it is the key a request body is picked under and then refused,
+        // and the key a response is typed from.
+        assert!(is_json("application/*+json"));
     }
 
     #[test]

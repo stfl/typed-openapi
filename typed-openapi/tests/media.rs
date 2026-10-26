@@ -6,8 +6,10 @@
 //! SEV-249 behind F-9 (`A2/wire` `main.yaml`, `A7` `suffix.yaml` and `range.yaml`,
 //! and `p07` of `A3a/reduce`), in `tests/fixtures/media.yaml` where they have to
 //! load and beside their assertion where they are refused. A case that refuses a
-//! document asserts the variant beside the words, and loads the document with the
-//! repair the words name.
+//! document asserts the variant beside the words. The Overlays that the words name
+//! as the repair of a range are loaded in
+//! `the_overlay_the_words_name_replaces_the_range_with_a_type` and
+//! `the_overlay_that_removes_a_range_beside_json_leaves_the_json_key_to_be_sent`.
 
 #![expect(
     clippy::expect_used,
@@ -36,16 +38,19 @@ fn posting(content: &str) -> String {
     )
 }
 
-/// What the reduction made of a body, and the media type it goes out under.
-/// A multipart body is assembled with a boundary of its own, so it names none.
+/// What the reduction made of a body, and the media type it goes out under
+/// (`Body::media_type`). A multipart body is assembled with a boundary of its
+/// own, so it names none.
 fn picked(doc: &Document, id: &str) -> (&'static str, Option<String>) {
-    match doc.get(id).expect("the operation").body() {
-        Body::JsonFields { media_type, .. } => ("fields", Some(media_type.clone())),
-        Body::JsonWhole { media_type, .. } => ("whole", Some(media_type.clone())),
-        Body::Opaque { media_type, .. } => ("opaque", Some(media_type.clone())),
-        Body::Multipart { .. } => ("multipart", None),
-        Body::None => ("none", None),
-    }
+    let body = doc.get(id).expect("the operation").body();
+    let kind = match body {
+        Body::JsonFields { .. } => "fields",
+        Body::JsonWhole { .. } => "whole",
+        Body::Opaque { .. } => "opaque",
+        Body::Multipart { .. } => "multipart",
+        Body::None => "none",
+    };
+    (kind, body.media_type().map(str::to_owned))
 }
 
 /// The `content-type` of the request that `values` make of `id`.
@@ -102,8 +107,8 @@ fn scratch(name: &str, text: &str) -> std::path::PathBuf {
 
 // ------------------------------------------------------------------ F-9
 
-/// `A2/wire` `main.yaml`, `things patch`: the body is declared as
-/// `application/merge-patch+json` and went out as `application/json`.
+/// `A2/wire` `main.yaml`, `things patch` is the input: the body is declared as
+/// `application/merge-patch+json`, and it goes out as that.
 #[test]
 fn a_merge_patch_goes_out_as_a_merge_patch() {
     let doc = media();
@@ -119,7 +124,8 @@ fn a_merge_patch_goes_out_as_a_merge_patch() {
     );
 }
 
-/// `A7` `suffix.yaml`, `createArticle`.
+/// `A7` `suffix.yaml`, `createArticle` is the input: a body declared as
+/// `application/vnd.api+json`.
 #[test]
 fn a_json_api_body_goes_out_as_json_api() {
     let doc = media();
@@ -171,7 +177,8 @@ fn a_body_with_no_schema_goes_out_under_its_key() {
 }
 
 /// The model says which type each JSON body goes out under, so a caller that
-/// walks the operations can tell a merge patch from a plain JSON body.
+/// walks the operations can tell a merge patch from a plain JSON body. A body
+/// that the document does not declare has none.
 #[test]
 fn a_json_body_carries_the_type_it_was_declared_under() {
     let doc = media();
@@ -190,6 +197,7 @@ fn a_json_body_carries_the_type_it_was_declared_under() {
             )
         )
     );
+    assert_eq!(picked(&doc, "getThing"), ("none", None));
 }
 
 /// The blob is the only door a shipped binary has onto the document.
@@ -228,7 +236,11 @@ fn the_key_that_is_sent_is_the_first_json_one_and_else_the_first_of_all() {
         ),
         ("pickMultipartFirst", "multipart", None),
         ("pickJsonOverRange", "fields", Some("application/json")),
-        ("pickJsonOverJsonRange", "fields", Some("application/json")),
+        (
+            "pickJsonBeforeJsonRange",
+            "fields",
+            Some("application/json"),
+        ),
         ("pickTextOverRange", "opaque", Some("text/plain")),
     ];
 
@@ -241,8 +253,25 @@ fn the_key_that_is_sent_is_the_first_json_one_and_else_the_first_of_all() {
     }
 }
 
-/// `A7` `range.yaml` and `p07b`, `p07c`: a range was the request's
-/// `Content-Type`, so `*/*` went to the server as a `content-type`.
+/// Loads `content` as the body of `upload` and asserts that the document is
+/// refused as `LoadError::MediaRange` for `range`, with words that name the
+/// operation, the key and what it is.
+fn assert_refused_as_a_range(content: &str, range: &str) {
+    let error = Document::load(&posting(content), &[]).expect_err(range);
+
+    assert!(
+        matches!(&error, LoadError::MediaRange { op, media_type }
+            if op == "upload" && media_type == range),
+        "{range}: {error:?}"
+    );
+    let words = error.to_string();
+    assert!(words.contains("upload") && words.contains(range), "{words}");
+    assert!(words.contains("media range"), "{words}");
+}
+
+/// `A7` `range.yaml` and `p07b`, `p07c` are the input: one body declared under a
+/// range. A range names a set of types and a request goes out under one, so a
+/// range that is the key that is sent is refused by name.
 #[test]
 fn a_media_range_as_the_key_that_is_sent_is_refused_by_name() {
     let object = "{ type: object, properties: { a: { type: string } } }";
@@ -252,40 +281,52 @@ fn a_media_range_as_the_key_that_is_sent_is_refused_by_name() {
         ("'*/*'", object),
         ("image/*", binary),
         ("'application/*'", binary),
-        // A wildcard in the subtype is no more a type than a range is, and
-        // `is_json` took it for JSON.
         ("'application/*+json'", object),
     ] {
         let content = format!("          {key}:\n            schema: {schema}\n");
-        let error = Document::load(&posting(&content), &[]).expect_err(key);
-
-        let key = key.trim_matches('\'');
-        assert!(
-            matches!(&error, LoadError::MediaRange { op, media_type }
-                if op == "upload" && media_type == key),
-            "{key}: {error:?}"
-        );
-        let words = error.to_string();
-        assert!(words.contains("upload") && words.contains(key), "{words}");
-        assert!(words.contains("media range"), "{words}");
+        assert_refused_as_a_range(&content, key.trim_matches('\''));
     }
 }
 
-/// The range is read when it is the key that would be sent, which is the first
-/// key when no key names JSON, and not otherwise.
+/// A range is refused when it is the key that is sent: the first that names
+/// JSON, and else the first of all. A key beside it is not read, wherever it
+/// stands.
 #[test]
-fn a_range_is_refused_when_nothing_before_it_is_sent() {
+fn a_range_is_refused_when_no_key_names_json_and_it_is_the_first() {
     let first = "          image/*:\n            schema: { type: string, format: binary }\n          \
                  text/plain:\n            schema: { type: string }\n";
-    let error = Document::load(&posting(first), &[]).expect_err("the range comes first");
-    assert!(
-        matches!(&error, LoadError::MediaRange { media_type, .. } if media_type == "image/*"),
-        "{error:?}"
-    );
+    assert_refused_as_a_range(first, "image/*");
 
     let json_last = "          image/*:\n            schema: { type: string, format: binary }\n          \
                      application/json:\n            schema: { type: object }\n";
     Document::load(&posting(json_last), &[]).expect("the key that is sent names JSON");
+}
+
+/// `application/*+json` ends in `+json`, so the rule that picks a key reads it as
+/// JSON, and it is the key that is sent wherever it stands as the first that
+/// names JSON: before `application/json`, after a key that names no JSON, and
+/// after one that `Body::build` would otherwise send. It is then refused as the
+/// range it is. After a key that names JSON it is not read.
+#[test]
+fn a_range_that_ends_in_json_is_the_first_json_key_and_is_refused() {
+    let range = "          'application/*+json':\n            schema: { type: object, \
+                 properties: { a: { type: string } } }\n";
+    let json = "          application/json:\n            schema: { type: object, \
+                properties: { b: { type: string } } }\n";
+    let other = |key: &str| format!("          {key}:\n            schema: {{ type: string }}\n");
+
+    for before in [
+        String::new(),
+        other("text/plain"),
+        other("application/x-www-form-urlencoded"),
+        other("multipart/form-data"),
+    ] {
+        assert_refused_as_a_range(&format!("{before}{range}{json}"), "application/*+json");
+        assert_refused_as_a_range(&format!("{before}{range}"), "application/*+json");
+    }
+
+    Document::load(&posting(&format!("{json}{range}")), &[])
+        .expect("a key that names JSON is sent first");
 }
 
 /// The words name the repair: the vendor's server reads one type, and the
@@ -313,11 +354,42 @@ fn the_overlay_the_words_name_replaces_the_range_with_a_type() {
     );
 }
 
-/// The refusal of a key that is no type at all is the one it was, and a range is
-/// not that: a `*` with nothing beside it names no type either, and is asked
-/// first.
+/// A range that ends in `+json` beside `application/json` is the repair of a
+/// document that declares both: the Overlay removes the range, and the key that
+/// names JSON without a `*` is the one that is sent, with its own schema.
 #[test]
-fn a_key_that_is_no_media_type_is_still_not_a_media_type() {
+fn the_overlay_that_removes_a_range_beside_json_leaves_the_json_key_to_be_sent() {
+    let both = "          'application/*+json':\n            schema: { type: object, \
+                properties: { a: { type: string } } }\n          application/json:\n            \
+                schema: { type: object, properties: { b: { type: string } } }\n";
+    let overlay = "overlay: 1.1.0\n\
+                   info: { title: t, version: \"1\" }\n\
+                   actions:\n  \
+                   - target: \"$.paths['/uploads'].post.requestBody.content['application/*+json']\"\n    \
+                   remove: true\n";
+
+    let doc = Document::load(&posting(both), &[overlay]).expect("the Overlay repairs it");
+
+    assert_eq!(
+        picked(&doc, "upload"),
+        ("fields", Some("application/json".to_owned()))
+    );
+    let names: Vec<&str> = doc
+        .get("upload")
+        .expect("the operation")
+        .body()
+        .fields()
+        .iter()
+        .map(typed_openapi::Field::name)
+        .collect();
+    assert_eq!(names, ["b"]);
+}
+
+/// A key that has no type and subtype is refused as no media type, and a `*`
+/// with nothing beside it is no range either: the question whether a key is a
+/// media type is asked first.
+#[test]
+fn a_key_with_no_type_and_subtype_is_no_media_type_and_no_range() {
     for key in ["form-data", "'*'"] {
         let content = format!("          {key}:\n            schema: {{ type: string }}\n");
 
@@ -329,5 +401,41 @@ fn a_key_that_is_no_media_type_is_still_not_a_media_type() {
                 if op == "upload" && media_type == key),
             "{key}: {error:?}"
         );
+        let words = error.to_string();
+        assert!(words.contains("upload") && words.contains(key), "{words}");
+        assert!(words.contains("not a media type"), "{words}");
+    }
+}
+
+/// The key is the request's `Content-Type`, so a key that no header carries is
+/// no media type, whichever body it declares. The words print the byte as its
+/// escape: a key that looks like a media type says why it is refused. The inputs
+/// are `application/json; x="a<U+0001>b"`, the same with a newline, and
+/// `application/json;x=<DEL>`, and an opaque body under `text/plain`.
+#[test]
+fn a_key_that_no_header_carries_is_no_media_type() {
+    let object = "{ type: object, properties: { a: { type: string } } }";
+    for (key, schema, shown) in [
+        (r#""application/json; x=\"a\u0001b\"""#, object, r"a\u{1}b"),
+        (r#""application/json; x=\"a\nb\"""#, object, r"a\nb"),
+        (r#""application/json;x=\u007f""#, object, r"x=\u{7f}"),
+        (
+            r#""text/plain; x=\"a\u0001b\"""#,
+            "{ type: string }",
+            r"a\u{1}b",
+        ),
+    ] {
+        let content = format!("          {key}:\n            schema: {schema}\n");
+
+        let error = Document::load(&posting(&content), &[]).expect_err(key);
+
+        assert!(
+            matches!(&error, LoadError::MediaType { op, .. } if op == "upload"),
+            "{key}: {error:?}"
+        );
+        let words = error.to_string();
+        assert!(words.contains(shown), "{words}");
+        assert!(words.contains("not a media type"), "{words}");
+        assert!(!words.contains(|c: char| c.is_control()), "{words:?}");
     }
 }

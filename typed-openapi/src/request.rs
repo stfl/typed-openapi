@@ -518,37 +518,24 @@ impl<'a> Invocation<'a> {
 
     /// The `Content-Type` and the bytes, or `None` for a body-less request.
     fn body(&self) -> Option<(String, Vec<u8>)> {
-        match self.body.as_ref()? {
-            Payload::Json(value) => {
-                // The media type is the document's, never the caller's: a server
-                // reads a merge patch and a JSON:API document by the type they
-                // were declared under.
-                let media_type = match self.op.body() {
-                    Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
-                        media_type.clone()
-                    }
-                    Body::None | Body::Multipart { .. } | Body::Opaque { .. } => {
-                        "application/json".to_owned()
-                    }
-                };
-                Some((media_type, value.to_string().into_bytes()))
-            }
-            Payload::Raw(bytes) => {
-                // The media type is the document's, never the caller's.
-                let media_type = match self.op.body() {
-                    Body::Opaque { media_type, .. } => media_type.clone(),
-                    Body::None
-                    | Body::JsonFields { .. }
-                    | Body::JsonWhole { .. }
-                    | Body::Multipart { .. } => "application/octet-stream".to_owned(),
-                };
-                Some((media_type, bytes.clone()))
-            }
+        let bytes = match self.body.as_ref()? {
+            Payload::Json(value) => value.to_string().into_bytes(),
+            Payload::Raw(bytes) => bytes.clone(),
             Payload::Multipart(parts) => {
                 let encoded = multipart::encode(parts);
-                Some((encoded.content_type, encoded.bytes))
+                return Some((encoded.content_type, encoded.bytes));
             }
-        }
+        };
+        // The media type is the document's, never the caller's: a server reads a
+        // merge patch and a JSON:API document by the type they were declared
+        // under. `check_body` pairs a JSON or a raw payload with a body that
+        // declares one, so the default is a type nothing here sends.
+        let media_type = self
+            .op
+            .body()
+            .media_type()
+            .unwrap_or("application/octet-stream");
+        Some((media_type.to_owned(), bytes))
     }
 
     fn url(&self, base: &Uri) -> String {

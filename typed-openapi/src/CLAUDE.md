@@ -235,18 +235,23 @@ themselves with a `&str`, and `Values` keeps parameters and body apart, so the
 name alone does not say where the value goes.
 
 **A JSON body goes out under the `content` key it was declared under.**
-`Body::JsonFields` and `Body::JsonWhole` carry the key as the document spells it,
-parameters included, as `Body::Opaque` does, and `Invocation::request` sends it.
-So the command line and the typed call send one `Content-Type`, and `Values` has
-no way to name one. The key that is sent among several is picked in
-`Body::build` and nowhere else: the first that `is_json`, wherever it stands, and
-else the first of all, so a multipart key is no better than another. Only that
-key is read, so only that key can be refused (`MediaType`, `MediaRange`), and a
-range beside a JSON key loads. A media range is a `*` in the type or in the
-subtype (`is_media_range`), `application/*+json` among them. `is_json` reads a
-`+json` suffix and not a range, so that key is the one that is sent only when no
-concrete JSON key stands beside it. `docs/validation.md` states the rule and
-`tests/media.rs` pins it.
+`Body::JsonFields` and `Body::JsonWhole` carry the key as the document spells
+it, parameters included, as `Body::Opaque` does, and `Body::media_type` is the
+one reading of it: `Invocation::request` sends it and the generator reads the
+entry under it. So the command line and the typed call send one `Content-Type`,
+and `Values` has no way to name one. The key that is sent among several is
+picked in `Body::build`: the first that `is_json`, wherever it stands, and else
+the first of all, so a multipart key is no better than another. The generator
+does not pick again, so the type of a wrapper's argument and the request come
+from one entry (`json_body` in `src/generate/names.rs` takes the model's key). A
+response is another pick, over its own `content` with the same `is_json`. Only
+the key that is sent is read, so only that key can be refused (`MediaType`,
+`MediaRange`), and a range that stands after a key that names JSON loads. A
+media range is a `*` in the type or in the subtype (`is_media_range`). `is_json`
+reads the `+json` suffix and nothing else, so `application/*+json` names JSON:
+where it is the first key that does, it is the key that is sent, and it is
+refused as a range. A response is typed from it. `docs/validation.md` states the
+rule and `tests/media.rs` pins it.
 
 **A shape the reduction cannot read is refused by name, never approximated.** A
 `pattern` no engine runs, a `content` key that is not a media type and one that

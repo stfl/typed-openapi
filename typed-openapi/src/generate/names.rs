@@ -256,8 +256,8 @@ pub(super) fn sites<'a>(api: &'a OpenAPI, model: &Document) -> Vec<(Site, &'a Sc
         let Some((_, operation)) = find(api, op) else {
             continue;
         };
-        if matches!(op.body(), Body::JsonFields { .. } | Body::JsonWhole { .. })
-            && let JsonBody::Stated(ReferenceOr::Item(schema)) = json_body(operation)
+        if let Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } = op.body()
+            && let JsonBody::Stated(ReferenceOr::Item(schema)) = json_body(operation, media_type)
         {
             found.push((Site::body(op.id()), schema));
         }
@@ -277,8 +277,9 @@ pub(super) fn sites<'a>(api: &'a OpenAPI, model: &Document) -> Vec<(Site, &'a Sc
 pub(super) enum JsonBody<'a> {
     /// The operation declares no `requestBody`, or declares it as a `$ref`.
     Referenced,
-    /// It declares one, and none of its `content` entries is JSON.
-    NotJson,
+    /// It declares one, and has no `content` entry under the key the model
+    /// sends it under: the model and the document it was reduced from disagree.
+    Unkeyed,
     /// It declares a JSON body and states no schema for it: the document
     /// describes no shape.
     Shapeless,
@@ -286,13 +287,18 @@ pub(super) enum JsonBody<'a> {
     Stated(&'a ReferenceOr<Schema>),
 }
 
-/// The JSON request body an operation declares.
-pub(super) fn json_body(operation: &openapiv3::Operation) -> JsonBody<'_> {
+/// The JSON request body an operation declares, read from the `content` entry
+/// under `media_type`, the key the model sends it under.
+///
+/// The key is the model's and is not picked again here: the reduction chooses
+/// the entry a body is sent under in one place, and the type of a wrapper's
+/// argument is read from the entry that is sent.
+pub(super) fn json_body<'a>(operation: &'a openapiv3::Operation, media_type: &str) -> JsonBody<'a> {
     let Some(ReferenceOr::Item(body)) = &operation.request_body else {
         return JsonBody::Referenced;
     };
-    let Some(media) = json(&body.content) else {
-        return JsonBody::NotJson;
+    let Some(media) = body.content.get(media_type) else {
+        return JsonBody::Unkeyed;
     };
     match &media.schema {
         None => JsonBody::Shapeless,
@@ -328,8 +334,8 @@ pub(super) fn find<'a>(
     Some((item, operation))
 }
 
-/// The JSON entry of a `content` map, whichever spelling of the media type the
-/// document used.
+/// The JSON entry of a response's `content` map, whichever spelling of the
+/// media type the document used.
 fn json<'a>(
     content: impl IntoIterator<Item = (&'a String, &'a MediaType)>,
 ) -> Option<&'a MediaType> {

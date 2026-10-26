@@ -441,9 +441,10 @@ Three things are worth knowing:
 - **A `content` key must be a media type.** A request body declared under a key
   with no `type/subtype` in it — `form-data` where `multipart/form-data` was
   meant — is a `LoadError` naming the operation and the key, rather than bytes
-  sent under a `Content-Type` no server reads. A key that is a media range
-  (`*/*`, `image/*`) is refused too (`LoadError::MediaRange`), when it is the key
-  the body is sent under. The repair is an Overlay action,
+  sent under a `Content-Type` no server reads. A key that holds a byte no
+  header carries is no media type either. A key that is a media range (`*/*`,
+  `image/*`) is refused too (`LoadError::MediaRange`), when it is the key the body
+  is sent under. The repair is an Overlay action,
   and [overlay.md](overlay.md#1-plain-corrections) writes one out.
 - **A parameter becomes an argument only where a command line could spell it.**
   A scalar is one argument; an array of scalars is a `Vec` argument the wrapper

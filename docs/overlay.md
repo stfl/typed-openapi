@@ -491,7 +491,11 @@ upload: `*/*` is a media range, and a body is sent under one media type; an Over
 The two actions are the ones above: `remove` takes the range out, and `update`
 puts in the type the server reads, which is a judgement of yours and, where the
 server really reads several, a choice. A range that stands beside a key that
-names JSON is not read, because the JSON key is the one that is sent.
+names JSON is not read, because the JSON key is the one that is sent. The one
+exception is a range that ends in `+json`, such as `application/*+json`: it names
+JSON by its suffix, so it is read unless a key before it names JSON. Where
+`application/json` stands after it, `remove` alone is the repair, and that key
+is the one that is sent.
 
 A rule the vendor names and never states. There are two ways to name one
 without stating it, and the toy document has both.

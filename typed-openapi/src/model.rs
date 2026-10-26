@@ -1456,6 +1456,24 @@ impl Body {
             }
         }
     }
+
+    /// The `Content-Type` this body goes out under, as the document spells the
+    /// `content` key, parameters included.
+    ///
+    /// The one place a request reads it, so that a JSON body and a body sent
+    /// verbatim cannot take it from two readings. [`Body::None`] sends nothing
+    /// and answers `None`, and so does [`Body::Multipart`]: its `Content-Type`
+    /// carries a boundary that is chosen when the parts are encoded, so the key
+    /// alone is not what is sent.
+    #[must_use]
+    pub fn media_type(&self) -> Option<&str> {
+        match self {
+            Self::JsonFields { media_type, .. }
+            | Self::JsonWhole { media_type, .. }
+            | Self::Opaque { media_type, .. } => Some(media_type),
+            Self::None | Self::Multipart { .. } => None,
+        }
+    }
 }
 
 /// `http::Uri` is not a `serde` type; the blob carries the string it prints as.

@@ -185,7 +185,7 @@ own type rather than the box `DispatchError::Transport` carries.
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
 | a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE` |
 | any other JSON body — nested, an array, no schema | `--json-body FILE`, plus `--json-body-template` where the document describes a shape |
-| a JSON body declared under `application/merge-patch+json`, `application/vnd.api+json` or any other `+json` key | the same flags, and the body is sent under that key, not under `application/json` |
+| a JSON body declared under `application/merge-patch+json`, `application/vnd.api+json` or any other `+json` type that is not a range | the same flags, and the body is sent under that key, not under `application/json` |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
 | any other media type | `--raw-body FILE`, sent verbatim under that media type |
 | no request body | nothing |
@@ -449,8 +449,9 @@ parameters. A request built on a guess looks sent and is not read.
 A body is refused the same way when its `content` key is not a media type at
 all — `form-data` where `multipart/form-data` was meant is a
 `LoadError::MediaType`, not a `--raw-body` sent under a `Content-Type` no server
-parses. So is a key that is a media range, `*/*` or `image/*`: a request goes out
-under one type, and the range does not name it (`LoadError::MediaRange`).
+parses — or holds a byte that no header carries, a control character in a
+parameter. So is a key that is a media range, `*/*` or `image/*`: a request goes
+out under one type, and the range does not name it (`LoadError::MediaRange`).
 [docs/overlay.md](overlay.md#1-plain-corrections) has the action that repairs
 either. Which key is sent when a body has several is a rule of its own, in
 [validation.md](validation.md#what-goes-on-the-wire).

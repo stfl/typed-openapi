@@ -541,12 +541,16 @@ pub enum LoadError {
         why: Unsupported,
     },
     /// A `requestBody` whose `content` key names no media type — `form-data`
-    /// where `multipart/form-data` was meant. Refused while the document is
-    /// reduced, because the alternative is a request sent under a
-    /// `Content-Type` no server can read.
+    /// where `multipart/form-data` was meant — or holds a byte that no header
+    /// carries, a control character in a parameter. Refused while the document
+    /// is reduced, because the alternative is a request sent under a
+    /// `Content-Type` no server can read, or no request at all. The message
+    /// prints a control character as its escape, so a key that looks like a
+    /// media type is not refused with nothing to show why.
     #[error(
-        "{op}: `{media_type}` is not a media type; \
-         an Overlay is where a document's content type is corrected"
+        "{op}: `{}` is not a media type; \
+         an Overlay is where a document's content type is corrected",
+        .media_type.escape_debug()
     )]
     MediaType {
         /// The `operationId` of the operation that declares the body.
@@ -1795,19 +1799,20 @@ impl Body {
                 required,
             });
         }
-        let entry = Entry {
+        let json = JsonEntry {
             media_type,
             schema: media.schema.as_ref(),
             required,
         };
-        json_body(id, &entry, components, flags)
+        json_body(id, json, components, flags)
     }
 }
 
 /// The `content` entry a JSON body is read from: the key it stands under, as the
 /// document spells it, which is the `Content-Type` the body goes out under, the
 /// schema beside the key, and whether the body is required.
-struct Entry<'a> {
+#[derive(Clone, Copy)]
+struct JsonEntry<'a> {
     media_type: &'a str,
     schema: Option<&'a ReferenceOr<Schema>>,
     required: bool,
@@ -1825,15 +1830,15 @@ struct Entry<'a> {
 /// walk that decided it has already seen the shape.
 fn json_body(
     id: &str,
-    entry: &Entry<'_>,
+    entry: JsonEntry<'_>,
     components: &Components,
     flags: &mut Namespace,
 ) -> Result<Body, LoadError> {
-    let Entry {
+    let JsonEntry {
         media_type,
         schema,
         required,
-    } = *entry;
+    } = entry;
     let media_type = media_type.to_owned();
     let Some(schema) = schema else {
         return Ok(Body::JsonWhole {

@@ -1027,6 +1027,18 @@ fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {
     let sent = request(&doc, "createVoucher", Values::new().json(json!({})));
     assert!(sent.expect("the values satisfy it").is_err());
 
+    // `MediaRange`: a header carries a range, so the request is built and goes
+    // out under it. The server is what refuses a `Content-Type` that names no
+    // one type.
+    let doc = read(|value| {
+        operation(value, "createVoucher")["body"]["JsonFields"]["media_type"] = json!("*/*");
+    });
+    let sent = request(&doc, "createVoucher", Values::new().json(json!({})));
+    let built = sent
+        .expect("the values satisfy it")
+        .expect("a header carries a range");
+    assert_eq!(built.headers()["content-type"], "*/*");
+
     // `ServerUrl`: a server with no scheme builds no request.
     let doc = read(|value| value["base"] = json!("localhost:9999"));
     let sent = request(&doc, "getVoucher", Values::new().param("id", 5));

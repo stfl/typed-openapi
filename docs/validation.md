@@ -324,13 +324,18 @@ type.
 
 **One key is sent, and this is the rule that picks it.** A body may be declared
 under several `content` keys, and a request goes out under one. The key is the
-first, in the order of the overlaid document, that names JSON
-(`application/json` or a subtype that ends in `+json`, and no media range),
-wherever it stands among the others. Where none names JSON it is the first key
-of all, whatever it names, so a `multipart/form-data` key is no better than
-another and `application/x-www-form-urlencoded` listed before it is sent as raw
-bytes. An Overlay that removes a key takes it out of the choice.
-`tests/media.rs` pins each case.
+first, in the order of the overlaid document, that names JSON (`application/json`
+or a type whose subtype ends in `+json`), wherever it stands among the others.
+Where none names JSON it is the first key of all, whatever it names, so a
+`multipart/form-data` key is no better than another and
+`application/x-www-form-urlencoded` listed before it is sent as raw bytes. An
+Overlay that removes a key takes it out of the choice. `tests/media.rs` pins each
+case.
+
+The suffix is all that is read, so `application/*+json` names JSON: where it is
+the first key that does, it is the key that is sent, and it is refused as a media
+range (below), whatever stands beside it. After `application/json` or another key
+that names JSON it is not the key that is sent and is not read.
 
 The key that is sent is the only one the reduction reads, and so the only one it
 can refuse. A key beside it is the vendor's business: it is not sent, and a
@@ -344,8 +349,15 @@ member the vendor means. The refusal is `LoadError::MediaRange`, which names the
 operation and the key, when the range is the key that is sent. The repair is the
 one for a key that is no media type at all, an Overlay that removes the range and
 states the type the vendor's server reads
-([overlay.md](overlay.md#1-plain-corrections)). A `*` in a parameter after the
-`;` is the vendor's to spell and is not read.
+([overlay.md](overlay.md#1-plain-corrections)). Where the range stands beside a
+key that names JSON and is the first to, as `application/*+json` before
+`application/json`, removing the range leaves the other key to be sent. A `*` in
+a parameter after the `;` is the vendor's to spell and is not read.
+
+**A key that no header carries is no media type.** The key is the request's
+`Content-Type`, so a control character or DEL anywhere in it, in a parameter as
+much as in the type, is refused as `LoadError::MediaType`, which prints the byte
+as its escape. The rest of a parameter is not parsed.
 
 A base URL is the scheme, the host and the path of every request, and nothing
 else of it is kept. One with userinfo (`user:password@`) or a query is refused
