@@ -5,11 +5,17 @@
 //! and the request it is about cannot come from two operations. A `Call` plans
 //! with what a caller answered and sends what it planned, so a request that is
 //! printed as a dry run is the request that goes out when the write is
-//! confirmed. Every error that a call raises when it runs says which operation
-//! it was, and none of them prints bytes the server sent: the body is a field.
+//! confirmed. The four errors that a call raises once it sends (`Status`,
+//! `Decode`, `Transport` and `Encode`) say which operation it was, and no
+//! message and no cause of theirs prints a byte the server sent: the body is a
+//! field. The cause of a `Transport` is the client's own error and prints what
+//! that client prints. `Request` comes before anything is sent and names no
+//! operation.
 //!
 //! The inputs are the probes of SEV-249: `A1/errs` (`chains`) for the 500 with a
 //! body that holds a credential, and the code reading of F-33 for the pairing.
+//! The bodies of `refused` are the Code Reviewer's probe of the chain that a
+//! `Decode` prints (SEV-283).
 
 #![expect(
     clippy::expect_used,
@@ -25,7 +31,7 @@ use std::task::{Context, Poll, Waker};
 use http::StatusCode;
 use serde::Deserialize;
 use serde_json::json;
-use typed_openapi::client::{Client, Error as ClientError, Planned, to_json};
+use typed_openapi::client::{Client, DecodeClass, Error as ClientError, Planned, to_json};
 use typed_openapi::{
     Answers, Document, Invocation, Plan, Reach, Recorder, RecorderError, Values, render,
 };
@@ -55,6 +61,22 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses: { "200": { description: ok } }
+  /tags/{tag}:
+    put:
+      operationId: tagThing
+      parameters:
+        - { name: tag, in: path, required: true, schema: { type: string } }
+        - { name: note, in: query, schema: { type: string } }
+        - { name: X-Token, in: header, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+      responses: { "200": { description: ok } }
   /things:
     post:
       operationId: createThing
@@ -72,6 +94,21 @@ paths:
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct Thing {
     id: i64,
+}
+
+/// A type that names every property it takes and refuses the rest, so serde's
+/// own message quotes a value, a key or a variant of the body it was given.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Strict {
+    id: i64,
+    kind: Option<Kind>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+enum Kind {
+    A,
+    B,
 }
 
 fn document() -> Document {
@@ -112,8 +149,8 @@ fn shown(request: &http::Request<Vec<u8>>) -> (String, Vec<u8>) {
 }
 
 /// The gate decides about the operation the invocation holds, and the request it
-/// returns is that invocation's own. A write beside a read's verdict was `Send`
-/// when the two came in as separate arguments.
+/// returns is that invocation's own, so a write is held back whatever a read
+/// answers beside it.
 #[test]
 fn a_plan_is_decided_on_the_invocation_and_carries_its_own_request() {
     let doc = document();
@@ -280,24 +317,41 @@ fn an_async_client_sends_the_request_that_was_planned() {
     assert!(recorder.take().is_empty());
 }
 
-/// A `Debug` goes to logs, and the request holds the header values and the body
-/// the caller gave.
+/// A `Debug` goes to logs, and the request holds the path, the query, the header
+/// values and the body the caller gave. `http::Request` prints a body as a list
+/// of numbers and everything else as text, so the secret is in each of the four.
 #[test]
 fn the_debug_of_a_planned_call_shows_no_request() {
     let client = client();
     let doc = client.document();
     let call = client
         .call::<Thing>(
-            doc.get("createThing").expect("the write"),
-            Values::new().json(json!({"name": "token=abc"})),
+            doc.get("tagThing").expect("the write"),
+            Values::new()
+                .param("tag", "path-secret")
+                .param("note", "query-secret")
+                .param("X-Token", "header-secret")
+                .json(json!({"name": "body-secret"})),
         )
         .expect("values");
 
     let planned: Planned<'_, Thing> = call.plan(&Answers::new()).expect("a plan");
     let debug = format!("{planned:?}");
 
-    assert!(debug.contains("createThing"), "{debug}");
-    assert!(!debug.contains("token=abc"), "{debug}");
+    assert!(debug.contains("tagThing"), "{debug}");
+    assert_eq!(
+        planned.request().uri().path(),
+        "/api/tags/path-secret",
+        "the request does hold the path the secret stands in"
+    );
+    for secret in [
+        "path-secret",
+        "query-secret",
+        "header-secret",
+        "body-secret",
+    ] {
+        assert!(!debug.contains(secret), "{secret} is in {debug}");
+    }
 }
 
 /// `A1/errs` (`chains`): a 500 whose body holds a credential. The message names
@@ -357,6 +411,127 @@ fn an_async_status_names_the_operation_too() {
         error.to_string(),
         "getThing: the server answered 404 Not Found"
     );
+    assert!(
+        matches!(
+            &error,
+            ClientError::Status { op, status, .. }
+                if op == "getThing" && *status == StatusCode::NOT_FOUND
+        ),
+        "{error:?}"
+    );
+}
+
+/// `A2` (`F-23`): a gateway's HTML page of 3,013 bytes. The message of a status
+/// is the same for it as for an empty body, and the page is in the error.
+#[test]
+fn a_status_says_the_same_whatever_the_body_holds() {
+    let client = client();
+    let doc = client.document();
+    let page = format!(
+        "<html><body>{}</body></html>",
+        "<p>upstream</p>".repeat(200)
+    );
+    let empty = Vec::new();
+
+    let errors: Vec<ClientError> = [page.clone().into_bytes(), empty]
+        .into_iter()
+        .map(|body| {
+            let mut response = http::Response::new(body);
+            *response.status_mut() = StatusCode::BAD_GATEWAY;
+            let recorder = Recorder::new().answering_with(response);
+            client
+                .call::<Thing>(doc.get("getThing").expect("the read"), id(5))
+                .expect("values")
+                .send(&recorder)
+                .expect_err("a 502 is not a success")
+        })
+        .collect();
+
+    let [with_page, with_nothing] = <[ClientError; 2]>::try_from(errors).expect("two errors");
+    assert_eq!(
+        with_page.to_string(),
+        "getThing: the server answered 502 Bad Gateway"
+    );
+    assert_eq!(with_page.to_string(), with_nothing.to_string());
+    assert!(
+        matches!(
+            &with_page,
+            ClientError::Status { op, status, body }
+                if op == "getThing" && *status == StatusCode::BAD_GATEWAY && *body == page
+        ),
+        "{with_page:?}"
+    );
+    assert!(
+        matches!(
+            &with_nothing,
+            ClientError::Status { op, status, body }
+                if op == "getThing" && *status == StatusCode::BAD_GATEWAY && body.is_empty()
+        ),
+        "{with_nothing:?}"
+    );
+}
+
+/// The planned road on a runtime has its own call to the parser and to the
+/// client, so it names the operation on its own: a status and a failing client.
+#[test]
+fn an_async_planned_call_names_the_operation_of_its_failure() {
+    let client = client();
+    let doc = client.document();
+    let op = doc.get("getThing").expect("the read");
+    let planned = || {
+        client
+            .call::<Thing>(op, id(5))
+            .expect("values")
+            .plan(&Answers::new())
+            .expect("a plan")
+    };
+
+    let status = block_on(planned().send_async(
+        &Recorder::new().answering(StatusCode::SERVICE_UNAVAILABLE, &json!({"error": "no"})),
+    ))
+    .expect_err("a 503 is not a success");
+    let transport =
+        block_on(planned().send_async(&Recorder::new().failing(Reach::NeverAnswered, "timed out")))
+            .expect_err("the client fails");
+    let decode = block_on(
+        planned().send_async(&Recorder::new().answering(StatusCode::OK, &json!({"id": "x"}))),
+    )
+    .expect_err("the body is not a `Thing`");
+
+    assert!(
+        matches!(&status, ClientError::Status { op, status, .. }
+            if op == "getThing" && *status == StatusCode::SERVICE_UNAVAILABLE),
+        "{status:?}"
+    );
+    assert!(
+        matches!(&transport, ClientError::Transport { op, .. } if op == "getThing"),
+        "{transport:?}"
+    );
+    assert!(
+        matches!(&decode, ClientError::Decode { op, .. } if op == "getThing"),
+        "{decode:?}"
+    );
+}
+
+/// A 200 whose body is `body`, read as a `Strict` by a typed call to `getThing`.
+fn decode_failure(body: &str) -> ClientError {
+    let client = client();
+    let doc = client.document();
+    let recorder = Recorder::new().answering_with(http::Response::new(body.as_bytes().to_vec()));
+
+    client
+        .call::<Strict>(doc.get("getThing").expect("the read"), id(5))
+        .expect("values")
+        .send(&recorder)
+        .expect_err("the body is not a `Strict`")
+}
+
+/// Every message down the chain of `error`, outermost first, joined.
+fn chain(error: &(dyn std::error::Error + 'static)) -> String {
+    std::iter::successors(Some(error), |&layer| layer.source())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" / ")
 }
 
 /// A success whose body is not the type the document promises names the
@@ -384,8 +559,136 @@ fn a_decode_names_the_operation_and_keeps_the_text() {
         ),
         "{error:?}"
     );
-    assert!(error.source().is_some(), "serde's reading is the cause");
+    assert!(
+        error.source().is_some(),
+        "where the read stopped is the cause"
+    );
     assert!(error.body().is_some_and(|held| held.contains("\"x\"")));
+}
+
+/// A 200 that a `Strict` refuses, the words of its body that serde quotes in
+/// its own message, and the column where serde stopped.
+struct Refused {
+    body: String,
+    quoted: &'static [&'static str],
+    column: usize,
+}
+
+/// The Code Reviewer's three bodies, which serde reads as `invalid type: string
+/// "IBAN AT61 …, token=abc", expected i64`, ``unknown field `token=abc` `` and
+/// ``unknown variant `secret-variant-token=abc` ``, and a string value of 3,000
+/// characters.
+fn refused() -> [Refused; 4] {
+    [
+        Refused {
+            body: r#"{"id":"IBAN AT61 1904 3002 3457 3201, token=abc"}"#.to_owned(),
+            quoted: &["IBAN", "AT61", "token=abc"],
+            column: 48,
+        },
+        Refused {
+            body: r#"{"id":1,"token=abc":1}"#.to_owned(),
+            quoted: &["token=abc"],
+            column: 19,
+        },
+        Refused {
+            body: r#"{"id":1,"kind":"secret-variant-token=abc"}"#.to_owned(),
+            quoted: &["secret-variant", "token=abc"],
+            column: 41,
+        },
+        Refused {
+            body: format!(r#"{{"id":"{}"}}"#, "x".repeat(3000)),
+            quoted: &["xxxx"],
+            column: 3008,
+        },
+    ]
+}
+
+/// F-23 with D7: what serde says about a value, a key or a variant of the body
+/// reaches a log through `source()`, so the cause of a `Decode` keeps none of
+/// it. The chain stays as short as for any other failure, whatever the size of
+/// the value.
+#[test]
+fn a_decode_chain_holds_no_byte_of_the_body() {
+    for Refused { body, quoted, .. } in refused() {
+        let error = decode_failure(&body);
+
+        let chain = chain(&error);
+
+        assert!(
+            matches!(&error, ClientError::Decode { op, .. } if op == "getThing"),
+            "{error:?}"
+        );
+        for word in quoted {
+            assert!(!chain.contains(word), "`{word}` is in {chain:?}");
+        }
+        assert!(chain.len() < 200, "{} bytes: {chain:?}", chain.len());
+        assert_eq!(
+            error.body(),
+            Some(body.as_str()),
+            "the body is readable from the error"
+        );
+    }
+}
+
+/// The cause of a `Decode` says what kind of failure it was and where the read
+/// stopped, which is what serde's own message says about the body besides the
+/// bytes of it.
+#[test]
+fn a_decode_cause_says_the_class_the_line_and_the_column() {
+    for Refused { body, column, .. } in refused() {
+        let error = decode_failure(&body);
+
+        let ClientError::Decode { source, .. } = &error else {
+            panic!("a decode: {error:?}");
+        };
+
+        assert_eq!(source.class, DecodeClass::Data, "{body}");
+        assert_eq!((source.line, source.column), (1, column), "{body}");
+        assert_eq!(
+            source.to_string(),
+            format!("the body does not fit the type at line 1 column {column}")
+        );
+    }
+}
+
+/// A body that is not JSON, one that ends early and one that is JSON of another
+/// type are three classes, and a body of several lines puts the read on the
+/// line it stopped at.
+#[test]
+fn a_decode_cause_tells_the_three_classes_apart() {
+    for (body, class, line, column, words) in [
+        (
+            "not json",
+            DecodeClass::Syntax,
+            1,
+            2,
+            "the body is not JSON at line 1 column 2",
+        ),
+        (
+            r#"{"id":"#,
+            DecodeClass::Eof,
+            1,
+            6,
+            "the body ends early at line 1 column 6",
+        ),
+        (
+            "{\n  \"id\": 1,\n  \"kind\": \"C\"\n}",
+            DecodeClass::Data,
+            3,
+            13,
+            "the body does not fit the type at line 3 column 13",
+        ),
+    ] {
+        let error = decode_failure(body);
+
+        let ClientError::Decode { source, .. } = &error else {
+            panic!("a decode: {error:?}");
+        };
+
+        assert_eq!(source.class, class, "{body}");
+        assert_eq!((source.line, source.column), (line, column), "{body}");
+        assert_eq!(source.to_string(), words);
+    }
 }
 
 /// A failure of the client names the operation, on the planned road and on the

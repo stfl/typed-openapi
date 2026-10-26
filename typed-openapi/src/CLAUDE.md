@@ -847,17 +847,28 @@ the same. The query is left out with the userinfo because a key goes there, and
 a request from a base that holds one is refused. The text of the operator's own
 argument is the operator's, and clap repeats it in its own errors.
 
-**A call-time error names its operation and prints no byte the server sent.**
+**A call-time error names its operation, and no message or cause of this crate
+prints a byte the server sent.**
 `client::Error::{Encode, Transport, Status, Decode}` carry `op`, the
 `operationId`, and their messages begin with it, so a log line says which call
-failed. `Status` prints the operation and the status and never the body: the
-body is the server's and can hold a credential or a client's data, and
-sevdesk-cli re-exports the type as its own error, where its rule "No peer bytes
-in an error" applies. The body is the field, and `Error::body` reads it for
-`Status` and for the `raw` of `Decode`, which a message does not print either. A
-variant added to the call-time group carries `op`. `to_json` takes it, because
-only the generated wrapper knows which operation a body is the body of, so an
-argument that does not serialise names it.
+failed. `Request` is raised while the request is built, before anything is sent,
+and names no operation. `Status` prints the operation and the status and never
+the body: the body is the server's and can hold a credential or a client's data,
+and sevdesk-cli re-exports the type as its own error, where its rule "No peer
+bytes in an error" applies. The cause is printed where the message is, because
+whoever reports an error walks `source()`, so the cause of `Decode` holds no
+byte of the body either: it is a `DecodeError`, which keeps what `serde_json`
+says of the kind of failure (`DecodeClass`) and of the line and the column, and
+none of its message, which quotes the value, the key or the variant it refused.
+No `serde_json::Error` is held by `Decode`, because a caller that can get one
+can print it. The cause of `Encode` is `serde_json::Error`, which can quote only
+the caller's own value, and the cause of `Transport` is the client's error,
+which prints what that client prints. The body is the field, and `Error::body`
+reads it for `Status` and for the `raw` of `Decode`. A variant added to the
+call-time group carries `op`, and a cause of it that could hold the server's
+bytes is a type of this crate that keeps none. `to_json` takes the operation,
+because only the generated wrapper knows which operation a body is the body of,
+so an argument that does not serialise names it.
 
 **A request body is held to the generated type in one place, and an undeclared
 property has no way through.** `client::fits` is where a JSON body meets the

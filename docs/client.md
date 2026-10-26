@@ -145,7 +145,7 @@ if let Err(DispatchError::Transport(boxed)) = run(&document, client, &matches)
 ```
 
 **Send it yourself.** Build the request through `Plan` — `Selection::plan` from
-a command line, `Call::plan` or `Call::request` on the typed side — and hand it
+a command line — or take it from `Call::request` on the typed side, and hand it
 to the client's own `send`. Nothing is boxed and the error is the client's own
 type:
 
@@ -189,8 +189,8 @@ other.
 
 ## What a call's error says
 
-Every error a call raises when it runs says which operation it was, in the words
-of the `operationId`, so a log line needs no context to be read:
+The four errors that a call raises once it sends say which operation it was, in
+the words of the `operationId`, so a log line needs no context to be read:
 
 | `client::Error` | message |
 |---|---|
@@ -199,12 +199,33 @@ of the `operationId`, so a log line needs no context to be read:
 | `Status { op, status, body }` | `getVoucher: the server answered 404 Not Found` |
 | `Decode { op, source, raw }` | `getVoucher: the response is not the shape the document promises` |
 
-None of them prints what the server sent. The body of a response is the
-server's: it can hold a credential or a client's data, and an error is printed
-where a log reads it. It stays in the error. `Status` has it in `body`, `Decode`
-has the text it could not read in `raw`, and `Error::body()` reads whichever the
-error holds. A cause is printed once, on its own line, by whoever walks
-`source()`.
+`Request`, which a call raises while it builds the request and before anything
+is sent, names no operation: its message says what is wrong with the base URL or
+with what the document names.
+
+No message of the four prints what the server sent, and the cause of a `Decode`
+does not either. The body of a response is the server's: it can hold a
+credential or a client's data, and an error is printed where a log reads it. It
+stays in the error. `Status` has it in `body`, `Decode` has the text it could
+not read in `raw`, and `Error::body()` reads whichever the error holds.
+
+The cause of a `Decode` is a `DecodeError`. It holds the kind of failure
+(`DecodeClass`: the body is not JSON, the body ends early, or the body is JSON
+that does not fit the type), the line and the column where the read stopped, and
+no byte of the body:
+
+```text
+getVoucher: the response is not the shape the document promises
+      caused by: the body does not fit the type at line 1 column 48
+```
+
+`serde_json` says more, `invalid type: string "…", expected i64`, and quotes the
+value, the key or the variant that it refused. That is why the cause does not
+say it. To see what was refused, read `Error::body()` at that line and column.
+
+The cause of a `Transport` is the error of the client that you passed, and it
+prints what that client prints. A cause is printed once, on its own line, by
+whoever walks `source()`.
 
 ## `Recorder`, the one client this crate ships
 

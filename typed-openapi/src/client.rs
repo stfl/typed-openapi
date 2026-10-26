@@ -6,8 +6,12 @@
 //! wants the gate a command line has plans the call with its [`Answers`] and
 //! sends what it planned ([`Call::plan`], [`Planned`]).
 //!
-//! Every error a call raises when it runs names the operation, and none of them
-//! prints what the server sent: the body is a field of the error.
+//! The four errors a call raises once it sends (`Status`, `Decode`, `Transport`
+//! and `Encode`) name the operation. No message of theirs prints what the server
+//! sent, and neither does the cause of a `Decode`: the body is a field of the
+//! error, and [`Error::body`] reads it. The cause of a `Transport` is the
+//! client's own error, which prints what that client prints. A `Request` is
+//! raised before anything is sent and names no operation.
 //!
 //! Nothing here is specific to one API. A generated wrapper is the typed door
 //! onto [`Client::call`]: it names the `operationId`, names the arguments under
@@ -61,7 +65,8 @@ pub enum Error {
     Values(#[from] ValueError),
     /// The values satisfied the operation and the request they render to could
     /// not be built: the base URL holds userinfo or a query, or the `http` crate
-    /// refused what the document names, such as a header name.
+    /// refused what the document names, a URI or a header name. It is raised
+    /// before anything is sent and names no operation.
     #[error(transparent)]
     Request(#[from] RequestError),
     /// A typed argument that does not serialise to JSON, so there is no body to
@@ -110,17 +115,82 @@ pub enum Error {
     },
     /// A success response whose body is not the type the document promises for
     /// it.
+    ///
+    /// The cause holds the kind of failure and where the read stopped, and no
+    /// byte of the body: serde's own message quotes the value, the key or the
+    /// variant it refused, and the chain of an error is printed where a log
+    /// reads it. The text is in `raw`.
     #[error("{op}: the response is not the shape the document promises")]
     Decode {
         /// The `operationId` of the operation whose request was answered.
         op: String,
-        /// `serde_json`'s reading of the body, with the line and column where
-        /// it stopped.
+        /// What kind of failure it was, and the line and column where the read
+        /// stopped.
         #[source]
-        source: serde_json::Error,
+        source: DecodeError,
         /// The response body as text, with bytes that are not UTF-8 replaced.
         raw: String,
     },
+}
+
+/// Where a response body stopped being the type the document promises, and
+/// what kind of failure it was, and nothing the body said.
+///
+/// `serde_json` words its failure with the value, the key or the variant it
+/// refused. This is what is left of that message once the bytes of the body are
+/// taken out: the cause of an [`Error::Decode`], so a chain that a log prints
+/// holds a fixed number of bytes whatever the server sent. The line and the
+/// column are the reader's own, counted from 1; the text is [`Error::body`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("{class} at line {line} column {column}")]
+#[non_exhaustive]
+pub struct DecodeError {
+    /// What kind of failure it was.
+    pub class: DecodeClass,
+    /// The line of the body where the read stopped.
+    pub line: usize,
+    /// The column of that line where the read stopped.
+    pub column: usize,
+}
+
+impl DecodeError {
+    /// What `serde_json` reports about its failure, without the message: it
+    /// holds the bytes that the cause must not.
+    pub(crate) fn of(error: &serde_json::Error) -> Self {
+        use serde_json::error::Category;
+        Self {
+            class: match error.classify() {
+                Category::Syntax => DecodeClass::Syntax,
+                Category::Eof => DecodeClass::Eof,
+                Category::Data => DecodeClass::Data,
+                Category::Io => DecodeClass::Io,
+            },
+            line: error.line(),
+            column: error.column(),
+        }
+    }
+}
+
+/// What kind of failure a [`DecodeError`] is, in the words that `serde_json`
+/// classifies its own by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum DecodeClass {
+    /// The body is not JSON.
+    #[error("the body is not JSON")]
+    Syntax,
+    /// The body is JSON that ends before the value does.
+    #[error("the body ends early")]
+    Eof,
+    /// The body is JSON and is not the type: a value of another type, a missing
+    /// property, a property or a variant that the type does not take.
+    #[error("the body does not fit the type")]
+    Data,
+    /// The reader failed. A body is a slice in memory, which cannot fail to be
+    /// read; the variant is here because a reading of `serde_json`'s categories
+    /// that left one out would have to panic.
+    #[error("the body could not be read")]
+    Io,
 }
 
 impl Error {
@@ -128,8 +198,8 @@ impl Error {
     /// of a [`Error::Status`], and the text a [`Error::Decode`] could not read.
     /// Bytes that are not UTF-8 are replaced.
     ///
-    /// It is a method and not part of any message, because the body is the
-    /// server's and a message is printed where a log reads it.
+    /// It is a method and not part of any message or cause, because the body is
+    /// the server's and the chain of an error is printed where a log reads it.
     #[must_use]
     pub fn body(&self) -> Option<&str> {
         match self {
@@ -636,7 +706,34 @@ impl<'a, T: DeserializeOwned> Call<'a, T> {
 /// a call that did not plan it, and a dry run cannot be sent at all: [`send`]
 /// answers `None` for it and asks the client for nothing.
 ///
+/// A plan that nothing sends sends nothing, so dropping one unused is a warning:
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use typed_openapi::client::Error;
+/// use typed_openapi::{Answers, Call, NoContent};
+///
+/// fn forget(call: &Call<'_, NoContent>) -> Result<(), Error> {
+///     call.plan(&Answers::new())?;
+///     Ok(())
+/// }
+/// ```
+///
+/// The same function compiles where the plan is read:
+///
+/// ```
+/// #![deny(unused_must_use)]
+/// use typed_openapi::client::Error;
+/// use typed_openapi::{Answers, Call, NoContent};
+///
+/// fn look(call: &Call<'_, NoContent>) -> Result<String, Error> {
+///     let planned = call.plan(&Answers::new())?;
+///     Ok(planned.request().uri().to_string())
+/// }
+/// ```
+///
 /// [`send`]: Planned::send
+#[must_use = "a planned call sends nothing until `send` or `send_async` is called"]
 pub struct Planned<'a, T> {
     operation: &'a Operation,
     plan: Plan,
@@ -749,9 +846,9 @@ fn parse<T: DeserializeOwned>(op: &str, response: &HttpResponse) -> Result<T, Er
     }
     // An empty body is how "no content" arrives; `NoContent` accepts `null`.
     let bytes = if body.is_empty() { b"null" } else { &body[..] };
-    serde_json::from_slice(bytes).map_err(|source| Error::Decode {
+    serde_json::from_slice(bytes).map_err(|error| Error::Decode {
         op: op.to_owned(),
-        source,
+        source: DecodeError::of(&error),
         raw: String::from_utf8_lossy(body).into_owned(),
     })
 }
@@ -775,7 +872,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
-    use super::{BodyError, fits};
+    use super::{BodyError, DecodeClass, DecodeError, fits};
 
     /// A body with a list of objects in it, which is the shape whose refusal
     /// is hardest to place by eye: serde's own message does not say which
@@ -1417,5 +1514,29 @@ mod tests {
         };
         assert_eq!(op, "write");
         assert_eq!(source.to_string(), "this type is not written");
+    }
+
+    /// A reader that fails: the one way `serde_json` raises its `Io` category,
+    /// which a slice never does.
+    struct Failing;
+
+    impl std::io::Read for Failing {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("secret-token"))
+        }
+    }
+
+    #[test]
+    fn a_read_that_fails_is_its_own_class_and_prints_nothing_of_the_failure() {
+        let failed = serde_json::from_reader::<_, u8>(Failing).unwrap_err();
+
+        let cause = DecodeError::of(&failed);
+
+        assert_eq!(cause.class, DecodeClass::Io);
+        assert!(
+            cause.to_string().starts_with("the body could not be read"),
+            "{cause}"
+        );
+        assert!(!cause.to_string().contains("secret-token"), "{cause}");
     }
 }

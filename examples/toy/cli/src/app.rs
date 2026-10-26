@@ -4,13 +4,13 @@
 //! than printing it, so every test in `tests/` drives the real thing with a
 //! recording client and no socket.
 
-use api::{Api, OperationId};
+use api::Api;
 use clap::{Arg, ArgMatches, Command, value_parser};
 use clap_complete::aot::Shell;
 use http::Uri;
 use thiserror::Error;
-use typed_openapi::SyncClient;
 use typed_openapi::tree::{self, DispatchError};
+use typed_openapi::{COMMIT_ID, SyncClient};
 
 use crate::output::Output;
 use crate::{finalize, raw};
@@ -36,6 +36,11 @@ pub enum Error {
     Body(#[from] api::BodyError),
     #[error("cannot build the request")]
     Request(#[from] http::Error),
+    /// The fetch that the chain depends on is a write in the document, and
+    /// nobody confirmed it. A read is sent on sight, so the toy's document never
+    /// raises this.
+    #[error("the fetch the chain depends on is a write, and it was not confirmed")]
+    FetchHeld,
     #[error("no operation named `{0}` in the document")]
     Unknown(String),
     #[error("no command given")]
@@ -97,12 +102,15 @@ pub fn root(api: &Api) -> Command {
 /// Overlay that renames a gate renames this flag with it, and so does the word
 /// the bless step confirms with, and there is nothing to keep in step.
 ///
+/// The chain sends two writes, so the help of the confirmation says "the
+/// writes": the help `tree::confirmation` gives is about one request.
+///
 /// Every gate is `required`, exactly as it is under `raw`, and a voucher that
 /// turns out not to need enshrining does not soften that: which operations the
 /// chain reaches is the *server's* answer, arriving after the command line is
 /// gone, so the word is asked for while there is still someone to ask.
 fn finalize_voucher(api: &Api) -> Command {
-    let op = api.operation(OperationId::EnshrineVoucher);
+    let op = finalize::gate(api);
     tree::gates(
         tree::confirmation(
             Command::new(FINALIZE)
@@ -123,7 +131,10 @@ fn finalize_voucher(api: &Api) -> Command {
                         .help("The voucher to finalize"),
                 ),
             op,
-        ),
+        )
+        .mut_arg(COMMIT_ID, |arg| {
+            arg.help("Send the writes. Without it this is a dry run that prints them")
+        }),
         op,
     )
 }
@@ -146,7 +157,7 @@ pub fn run<C: SyncClient>(api: Api, client: &C, matches: &ArgMatches) -> Result<
             // Read the way the generated surface reads its own: the flags on
             // this verb are the operation's words, so the same function makes
             // the same answer out of them.
-            &tree::answers(api.operation(OperationId::EnshrineVoucher), sub),
+            &tree::answers(finalize::gate(&api), sub),
         ),
         Some((COMPLETIONS, sub)) => Ok(completions(&api, sub)),
         Some((name, _)) => Err(Error::Unknown(name.to_owned())),

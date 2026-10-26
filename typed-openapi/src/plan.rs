@@ -109,8 +109,8 @@ impl Plan {
     /// }
     /// ```
     ///
-    /// The one failure is the request: a base that holds userinfo or a query, or
-    /// a header name that the `http` crate refuses.
+    /// The one failure is the request: a base that holds userinfo or a query,
+    /// or a URI or a header that the `http` crate cannot build.
     pub fn decide(
         invocation: &Invocation<'_>,
         base: &Uri,
@@ -165,7 +165,7 @@ pub enum PlanError {
     Value(#[from] ValueError),
     /// The values satisfied the operation and the request they render to could
     /// not be built: the base URL holds userinfo or a query, or the `http` crate
-    /// refused what the document names, such as a header name.
+    /// refused what the document names, a URI or a header name.
     #[error(transparent)]
     Request(#[from] RequestError),
 }

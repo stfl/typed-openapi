@@ -24,14 +24,15 @@ use std::io;
 use std::path::PathBuf;
 
 use clap::{Arg, Command, value_parser};
-use typed_openapi::client::{BodyError, Error as ClientError};
+use http::StatusCode;
+use typed_openapi::client::{BodyError, Client, Error as ClientError};
 use typed_openapi::generate::GenerateError;
 use typed_openapi::overlay::{self, OverlayError};
 use typed_openapi::plan::PlanError;
 use typed_openapi::request::{RequestError, ValueError};
 use typed_openapi::scalar::ScalarError;
 use typed_openapi::tree::{self, ArgError, DispatchError};
-use typed_openapi::{Document, DocumentError, Invocation, LoadError, Values};
+use typed_openapi::{Document, DocumentError, Invocation, LoadError, Recorder, Values};
 
 /// An OpenAPI document with `parameters` on its one operation and the server
 /// `url`, so a case names only the part that is wrong.
@@ -128,6 +129,23 @@ fn bad_list() -> ValueError {
     let doc = Document::load(&document(URL, list), &[]).expect("a document");
     let op = doc.get("listThings").expect("the one operation");
     Invocation::new(op, Values::new().each("n", [7, 7])).expect_err("`7` is given twice")
+}
+
+/// A typed call to the one operation that a 200 answers with a body that is no
+/// integer.
+fn decode_error() -> ClientError {
+    let doc = Document::load(&document(URL, SOUND), &[]).expect("a document");
+    let client = Client::over(doc);
+    let op = client
+        .document()
+        .get("listThings")
+        .expect("the one operation");
+    let recorder = Recorder::new().answering(StatusCode::OK, &serde_json::json!("x"));
+    client
+        .call::<u8>(op, Values::new())
+        .expect("no value is required")
+        .send(&recorder)
+        .expect_err("`\"x\"` is not an integer")
 }
 
 /// A verb of the adopter's own that declares `--n` with a parser that stores an
@@ -388,14 +406,9 @@ fn calling() -> Vec<Case> {
                 source: Box::new(io_error()),
             },
         ),
-        case(
-            "client::Error::Decode",
-            ClientError::Decode {
-                op: "listThings".to_owned(),
-                source: json_error(),
-                raw: "x".to_owned(),
-            },
-        ),
+        from_input("client::Error::Decode", decode_error(), |e| {
+            matches!(e, ClientError::Decode { .. })
+        }),
         case("client::Error::Values", ClientError::Values(bad_value())),
     ]
 }

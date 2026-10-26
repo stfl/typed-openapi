@@ -799,6 +799,16 @@ the two command lines cannot come to disagree about one operation. A document
 whose bless step confirms with `yes` has `--yes` on your verb too, and its gate
 flags say "in addition to --yes".
 
+The help of the confirmation flag says "Send the request". A verb that sends
+more than one replaces it on the flag's id and keeps the word:
+`finalize-voucher`, whose chain sends two writes, says "Send the writes".
+
+```rust,ignore
+tree::confirmation(verb, op).mut_arg(COMMIT_ID, |arg| {
+    arg.help("Send the writes. Without it this is a dry run that prints them")
+})
+```
+
 The plan holds the request the gate decided on. What your verb prints for a dry
 run and what it sends once the write is confirmed are that one value, and a dry
 run has nothing to send:

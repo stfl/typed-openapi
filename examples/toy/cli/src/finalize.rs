@@ -10,7 +10,7 @@
 //! it — the CLI does not discover it at run time against a customer's ledger.
 
 use api::{Api, Call, OperationId, Voucher, VoucherStatus};
-use typed_openapi::{Answers, SyncClient, render};
+use typed_openapi::{Answers, Operation, SyncClient, render};
 
 use crate::app::Error;
 use crate::output::Output;
@@ -68,6 +68,15 @@ pub fn call(api: &Api, step: Step) -> Result<Call<'_, Voucher>, api::Error> {
     }
 }
 
+/// The operation whose words the chain stands behind: its gates and the word that
+/// confirms it. The chain's other write, the render, names no gate, and the
+/// confirmation word is the document's, so this is the one operation that the
+/// command line, the dispatch and the note of a dry run all ask.
+#[must_use]
+pub fn gate(api: &Api) -> &Operation {
+    api.operation(OperationId::EnshrineVoucher)
+}
+
 /// What the chain's writes came to, once the gate has had its say.
 #[derive(Debug)]
 enum Wrote {
@@ -84,11 +93,16 @@ pub fn run<C: SyncClient>(
     id: i64,
     answers: &Answers,
 ) -> Result<Output, Error> {
-    let fetch = api.get_voucher(id)?;
-    let mut printed = vec![render(&fetch.request()?)];
-    // The read runs in both modes: the plan is a function of what the server
-    // says the voucher is, so there is nothing to print without it.
-    let voucher = fetch.send(client)?;
+    // The fetch is planned as the writes are, so the request that is printed is
+    // the request that is sent. The read runs in both modes: the plan is a
+    // function of what the server says the voucher is, so there is nothing to
+    // print without it. A read is sent on sight, so a plan with nothing to send
+    // is a document that made the fetch a write.
+    let fetch = api.get_voucher(id)?.plan(answers)?;
+    let mut printed = vec![render(fetch.request())];
+    let Some(voucher) = fetch.send(client)? else {
+        return Err(Error::FetchHeld);
+    };
     let steps = plan(&voucher);
     if steps.is_empty() {
         return Ok(Output::note(
@@ -119,7 +133,7 @@ pub fn run<C: SyncClient>(
             format!(
                 "dry run: the fetch above ran, the writes did not. \
                  Add --{} to send them.\n",
-                api.operation(OperationId::EnshrineVoucher).commit()
+                gate(api).commit()
             ),
         ),
         Wrote::Everything(last) => Output::value(&printed, &last),

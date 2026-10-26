@@ -360,7 +360,10 @@ impl Summary {
 
 /// Text for a cell of a table. A `|` ends a cell, a code span included, unless a
 /// backslash stands before it. An `operationId` and a parameter's name are the
-/// vendor's, and either can hold one, so each goes through here. A gate and a
+/// vendor's, and either can hold one, so each goes through here. So does the
+/// reason a parameter has no flag: it is the crate's own words for a document
+/// that was loaded, and any text for a `Document` read from a blob or from
+/// another format, because `Unsupported::Keyword` holds a `String`. A gate and a
 /// group are spelled `[a-z0-9-]` and hold none.
 fn cell(text: &str) -> String {
     text.replace('|', "\\|")

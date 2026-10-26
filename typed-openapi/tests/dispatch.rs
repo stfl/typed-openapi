@@ -1059,10 +1059,10 @@ fn confirmed_with_yes() -> Document {
     .expect("the document loads with its own word")
 }
 
-/// `A7/docs/gated.yaml` with `A7_COMMIT_WORD=yes`: a hand-written verb that
-/// spelled `--commit` itself named a flag the gate's help did not, and refused
-/// the word the operation chose. The door adds the flag the generated subcommand
-/// carries, in the operation's word, with the same id, help and action.
+/// `A7/docs/gated.yaml` with `A7_COMMIT_WORD=yes`: a hand-written verb spells no
+/// word of its own, so the flag it accepts is the flag the gate's help names. The
+/// door adds the flag the generated subcommand carries, in the operation's word,
+/// with the same id, help and action.
 #[test]
 fn a_verb_of_your_own_carries_the_confirmation_the_subcommand_carries() {
     for doc in [document(), confirmed_with_yes()] {

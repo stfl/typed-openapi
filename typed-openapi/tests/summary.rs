@@ -356,3 +356,37 @@ fn a_pipe_in_a_name_stays_in_its_cell() {
         "the operation is escaped too:\n{page}"
     );
 }
+
+/// The reason a parameter is carried without a flag is the crate's own words for
+/// a document that was loaded. A `Document` read from a blob or from another
+/// format holds whatever `Unsupported::Keyword` it was written with, and a pipe
+/// in that text ends the cell as a pipe in a name does.
+#[test]
+fn a_pipe_in_the_reason_stays_in_its_cell() {
+    let loaded = Document::load(PIPES, &[]).expect("a document");
+    let json = serde_json::to_string(&loaded).expect("a document writes as JSON");
+    let edited = json.replace(
+        r#""Unreachable":"Cookie""#,
+        r#""Unreachable":{"Keyword":"a|b"}"#,
+    );
+    assert_ne!(
+        edited, json,
+        "the cookie parameter is carried without a flag"
+    );
+    let doc: Document = serde_json::from_str(&edited).expect("a document reads back");
+
+    let page = doc.summary().to_string();
+
+    let row = page
+        .lines()
+        .skip_while(|line| !line.starts_with("## Parameters"))
+        .find(|line| line.contains("`a\\|b`"))
+        .unwrap_or_else(|| panic!("the cookie parameter is listed:\n{page}"));
+    let Ok([_operation, _parameter, why]) = <[String; 3]>::try_from(cells(row)) else {
+        panic!("a pipe broke the row `{row}`");
+    };
+    assert_eq!(
+        why,
+        "stated with `a\\|b`, which this CLI does not read as a value"
+    );
+}

@@ -106,14 +106,16 @@ the crate follows [Semantic Versioning][semver].
   `Planned::send` and `send_async` send that request and answer `Some(T)`, or
   send nothing and answer `None` for a dry run. The request is built once, so
   what a caller prints as a dry run is what a confirmed run sends, and no
-  signature takes an operation and a request side by side.
+  signature takes an operation and a request side by side. A `Planned` is
+  `#[must_use]`, so a plan that is dropped unused is a warning.
   `tree::confirmation(cmd, op)` adds the confirmation flag to a command of your
   own in the word the operation carries, as `tree::command` does, and adds none
-  for a read. A verb that spelled `Arg::new(COMMIT_ID).long(COMMIT)` itself
-  accepted `--commit` only, so with `Loading::commit("yes")` the help of its
-  gate flags named `--yes`, a flag the verb refused. Repair: use
-  `tree::confirmation(cmd, op)` in the place of that `Arg`, and `Call::plan`
-  where you called `Plan::decide` on a typed call.
+  for a read. Its help says "Send the request"; a verb that sends several
+  replaces it with `.mut_arg(COMMIT_ID, |arg| arg.help(..))`. A verb that
+  spelled `Arg::new(COMMIT_ID).long(COMMIT)` itself accepted `--commit` only, so
+  with `Loading::commit("yes")` the help of its gate flags named `--yes`, a flag
+  the verb refused. Repair: use `tree::confirmation(cmd, op)` in the place of
+  that `Arg`, and `Call::plan` where you called `Plan::decide` on a typed call.
 
 ### Changed
 
@@ -1237,8 +1239,8 @@ the crate follows [Semantic Versioning][semver].
   `Plan::decide(&invocation, &base, &answers) -> Result<Plan, RequestError>`,
   and the gate reads the operation that the invocation holds, so the verdict and
   the request are about one operation. The error is the request's: a base with
-  userinfo or a query, or a header name that `http` refuses. `Plan::build` keeps
-  its signature. Repair:
+  userinfo or a query, or a URI or a header that `http` cannot build.
+  `Plan::build` keeps its signature. Repair:
   `Plan::decide(&Invocation::new(op, values)?, &base, &answers)?`, or
   `Plan::build(op, &base, values, &answers)?`; for a typed call,
   `call.plan(&answers)?`.
@@ -1257,6 +1259,19 @@ the crate follows [Semantic Versioning][semver].
   `<op>: the response is not the shape the document promises`. Repair: a pattern
   that binds the fields of one of them adds `op` or `..`, and a tuple pattern of
   `Encode` or `Transport` becomes a struct pattern.
+- **The `source` of `client::Error::Decode` is a `client::DecodeError`, not a
+  `serde_json::Error`.** The message of `serde_json` quotes the value, the key
+  or the variant that it refused, and the chain of an error is printed where a
+  log reads it: a string value of 3,000 characters made a chain of 3,138 bytes.
+  `DecodeError` holds `class` (a `DecodeClass`: `Syntax` for a body that is not
+  JSON, `Eof` for one that ends early, `Data` for JSON that is not the type, and
+  `Io`, which a slice cannot raise), `line` and `column`, and no byte of the
+  body. It prints `the body does not fit the type at line 1 column 48`. The text
+  stays in `raw`, and `Error::body()` reads it. Repair: where a caller read the
+  kind or the position from the `serde_json::Error` (`downcast_ref` on
+  `source()`), read `class`, `line` and `column` from the `DecodeError` and the
+  text from `Error::body()`; the expected type is not named, so read the body
+  at that line and column.
 - **`client::to_json` takes the operation, and a generated wrapper passes it.**
   It is `to_json(op, &value)` where it was `to_json(&value)`, so that the
   `Encode` error of a body that does not serialise names whose body it was. The
