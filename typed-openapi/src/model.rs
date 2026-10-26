@@ -547,9 +547,9 @@ pub enum Body {
     /// of the same facts in a second notation would be the one place the two
     /// could come to disagree.
     JsonFields {
-        /// The `Content-Type` the body goes out under, as the document spells the
-        /// `content` key, parameters included: `application/merge-patch+json` goes
-        /// out as that.
+        /// The `content` key the body is sent under, as the document spells it,
+        /// parameters included: `application/merge-patch+json` goes out as that.
+        /// [`Body::media_type`] is the `Content-Type` that is sent.
         media_type: String,
         /// The properties, one flag each, in document order.
         fields: Vec<Field>,
@@ -564,8 +564,8 @@ pub enum Body {
     /// while the document was reduced. `None` where the document describes no
     /// shape to render, and then the subcommand grows no flag to ask for one.
     JsonWhole {
-        /// The `Content-Type` the body goes out under, as the document spells the
-        /// `content` key.
+        /// The `content` key the body is sent under, as the document spells it.
+        /// [`Body::media_type`] is the `Content-Type` that is sent.
         media_type: String,
         /// Whether the document requires the body.
         required: bool,
@@ -589,8 +589,8 @@ pub enum Body {
     /// is, because a `content` key that is not one, or that is a media range, is
     /// refused while the document is reduced rather than carried here.
     Opaque {
-        /// The `Content-Type` the bytes go out under, as the document spells
-        /// the media type.
+        /// The `content` key the bytes are sent under, as the document spells it.
+        /// [`Body::media_type`] is the `Content-Type` that is sent.
         media_type: String,
         /// Whether the document requires the body.
         required: bool,
@@ -1457,8 +1457,11 @@ impl Body {
         }
     }
 
-    /// The `Content-Type` this body goes out under, as the document spells the
-    /// `content` key, parameters included.
+    /// The `Content-Type` this body goes out under: the `content` key as the
+    /// document spells it, parameters included, without the space and the tab at
+    /// its two ends. RFC 9110 reads them as optional white space, and RFC 9113
+    /// calls a field value that starts or ends with one malformed, so a receiver
+    /// reads the same type whether they are sent or not.
     ///
     /// The one place a request reads it, so that a JSON body and a body sent
     /// verbatim cannot take it from two readings. [`Body::None`] sends nothing
@@ -1470,7 +1473,7 @@ impl Body {
         match self {
             Self::JsonFields { media_type, .. }
             | Self::JsonWhole { media_type, .. }
-            | Self::Opaque { media_type, .. } => Some(media_type),
+            | Self::Opaque { media_type, .. } => Some(media_type.trim_matches([' ', '\t'])),
             Self::None | Self::Multipart { .. } => None,
         }
     }

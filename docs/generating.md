@@ -442,9 +442,9 @@ Three things are worth knowing:
   with no `type/subtype` in it — `form-data` where `multipart/form-data` was
   meant — is a `LoadError` naming the operation and the key, rather than bytes
   sent under a `Content-Type` no server reads. A key that is sent as the
-  `Content-Type` and that no header carries is no media type either: a control
-  character other than a tab, or DEL, or a white space other than a space and a
-  tab at an end of its type or subtype. A key that is a media range (`*/*`,
+  `Content-Type` and that no header carries is no media type either: an ASCII
+  control character other than a tab, or a white space other than a space and a
+  tab before its type or after its subtype. A key that is a media range (`*/*`,
   `image/*`) is refused too (`LoadError::MediaRange`), when it is the key the body
   is sent under. The repair is an Overlay action,
   and [overlay.md](overlay.md#1-plain-corrections) writes one out.

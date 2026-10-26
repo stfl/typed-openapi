@@ -755,7 +755,8 @@ the crate follows [Semantic Versioning][semver].
   declared as `application/merge-patch+json` or `application/vnd.api+json`
   reached its server under another type, which answers 415 or reads it with the
   semantics of the other. The `Content-Type` is the key as the document spells
-  it, parameters included, on the command line and in the typed call alike. A
+  it, parameters included and less a space and a tab at its two ends, on the
+  command line and in the typed call alike. A
   document that declares `application/json` sends what it sent, and so does
   sevdesk-cli's, whose 76 JSON bodies all declare it. The model carries the key,
   so two variants of `Body` change:
@@ -804,12 +805,11 @@ the crate follows [Semantic Versioning][semver].
 - **A `content` key that no header carries is refused as a media type, when it
   is the key that goes out as the `Content-Type`.** The check read the type and
   the subtype and nothing else of the key, so these loaded:
-  - a control character other than a tab, or DEL, in a parameter after the `;`;
-  - a line feed, vertical tab, form feed or carriage return at an end of the type
-    or subtype, which `str::trim` took off before the check;
-  - a white space other than a space and a tab at an end of the type or subtype,
-    such as `application/json` followed by a no-break space, or a next-line
-    character before it.
+  - an ASCII control character other than a tab in a parameter after the `;`;
+  - a white space other than a space and a tab before the type or after the
+    subtype, which `str::trim` took off before the check: a line feed, vertical
+    tab, form feed or carriage return, a no-break space, or a next-line
+    character, such as `application/json` followed by a no-break space.
 
   A JSON body ignored the key and went out as `application/json`, so each of
   them loaded and worked. A body sent verbatim loaded too, and went out with the
@@ -818,17 +818,23 @@ the crate follows [Semantic Versioning][semver].
   every request with `RequestError::Http` for a control character. A JSON body
   now goes out under the key, so the load refuses each of them as
   `LoadError::MediaType`, for a JSON body and a body sent verbatim, when the key
-  is the one that is sent. A space and a tab round the type are optional white
-  space in RFC 9110 and are no fault. A `multipart/form-data` key is not asked,
-  because that body writes its own `Content-Type`, with a boundary, and its key is
-  never sent: a document that holds one with such a byte loaded and its requests
-  went out as `multipart/form-data; boundary=…`, and it still does. The message
-  prints the key as the document spells it, and writes a character that does not
-  show, a control character or a white space other than a space, as its code point
-  (`\u{a0}`). sevdesk-cli declares no such key: its 82 body keys are
-  `application/json`, `multipart/form-data` and
-  `application/x-www-form-urlencoded`. Repair: an Overlay that replaces the key
-  with the type the server reads.
+  is the one that is sent. A C1 control character in a parameter is a byte that a
+  header carries, and it loads as it did. A space and a tab before the type or
+  after the subtype are optional white space in RFC 9110 and are no fault, and
+  the request goes out without them, because RFC 9113 calls a field value that
+  starts or ends with one malformed: a JSON body with such a key went out as
+  `application/json`, and a body sent verbatim went out with them. A space or a
+  tab inside the key, as before the `;`, is sent as the document spells it.
+  A `multipart/form-data` key is not asked what a header carries, because that
+  body writes its own `Content-Type`, with a boundary, and its key is never sent:
+  a document that holds one with such a byte loaded and its requests went out as
+  `multipart/form-data; boundary=…`, and it still does. The message prints the
+  key as the document spells it, and writes each character that does not show as
+  its code point (`\u{a0}`): a control character, a white space other than a
+  space, a format character such as a zero width space, and a combining mark.
+  sevdesk-cli declares no such key: its 82 body keys are `application/json`,
+  `multipart/form-data` and `application/x-www-form-urlencoded`. Repair: an
+  Overlay that replaces the key with the type the server reads.
 
 ### Removed
 

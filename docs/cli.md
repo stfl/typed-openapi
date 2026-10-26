@@ -450,8 +450,8 @@ A body is refused the same way when its `content` key is not a media type at
 all — `form-data` where `multipart/form-data` was meant is a
 `LoadError::MediaType`, not a `--raw-body` sent under a `Content-Type` no server
 parses — or, where it is sent as the `Content-Type`, is none that a header
-carries: a control character other than a tab, or DEL, or a white space other than
-a space and a tab at an end of its type or subtype. So is a key that is a media
+carries: an ASCII control character other than a tab, or a white space other than
+a space and a tab before its type or after its subtype. So is a key that is a media
 range, `*/*` or `image/*`: a request goes out under one type, and the range does
 not name it (`LoadError::MediaRange`).
 [docs/overlay.md](overlay.md#1-plain-corrections) has the action that repairs

@@ -565,13 +565,13 @@ pub(crate) fn is_media_type(media_type: &str) -> bool {
 /// is picked. This is asked only of a key that goes out as the header, a JSON
 /// body's and one that is sent verbatim: a `multipart/form-data` body writes its
 /// own `Content-Type`, with a boundary, and its key is never sent. The header is
-/// read as RFC 9110 reads it: a space and a tab round the essence are optional
-/// white space and are trimmed, and no other white space is, so a no-break space
-/// at an end of the type is no `token` character and a server reads no type in
-/// it. The whole key must also be a header value, which refuses a control
-/// character other than a tab, and DEL, in a parameter as much as in the
-/// essence. The rest of a parameter is not parsed, for the reason that
-/// [`is_media_type`] gives.
+/// read as RFC 9110 reads it: a space and a tab before the type and after the
+/// subtype are optional white space and are trimmed, and no other white space is,
+/// so a no-break space there is no `token` character and a server reads no type
+/// in it. The whole key must also be a header value, which refuses an ASCII
+/// control character other than a tab, in a parameter as much as in the essence.
+/// The rest of a parameter is not parsed, for the reason that [`is_media_type`]
+/// gives.
 #[must_use]
 pub(crate) fn is_content_type(media_type: &str) -> bool {
     has_type_and_subtype(before_parameters(media_type).trim_matches([' ', '\t']))
@@ -677,9 +677,11 @@ mod tests {
         assert!(!is_content_type("application/json; x=\"a\u{1}b\""));
         assert!(!is_content_type("application/json; x=\"a\nb\""));
         assert!(!is_content_type("application/json;x=\u{7f}"));
-        // A tab is one a header carries, and so is a byte past ASCII.
+        // A tab is one a header carries, and so is a byte past ASCII, a C1
+        // control character among them.
         assert!(is_content_type("text/plain; x=\"a\tb\""));
         assert!(is_content_type("text/plain; x=\"é\""));
+        assert!(is_content_type("text/plain; x=\"a\u{85}b\""));
         // `is_media_type` leaves a parameter unread, so a multipart key with such
         // a byte is a media type: the key is never sent and is not held to the
         // header.
@@ -688,8 +690,8 @@ mod tests {
 
     /// RFC 9110's optional white space is a space and a tab. `str::trim`, which
     /// `is_media_type` reads the essence with, takes every Unicode white space, so
-    /// a key with another at an end of its type or subtype is a media type and no
-    /// content type.
+    /// a key with another before its type or after its subtype is a media type
+    /// and no content type.
     #[test]
     fn a_content_type_is_trimmed_of_a_space_and_a_tab_and_no_other_white_space() {
         assert!(is_content_type(" text/plain\t"));

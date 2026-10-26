@@ -409,7 +409,8 @@ fn a_key_with_no_type_and_subtype_is_no_media_type_and_no_range() {
 
 /// Loads `key` as the one `content` key of `upload`, with `schema`, and asserts
 /// that the document is refused as `LoadError::MediaType` and that the words name
-/// the operation, say "not a media type" and spell the key as `shown`.
+/// the operation, say "not a media type" and spell the key as `shown`, with no
+/// character in the words that does not show.
 fn assert_refused_as_no_media_type(key: &str, schema: &str, shown: &str) {
     let content = format!("          {key}:\n            schema: {schema}\n");
 
@@ -424,7 +425,7 @@ fn assert_refused_as_no_media_type(key: &str, schema: &str, shown: &str) {
     assert!(words.contains(shown), "{words}");
     assert!(words.contains("not a media type"), "{words}");
     assert!(
-        !words.contains(|c: char| c.is_control() || (c.is_whitespace() && c != ' ')),
+        words.chars().all(|c| c == ' ' || c.is_ascii_graphic()),
         "{words:?}"
     );
 }
@@ -451,12 +452,13 @@ fn a_key_that_no_header_carries_is_no_media_type() {
     }
 }
 
-/// A key with a white space other than a space or a tab at an end of its type or
-/// subtype is no media type, because it is not one to RFC 9110: the white space
-/// is no `token` character and no optional white space, and the header would
-/// carry it. The inputs are `application/json<NBSP>`, `<NEL>application/json`,
-/// `application/json<U+3000>`, `application/merge-patch+json<NBSP>` and a
-/// `text/plain<NBSP>` key, which a body sent verbatim holds.
+/// A key with a white space other than a space or a tab before its type or after
+/// its subtype is no media type, because it is not one to RFC 9110: the white
+/// space is no `token` character and no optional white space, and the header
+/// would carry it. The inputs are `application/json<NBSP>`,
+/// `<NEL>application/json`, `application/json<U+3000>`,
+/// `application/merge-patch+json<NBSP>` and a `text/plain<NBSP>` key, which a
+/// body sent verbatim holds.
 #[test]
 fn a_key_with_white_space_other_than_a_space_or_a_tab_is_no_media_type() {
     let object = "{ type: object, properties: { a: { type: string } } }";
@@ -488,10 +490,31 @@ fn a_key_with_white_space_other_than_a_space_or_a_tab_is_no_media_type() {
     }
 }
 
-/// A space and a tab are the optional white space round the essence, so a key
-/// with one loads and is sent as the document spells it.
+/// The words write a character that does not show as its code point, whatever
+/// kind of character it is, because a key refused for one would read as a media
+/// type with no fault in it. The inputs are `application/json` with a zero width
+/// space, a left-to-right mark or a word joiner after it, a byte order mark
+/// before it, a soft hyphen inside it, and a combining acute accent after it.
 #[test]
-fn a_space_and_a_tab_round_the_essence_are_no_fault() {
+fn a_character_that_does_not_show_is_written_as_its_code_point() {
+    let object = "{ type: object, properties: { a: { type: string } } }";
+    for (key, shown) in [
+        (r#""application/json\u200b""#, r"application/json\u{200b}"),
+        (r#""\ufeffapplication/json""#, r"\u{feff}application/json"),
+        (r#""application/js\u00adon""#, r"application/js\u{ad}on"),
+        (r#""application/json\u2060""#, r"application/json\u{2060}"),
+        (r#""application/json\u200e""#, r"application/json\u{200e}"),
+        (r#""application/json\u0301""#, r"application/json\u{301}"),
+    ] {
+        assert_refused_as_no_media_type(key, object, shown);
+    }
+}
+
+/// A space and a tab are the optional white space before the type and after the
+/// subtype, so a key with one after its subtype loads and is sent as the document
+/// spells it.
+#[test]
+fn a_space_and_a_tab_after_the_subtype_are_no_fault() {
     let content = "          \"application/json \\t; charset=utf-8\":\n            \
                    schema: { type: object, properties: { a: { type: string } } }\n";
 
@@ -503,15 +526,48 @@ fn a_space_and_a_tab_round_the_essence_are_no_fault() {
     );
 }
 
+/// A space and a tab at an end of the key are optional white space too, and a
+/// field value must not start or end with one (RFC 9113, 8.2.1), so the request
+/// goes out without them, under a JSON key and a key sent verbatim alike. The
+/// inputs are `<SP>application/json`, `application/json<TAB>` and
+/// `<TAB>text/plain; charset=utf-8<SP>`.
+#[test]
+fn a_space_and_a_tab_at_an_end_of_the_key_are_not_sent() {
+    let object = "{ type: object, properties: { a: { type: string } } }";
+    for (key, schema, sent) in [
+        (r#"" application/json""#, object, "application/json"),
+        (r#""application/json\t""#, object, "application/json"),
+        (
+            r#""\ttext/plain; charset=utf-8 ""#,
+            "{ type: string }",
+            "text/plain; charset=utf-8",
+        ),
+    ] {
+        let content = format!("          {key}:\n            schema: {schema}\n");
+
+        let doc = Document::load(&posting(&content), &[]).expect(key);
+
+        let values = if schema == object {
+            Values::new().json(json!({ "a": "x" }))
+        } else {
+            Values::new().raw(vec![1])
+        };
+        assert_eq!(content_type(&doc, "upload", values), sent, "{key}");
+    }
+}
+
 /// The words spell the key as the document does, so the target of the Overlay
 /// that repairs it can match: a quote and a backslash are printed as they stand,
 /// and only a character that does not show is written as its code point. The
-/// inputs are `form-data; name="file"` and `form\data`.
+/// inputs are `form-data; name="file"`, `form\data`, `application/jsoné` and
+/// `application/json` with a replacement character after it.
 #[test]
 fn the_words_spell_the_key_as_the_document_does() {
     for (key, spelled) in [
         (r#"'form-data; name="file"'"#, r#"`form-data; name="file"`"#),
         (r"'form\data'", r"`form\data`"),
+        ("'application/json\u{e9}'", "`application/json\u{e9}`"),
+        ("'application/json\u{fffd}'", "`application/json\u{fffd}`"),
     ] {
         let content = format!("          {key}:\n            schema: {{ type: string }}\n");
 
@@ -526,10 +582,10 @@ fn the_words_spell_the_key_as_the_document_does() {
 }
 
 /// A `multipart/form-data` key is never sent: the body is assembled with a
-/// `Content-Type` of its own, boundary and all. So the header is not asked of it,
-/// and a key that no header carries loads and the request goes out as it did. The
-/// inputs are `multipart/form-data; x="a<U+0001>b"` and
-/// `multipart/form-data<NBSP>`.
+/// `Content-Type` of its own, boundary and all. So it is not asked what a header
+/// carries, and a key that no header carries loads and the request goes out as
+/// `multipart/form-data; boundary=…`. The inputs are
+/// `multipart/form-data; x="a<U+0001>b"` and `multipart/form-data<NBSP>`.
 #[test]
 fn a_multipart_key_is_not_asked_what_a_header_carries() {
     let schema = "{ type: object, properties: { note: { type: string } } }";

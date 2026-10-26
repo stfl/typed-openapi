@@ -312,8 +312,9 @@ corrects the name or removes the parameter. A header parameter with no flag send
 nothing, so its name is not asked.
 
 **The `Content-Type` is the document's.** A JSON body goes out under the
-`content` key it was declared under, spelled as the document spells it and with
-its parameters: `application/merge-patch+json` is sent as that and not as
+`content` key it was declared under, spelled as the document spells it, with
+its parameters and less a space and a tab at its two ends:
+`application/merge-patch+json` is sent as that and not as
 `application/json`, and
 `application/vnd.api+json; profile="https://example.com/Profiles/Timestamps"` is
 sent with its `profile`. A server reads a merge patch and a JSON:API document by
@@ -359,18 +360,24 @@ JSON body and a body that is sent verbatim go out under the key, so the key is
 read as RFC 9110 reads a header value, and one that is not is refused as
 `LoadError::MediaType`, when it is the key that is sent:
 
-- a control character other than a tab, or DEL, anywhere in it, in a parameter as
-  much as in the type;
-- a white space other than a space and a tab at an end of its type or subtype,
-  such as a no-break space. A space and a tab round the type are the optional
-  white space of RFC 9110 and are no fault.
+- an ASCII control character other than a tab (U+0000 to U+001F and U+007F)
+  anywhere in it, in a parameter as much as in the type. A byte of 0x80 or above,
+  a C1 control character among them, is one a header carries;
+- a white space other than a space and a tab before its type or after its
+  subtype, such as a no-break space. A space and a tab there are the optional
+  white space of RFC 9110 and are no fault, and the request goes out without
+  them, because a field value must not start or end with one (RFC 9113,
+  section 8.2.1). A space or a tab inside the key, such as before the `;`, is
+  sent as the document spells it.
 
-The rest of a parameter is not parsed. A `multipart/form-data` key is not asked,
-because that body is sent under a `Content-Type` of its own, with the boundary
-that is chosen when the parts are encoded, and the key is never sent: such a
-document loads. The words spell the key as the document does, so that the target
-of an Overlay can match it, and write a character that does not show, a control
-character or a white space other than a space, as its code point (`\u{a0}`).
+The rest of a parameter is not parsed. A `multipart/form-data` key is not asked
+what a header carries, because that body is sent under a `Content-Type` of its
+own, with the boundary that is chosen when the parts are encoded, and the key is
+never sent: such a document loads. The words spell the key as the document does,
+so that the target of an Overlay can match it, and write each character that
+does not show as its code point (`\u{a0}`): a control character, a white space
+other than a space, a format character such as a zero width space or a soft
+hyphen, and a combining mark. A quote and a backslash are printed as they stand.
 
 A base URL is the scheme, the host and the path of every request, and nothing
 else of it is kept. One with userinfo (`user:password@`) or a query is refused

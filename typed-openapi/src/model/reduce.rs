@@ -542,9 +542,9 @@ pub enum LoadError {
     },
     /// A `requestBody` whose `content` key names no media type — `form-data`
     /// where `multipart/form-data` was meant — or, for a key that goes out as the
-    /// request's `Content-Type`, is none that a header carries: a control
-    /// character other than a tab or a DEL, or a white space other than a space
-    /// and a tab at an end of its type or subtype. Refused while the document is
+    /// request's `Content-Type`, is none that a header carries: an ASCII control
+    /// character other than a tab, or a white space other than a space and a tab
+    /// before its type or after its subtype. Refused while the document is
     /// reduced, because the alternative is a request sent under a `Content-Type`
     /// no server can read, or no request at all. The message spells the key as
     /// the document does, so that an Overlay's target can match it, and writes a
@@ -552,7 +552,7 @@ pub enum LoadError {
     #[error(
         "{op}: `{}` is not a media type; \
          an Overlay is where a document's content type is corrected",
-        shown(.media_type)
+        with_code_points(.media_type)
     )]
     MediaType {
         /// The `operationId` of the operation that declares the body.
@@ -675,18 +675,22 @@ pub enum LoadError {
 }
 
 /// A `content` key as the document spells it, except that a character which does
-/// not show is written as its code point. A control character, a no-break space
-/// and a line separator look like nothing or like a space, so a key refused for
-/// one would read as a media type with no fault in it. A space is written as a
-/// space, because a space round the essence is no fault.
-fn shown(media_type: &str) -> String {
+/// not show is written as its code point (`\u{a0}`): each character that
+/// [`char::escape_debug`] does not print as itself. That is a control character,
+/// a white space other than a space, a format character such as a zero width
+/// space or a soft hyphen, and a combining mark. A key refused for one would
+/// otherwise read as a media type with no fault in it. A quote and a backslash
+/// are printed as they stand, because an Overlay's target is matched against the
+/// spelling, and so is a space, because a space before the type or after the
+/// subtype is no fault.
+fn with_code_points(media_type: &str) -> String {
     media_type
         .chars()
         .map(|c| {
-            if c.is_control() || (c.is_whitespace() && c != ' ') {
-                c.escape_unicode().to_string()
-            } else {
+            if matches!(c, '"' | '\'' | '\\') || c.escape_debug().eq(std::iter::once(c)) {
                 c.to_string()
+            } else {
+                c.escape_unicode().to_string()
             }
         })
         .collect()
