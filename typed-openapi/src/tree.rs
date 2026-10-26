@@ -341,25 +341,34 @@ fn long_about(op: &Operation) -> String {
             );
         }
     }
-    // A property the API sets is left out of the request for the same reason a
-    // flag is: there is nothing for an operator to give. A flat body says where
-    // the flag went, and a body that goes whole says what to leave out of the
-    // file.
-    for name in op.body().read_only() {
-        let _ = if matches!(op.body(), Body::JsonFields { .. }) {
-            write!(
-                out,
-                "\n\n`{name}` has no flag: it is `readOnly`, so the API sets it and the request \
-                 should go out without it."
-            )
-        } else {
-            write!(
-                out,
-                "\n\n`{name}` is `readOnly`: the API sets it, so the body should go out without it."
-            )
-        };
+    for note in read_only_notes(op.body()) {
+        let _ = write!(out, "\n\n{note}");
     }
     out
+}
+
+/// What the long help says about each property the API sets. It is left out of
+/// the request for the same reason a flag is: there is nothing for an operator to
+/// give. A flat body says where the flag went, and a body that goes whole says
+/// what to leave out of the file, by its path.
+fn read_only_notes(body: &Body) -> Vec<String> {
+    let (said, names): (fn(&str) -> String, &[String]) = match body {
+        Body::JsonFields { read_only, .. } => (has_no_flag, read_only),
+        Body::JsonWhole { read_only, .. } => (leave_out, read_only),
+        Body::None | Body::Multipart { .. } | Body::Opaque { .. } => (leave_out, &[]),
+    };
+    names.iter().map(|name| said(name)).collect()
+}
+
+fn has_no_flag(name: &str) -> String {
+    format!(
+        "`{name}` has no flag: it is `readOnly`, so the API sets it and the request should go \
+         out without it."
+    )
+}
+
+fn leave_out(path: &str) -> String {
+    format!("`{path}` is `readOnly`: the API sets it, so the body should go out without it.")
 }
 
 /// What the user answered at the gate, read off one operation's `ArgMatches`:

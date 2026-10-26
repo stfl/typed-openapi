@@ -455,8 +455,15 @@ pub enum Unsupported {
     /// as the document spells it: a composition (`oneOf`, `anyOf`, an `allOf` of
     /// more than one schema, `not`), a keyword that the schema's scalar `type`
     /// does not have (`allOf` or `pattern` beside `type: integer`), an `enum` that
-    /// lists a value of another type, an integer's bound that is no whole number
-    /// a double states exactly, or a `type` that is none of the six.
+    /// lists a value of another type, an integer's bound or step that
+    /// `openapiv3` holds as a double and that the double does not state as the
+    /// integers it admits, or a `type` that is none of the six.
+    ///
+    /// A bound whose double gives its integers exactly is read: one with a
+    /// fraction is the integer next inside it, and one past every `i64` bounds
+    /// nothing, or admits none and is refused. A whole bound from 2^53 to 2^63,
+    /// where the texts of more than one integer are one double, and a `multipleOf`
+    /// that is no whole number below 2^53 are refused by their keyword.
     ///
     /// Reading the value anyway would be a guess at what the vendor meant, and a
     /// correction is the adopter's to write in an Overlay where a reviewer can
@@ -569,8 +576,8 @@ pub enum Body {
     None,
     /// A JSON object whose every property is a scalar or is set by the API: one
     /// flag per scalar, plus `--json-body` as a base document to merge them
-    /// over. A property the schema marks `readOnly` has no flag and is no
-    /// scalar to be, so it never sends the body whole.
+    /// over. A property the schema marks `readOnly` has no flag and is read for
+    /// no rule, so it never sends the body whole.
     ///
     /// No template: the per-field flags already say what goes in the body, one
     /// per property, each with the rules its schema states. A second rendering
@@ -610,9 +617,14 @@ pub enum Body {
         /// The JSON skeleton of the body, rendered while the document was
         /// reduced, and `None` where the document describes no shape to render.
         template: Option<String>,
-        /// The properties of the body's own object that the schema marks
-        /// `readOnly`, in document order. The template leaves them out, and a
-        /// request should too.
+        /// The properties that the schema marks `readOnly` and that a request
+        /// should leave out, each by its path as [`BodyError`] spells a place:
+        /// `address.aid`, `positions[].id`, `[].id`. The properties of the body's
+        /// own object come first, in document order. Then come the ones the
+        /// template leaves out below it, at every depth, which are the required
+        /// ones: the template writes only those.
+        ///
+        /// [`BodyError`]: crate::client::BodyError
         read_only: Vec<String>,
     },
     /// `multipart/form-data`: assembled from `--file name=@path` and
@@ -1501,13 +1513,17 @@ impl Body {
         }
     }
 
-    /// The properties of the body that the schema marks `readOnly`, in document
-    /// order: the API sets each of them, so none has a flag and a request should
-    /// leave each out.
+    /// The properties of the body that the schema marks `readOnly`, each by its
+    /// path as [`BodyError`] spells a place: the API sets each of them, so none has
+    /// a flag and a request should leave each out.
     ///
-    /// Only the properties of the body's own object are named. A body that is no
-    /// object, and every other kind of body, answers with nothing, as
+    /// A body that is flat names the properties of its object, in document order.
+    /// A body that goes whole names the same for its own object, and then every
+    /// required property that its template leaves out below it (`address.aid`,
+    /// `positions[].id`). Every other kind of body answers with nothing, as
     /// [`Body::fields`] does.
+    ///
+    /// [`BodyError`]: crate::client::BodyError
     #[must_use]
     pub fn read_only(&self) -> &[String] {
         match self {

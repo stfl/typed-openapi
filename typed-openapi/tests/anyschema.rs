@@ -16,6 +16,7 @@
 )]
 
 use typed_openapi::model::{Body, Operation, Shape, Unsupported};
+use typed_openapi::scalar::Limit;
 use typed_openapi::tree;
 use typed_openapi::{Document, LoadError, Scalar};
 
@@ -135,25 +136,208 @@ fn the_format_of_a_scalar_read_from_an_any_schema_is_kept() {
     );
 }
 
-/// A bound that is no whole number below 2^53 is not the integer a double
-/// states, so the bound is refused by its keyword rather than rounded.
+/// The range of an integer: its two bounds, or the keyword that refuses it.
+type Range = Result<(Option<Limit<i64>>, Option<Limit<i64>>), &'static str>;
+
+/// What the schema `v` is worth as an integer, read from the parameter and from
+/// the property of a body alike: its bounds, or the keyword that refuses it. The
+/// body goes whole where the property is refused.
+fn range_of(schema: &str) -> Range {
+    let doc = loaded(schema);
+    let property = property_of(&doc);
+    match param_of(&doc) {
+        Ok(Scalar::Integer(bounds)) => {
+            let Some(Scalar::Integer(same)) = property else {
+                panic!("{schema}: the parameter is an integer and the property is {property:?}");
+            };
+            assert_eq!(bounds, same, "{schema}");
+            Ok((bounds.low, bounds.high))
+        }
+        Ok(other) => panic!("{schema}: {other:?}"),
+        Err(Unsupported::Keyword(keyword)) => {
+            assert!(property.is_none(), "{schema}: the body goes whole");
+            Err(match keyword.as_str() {
+                "minimum" => "minimum",
+                "maximum" => "maximum",
+                "multipleOf" => "multipleOf",
+                other => panic!("{schema}: refused by `{other}`"),
+            })
+        }
+        Err(other) => panic!("{schema}: {other:?}"),
+    }
+}
+
+/// One bound as the document spells it, whether `exclusive…` is set beside it, and
+/// what the integer comes to.
+type Row = (&'static str, bool, Range);
+
+/// What an integer's `minimum` comes to when `openapiv3` holds it as a double,
+/// because it is no `i64`.
+fn minimums() -> Vec<Row> {
+    use Limit::{Exclusive, Inclusive};
+    let low = |limit| Ok((limit, None));
+    vec![
+        // A fraction: the ceiling, whatever `exclusiveMinimum` says.
+        ("0.5", false, low(Some(Inclusive(1)))),
+        ("2.5", false, low(Some(Inclusive(3)))),
+        ("-0.5", false, low(Some(Inclusive(0)))),
+        ("-2.5", false, low(Some(Inclusive(-2)))),
+        ("0.5", true, low(Some(Inclusive(1)))),
+        ("-2.5", true, low(Some(Inclusive(-2)))),
+        // Whole, below 2^53: that integer, exclusive where the document says so.
+        ("0.0", false, low(Some(Inclusive(0)))),
+        ("0.0", true, low(Some(Exclusive(0)))),
+        (
+            "9007199254740991.0",
+            false,
+            low(Some(Inclusive(9_007_199_254_740_991))),
+        ),
+        (
+            "-9007199254740991.0",
+            false,
+            low(Some(Inclusive(-9_007_199_254_740_991))),
+        ),
+        // Whole, from 2^53 to 2^63, both ends included: no one integer.
+        ("9007199254740992.0", false, Err("minimum")),
+        ("-9007199254740992.0", false, Err("minimum")),
+        ("9223372036854775807.0", false, Err("minimum")),
+        ("9223372036854775808", false, Err("minimum")),
+        ("-9223372036854775808.0", false, Err("minimum")),
+        // Above 2^63: no integer of a flag meets it.
+        ("9223372036854777856.0", false, Err("minimum")),
+        ("18446744073709551615", false, Err("minimum")),
+        ("1e30", false, Err("minimum")),
+        // Below −2^63: every integer of a flag meets it.
+        ("-9223372036854777856.0", false, low(None)),
+        ("-1e30", false, low(None)),
+        ("-1e30", true, low(None)),
+    ]
+}
+
+/// What an integer's `maximum` comes to, the other way round.
+fn maximums() -> Vec<Row> {
+    use Limit::{Exclusive, Inclusive};
+    let high = |limit| Ok((None, limit));
+    vec![
+        // A fraction: the floor, whatever `exclusiveMaximum` says.
+        ("5.5", false, high(Some(Inclusive(5)))),
+        ("0.5", false, high(Some(Inclusive(0)))),
+        ("-0.5", false, high(Some(Inclusive(-1)))),
+        ("-2.5", false, high(Some(Inclusive(-3)))),
+        ("5.5", true, high(Some(Inclusive(5)))),
+        ("-2.5", true, high(Some(Inclusive(-3)))),
+        // Whole, below 2^53.
+        ("1e3", false, high(Some(Inclusive(1000)))),
+        ("1e3", true, high(Some(Exclusive(1000)))),
+        (
+            "9007199254740991.0",
+            false,
+            high(Some(Inclusive(9_007_199_254_740_991))),
+        ),
+        // Whole, from 2^53 to 2^63, both ends included.
+        ("9007199254740992.0", false, Err("maximum")),
+        ("9007199254740993.0", false, Err("maximum")),
+        ("-9007199254740992.0", false, Err("maximum")),
+        ("9223372036854775807.0", false, Err("maximum")),
+        ("9223372036854775808", false, Err("maximum")),
+        ("-9223372036854775808.0", false, Err("maximum")),
+        // Above 2^63: every integer of a flag is below it, so it bounds nothing.
+        ("9223372036854777856.0", false, high(None)),
+        ("18446744073709551615", false, high(None)),
+        ("1e30", false, high(None)),
+        ("1e30", true, high(None)),
+        // Below −2^63: no integer of a flag meets it.
+        ("-9223372036854777856.0", false, Err("maximum")),
+        ("-1e30", false, Err("maximum")),
+    ]
+}
+
+/// An integer's range as the document spells it, with `keyword` as `minimum` or
+/// `maximum` and the exclusive flag beside it where `exclusive` is set.
+fn spelled(keyword: &str, bound: &str, exclusive: bool) -> String {
+    let flag = match (exclusive, keyword) {
+        (false, _) => "",
+        (true, "minimum") => ", exclusiveMinimum: true",
+        (true, _) => ", exclusiveMaximum: true",
+    };
+    format!("{{ type: integer, {keyword}: {bound}{flag} }}")
+}
+
+/// An integer's `minimum`, which `openapiv3` holds as a double when it is no
+/// `i64`. A double with a fraction is the text of a number that is no integer, so
+/// the integer next inside it is the bound, with or without `exclusiveMinimum`. A
+/// whole double below 2^53 is that integer. From 2^53 to 2^63, both ends included,
+/// more than one integer's text is that double, and the bound is refused. A
+/// double above 2^63 is above every integer a flag carries, so none meets it, and
+/// one below −2^63 is below every one, so it bounds nothing.
 #[test]
-fn an_integer_bound_that_a_double_does_not_state_exactly_is_refused_by_its_keyword() {
-    for (schema, keyword) in [
-        ("{ type: integer, minimum: 9223372036854775808 }", "minimum"),
-        ("{ type: integer, maximum: 1e30 }", "maximum"),
-        ("{ type: integer, minimum: 0.5 }", "minimum"),
-        ("{ type: integer, multipleOf: 2.5 }", "multipleOf"),
-        ("{ type: integer, maximum: 9007199254740993.0 }", "maximum"),
+fn an_integers_minimum_that_openapiv3_holds_as_a_double_is_read_where_the_double_is_exact() {
+    for (bound, exclusive, expected) in minimums() {
+        let schema = spelled("minimum", bound, exclusive);
+        assert_eq!(range_of(&schema), expected, "{schema}");
+    }
+}
+
+/// An integer's `maximum`, the other way round: a double with a fraction is the
+/// integer next inside it, a double above 2^63 bounds nothing, and one below
+/// −2^63 is below every integer a flag carries.
+#[test]
+fn an_integers_maximum_that_openapiv3_holds_as_a_double_is_read_where_the_double_is_exact() {
+    for (bound, exclusive, expected) in maximums() {
+        let schema = spelled("maximum", bound, exclusive);
+        assert_eq!(range_of(&schema), expected, "{schema}");
+    }
+}
+
+/// An unsigned 64-bit id is the case that matters: `openapiv3` holds it as an
+/// `AnySchema` because its maximum is no `i64`, and it is an integer of at least 0.
+/// A document that requires such a parameter loads.
+#[test]
+fn an_unsigned_64_bit_id_is_an_integer_of_at_least_0() {
+    let schema = "{ type: integer, minimum: 0, maximum: 18446744073709551615 }";
+    assert_eq!(
+        range_of(schema),
+        Ok((Some(Limit::Inclusive(0)), None)),
+        "{schema}"
+    );
+    let doc = Document::load(&document(schema, true), &[]).expect("a required id is a value");
+    assert!(operation(&doc, "op").param("v").expect("v").required());
+
+    // The probe's own input: a bound that no integer meets, which refuses the
+    // document that requires it, by the keyword.
+    let schema = "{ type: integer, minimum: 9223372036854775808 }";
+    let refused = Document::load(&document(schema, true), &[]).expect_err("no integer meets it");
+    assert!(
+        matches!(&refused, LoadError::Parameter { why: Unsupported::Keyword(found), .. } if found == "minimum"),
+        "{refused:?}"
+    );
+}
+
+/// A step is read where it is a whole number below 2^53 and refused by its keyword
+/// where it is not: `2.5` states that an integer is a multiple of 5, and no step
+/// that this crate reads says so.
+#[test]
+fn an_integers_step_that_openapiv3_holds_as_a_double_is_read_only_where_it_is_whole() {
+    for (schema, expected) in [
+        ("{ type: integer, minimum: 0.0, multipleOf: 2.0 }", Ok(())),
+        (
+            "{ type: integer, minimum: 0.0, multipleOf: 9007199254740991.0 }",
+            Ok(()),
+        ),
+        (
+            "{ type: integer, minimum: 0.0, multipleOf: 2.5 }",
+            Err("multipleOf"),
+        ),
+        (
+            "{ type: integer, minimum: 0.0, multipleOf: 9007199254740992.0 }",
+            Err("multipleOf"),
+        ),
+        (
+            "{ type: integer, minimum: 0.0, multipleOf: 1e30 }",
+            Err("multipleOf"),
+        ),
     ] {
-        let doc = loaded(schema);
-        let why = param_of(&doc).expect_err(schema);
-        assert!(
-            matches!(&why, Unsupported::Keyword(found) if found == keyword),
-            "{schema}: {why:?}"
-        );
-        // A body property that has no flag sends the body whole.
-        assert!(property_of(&doc).is_none(), "{schema}");
+        assert_eq!(range_of(schema).map(drop), expected, "{schema}");
     }
 }
 
@@ -247,6 +431,106 @@ fn a_keyword_the_type_does_not_have_is_named() {
     }
 }
 
+/// Each keyword that `openapiv3` holds in an `AnySchema`, with a value that it
+/// reads, as the document spells it.
+const KEYWORDS: [(&str, &str); 23] = [
+    ("allOf", "[{ type: string }]"),
+    ("oneOf", "[{ type: string }]"),
+    ("anyOf", "[{ type: string }]"),
+    ("not", "{ type: string }"),
+    ("properties", "{ a: { type: string } }"),
+    ("required", "[a]"),
+    ("additionalProperties", "true"),
+    ("minProperties", "1"),
+    ("maxProperties", "1"),
+    ("items", "{ type: string }"),
+    ("minItems", "1"),
+    ("maxItems", "1"),
+    ("uniqueItems", "true"),
+    ("pattern", "'^a$'"),
+    ("minLength", "1"),
+    ("maxLength", "1"),
+    ("minimum", "1"),
+    ("maximum", "1"),
+    ("exclusiveMinimum", "true"),
+    ("exclusiveMaximum", "true"),
+    ("multipleOf", "2"),
+    ("enum", "[a]"),
+    ("format", "x"),
+];
+
+/// The keywords each `type` has, from JSON Schema, and not from this crate.
+const OWN: [(&str, &[&str]); 6] = [
+    (
+        "string",
+        &["pattern", "minLength", "maxLength", "enum", "format"],
+    ),
+    (
+        "number",
+        &[
+            "multipleOf",
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "enum",
+            "format",
+        ],
+    ),
+    (
+        "integer",
+        &[
+            "multipleOf",
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "enum",
+            "format",
+        ],
+    ),
+    ("boolean", &["enum"]),
+    (
+        "object",
+        &[
+            "properties",
+            "required",
+            "additionalProperties",
+            "minProperties",
+            "maxProperties",
+        ],
+    ),
+    ("array", &["items", "minItems", "maxItems", "uniqueItems"]),
+];
+
+/// A keyword that the `type` does not have is named, whichever keyword and
+/// whichever type of the six. A keyword that the reading quietly dropped would be
+/// the vendor's rule gone with no word, so every keyword is put beside every type
+/// that does not have it.
+///
+/// `required` is left to the unit test of `any_type`, which reads the schema with
+/// no document round it: beside a `type` that has no `properties` it names a key
+/// that nothing declares, and a document with one is refused as `Phantom` before
+/// it is reduced.
+#[test]
+fn every_keyword_beside_a_type_that_does_not_have_it_is_named() {
+    for (ty, own) in OWN {
+        for (keyword, value) in KEYWORDS {
+            if own.contains(&keyword) || keyword == "required" {
+                continue;
+            }
+            let schema = format!("{{ type: {ty}, {keyword}: {value} }}");
+            let doc = loaded(&schema);
+            let why = param_of(&doc).expect_err(&schema);
+            assert!(
+                matches!(&why, Unsupported::Keyword(found) if found == keyword),
+                "{schema}: {why:?}"
+            );
+            assert!(property_of(&doc).is_none(), "{schema}: the body goes whole");
+        }
+    }
+}
+
 /// The words of the refusal, once: in the long help, where an optional parameter
 /// says where its flag went, and in the refusal of a document that requires it.
 #[test]
@@ -279,18 +563,58 @@ fn the_reason_is_said_where_a_flag_would_have_been_and_when_the_document_require
     );
 }
 
-/// An object or an array that `openapiv3` holds as `AnySchema` is what it is, and
-/// the reason that says so is the true one.
+/// An object or an array is no value, and the reason says so where nothing else
+/// is the matter. Where the schema states a keyword that its type does not have,
+/// the reason is that keyword, as it is for a scalar: a list of strings that
+/// states `minLength` is no list of values to be called one.
 #[test]
-fn an_object_or_an_array_is_still_neither_a_value_nor_a_list_of_values() {
+fn an_object_or_an_array_is_structured_unless_it_states_a_keyword_it_does_not_have() {
     for schema in [
         "{ type: object, properties: { a: { type: string } } }",
-        "{ type: object, allOf: [{ $ref: '#/components/schemas/Code' }] }",
-        "{ type: array, items: { type: string }, pattern: x }",
+        "{ type: object, minProperties: 1, properties: { a: { type: string } } }",
+        "{ type: array, items: { type: object } }",
     ] {
         let why = param_of(&loaded(schema)).expect_err(schema);
         assert_eq!(why, Unsupported::Structured, "{schema}");
         assert_eq!(why.to_string(), "neither a value nor a list of values");
+    }
+    for (schema, keyword) in [
+        (
+            "{ type: object, allOf: [{ $ref: '#/components/schemas/Code' }] }",
+            "allOf",
+        ),
+        ("{ type: object, pattern: x }", "pattern"),
+        (
+            "{ type: array, items: { type: string }, pattern: x }",
+            "pattern",
+        ),
+        (
+            "{ type: array, items: { type: string }, minLength: 1 }",
+            "minLength",
+        ),
+        (
+            "{ type: array, items: { type: string }, enum: [[a]] }",
+            "enum",
+        ),
+        (
+            "{ type: array, items: { type: string }, allOf: [{ $ref: '#/components/schemas/Code' }] }",
+            "allOf",
+        ),
+        // The first the schema states, the compositions first.
+        (
+            "{ type: array, items: { type: string }, pattern: x, oneOf: [{ type: string }] }",
+            "oneOf",
+        ),
+    ] {
+        let why = param_of(&loaded(schema)).expect_err(schema);
+        assert!(
+            matches!(&why, Unsupported::Keyword(found) if found == keyword),
+            "{schema}: {why:?}"
+        );
+        assert!(
+            !why.to_string().contains("neither a value"),
+            "{schema}: {why}"
+        );
     }
 }
 
@@ -308,6 +632,19 @@ fn a_composition_names_its_keyword() {
         (
             "{ oneOf: [{ type: string }], properties: { a: { type: string } } }",
             "oneOf",
+        ),
+        // A composition beside another keyword is `AnySchema` with no `type`, and
+        // each of the four is named there.
+        ("{ allOf: [{ type: string }], pattern: x }", "allOf"),
+        ("{ anyOf: [{ type: string }], pattern: x }", "anyOf"),
+        ("{ not: { type: string }, pattern: x }", "not"),
+        (
+            "{ not: { type: string }, anyOf: [{ type: string }], pattern: x }",
+            "anyOf",
+        ),
+        (
+            "{ not: { type: string }, oneOf: [{ type: string }], allOf: [{ type: string }] }",
+            "allOf",
         ),
     ] {
         let why = param_of(&loaded(schema)).expect_err(schema);
@@ -362,6 +699,124 @@ fn a_scalar_that_openapiv3_holds_as_a_type_is_read_as_before() {
     let scalar = param_of(&doc).expect("a scalar");
     assert!(scalar.parse("a").is_ok());
     assert!(scalar.parse("b").is_err());
+}
+
+/// One operation of this test's own: `parameters` is its parameter list, and
+/// `gates` what it says in `x-cli-gates`. Its body is `body`, as the JSON schema.
+fn operation_with(parameters: &str, gates: &str, body: &str) -> String {
+    format!(
+        "openapi: 3.0.3
+info: {{ title: t, version: \"1\" }}
+servers: [{{ url: 'http://localhost:9999' }}]
+paths:
+  /x:
+    post:
+      operationId: op
+      x-cli-writes: true
+      {gates}
+      parameters: [{parameters}]
+      requestBody:
+        content:
+          application/json:
+            schema: {body}
+      responses: {{ '200': {{ description: OK }} }}
+"
+    )
+}
+
+/// The documents of a rule that cannot run on a scalar that `openapiv3` holds as
+/// `AnySchema`, or on a wrapper of one element that a list's items or a JSON body
+/// read through.
+fn rules_that_cannot_run() -> Vec<(&'static str, String)> {
+    let property = |schema: &str| {
+        operation_with(
+            "",
+            "",
+            &format!("{{ type: object, properties: {{ v: {schema} }} }}"),
+        )
+    };
+    let parameter = |schema: &str| {
+        operation_with(
+            &format!("{{ name: v, in: query, schema: {schema} }}"),
+            "",
+            "{ type: object }",
+        )
+    };
+    vec![
+        (
+            "a step of 0 on a parameter",
+            parameter("{ type: integer, minimum: 0.0, multipleOf: 0 }"),
+        ),
+        (
+            "a negative step on a parameter",
+            parameter("{ type: integer, minimum: 0.0, multipleOf: -2 }"),
+        ),
+        (
+            "an `enum` of `null` on a parameter",
+            parameter("{ type: integer, minimum: 0.0, enum: [null] }"),
+        ),
+        (
+            "a step of 0 on a body property",
+            property("{ type: integer, minimum: 0.0, multipleOf: 0 }"),
+        ),
+        (
+            "an `enum` of `null` on a body property",
+            property("{ type: integer, minimum: 0.0, enum: [null] }"),
+        ),
+        (
+            "a step of 0 in the items of a wrapped list",
+            parameter("{ allOf: [{ type: array, items: { type: integer, multipleOf: 0 } }] }"),
+        ),
+        (
+            "a step of 0 on a property of a wrapped body",
+            operation_with(
+                "",
+                "",
+                "{ allOf: [{ type: object, properties: { v: { type: integer, multipleOf: 0 } } }] }",
+            ),
+        ),
+    ]
+}
+
+/// A scalar that `openapiv3` holds as `AnySchema` has a flag, so it is held to
+/// what every flag is held to, and so is a wrapper of one element, which a list's
+/// items and a JSON body read through. A rule that cannot run is refused.
+#[test]
+fn a_scalar_read_from_an_any_schema_is_held_to_the_rules_that_a_flag_runs() {
+    for (label, text) in rules_that_cannot_run() {
+        let refused = Document::load(&text, &[]).expect_err(label);
+        assert!(
+            matches!(&refused, LoadError::Unrunnable { name, .. } if name == "v"),
+            "{label}: {refused:?}"
+        );
+    }
+}
+
+/// The same holds for the names: a property of a wrapped body that is named like a
+/// gate, and a header parameter that no header is named like, once it has a flag.
+#[test]
+fn a_scalar_read_from_an_any_schema_is_held_to_the_names_that_a_flag_has() {
+    let gated = operation_with(
+        "",
+        "x-cli-gates: [force]",
+        "{ allOf: [{ type: object, properties: { force: { type: integer, minimum: 0.0 } } }] }",
+    );
+    let refused = Document::load(&gated, &[]).expect_err("a property named like a gate");
+    assert!(
+        matches!(&refused, LoadError::GateTakenByName { what: "property", name, .. } if name == "force"),
+        "{refused:?}"
+    );
+
+    let header = operation_with(
+        "{ name: 'X V', in: header, schema: { type: integer, minimum: 0.0 } }",
+        "",
+        "{ type: object }",
+    );
+    let refused = Document::load(&header, &[]).expect_err("no header has this name");
+    assert!(
+        matches!(&refused, LoadError::HeaderName { name, .. } if name == "X V"),
+        "{refused:?}"
+    );
 }
 
 // ---------------------------------------------------------------- the wrapper

@@ -890,18 +890,23 @@ the crate follows [Semantic Versioning][semver].
   made `--id` a required flag, wrote `id` into `--json-body-template`, and made
   `id` a required field of the generated type, so a caller had to invent an id
   that the API sets. Now:
-  - A `readOnly` property has no flag, whether or not the schema requires it.
-    It neither sends the body whole nor needs to be a scalar. `--id` is a clap
+  - A `readOnly` property has no flag, whether or not the schema requires it. It
+    neither sends the body whole nor needs to be a scalar. `--id` is a clap
     error, where it was demanded. The property is read-only when its own schema
     says so, when it points with a `$ref` at a schema that says so, and when it
     is an `allOf` of one element (the spelling that keeps a flag beside a
     reference) with the flag on the wrapper or on the schema it wraps.
     `writeOnly` is not read.
   - `--json-body-template` leaves out a required `readOnly` property, at every
-    depth, and the long help names each `readOnly` property of the body's own
-    object, where its flag would have been.
+    depth. The long help names each `readOnly` property of the body's own
+    object, where its flag would have been, and each one that the template
+    leaves out below it, by its path as a `BodyError` spells a place:
+    `address.aid`, `positions[].id`, `[].id` for a body that is a list. The
+    template writes the required properties only, so a `readOnly` property below
+    the body's own object that the document does not require is left out of
+    nothing and is not named.
   - `Body::JsonFields` and `Body::JsonWhole` have the field `read_only`, the
-    names in document order, and `Body::read_only()` answers it for every kind
+    paths in document order, and `Body::read_only()` answers it for every kind
     of body. `Document::MODEL_LAYOUT` is 9. Repair: a `match` that binds every
     field of either variant adds `read_only` or `..`. Run the bless step again
     and commit `model.postcard`: a blob of layout 8 is `DocumentError::Stale`.
@@ -910,16 +915,21 @@ the crate follows [Semantic Versioning][semver].
     writes for an optional field. A request body reaches the schema it names or
     states and every schema those refer to with a `$ref`. A type that only
     responses reach keeps the document's `required`, because there it takes
-    effect. Repair: code that builds such a type writes `Some(id)` or leaves the
-    field out, and code that reads it handles `None`. Run the bless step again
-    and commit `types.rs`. A `required` that lists a property which another
-    member of an `allOf` declares keeps it, and so does a type that only a body
-    behind `#/components/requestBodies/` reaches, because the generator follows
-    neither.
+    effect. A schema that is an `allOf` is one type, so a property that the
+    schema or any member declares read-only comes off the `required` of the
+    schema and of every member stated inline in it, whichever member lists it.
+    Repair: code that builds such a type writes `Some(id)` or leaves the field
+    out, and code that reads it handles `None`. Run the bless step again and
+    commit `types.rs`. Two limits. A member that is a `$ref` keeps its own
+    `required` unless it declares the property read-only itself, because a named
+    schema is one type wherever it is used. And a type that only a body behind
+    `#/components/requestBodies/` reaches keeps the document's `required`,
+    because the generator follows no such body.
   - A `readOnly` property is read for no rule of a flag, so a `multipleOf` of 0
     on one loads, where it was `LoadError::Unrunnable`. A `pattern` that no
-    engine runs on one is still refused, as `LoadError::UnrunnablePattern`, which
-    names the schema, where it was `Unrunnable`, which names the operation.
+    engine runs on one is still refused, as `LoadError::UnrunnablePattern`,
+    which names the schema, where it was `Unrunnable`, which names the
+    operation.
 
   sevdesk-cli reads the same as before at the level of its flags: of its 30 flat
   JSON bodies none has a `readOnly` property, so no flag goes, and 8 of its 46
@@ -930,40 +940,80 @@ the crate follows [Semantic Versioning][semver].
   this crate cannot read names its keyword.** `openapiv3` cannot fit an integer
   with a bound spelled `0.0` or `1e3`, a `string` beside an `allOf`, a `pattern`
   beside an `integer` or an `enum` that lists a value of another type in one of
-  its scalar types, and holds each as `AnySchema`. This crate read every such
-  schema as no scalar. A parameter was then "neither a value nor a list of
-  values", which is false of a number, a required one refused the document under
-  that reason, and a body that held one lost every flag. A list parameter or a
-  body inside an `allOf` of one element met the same, because the list's items,
-  the JSON body and the multipart parts did not unwrap it. Now:
-  - An `AnySchema` whose `type` is a scalar and whose keywords all belong to that
-    type is read as that scalar. `{ type: integer, minimum: 0.0 }` is an integer
-    with a lower bound of 0, and a required parameter of that schema loads.
+  its types, and holds each as `AnySchema`. This crate read every such schema as
+  no scalar. A parameter was then "neither a value nor a list of values", which
+  is false of a number, a required one refused the document under that reason,
+  and a body that held one lost every flag. A list parameter or a body inside an
+  `allOf` of one element met the same, because the list's items, the JSON body
+  and the multipart parts did not unwrap it. Now:
+  - An `AnySchema` whose `type` is a scalar and whose keywords all belong to
+    that type is read as that scalar. `{ type: integer, minimum: 0.0 }` is an
+    integer with a lower bound of 0, and a required parameter of that schema
+    loads.
+  - An integer's bound that `openapiv3` holds as a double is read where the
+    double states exactly the integers it admits. A bound with a fraction is the
+    integer next inside it, whatever `exclusiveMinimum` or `exclusiveMaximum`
+    says: `minimum: 0.5` is at least 1. A `maximum` above every `i64` bounds
+    nothing, and so does a `minimum` below every one, so an unsigned 64-bit id
+    (`minimum: 0`, `maximum: 18446744073709551615`) is an integer of at least 0.
+    A `minimum` above every `i64`, a `maximum` below every one and a whole bound
+    from 2^53 to 2^63, which is the double of more than one integer's text, are
+    refused by their keyword (`Unsupported::Keyword`) and never rounded. A step
+    (`multipleOf`) is read where it is a whole number below 2^53 and refused by
+    its keyword otherwise.
   - A single-element `allOf` is read as the schema it wraps for a list's items,
     a JSON body and a multipart body, as it is for a value.
+  - An object or an array that states a keyword its `type` does not have is
+    `Unsupported::Keyword`, naming the keyword, as a scalar is. A list of
+    strings that states `minLength` was "neither a value nor a list of values".
   - A generated wrapper takes such a parameter as an argument, typed as a bare
-    one is: an integer with a bound spelled `0.0` is `Option<i64>`, and a wrapper
-    over a named schema keeps its type. `Settings::write_to` failed with
+    one is: an integer with a bound spelled `0.0` is `Option<i64>`, an `allOf`
+    of one element over a named schema keeps its type, and a list whose array is
+    a `$ref`, bare or inside a wrapper of one element, is a `Vec` argument of
+    its items' type. `Settings::write_to` failed with
     `GenerateError::Operation`, "only `type:` schemas have a scalar spelling",
-    for a wrapper over a named schema and for the items of a list inside one, and
-    it generates them now. A parameter that had no flag and has one now is a new
-    argument of its wrapper. A multipart body
-    whose `allOf` leads to a reference that does not resolve is
-    `LoadError::Unresolvable`; it was a body with no parts.
+    for a wrapper over a named schema and for the items of a list inside one,
+    and "must declare `items` inline" for a list whose array is a `$ref`, and it
+    generates them now. A parameter that had no flag and has one now is a new
+    argument of its wrapper. Repair: a caller of the typed wrapper passes it,
+    `None` for an optional scalar and an empty `Vec` for a list.
   - Every other shape is `Shape::Unreachable` under a reason that is true of it,
     and a required parameter is refused under the same words. `Unsupported` has
-    two variants more, and it is not `#[non_exhaustive]`: `Keyword(String)` names
-    a composition (`oneOf`, `anyOf`, an `allOf` of more than one schema, `not`), a
-    keyword the `type` does not have, an `enum` that lists a value of another
-    type, a `type` that is none of the six, and an integer's bound or step that
-    is not a whole number below 2^53, which `openapiv3` has already rounded to a
-    double; `Untyped` is a schema with no `type` and no composition. An object or
-    an array stays `Structured`. `Document::MODEL_LAYOUT` is 9. Repair: a `match`
-    over `Unsupported` adds the two arms. A body property of these shapes sends
-    the body whole, as a nested property does.
-  - A document that was refused for such a parameter and loads now is the
-    required integer above. A document that loaded and is refused now is a
-    multipart body whose `allOf` leads nowhere.
+    two variants more, and it is not `#[non_exhaustive]`: `Keyword(String)`
+    names a composition (`oneOf`, `anyOf`, an `allOf` of more than one schema,
+    `not`), a keyword the `type` does not have, an `enum` that lists a value of
+    another type, a `type` that is none of the six, and an integer's bound or
+    step that is refused as above; `Untyped` is a schema with no `type` and no
+    composition. An object or an array whose keywords all belong to it stays
+    `Structured`. `Document::MODEL_LAYOUT` is 9. Repair: a `match` over
+    `Unsupported` adds the two arms. A body property of these shapes sends the
+    body whole, as a nested property does, and the long help names no reason for
+    it: the whole body is read as JSON and held to the generated type.
+  - A document that was refused and loads now is a required parameter of
+    `{ type: integer, minimum: 0.0 }`, of `{ type: integer, minimum: 0.5 }`, or
+    of `{ type: integer, minimum: 0, maximum: 18446744073709551615 }`.
+  - A document that loaded and is refused now. Each holds a scalar or a wrapper
+    that this crate read as no value and reads as one now, so it is held to what
+    a value is held to.
+    - A rule that cannot run, on a scalar that `openapiv3` holds as `AnySchema`,
+      is `LoadError::Unrunnable`, as it is on any scalar that has a flag:
+      `{ type: integer, minimum: 0.0, multipleOf: 0 }` (a step of 0 or less) and
+      `{ type: integer, minimum: 0.0, enum: [null] }` on a parameter or on a
+      property of a JSON body. Repair: an Overlay that corrects the step or the
+      `enum`, or removes it.
+    - The same rule inside an `allOf` of one element, which is unwrapped now:
+      the items of a wrapped list that has `multipleOf: 0`, and a property of a
+      wrapped JSON body that has it. Repair: the same.
+    - A property of a wrapped JSON body that is named like a gate of
+      `x-cli-gates` is `LoadError::GateTakenByName`. Repair: an Overlay that
+      renames the gate, as the refusal says.
+    - A header parameter whose name is no header name (`X V`) is
+      `LoadError::HeaderName` once it has a flag, which a schema such as
+      `{ type: integer, minimum: 0.0 }` gives it. Repair: an Overlay that
+      corrects the name or removes the parameter, as the refusal says.
+    - A multipart body whose `allOf` of one element leads to a reference that
+      does not resolve is `LoadError::Unresolvable`; it was a body with no
+      parts. Repair: an Overlay that corrects the reference.
 
 ### Removed
 

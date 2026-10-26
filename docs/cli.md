@@ -185,7 +185,7 @@ own type rather than the box `DispatchError::Transport` carries.
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
 | a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE`; a property is required exactly when the body and the property both are, unless `--json-body` is given |
 | a property of a JSON body that the schema marks `readOnly` | nothing: the API sets it, so the subcommand's long help names it, and the body is flat or whole without regard to it |
-| any other JSON body — nested, an array, no schema | `--json-body FILE`, plus `--json-body-template` where the document describes a shape |
+| any other JSON body — an array, no schema, or an object with a nested property, a name with no spelling or a schema this CLI does not read as a value | `--json-body FILE`, plus `--json-body-template` where the document describes a shape |
 | a JSON body declared under `application/merge-patch+json`, `application/vnd.api+json` or any other `+json` type that is not a range | the same flags, and the body is sent under that key, not under `application/json` |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
 | any other media type | `--raw-body FILE`, sent verbatim under that media type |
@@ -198,10 +198,16 @@ One nested property is enough to make the whole body `--json-body` only: no
 sibling gets a flag the request builder would then throw away. `contacts create`
 is the case — its `address` is an object, so there is no `--name`, and asking
 for one is a clap error rather than a value silently dropped. A property whose
-*name* has no kebab-case spelling does the same thing for the same reason: what
-the rule turns on is whether a property has a flag, never why it has none, and
+*name* has no kebab-case spelling does the same thing for the same reason, and so
+does a property whose schema is no scalar that this CLI reads: a composition (an
+`allOf` of more than one schema, `oneOf`, `anyOf`, `not`), a keyword that its
+`type` does not have (`pattern` beside `type: integer`), or no `type`. What the
+rule turns on is whether a property has a flag, never why it has none, and
 `--json-body-template` is then where the key that could not be spelled is
-written down.
+written down. The whole body goes through `--json-body`, which reads it as JSON
+and holds it to the generated type, so the property is read as part of the body.
+The help names no reason for it: a parameter that has no flag has nothing else to
+fall back on, and a body has the file.
 
 **A property the API sets has no flag, and it is not asked for.** OpenAPI 3.0.3
 says of a `readOnly` property that it "SHOULD NOT be sent as part of the
@@ -218,9 +224,12 @@ out without it.
 ```
 
 A body that goes whole has a line of its own for it: `` `id` is `readOnly`: the
-API sets it, so the body should go out without it. `` Only the properties of the
-body's own object are named. A `readOnly` property of a nested object is left out
-of `--json-body-template` too, and nothing says so.
+API sets it, so the body should go out without it. `` It names each property of
+the body's own object, and each one that `--json-body-template` leaves out below
+it, by its path as a body error spells a place: `address.aid`, `positions[].id`,
+and `[].id` for a body that is a list. The template writes only the properties
+that the schema requires, so a `readOnly` property below the body's own object
+that the document does not require is left out of nothing and is not named.
 
 A property is `readOnly` when its own schema says so, when it points with a
 `$ref` at a named schema that says so, or when it is an `allOf` of one element
@@ -408,13 +417,23 @@ a bound spelled `0.0` or `1e3` is an integer with that bound, and a `string`,
 `number`, `integer` or `boolean` whose keywords all belong to its type is that
 scalar. The other shapes are named by the keyword that stops them, and the
 reason is true of the schema: `oneOf`, `anyOf`, an `allOf` of more than one
-schema and `not` are named, and so is a keyword the scalar `type` does not have
-(`allOf` or `pattern` beside `type: integer`), an `enum` that lists a value of
-another type, and an integer's bound or step that is not a whole number below
-2^53 (`openapiv3` holds it as a double, and a double states no more). A schema
-that states no `type` and no composition has the reason "stated with no
-`type`". A single `allOf` element is read as the schema it wraps for a list, a
-JSON body and a multipart body, as it is for a value.
+schema and `not` are named, and so is a keyword that the `type` does not have
+(`allOf` or `pattern` beside `type: integer`, `minLength` beside `type: array`),
+an `enum` that lists a value of another type, and an integer's `multipleOf` that
+is not a whole number below 2^53. A schema that states no `type` and no
+composition has the reason "stated with no `type`". A single `allOf` element is
+read as the schema it wraps for a list, a JSON body and a multipart body, as it
+is for a value.
+
+`openapiv3` holds a bound that is no `i64` as a double, and the double is read
+where it states exactly the integers it admits. A bound with a fraction is the
+integer next inside it, whatever `exclusiveMinimum` or `exclusiveMaximum` says:
+`minimum: 0.5` is at least 1. A `maximum` above every `i64` bounds nothing, and
+so does a `minimum` below every one, so an unsigned 64-bit id (`minimum: 0`,
+`maximum: 18446744073709551615`) is an integer of at least 0. A `minimum` above
+every `i64` and a `maximum` below every one are met by no integer of a flag, and
+a whole bound from 2^53 to 2^63 is the double of more than one integer's text, so
+each is named by its keyword and never approximated.
 
 The parameters of an operation are one list. It holds the path item's
 parameters in the order the path item lists them, with a parameter of the

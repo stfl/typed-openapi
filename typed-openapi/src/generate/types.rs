@@ -416,6 +416,10 @@ fn typify_schema(value: Value) -> Result<Schema, serde_json::Error> {
     Ok(schema)
 }
 
+/// Where the named schemas are in the document, and in typify's dialect.
+const COMPONENTS: &str = "#/components/schemas/";
+const DEFINITIONS: &str = "#/definitions/";
+
 /// Takes the property the API sets off the `required` of every type that a
 /// request body reaches.
 ///
@@ -432,7 +436,13 @@ fn set_by_the_api(
 ) {
     let read_only = read_only_schemas(api);
     let reached = reached(api, model, definitions, stated);
-    let mut relax = NotRequired(&read_only);
+    // What a member that is a `$ref` declares is read from the schemas as they
+    // stood before any `required` changed: the change never touches a property.
+    let named: BTreeMap<String, Schema> = definitions.iter().cloned().collect();
+    let mut relax = NotRequired {
+        read_only: &read_only,
+        named: &named,
+    };
     for (_, schema) in definitions
         .iter_mut()
         .filter(|(name, _)| reached.contains(name))
@@ -458,7 +468,7 @@ fn read_only_schemas(api: &OpenAPI) -> BTreeSet<String> {
         .keys()
         .filter(|name| {
             let schema = ReferenceOr::Reference {
-                reference: format!("#/components/schemas/{name}"),
+                reference: format!("{COMPONENTS}{name}"),
             };
             read_only_of(&schema, components).unwrap_or(false)
         })
@@ -509,10 +519,6 @@ fn reached(
     reached
 }
 
-/// Where the named schemas are in the document, and in typify's dialect.
-const COMPONENTS: &str = "#/components/schemas/";
-const DEFINITIONS: &str = "#/definitions/";
-
 /// The names of the schemas that `schema` refers to, at any depth.
 fn refers_to(schema: &Schema) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
@@ -537,23 +543,99 @@ impl Visitor for Refers<'_> {
 }
 
 /// Takes the name of every property that the API sets off the `required` of the
-/// object that lists it, at every depth.
-struct NotRequired<'n>(&'n BTreeSet<String>);
+/// schemas that list it, at every depth.
+///
+/// A schema that is an `allOf` is one type, so a property that any of its members
+/// declares read-only is not required of the type, whichever member lists it in
+/// its `required`. The names come off the schema and off every inline member of
+/// it. A member that is a `$ref` is a named schema and one type wherever it is
+/// used, so its `required` stays as it is: where it declares the property
+/// read-only itself the walk relaxes it, because the body reaches it, and where it
+/// declares the property without `readOnly` and requires it, the composed type
+/// requires it too.
+struct NotRequired<'n> {
+    /// The names of the schemas that say they are read-only.
+    read_only: &'n BTreeSet<String>,
+    /// Every named schema, to read what a member that is a `$ref` declares.
+    named: &'n BTreeMap<String, Schema>,
+}
+
+impl NotRequired<'_> {
+    /// The names of the properties that `schema` declares read-only, itself or in
+    /// a member of its `allOf`. A member that is a `$ref` is read through the
+    /// schema it names, once: `seen` holds the ones read, so a composition that
+    /// leads back to itself ends.
+    fn declared(&self, schema: &SchemaObject, seen: &mut BTreeSet<String>) -> BTreeSet<String> {
+        let own = schema
+            .object
+            .iter()
+            .flat_map(|object| &object.properties)
+            .filter(|(_, property)| says_read_only(property, self.read_only))
+            .map(|(name, _)| name.clone());
+        let members = members(schema)
+            .iter()
+            .filter_map(|member| match member {
+                Schema::Object(member) => Some(member),
+                Schema::Bool(_) => None,
+            })
+            .flat_map(|member| match member.reference.as_deref() {
+                None => self.declared(member, seen),
+                Some(reference) => self.declared_by_name(reference, seen),
+            });
+        own.chain(members).collect()
+    }
+
+    fn declared_by_name(&self, reference: &str, seen: &mut BTreeSet<String>) -> BTreeSet<String> {
+        let Some(name) = reference.strip_prefix(DEFINITIONS) else {
+            return BTreeSet::new();
+        };
+        match self.named.get(name) {
+            Some(Schema::Object(schema)) if seen.insert(name.to_owned()) => {
+                self.declared(schema, seen)
+            }
+            _ => BTreeSet::new(),
+        }
+    }
+}
 
 impl Visitor for NotRequired<'_> {
     fn visit_schema_object(&mut self, schema: &mut SchemaObject) {
-        if let Some(object) = schema.object.as_mut() {
-            let set_by_the_api: Vec<String> = object
-                .properties
-                .iter()
-                .filter(|(_, property)| says_read_only(property, self.0))
-                .map(|(name, _)| name.clone())
-                .collect();
-            for name in &set_by_the_api {
-                object.required.remove(name);
-            }
-        }
+        let set_by_the_api = self.declared(schema, &mut BTreeSet::new());
+        relax(schema, &set_by_the_api);
         schemars::visit::visit_schema_object(self, schema);
+    }
+}
+
+/// The members of a schema's `allOf`, and none where it has no `allOf`.
+fn members(schema: &SchemaObject) -> &[Schema] {
+    schema
+        .subschemas
+        .as_ref()
+        .and_then(|subschemas| subschemas.all_of.as_deref())
+        .unwrap_or_default()
+}
+
+/// Takes `names` off the `required` of the schema and of every member of its
+/// `allOf` that is stated inline, and of theirs in turn. A member that is a `$ref`
+/// holds the reference alone: the `required` of the schema it names is the named
+/// schema's, and stays.
+fn relax(schema: &mut SchemaObject, names: &BTreeSet<String>) {
+    if let Some(object) = schema.object.as_mut() {
+        for name in names {
+            object.required.remove(name);
+        }
+    }
+    let Some(all_of) = schema
+        .subschemas
+        .as_mut()
+        .and_then(|subschemas| subschemas.all_of.as_mut())
+    else {
+        return;
+    };
+    for member in all_of {
+        if let Schema::Object(member) = member {
+            relax(member, names);
+        }
     }
 }
 
@@ -751,7 +833,60 @@ fn as_json_schema(value: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{PLACEHOLDER, owned};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use schemars::schema::Schema;
+    use serde_json::json;
+
+    use super::{NotRequired, PLACEHOLDER, owned};
+
+    /// Named schemas as typify reads them, from the JSON of each.
+    fn named(schemas: Vec<(&str, serde_json::Value)>) -> BTreeMap<String, Schema> {
+        schemas
+            .into_iter()
+            .map(|(name, schema)| {
+                let schema = serde_json::from_value(schema)
+                    .unwrap_or_else(|error| panic!("`{name}` is a schema: {error}"));
+                (name.to_owned(), schema)
+            })
+            .collect()
+    }
+
+    /// Two schemas that name each other through their `allOf` are a document with
+    /// no finite reading, and the members of one are asked once: the reading of
+    /// what they declare ends, and finds what the cycle holds.
+    #[test]
+    fn what_the_members_of_a_composition_declare_is_read_once_through_a_cycle() {
+        let named = named(vec![
+            (
+                "Left",
+                json!({ "allOf": [
+                    { "$ref": "#/definitions/Right" },
+                    { "type": "object",
+                      "properties": { "id": { "type": "integer", "readOnly": true } } }
+                ] }),
+            ),
+            (
+                "Right",
+                json!({ "allOf": [
+                    { "$ref": "#/definitions/Left" },
+                    { "type": "object", "properties": { "name": { "type": "string" } } }
+                ] }),
+            ),
+        ]);
+        let read_only = BTreeSet::new();
+        let reading = NotRequired {
+            read_only: &read_only,
+            named: &named,
+        };
+        let Some(Schema::Object(left)) = named.get("Left") else {
+            panic!("`Left` is an object schema");
+        };
+        assert_eq!(
+            reading.declared(left, &mut BTreeSet::new()),
+            BTreeSet::from(["id".to_owned()])
+        );
+    }
 
     /// Every format the adopter named, as `(format, placeholder, type)`.
     fn read(named: &[(&str, &str)]) -> Vec<(String, String, String)> {

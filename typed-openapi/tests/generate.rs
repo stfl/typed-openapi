@@ -915,6 +915,50 @@ fn a_scalar_read_through_a_wrapper_or_an_any_schema_is_an_argument_of_its_type()
     );
 }
 
+/// A list parameter whose array is named: bare, in a wrapper of one element, and
+/// with items that are named too.
+const NAMED_LISTS: &str = r##"
+openapi: 3.0.3
+info: { title: Lists, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - { name: days, in: query, schema: { $ref: "#/components/schemas/Days" } }
+        - { name: weeks, in: query, schema: { allOf: [{ $ref: "#/components/schemas/Days" }], description: Weeks. } }
+        - { name: codes, in: query, required: true, schema: { $ref: "#/components/schemas/Codes" } }
+        - { name: kinds, in: query, schema: { allOf: [{ $ref: "#/components/schemas/Codes" }] } }
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Days: { type: array, items: { type: string } }
+    Codes: { type: array, items: { $ref: "#/components/schemas/Code" } }
+    Code: { type: string, pattern: "^[A-Z]{3}$" }
+"##;
+
+/// The reduction reads a list through a `$ref`, so the wrapper does too: the
+/// argument is the `Vec` of the items' type, as it is for an array stated inline.
+#[test]
+fn a_list_parameter_whose_array_is_named_is_a_vec_argument() {
+    let dir = out("named-lists");
+    Settings::new(wrote(&dir, "lists.yaml", NAMED_LISTS))
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = read(&dir.join("src/ops.rs"));
+
+    for argument in [
+        "days: Vec<&str>",
+        "weeks: Vec<&str>",
+        "codes: Vec<crate::types::Code>",
+        "kinds: Vec<crate::types::Code>",
+    ] {
+        assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
+    }
+}
+
 /// A CLI and a Rust caller reach one request builder, so a parameter has to
 /// mean the same thing on both roads: a list is a `Vec` argument filled the way
 /// a repeated flag fills it, and a parameter neither can supply is an argument

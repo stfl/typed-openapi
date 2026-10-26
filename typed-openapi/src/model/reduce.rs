@@ -39,7 +39,7 @@ use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
 use crate::scalar::{Items, Scalar, ScalarError};
 use crate::schema::{
-    Fit, RefError, description_of, format_of, is_content_type, is_json, is_media_range,
+    Fit, RefError, Template, description_of, format_of, is_content_type, is_json, is_media_range,
     is_media_type, is_multipart, lists_only_null, read_only_of, resolve, scalar_of, stated,
     template,
 };
@@ -1867,7 +1867,10 @@ struct JsonEntry<'a> {
 ///
 /// A property the API sets (`readOnly`) is no part of the request, so it has no
 /// flag and does not send the body whole, whatever its schema is. The body names
-/// it, for the help to say where its flag went.
+/// it, for the help to say where its flag went. A body that goes whole names the
+/// properties of its own object, each of them, and then the ones its skeleton
+/// leaves out below it ([`Template::read_only`]): both are what the help says to
+/// leave out of the file.
 fn json_body(
     id: &str,
     entry: JsonEntry<'_>,
@@ -1888,12 +1891,13 @@ fn json_body(
             read_only: Vec::new(),
         });
     };
-    let whole = |read_only: Vec<String>| {
+    let whole = |own: Vec<String>| {
+        let Template { text, read_only } = under(template(schema, components), id, BODY)?;
         Ok(Body::JsonWhole {
             media_type: media_type.clone(),
             required,
-            template: under(template(schema, components), id, BODY)?,
-            read_only,
+            template: text,
+            read_only: [own, read_only].concat(),
         })
     };
     let SchemaKind::Type(openapiv3::Type::Object(object)) =
@@ -1990,8 +1994,8 @@ enum Role {
 /// because a rule that cannot run is a fault of the document and not of the
 /// flag it would have been. A nested property sends the body whole, and a
 /// property listed after it states the same rule all the same, so the verdict
-/// cannot depend on which one comes first. A read-only property states none: it
-/// is no part of the request, so no flag could have carried its rules.
+/// cannot depend on which one comes first. A read-only property is read for no
+/// rule: it is no part of the request, so no flag could have carried its rules.
 fn properties_of<'a>(
     object: &'a ObjectType,
     components: &Components,

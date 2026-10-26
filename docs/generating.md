@@ -457,9 +457,9 @@ Three things are worth knowing:
   rather than `schema`, one whose schema is an object or states a keyword this
   crate does not read as a value, one whose name has no kebab-case spelling — is
   an argument on neither, and the wrapper's own
-  documentation says which parameter it does not carry and why. An array must
-  declare its `items` inline: a `$ref` to an array schema is a
-  `GenerateError::Unsupported` naming the parameter.
+  documentation says which parameter it does not carry and why. The array is
+  read the same way, so a list whose array is a `$ref`, bare or in a wrapper of
+  one element, is a `Vec` argument of its items' type.
 - **A property the API sets is not required of a request.** OpenAPI 3.0.3 says
   that the `required` of a `readOnly` property "will take effect on the response
   only". One schema serves a create and a read, so a `required` that lists `id`
@@ -467,14 +467,17 @@ Three things are worth knowing:
   reaches does not require such a property, and the field is an `Option`: the
   schema the body names or states, and every schema those refer to with a `$ref`.
   A type that only responses reach keeps the document's `required`, because there
-  it takes effect, and so does the type of a response that the generated type
-  refuses when it lacks what the API promised. A property is `readOnly` as the
-  command line reads it ([docs/cli.md](cli.md#flags)): marked, behind a `$ref` to
-  a schema that is, or the `allOf` of one element that is. Two limits: a
-  `required` that lists a property which another member of an `allOf` declares
-  keeps it, because the member that lists it does not say what the property is;
-  and a body that is a `$ref` to `#/components/requestBodies/` is not followed, so
-  what only such a body reaches keeps the document's `required`.
+  it takes effect, so the generated type still refuses a response that lacks what
+  the API promised. A property is `readOnly` as the command line reads it
+  ([docs/cli.md](cli.md#flags)): marked, behind a `$ref` to a schema that is, or
+  the `allOf` of one element that is. A schema that is an `allOf` is one type, so
+  a property that the schema or any member declares read-only comes off the
+  `required` of the schema and of every member stated inline in it. Two limits. A
+  member that is a `$ref` is a named schema, one type wherever it is used, so it
+  keeps its own `required` unless it declares the property read-only itself: where
+  it declares the property without `readOnly` and requires it, the composed type
+  requires it too. And a body that is a `$ref` to `#/components/requestBodies/` is
+  not followed, so what only such a body reaches keeps the document's `required`.
 - **A body the document leaves optional is an `Option` argument.** A body with
   `required: true` is an argument of its type: `&T` for a JSON body, `Vec<u8>`
   for one sent verbatim and `Vec<Part>` for a multipart body. A body without it

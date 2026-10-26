@@ -22,7 +22,7 @@ use syn::visit_mut::VisitMut as _;
 use super::GenerateError;
 use super::names::{JsonBody, Names, Site};
 use crate::model::{Body, Shape, declared, entry_of_flag};
-use crate::schema::typed;
+use crate::schema::{stated, typed};
 use crate::{Document, Operation};
 
 /// What one operation contributes to the generated file.
@@ -121,8 +121,8 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                     group: op.group().as_str().to_owned(),
                     command: op.command().as_str().to_owned(),
                     body: json_body_type(op, operation, names)?,
-                    method: wrapper(op, &declared, operation, names)?,
-                    builder_method: builder_wrapper(op, &declared, operation, names)?,
+                    method: wrapper(op, &declared, components, operation, names)?,
+                    builder_method: builder_wrapper(op, &declared, components, operation, names)?,
                 })
             };
             emitted().map_err(|source| GenerateError::Operation {
@@ -329,6 +329,7 @@ fn json_body_type(
 fn wrapper(
     op: &Operation,
     declared: &[&Parameter],
+    components: &Components,
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
@@ -344,7 +345,7 @@ fn wrapper(
         // The delegate beside this one forwards the argument names; a
         // positional call has no use for them.
         names: _,
-    } = signature_of(op, declared, operation, names)?;
+    } = signature_of(op, declared, components, operation, names)?;
     let response = response_type(op, operation, names)?;
     let variant = variant_of(op)?;
     let doc = paragraphs(
@@ -438,6 +439,7 @@ fn gate_note(op: &Operation) -> String {
 fn builder_wrapper(
     op: &Operation,
     declared: &[&Parameter],
+    components: &Components,
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
@@ -447,7 +449,7 @@ fn builder_wrapper(
         args,
         names: arguments,
         ..
-    } = signature_of(op, declared, operation, names)?;
+    } = signature_of(op, declared, components, operation, names)?;
     let response = response_type(op, operation, names)?;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
@@ -555,6 +557,7 @@ impl Signature {
 fn signature_of(
     op: &Operation,
     declared: &[&Parameter],
+    components: &Components,
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<Signature, GenerateError> {
@@ -565,7 +568,7 @@ fn signature_of(
         notes: Vec::new(),
     };
     for param in op.params() {
-        add_param(&mut out, param, declared, names)?;
+        add_param(&mut out, param, declared, components, names)?;
     }
     add_body(&mut out, op, operation, names)?;
     Ok(out)
@@ -687,6 +690,7 @@ fn add_param(
     out: &mut Signature,
     param: &crate::Param,
     declared: &[&Parameter],
+    components: &Components,
     names: &Names,
 ) -> Result<(), GenerateError> {
     let list = match param.shape() {
@@ -717,7 +721,7 @@ fn add_param(
     if list.is_some() {
         // A list parameter is the wire name given once per value, which is the
         // repetition a repeated flag reaches the request builder with.
-        let ty = list_type(param.name(), schema, names)?;
+        let ty = list_type(param.name(), schema, components, names)?;
         out.args.push(quote! { #ident: Vec<#ty> });
         out.builder.push(quote! { .each(#wire, #ident) });
     } else if param.required() {
@@ -760,20 +764,17 @@ fn param_schema<'d>(
 
 /// The Rust spelling of a list parameter's items.
 ///
-/// Only an inline `type: array` has one here, in a wrapper of one element or
-/// out of it. Following a `$ref` to an array schema would mean resolving against
-/// `components`, which this generator does not carry, so the parameter names
-/// itself rather than being guessed at.
+/// The array is read as the reduction reads it ([`stated`]): a `$ref` is followed
+/// and a wrapper of one element is the schema it wraps, so the argument is the
+/// list of the flag, whichever way the document spells the array.
 fn list_type(
     name: &str,
     schema: &ReferenceOr<Schema>,
+    components: &Components,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let ReferenceOr::Item(schema) = wrapped(schema) else {
-        return Err(unsupported(format!(
-            "`{name}` is a list, and a list parameter must declare `items` inline"
-        )));
-    };
+    let schema = stated(schema, components)
+        .map_err(|source| unsupported(format!("`{name}` cannot be followed: {source}")))?;
     let SchemaKind::Type(Type::Array(array)) = &schema.schema_kind else {
         return Err(unsupported(format!(
             "`{name}` is a list that is not an array"
@@ -794,7 +795,7 @@ fn list_type(
 /// argument has the type of the flag. A wrapper of one element is the schema it
 /// wraps, and a scalar that `openapiv3` holds as `AnySchema` has the type it names.
 fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStream, GenerateError> {
-    let schema = wrapped(schema);
+    let schema = unwrap_inline(schema);
     if let Some(name) = ref_name(schema) {
         return names.get(name).cloned();
     }
@@ -872,15 +873,16 @@ fn named_or_stated(
         .ok_or_else(|| unsupported("the schema it states inline has no Rust spelling"))
 }
 
-/// The schema that a wrapper of one element stands for, with no reference
-/// followed.
+/// The schema that a wrapper of one element stands for, unwrapped where it is
+/// stated and with no reference followed.
 ///
 /// A `$ref` erases what is written beside it, so an `allOf` of one element is how
 /// a document keeps a sentence beside a reference, and the reduction reads it as
-/// the schema it wraps. The generator has no `components` to follow a reference
-/// in, and wants the name of a named schema where it stops, so it unwraps the
-/// elements that are stated and leaves the `$ref` for `ref_name`.
-fn wrapped(schema: &ReferenceOr<Schema>) -> &ReferenceOr<Schema> {
+/// the schema it wraps. [`stated`] is that reading and follows the reference too.
+/// A scalar's argument wants the name of a named schema where the reading stops,
+/// so it unwraps the elements that are stated and leaves the `$ref` for
+/// `ref_name`.
+fn unwrap_inline(schema: &ReferenceOr<Schema>) -> &ReferenceOr<Schema> {
     let mut current = schema;
     while let ReferenceOr::Item(item) = current
         && let SchemaKind::AllOf { all_of } = &item.schema_kind

@@ -308,19 +308,80 @@ fn the_body_template_leaves_a_read_only_property_out_at_every_depth() {
         template,
         json!({ "owner": { "name": "" }, "lines": [{ "sku": "" }] })
     );
-    // The body's own object is what the help can name.
-    assert_eq!(read_only, &["id", "stamp"]);
+    // The body's own object comes first, and then what the template leaves out
+    // below it.
+    assert_eq!(read_only, &["id", "stamp", "owner.id", "lines[].number"]);
     let (_, help) = command_of(op);
-    assert!(
-        help.contains("`id` is `readOnly`: the API sets it, so the body should go out without it."),
-        "{help}"
+    for path in ["id", "stamp", "owner.id", "lines[].number"] {
+        assert!(
+            help.contains(&format!(
+                "`{path}` is `readOnly`: the API sets it, so the body should go out without it."
+            )),
+            "{path}: {help}"
+        );
+    }
+}
+
+/// A body that goes whole is a file the operator writes, so the help names every
+/// property the template leaves out, by its path, and not only the ones of the
+/// body's own object. A property that the document does not require is one the
+/// template never writes, so it is left out of nothing and is not named.
+#[test]
+fn the_long_help_names_each_read_only_property_the_template_leaves_out_by_its_path() {
+    let doc = loaded(&creating(
+        "{ $ref: '#/components/schemas/Order' }",
+        "    Order:
+      type: object
+      required: [name, address, positions]
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        address:
+          type: object
+          required: [aid, city]
+          properties:
+            aid: { type: integer, readOnly: true }
+            city: { type: string }
+            stamp: { type: string, readOnly: true }
+        positions:
+          type: array
+          items:
+            type: object
+            required: [id, qty]
+            properties:
+              id: { type: integer, readOnly: true }
+              qty: { type: integer }
+",
+    ));
+    let op = operation(&doc, "createPet");
+    assert_eq!(
+        op.body().read_only(),
+        &["id", "address.aid", "positions[].id"]
     );
-    assert!(
-        help.contains(
-            "`stamp` is `readOnly`: the API sets it, so the body should go out without it."
-        ),
-        "{help}"
-    );
+    let (_, help) = command_of(op);
+    for path in ["id", "address.aid", "positions[].id"] {
+        assert!(
+            help.contains(&format!("`{path}` is `readOnly`")),
+            "{path}: {help}"
+        );
+    }
+    assert!(!help.contains("address.stamp"), "{help}");
+
+    // A body that is a list names the properties of its items.
+    let doc = loaded(&creating(
+        "{ type: array, items: { $ref: '#/components/schemas/Line' } }",
+        "    Line:
+      type: object
+      required: [id, sku]
+      properties:
+        id: { type: integer, readOnly: true }
+        sku: { type: string }
+",
+    ));
+    let op = operation(&doc, "createPet");
+    assert_eq!(op.body().read_only(), &["[].id"]);
+    let (_, help) = command_of(op);
+    assert!(help.contains("`[].id` is `readOnly`"), "{help}");
 }
 
 /// A property no flag could carry is read for no rule. A step of 0 is the one
@@ -647,4 +708,176 @@ fn an_inline_request_body_stops_requiring_it_and_an_inline_response_does_not() {
     assert_eq!(field_type(response, "id"), "i64", "{response}");
     let stamp = struct_of(&types, "Stamp");
     assert_eq!(field_type(stamp, "id"), "i64", "{stamp}");
+}
+
+/// The two operations of the compositions below: one takes `schema` as its
+/// request body, and the other returns `response` as its response.
+fn composed(request: &str, response: &str, schemas: &str) -> String {
+    document(
+        &format!(
+            "  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        content:
+          application/json:
+            schema: {request}
+      responses: {{ '201': {{ description: Created }} }}
+  /pets/{{id}}:
+    get:
+      operationId: getPet
+      parameters:
+        - {{ name: id, in: path, required: true, schema: {{ type: integer }} }}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {response}
+"
+        ),
+        schemas,
+    )
+}
+
+/// The compositions of one schema that `required` is split over: the members that
+/// list `id` and the ones that declare it read-only.
+fn compositions() -> [(&'static str, &'static str); 4] {
+    [
+        (
+            "an inline member that requires it beside an inline member that declares it",
+            "    Pet:
+      allOf:
+        - { required: [id, name] }
+        - type: object
+          properties:
+            id: { type: integer, readOnly: true }
+            name: { type: string }
+",
+        ),
+        (
+            "the schema itself requires it, and a member declares it",
+            "    Pet:
+      required: [id, name]
+      allOf:
+        - type: object
+          properties:
+            id: { type: integer, readOnly: true }
+            name: { type: string }
+",
+        ),
+        (
+            "an inline member that requires it beside a member that is a `$ref`",
+            "    Pet:
+      allOf:
+        - { required: [id, name] }
+        - { $ref: '#/components/schemas/Base' }
+    Base:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+",
+        ),
+        (
+            "an inline member that requires it beside a wrapper of a `$ref` that declares it",
+            "    Pet:
+      allOf:
+        - { required: [id, name] }
+        - allOf:
+            - { $ref: '#/components/schemas/Base' }
+    Base:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+",
+        ),
+    ]
+}
+
+/// A schema that is an `allOf` is one type, so a property that any member declares
+/// read-only is not required of it, wherever a member lists it in `required`: in
+/// the schema itself, in a member stated inline, and in a member that is a
+/// `$ref`. A property that no member declares read-only stays required.
+#[test]
+fn a_required_in_one_member_does_not_keep_a_property_that_another_member_declares_read_only() {
+    for (label, schemas) in compositions() {
+        let doc = composed(
+            "{ $ref: '#/components/schemas/Pet' }",
+            "{ type: string }",
+            schemas,
+        );
+        let types = types_of("readonly-allof-request", &doc);
+        let pet = struct_of(&types, "Pet");
+        assert!(optional(field_type(pet, "id")), "{label}:\n{pet}");
+        assert_eq!(
+            field_type(pet, "name"),
+            "::std::string::String",
+            "{label}:\n{pet}"
+        );
+    }
+}
+
+/// The same composition that only a response reaches is the document's: `required`
+/// takes effect on a response, so `id` stays required there.
+#[test]
+fn the_composition_only_a_response_reaches_keeps_its_required() {
+    let doc = composed(
+        "{ type: object, properties: { name: { type: string } } }",
+        "{ $ref: '#/components/schemas/Pet' }",
+        "    Pet:
+      allOf:
+        - { required: [id, name] }
+        - type: object
+          properties:
+            id: { type: integer, readOnly: true }
+            name: { type: string }
+",
+    );
+    let types = types_of("readonly-allof-response", &doc);
+    let pet = struct_of(&types, "Pet");
+    assert_eq!(field_type(pet, "id"), "i64", "{pet}");
+}
+
+/// A member that is a `$ref` is a named schema, and one type wherever it is used:
+/// its own `required` stays unless it declares the property read-only itself. The
+/// composition that another member makes read-only does not reach into it. That is
+/// the one limit left, and a named schema that a request names alone shows it.
+#[test]
+fn a_member_that_is_a_reference_keeps_its_own_required_unless_it_declares_the_property_read_only() {
+    let doc = document(
+        "  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Pet' }
+      responses: { '201': { description: Created } }
+  /tags:
+    post:
+      operationId: createTag
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Tag' }
+      responses: { '201': { description: Created } }
+",
+        "    Pet:
+      allOf:
+        - { $ref: '#/components/schemas/Tag' }
+        - type: object
+          properties:
+            id: { type: integer, readOnly: true }
+    Tag:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer }
+",
+    );
+    let types = types_of("readonly-allof-named", &doc);
+    let tag = struct_of(&types, "Tag");
+    assert_eq!(field_type(tag, "id"), "i64", "{tag}");
 }
