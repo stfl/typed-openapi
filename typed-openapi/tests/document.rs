@@ -151,8 +151,9 @@ fn every_body_is_exactly_one_flag_set() {
 
 /// A `required` list is what a body must carry *if the caller sends one*, and
 /// whether the caller must send one at all is the other `required` — the
-/// boolean on the request body. A property is demanded on the command line only
-/// where both say so.
+/// boolean on the request body. The model keeps the two apart, a property's own
+/// on the field and the body's on the body, and a property is demanded on the
+/// command line only where both say so.
 ///
 /// Reading the list alone would put the two statements at odds: the document
 /// says the body may be left out, and the subcommand would then refuse to run
@@ -191,21 +192,26 @@ fn a_property_is_demanded_only_where_the_document_demands_the_body_holding_it() 
 "#;
 
     let doc = Document::load(&synthetic(EITHER_WAY), &[]).expect("a document");
-    let demanded = |id: &str| {
-        let Body::JsonFields { fields, .. } = doc.get(id).expect(id).body() else {
+    // The body's `required`, then the property's: each as the document states it.
+    let stated = |id: &str| {
+        let Body::JsonFields {
+            required, fields, ..
+        } = doc.get(id).expect(id).body()
+        else {
             panic!("`{id}` states a flat body");
         };
-        fields
+        let label = fields
             .iter()
             .find(|field| field.name() == "label")
-            .expect("the body declares `label`")
-            .required()
+            .expect("the body declares `label`");
+        (*required, label.required())
     };
-    assert!(
-        !demanded("createNote"),
-        "a body the document does not ask for demands a property of itself"
+    assert_eq!(
+        stated("createNote"),
+        (false, true),
+        "a body the document does not ask for loses the property's own `required`"
     );
-    assert!(demanded("createMemo"), "and one it does ask for does");
+    assert_eq!(stated("createMemo"), (true, true));
 
     // The same two answers where a user meets them: a subcommand whose body is
     // optional runs with nothing typed at all.

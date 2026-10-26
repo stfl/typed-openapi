@@ -566,31 +566,116 @@ fn signature_of(
     for param in op.params() {
         add_param(&mut out, param, declared, names)?;
     }
-    match op.body() {
-        Body::None => {}
-        Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
-            let ty = body_type(op, media_type, operation, names)?;
-            let body = out.argument(&format_ident!("body"), "body", "is the request body");
-            out.args.push(quote! { #body: &#ty });
-            out.builder.push(quote! { .json(crate::to_json(#body)?) });
+    add_body(&mut out, op, operation, names)?;
+    Ok(out)
+}
+
+/// What the body adds to a wrapper: an argument and the `Values` call that
+/// fills it.
+///
+/// A body the document requires is an argument of its type. A body it leaves
+/// optional is an `Option` of that type, and `None` adds no body to the request,
+/// which is what the command line sends when its operator gives none. A Rust
+/// caller and a command line reach one request builder, so a body that one can
+/// leave out is a body that the other can.
+fn add_body(
+    out: &mut Signature,
+    op: &Operation,
+    operation: &openapiv3::Operation,
+    names: &Names,
+) -> Result<(), GenerateError> {
+    let (required, argument) = match op.body() {
+        Body::None => return Ok(()),
+        Body::JsonFields {
+            media_type,
+            required,
+            ..
         }
-        Body::Opaque { media_type, .. } => {
-            let body = out.argument(&format_ident!("body"), "body", "is the request body");
+        | Body::JsonWhole {
+            media_type,
+            required,
+            ..
+        } => {
+            let ty = body_type(op, media_type, operation, names)?;
+            let name = out.argument(&format_ident!("body"), "body", "is the request body");
+            let argument = BodyArgument {
+                ty: quote! { &#ty },
+                call: quote! { .json(crate::to_json(#name)?) },
+                payload: quote! {
+                    #name.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json)
+                },
+                name,
+            };
+            (*required, argument)
+        }
+        Body::Opaque {
+            media_type,
+            required,
+        } => {
+            let name = out.argument(&format_ident!("body"), "body", "is the request body");
             out.notes.push(format!(
-                "`{body}` is sent verbatim under the document's own `{media_type}`, \
+                "`{name}` is sent verbatim under the document's own `{media_type}`, \
                  which this crate does not assemble."
             ));
-            out.args.push(quote! { #body: Vec<u8> });
-            out.builder.push(quote! { .raw(#body) });
+            let argument = BodyArgument {
+                ty: quote! { Vec<u8> },
+                call: quote! { .raw(#name) },
+                payload: quote! { #name.map(typed_openapi::Payload::Raw) },
+                name,
+            };
+            (*required, argument)
         }
-        Body::Multipart { names, .. } => {
-            let parts = out.argument(&format_ident!("parts"), "parts", "carries the body's parts");
-            out.notes.push(multipart_note(&parts, names));
-            out.args.push(quote! { #parts: Vec<Part> });
-            out.builder.push(quote! { .multipart(#parts) });
+        Body::Multipart { names, required } => {
+            let name = out.argument(&format_ident!("parts"), "parts", "carries the body's parts");
+            out.notes.push(multipart_note(&name, names));
+            let argument = BodyArgument {
+                ty: quote! { Vec<Part> },
+                call: quote! { .multipart(#name) },
+                payload: quote! { #name.map(typed_openapi::Payload::Multipart) },
+                name,
+            };
+            (*required, argument)
+        }
+    };
+    argument.add_to(out, required);
+    Ok(())
+}
+
+/// The argument of a body, before the document says whether it is required.
+struct BodyArgument {
+    name: Ident,
+    /// The type of the argument when the body is required.
+    ty: TokenStream,
+    /// The `Values` call that a required body is passed to.
+    call: TokenStream,
+    /// The `Option<Payload>` that an optional body is turned into.
+    payload: TokenStream,
+}
+
+impl BodyArgument {
+    fn add_to(self, out: &mut Signature, required: bool) {
+        let Self {
+            name,
+            ty,
+            call,
+            payload,
+        } = self;
+        if required {
+            out.args.push(quote! { #name: #ty });
+            out.builder.push(call);
+        } else {
+            out.args.push(quote! { #name: Option<#ty> });
+            out.builder.push(quote! { .body(#payload) });
+            out.notes.push(optional_note(&name));
         }
     }
-    Ok(out)
+}
+
+/// What a wrapper's documentation says about the argument of a body the
+/// document leaves optional, because `None` could be read as an empty body, and
+/// no body is what it sends.
+fn optional_note(argument: &Ident) -> String {
+    format!("`{argument}` is optional: with `None` the request carries no body.")
 }
 
 /// What one parameter adds to a wrapper: an argument and the `Values` call that

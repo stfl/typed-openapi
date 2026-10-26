@@ -1,5 +1,5 @@
 {
-  "model_layout": 7,
+  "model_layout": 8,
   "traces": {
     "Bounds<f64>": {
       "Bounds": {
@@ -56,6 +56,9 @@
               "STRUCT": [
                 {
                   "media_type": "STR"
+                },
+                {
+                  "required": "BOOL"
                 },
                 {
                   "fields": {

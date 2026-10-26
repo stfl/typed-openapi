@@ -672,7 +672,7 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
             .map(|path| read_bytes(path).map(Payload::Raw))
             .transpose(),
         Body::Multipart { .. } => parts(matches).map(|parts| parts.map(Payload::Multipart)),
-        Body::JsonFields { fields, .. } => Ok(Some(Payload::Json(assembled(fields, matches)?))),
+        Body::JsonFields { fields, .. } => Ok(assembled(fields, matches)?.map(Payload::Json)),
     }
 }
 
@@ -683,13 +683,20 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
 /// A flag beside one is refused, because dropping it would send a body the
 /// operator believes they changed. With no flag beside it, the file goes on
 /// as it is: whether a list is a body is for the check of the adopter's types.
-fn assembled(fields: &[Field], matches: &ArgMatches) -> Result<serde_json::Value, ArgError> {
+///
+/// With no file and no flag the operator gave no body, and the answer is `None`
+/// whether or not the document requires one: a body that is required and
+/// missing is [`Invocation::new`]'s to report. The empty object is a body that
+/// the operator asks for, with a `--json-body` file that holds it.
+///
+/// [`Invocation::new`]: crate::Invocation::new
+fn assembled(
+    fields: &[Field],
+    matches: &ArgMatches,
+) -> Result<Option<serde_json::Value>, ArgError> {
     let Some(path) = one::<PathBuf>(matches, JSON_BODY)? else {
-        return Ok(serde_json::Value::Object(edited(
-            serde_json::Map::new(),
-            fields,
-            matches,
-        )?));
+        let object = edited(serde_json::Map::new(), fields, matches)?;
+        return Ok((!object.is_empty()).then_some(serde_json::Value::Object(object)));
     };
     let body = read_json(path)?;
     let serde_json::Value::Object(object) = body else {
@@ -702,9 +709,11 @@ fn assembled(fields: &[Field], matches: &ArgMatches) -> Result<serde_json::Value
                 });
             }
         }
-        return Ok(body);
+        return Ok(Some(body));
     };
-    Ok(serde_json::Value::Object(edited(object, fields, matches)?))
+    Ok(Some(serde_json::Value::Object(edited(
+        object, fields, matches,
+    )?)))
 }
 
 /// `object` with each per-field flag the operator gave set in it.
@@ -890,7 +899,9 @@ fn wire(renamed: bool, name: &str) -> Option<String> {
 fn body_args(cmd: Command, body: &Body) -> Command {
     match body {
         Body::None => cmd,
-        Body::JsonFields { fields, .. } => json_field_args(cmd, fields),
+        Body::JsonFields {
+            fields, required, ..
+        } => json_field_args(cmd, fields, *required),
         // The flag that asks what this body looks like is `apart`'s to add,
         // once every other flag of the subcommand is there for it to name.
         Body::JsonWhole { required, .. } => cmd.arg(file_arg(JSON_BODY, *required).help(
@@ -910,7 +921,12 @@ fn body_args(cmd: Command, body: &Body) -> Command {
 
 /// One flag per scalar property, and `--json-body` as the base document they
 /// are merged over.
-fn json_field_args(cmd: Command, fields: &[Field]) -> Command {
+///
+/// A property is demanded when the body is required and the property is, and a
+/// file stands for it. A body that is optional demands no flag, because the
+/// operator who types none has given no body, and a body with a flag in it is
+/// held to its type where the adopter's check reads it.
+fn json_field_args(cmd: Command, fields: &[Field], body_required: bool) -> Command {
     let mut cmd = cmd;
     for field in fields {
         let mut arg = value_arg(
@@ -923,7 +939,7 @@ fn json_field_args(cmd: Command, fields: &[Field]) -> Command {
             ),
             false,
         );
-        if field.required() {
+        if body_required && field.required() {
             arg = arg.required_unless_present(JSON_BODY);
         }
         cmd = cmd.arg(arg);

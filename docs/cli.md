@@ -183,7 +183,7 @@ own type rather than the box `DispatchError::Transport` carries.
 | a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is; none for the three headers [OpenAPI ignores](#headers-openapi-says-to-ignore) |
 | the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode`, and held to the array's `minItems`, `maxItems` and `uniqueItems` |
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
-| a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE` |
+| a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE`; a property is required exactly when the body and the property both are, unless `--json-body` is given |
 | any other JSON body — nested, an array, no schema | `--json-body FILE`, plus `--json-body-template` where the document describes a shape |
 | a JSON body declared under `application/merge-patch+json`, `application/vnd.api+json` or any other `+json` type that is not a range | the same flags, and the body is sent under that key, not under `application/json` |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
@@ -203,6 +203,21 @@ the rule turns on is whether a property has a flag, never why it has none, and
 written down.
 
 `-` as the path to `--json-body` or `--raw-body` reads stdin.
+
+**A body the document leaves optional is left out when nothing fills it in.**
+`requestBody` has its own `required`, apart from the `required` list of its
+schema, which says what a body holds once there is one. A required body that
+nobody supplies is refused, and an optional one is not in the request: no
+`--json-body`, `--raw-body`, `--file` or `--field`, and for a flat JSON body no
+property flag either. No empty object is sent in its place, because the schema
+may require a property that the empty object lacks. To send the empty object,
+give `--json-body` a file that holds `{}`, or `-` with `{}` on stdin. The flag of
+a required property is demanded only of a required body, and `--json-body` stands
+for it. Once a flag or a file makes a body of an optional one, what the schema
+requires of it is the check of the adopter's type, as it is for a file. The typed
+call is the same: a required body that is missing is `ValueError::MissingBody`
+from `Invocation::new`, and an optional one may be left out
+([docs/generating.md](generating.md#requirements-and-limits)).
 
 **A value may start with a dash.** The word after a flag that takes a number or
 a text is its value, whatever the word looks like, and the flag's parser judges

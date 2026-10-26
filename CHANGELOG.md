@@ -835,6 +835,53 @@ the crate follows [Semantic Versioning][semver].
   sevdesk-cli declares no such key: its 82 body keys are `application/json`,
   `multipart/form-data` and `application/x-www-form-urlencoded`. Repair: an
   Overlay that replaces the key with the type the server reads.
+- **An optional body can be left out, and a required one cannot.** The model
+  lost whether `requestBody` is required for a flat JSON body: it folded the
+  body's `required` into each property's, so an optional flat body and a required
+  one in which no property is required read the same. Each road then did what
+  the model allowed. The command line sent `{}` for an optional flat body when
+  nobody gave a flag, and the type of the body refused it when the schema
+  required a property. `Invocation::new` accepted a required flat body that was
+  missing, so `Plan::build` with the commit made a `POST` with no body. And the
+  wrapper took every body as a required argument. Now the model carries it for
+  every kind of body, and both roads read it:
+  - `Body::JsonFields` has the field `required`, beside `media_type` and
+    `fields`, as the other three kinds of body have. `Field::required()` is
+    whether the schema's `required` list names the property, whether or not the
+    body is required; it was true only where both were. `Document::MODEL_LAYOUT`
+    is 8. Repair: a `match` that binds every field of `JsonFields` adds
+    `required` or `..`, and a caller that read `Field::required()` as "the flag
+    is demanded" asks it of a body that is required as well. Run the bless step
+    again and commit `model.postcard`: a blob of layout 7 is
+    `DocumentError::Stale`.
+  - `Invocation::new` refuses a required body that is missing, of every kind, as
+    `ValueError::MissingBody`. It was a flat JSON body that got through. Repair:
+    give the body with `Values::json`.
+  - The command line sends no body for a flat body when no flag and no
+    `--json-body` is given, and no `Content-Type` with it; it sent `{}` for every
+    flat body. An optional body then goes out with no body, and a required one is
+    refused as `ValueError::MissingBody`, as it is for the other kinds of body.
+    Repair: `--json-body` with a file that holds `{}`, or `-` with `{}` on stdin,
+    sends the empty object. The flag of a required property is demanded of a
+    required body only, and `--json-body` stands for it, as before.
+  - A generated wrapper takes a body the document leaves optional as an `Option`:
+    `Option<&T>` for a JSON body, `Option<Vec<u8>>` for one sent verbatim and
+    `Option<Vec<Part>>` for a multipart body, and `None` sends the request with
+    no body. A body with `required: true` is the argument it was. So the
+    generated code of a document whose bodies are all required does not change,
+    and the toy's `ops.rs` is the same file. Repair: pass `Some(&body)`, or
+    `None`. With the `builder` feature the setter is `.body(&body)` as before, and
+    may be left out.
+
+  sevdesk-cli met this. 66 of its wrappers take an `Option` body: 20 flat JSON
+  bodies, 42 JSON bodies that go whole, 3 sent verbatim and 1 multipart, and each
+  call of them needs `Some(..)` or `None`. The 20 flat ones are the optional ones
+  of its 30 flat JSON bodies. 8 of the 20 have no required property, so the
+  command line sent `{}` to its server for them, and sends no body now. `addContactAddress` is the
+  one flat body there that is required and has no required property, so it is
+  refused when no flag and no `--json-body` is given. Its `client.yaml` removes
+  the optional body of `createInvoiceReminder` because the generator made it a
+  required argument. That correction can go.
 
 ### Removed
 
