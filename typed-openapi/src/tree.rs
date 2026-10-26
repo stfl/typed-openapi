@@ -672,9 +672,7 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
             .map(|path| read_bytes(path).map(Payload::Raw))
             .transpose(),
         Body::Multipart { .. } => parts(matches).map(|parts| parts.map(Payload::Multipart)),
-        Body::JsonFields {
-            fields, required, ..
-        } => Ok(assembled(fields, *required, matches)?.map(Payload::Json)),
+        Body::JsonFields { fields, .. } => Ok(assembled(fields, matches)?.map(Payload::Json)),
     }
 }
 
@@ -686,18 +684,19 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
 /// operator believes they changed. With no flag beside it, the file goes on
 /// as it is: whether a list is a body is for the check of the adopter's types.
 ///
-/// With no file and no flag the operator gave no body. A body the document
-/// requires is then the empty object, which is a body whatever the schema asks
-/// of one that is sent, and a body the document leaves optional is `None`: an
-/// empty object sent for it would be a body that the schema may refuse.
+/// With no file and no flag the operator gave no body, and the answer is `None`
+/// whether or not the document requires one: a body that is required and
+/// missing is [`Invocation::new`]'s to report. The empty object is a body that
+/// the operator asks for, with a `--json-body` file that holds it.
+///
+/// [`Invocation::new`]: crate::Invocation::new
 fn assembled(
     fields: &[Field],
-    required: bool,
     matches: &ArgMatches,
 ) -> Result<Option<serde_json::Value>, ArgError> {
     let Some(path) = one::<PathBuf>(matches, JSON_BODY)? else {
         let object = edited(serde_json::Map::new(), fields, matches)?;
-        return Ok((required || !object.is_empty()).then_some(serde_json::Value::Object(object)));
+        return Ok((!object.is_empty()).then_some(serde_json::Value::Object(object)));
     };
     let body = read_json(path)?;
     let serde_json::Value::Object(object) = body else {

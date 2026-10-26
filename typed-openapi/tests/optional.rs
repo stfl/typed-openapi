@@ -3,9 +3,10 @@
 //! Whether a body is required travels in the model, and both roads read it. A
 //! required body that is missing is refused by `Invocation::new`, and an optional
 //! body that nobody filled in is not in the request at all. The documents are the
-//! input of the probes of SEV-249 behind F-18 (`A7/docs/optbody.yaml`, and
-//! `A2/wire` `nobody` over the toy fixtures), in `tests/fixtures/optional.yaml`.
-//! A case that refuses a body asserts the variant beside the words.
+//! input of the probes of SEV-249 behind F-18. `A7/docs/optbody.yaml` is
+//! `createReminder` in `tests/fixtures/optional.yaml`, and `A2/wire` `nobody` runs
+//! over the toy fixtures `toy.yaml`, `corrections.yaml` and `cli.yaml`. A case that
+//! refuses a body asserts the variant and the words beside it.
 
 #![expect(
     clippy::expect_used,
@@ -15,7 +16,7 @@
 use clap::error::ErrorKind;
 use serde_json::json;
 use typed_openapi::model::{Body, Operation};
-use typed_openapi::tree::{self, Asked, Outcome};
+use typed_openapi::tree::{self, Asked, DispatchError, Outcome};
 use typed_openapi::{
     Answers, Document, Invocation, JSON_BODY, Plan, PlanError, Recorder, ValueError, Values,
 };
@@ -49,8 +50,13 @@ fn parsed(doc: &Document, id: &str, args: &[&str]) -> Result<clap::ArgMatches, c
         .try_get_matches_from(line)
 }
 
-/// The one request that the command line `args` sends for `id`, confirmed.
-fn sent(doc: &Document, id: &str, args: &[&str]) -> http::Request<Vec<u8>> {
+/// What the command line `args` makes of `id`, confirmed, and the client that
+/// holds what went out.
+fn dispatched(
+    doc: &Document,
+    id: &str,
+    args: &[&str],
+) -> (Result<Outcome, DispatchError>, Recorder) {
     let mut args = args.to_vec();
     args.push("--commit");
     let matches = parsed(doc, id, &args).expect("clap accepts the command line");
@@ -60,9 +66,14 @@ fn sent(doc: &Document, id: &str, args: &[&str]) -> http::Request<Vec<u8>> {
         panic!("this command line runs the operation");
     };
     let client = Recorder::new();
-    let outcome = selection
-        .send(&client, doc.base())
-        .expect("the request is sent");
+    let outcome = selection.send(&client, doc.base());
+    (outcome, client)
+}
+
+/// The one request that the command line `args` sends for `id`, confirmed.
+fn sent(doc: &Document, id: &str, args: &[&str]) -> http::Request<Vec<u8>> {
+    let (outcome, client) = dispatched(doc, id, args);
+    let outcome = outcome.expect("the request is sent");
     assert!(matches!(outcome, Outcome::Sent(_)), "the commit sends it");
     let mut sent = client.take();
     assert_eq!(sent.len(), 1, "exactly one request went out");
@@ -138,8 +149,8 @@ fn whether_a_body_is_required_travels_in_the_model_for_every_kind() {
 }
 
 /// A property says whether its own schema requires it, whatever the body says,
-/// so a property of an optional body is still the one that a body must hold once
-/// one is sent, and the body that is required does not make a property so.
+/// so a property of an optional body is one that a body must hold once one is
+/// sent, and the body that is required does not make a property so.
 #[test]
 fn a_property_keeps_its_own_required_apart_from_the_body() {
     let doc = optional();
@@ -173,9 +184,10 @@ fn a_property_keeps_its_own_required_apart_from_the_body() {
 
 // ------------------------------------------------------------ the command line
 
-/// `A7/docs/optbody.yaml`: `reminders create --invoice 7 --commit` sent `{}`,
-/// which the generated type refuses for want of `note`. An operator who gives no
-/// field and no file has given no body, and the request carries none.
+/// `A7/docs/optbody.yaml`: `reminders create --invoice 7 --commit` carries no
+/// body, because `{}` is refused by the generated type for want of `note`. An
+/// operator who gives no field and no file has given no body, and the request
+/// carries none.
 #[test]
 fn an_optional_flat_body_with_no_flag_sends_no_body() {
     let doc = optional();
@@ -201,7 +213,7 @@ fn an_optional_flat_body_of_optional_properties_sends_no_body_with_no_flag() {
     assert!(carries_no_body(&sent(&doc, "createNote", &[])));
 }
 
-/// A flag, or a file, is a body, and a body goes out as it always did.
+/// A flag, or a file, is a body, and it goes out under `application/json`.
 #[test]
 fn an_optional_flat_body_is_sent_once_a_flag_or_a_file_gives_one() {
     let doc = optional();
@@ -253,13 +265,39 @@ fn an_optional_raw_or_multipart_body_is_left_out() {
     assert!(carries_no_body(&sent(&doc, "uploadScan", &[])));
 }
 
-/// A required flat body in which no property is required is still a body, so the
-/// command line sends the empty object when nobody gave a field: `{}` is a body
-/// the document admits, and a request without one is not.
+/// A required flat body in which no property is required is refused when
+/// nothing is typed, as the typed road refuses it: an operator who gives no field
+/// and no file has given no body, whether or not the document requires one.
 #[test]
-fn a_required_flat_body_with_no_required_property_goes_out_as_the_empty_object() {
+fn a_required_flat_body_with_no_required_property_is_refused_when_nothing_is_typed() {
     let doc = optional();
-    let request = sent(&doc, "createLabel", &[]);
+    let (outcome, client) = dispatched(&doc, "createLabel", &[]);
+
+    let refused = outcome.expect_err("the body is required");
+    assert!(
+        matches!(
+            &refused,
+            DispatchError::Plan(PlanError::Value(ValueError::MissingBody { op }))
+                if op == "createLabel"
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "createLabel: a request body is required"
+    );
+    assert!(client.take().is_empty(), "no request went out");
+}
+
+/// The empty object is a body the operator asks for with `--json-body`, and a
+/// file that holds it is sent as it is.
+#[test]
+fn a_file_that_holds_the_empty_object_sends_it_for_a_required_flat_body() {
+    let doc = optional();
+    let file = scratch("label.json", "{}");
+    let path = file.to_str().expect("the path is text");
+    let request = sent(&doc, "createLabel", &[&format!("--{JSON_BODY}"), path]);
+    std::fs::remove_file(&file).expect("removing the scratch file");
 
     assert_eq!(json_of(&request), json!({}));
     assert_eq!(request.headers()["content-type"], "application/json");
@@ -274,6 +312,7 @@ fn a_property_is_demanded_only_of_a_body_that_is_required() {
 
     let refused = parsed(&doc, "createTag", &["--commit"]).expect_err("`--name` is demanded");
     assert_eq!(refused.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(refused.to_string().contains("--name"), "{refused}");
 
     let file = scratch("tag.json", r#"{ "name": "work" }"#);
     let path = file.to_str().expect("the path is text");
@@ -297,8 +336,8 @@ fn a_property_is_demanded_only_of_a_body_that_is_required() {
 // ------------------------------------------------------------------ typed road
 
 /// `A2/wire` `nobody` over the toy fixtures: `createVoucher` takes a required
-/// flat body, and `Invocation::new` accepted values with none, so `Plan::build`
-/// with the commit made a `POST` with no body.
+/// flat body, and `Invocation::new` refuses values with none, so `Plan::build`
+/// with the commit makes no `POST`.
 #[test]
 fn a_required_flat_body_that_is_missing_is_refused() {
     let doc = toy();
@@ -314,13 +353,18 @@ fn a_required_flat_body_that_is_missing_is_refused() {
         "createVoucher: a request body is required"
     );
 
-    let planned = Plan::build(op, doc.base(), Values::new(), &Answers::new().commit());
+    let planned = Plan::build(op, doc.base(), Values::new(), &Answers::new().commit())
+        .expect_err("the body is required");
     assert!(
         matches!(
-            planned,
-            Err(PlanError::Value(ValueError::MissingBody { .. }))
+            &planned,
+            PlanError::Value(ValueError::MissingBody { op }) if op == "createVoucher"
         ),
         "{planned:?}"
+    );
+    assert_eq!(
+        planned.to_string(),
+        "createVoucher: a request body is required"
     );
 }
 
@@ -337,6 +381,10 @@ fn a_required_flat_body_with_no_required_property_is_refused_when_missing() {
         assert!(
             matches!(&refused, ValueError::MissingBody { op } if op == id),
             "{id}: {refused:?}"
+        );
+        assert_eq!(
+            refused.to_string(),
+            format!("{id}: a request body is required")
         );
     }
 

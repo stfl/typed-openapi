@@ -274,10 +274,64 @@ fn the_argument_is_typed_by_the_entry_the_body_is_sent_under() {
     );
 }
 
+/// What the wrapper of one body that the document leaves optional shows.
+struct OptionalBody {
+    what: &'static str,
+    wrapper: &'static str,
+    argument: &'static str,
+    builder: &'static str,
+    note: &'static str,
+}
+
+/// One body of each kind in `tests/fixtures/optional.yaml` that the document
+/// leaves optional: a flat body with a required property, a flat body with none,
+/// a body that goes whole, a body sent verbatim and a multipart body.
+fn optional_bodies() -> [OptionalBody; 5] {
+    let json = ".body(body.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json))";
+    let note = "`body` is optional: with `None` the request carries no body.";
+    [
+        OptionalBody {
+            what: "a flat body with a required property",
+            wrapper: "create_reminder",
+            argument: "body:Option<&crate::types::CreateReminderBody>",
+            builder: json,
+            note,
+        },
+        OptionalBody {
+            what: "a flat body with no required property",
+            wrapper: "create_note",
+            argument: "body:Option<&crate::types::CreateNoteBody>",
+            builder: json,
+            note,
+        },
+        OptionalBody {
+            what: "a body that goes whole",
+            wrapper: "create_export",
+            argument: "body:Option<&crate::types::CreateExportBody>",
+            builder: json,
+            note,
+        },
+        OptionalBody {
+            what: "a body sent verbatim",
+            wrapper: "upload_attachment",
+            argument: "body:Option<Vec<u8>>",
+            builder: ".body(body.map(typed_openapi::Payload::Raw))",
+            note,
+        },
+        OptionalBody {
+            what: "a multipart body",
+            wrapper: "upload_scan",
+            argument: "parts:Option<Vec<Part>>",
+            builder: ".body(parts.map(typed_openapi::Payload::Multipart))",
+            note: "`parts` is optional: with `None` the request carries no body.",
+        },
+    ]
+}
+
 /// A body the document leaves optional is an `Option` argument, of every kind,
 /// and `None` adds no body to the request: the command line sends none when its
 /// operator gives none, and the wrapper is the same call. `A7/docs/optbody.yaml`
-/// is `createReminder`, whose wrapper took a body that it had to be given.
+/// is `createReminder`, whose wrapper takes `Option<&T>`.
 #[test]
 fn an_optional_body_is_an_option_argument_that_none_leaves_out() {
     let dir = out("optional-bodies");
@@ -285,76 +339,93 @@ fn an_optional_body_is_an_option_argument_that_none_leaves_out() {
         .write_to(&dir)
         .expect("the document generates");
     let ops = read(&dir.join("src/ops.rs"));
-    let dense = dense(&ops);
 
-    for (what, argument, builder) in [
-        (
-            "a flat body",
-            "body:Option<&crate::types::CreateReminderBody>",
-            ".body(body.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json))",
-        ),
-        (
-            "a body that goes whole",
-            "body:Option<&crate::types::CreateExportBody>",
-            ".body(body.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json))",
-        ),
-        (
-            "a body sent verbatim",
-            "body:Option<Vec<u8>>",
-            ".body(body.map(typed_openapi::Payload::Raw))",
-        ),
-        (
-            "a multipart body",
-            "parts:Option<Vec<Part>>",
-            ".body(parts.map(typed_openapi::Payload::Multipart))",
-        ),
-    ] {
-        assert!(dense.contains(argument), "{what} is not optional:\n{ops}");
+    for case in optional_bodies() {
+        let text = wrapper(&ops, case.wrapper);
+        let dense = dense(&text);
+        let what = case.what;
         assert!(
-            dense.contains(builder),
-            "{what} is not left out by `None`:\n{ops}"
+            dense.contains(case.argument),
+            "{what} is not optional:\n{text}"
+        );
+        assert!(
+            dense.contains(case.builder),
+            "{what} is not left out by `None`:\n{text}"
+        );
+        assert!(
+            text.contains(case.note),
+            "the wrapper of {what} does not say what `None` sends:\n{text}"
         );
     }
-    assert!(
-        ops.contains("`body` is optional: with `None` the request carries no body."),
-        "the wrapper does not say what `None` sends:\n{ops}"
-    );
 }
 
-/// A body the document requires stays the argument it was, so no signature of an
-/// adoption whose bodies are all required changes: the toy's are, and so is the
-/// fixture's `createLabel`, in which no property is.
+/// A body the document requires is a plain argument, and its wrapper says
+/// nothing of `None`: no signature of an adoption whose bodies are all required
+/// has an `Option` in it. The toy's are, and so is the fixture's `createLabel`,
+/// in which no property is required.
 #[test]
-fn a_required_body_is_still_a_plain_argument() {
+fn a_required_body_is_a_plain_argument() {
     let dir = out("required-bodies");
     layered().write_to(&dir).expect("the fixtures generate");
-    let toy = dense(&read(&dir.join("src/ops.rs")));
-    for (what, argument, builder) in [
-        (
-            "a flat body",
-            "body:&crate::types::Voucher",
-            ".json(crate::to_json(body)?)",
-        ),
-        ("a body sent verbatim", "body:Vec<u8>", ".raw(body)"),
-        ("a multipart body", "parts:Vec<Part>", ".multipart(parts)"),
-    ] {
-        assert!(toy.contains(argument), "{what} is not required");
-        assert!(toy.contains(builder), "{what} is not sent as it was");
-    }
-
+    let toy = read(&dir.join("src/ops.rs"));
     let dir = out("required-flat-body");
     Settings::new(OPTIONAL)
         .write_to(&dir)
         .expect("the document generates");
-    let ops = dense(&read(&dir.join("src/ops.rs")));
-    assert!(
-        ops.contains("body:&crate::types::CreateLabelBody"),
-        "a required flat body with no required property is optional"
-    );
-    assert!(
-        ops.contains("body:&crate::types::CreateTagBody"),
-        "a required flat body is optional"
-    );
+    let optional = read(&dir.join("src/ops.rs"));
+
+    for (what, ops, wrapper_name, argument, builder) in [
+        (
+            "a flat body",
+            &toy,
+            "create_voucher",
+            "body:&crate::types::Voucher",
+            ".json(crate::to_json(body)?)",
+        ),
+        (
+            "a body sent verbatim",
+            &toy,
+            "upload_document",
+            "body:Vec<u8>",
+            ".raw(body)",
+        ),
+        (
+            "a multipart body",
+            &toy,
+            "upload_document_multipart",
+            "parts:Vec<Part>",
+            ".multipart(parts)",
+        ),
+        (
+            "a flat body with no required property",
+            &optional,
+            "create_label",
+            "body:&crate::types::CreateLabelBody",
+            ".json(crate::to_json(body)?)",
+        ),
+        (
+            "a flat body with a required property",
+            &optional,
+            "create_tag",
+            "body:&crate::types::CreateTagBody",
+            ".json(crate::to_json(body)?)",
+        ),
+    ] {
+        let text = wrapper(ops, wrapper_name);
+        let dense = dense(&text);
+        assert!(
+            dense.contains(argument),
+            "{what} is not a plain argument:\n{text}"
+        );
+        assert!(
+            dense.contains(builder),
+            "{what} is not passed to its own `Values` call:\n{text}"
+        );
+        assert!(
+            !text.contains("is optional"),
+            "the wrapper of {what} calls it optional:\n{text}"
+        );
+    }
 }
 
 /// A response is read for its type by the rule that reads a `+json` suffix, and
@@ -2165,6 +2236,26 @@ fn item(source: &str, opens: &str) -> String {
         .collect();
     assert!(!lines.is_empty(), "`{opens}` is not in:\n{source}");
     lines.join("\n")
+}
+
+/// One wrapper of a generated `ops.rs`, from the documentation above its
+/// signature to the closing brace of its body.
+fn wrapper(ops: &str, name: &str) -> String {
+    let signature = format!("    pub fn {name}(");
+    let lines: Vec<&str> = ops.lines().collect();
+    let head = lines
+        .iter()
+        .position(|line| line.starts_with(&signature))
+        .unwrap_or_else(|| panic!("`{name}` is not in:\n{ops}"));
+    let from = lines[..head]
+        .iter()
+        .rposition(|line| *line == "    /**")
+        .unwrap_or(head);
+    let to = lines[head..]
+        .iter()
+        .position(|line| *line == "    }")
+        .unwrap_or_else(|| panic!("`{name}` has no closing brace in:\n{ops}"));
+    lines[from..=head + to].join("\n")
 }
 
 /// The fixture's `createLedgerEntry` describes its request body where it uses

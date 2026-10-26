@@ -463,8 +463,8 @@ Three things are worth knowing:
   is `Option<&T>`, `Option<Vec<u8>>` or `Option<Vec<Part>>`, and `None` sends the
   request with no body and no `Content-Type`, as the command line does when its
   operator gives no flag and no file. A `Some` goes out as the body it holds. The
-  wrapper's own documentation says which. With the `builder` feature the body is
-  a setter that may be left out.
+  wrapper of an optional body says so in its documentation. With the `builder`
+  feature the body is a setter that may be left out.
 - **Two values that reduce to one Rust word get one argument each.** A document
   may name a parameter `self` and another `Self`, or `ref` in the path and `Ref`
   in the query; a function signature binds each name once, so the later of the

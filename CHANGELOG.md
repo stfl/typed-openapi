@@ -857,11 +857,13 @@ the crate follows [Semantic Versioning][semver].
   - `Invocation::new` refuses a required body that is missing, of every kind, as
     `ValueError::MissingBody`. It was a flat JSON body that got through. Repair:
     give the body with `Values::json`.
-  - The command line sends no body for an optional flat body when no flag and no
-    `--json-body` is given, and no `Content-Type` with it. A required flat body
-    in which no property is required still goes out as `{}`. The flag of a
-    required property is demanded of a required body only, and `--json-body`
-    stands for it, as before.
+  - The command line sends no body for a flat body when no flag and no
+    `--json-body` is given, and no `Content-Type` with it; it sent `{}` for every
+    flat body. An optional body then goes out with no body, and a required one is
+    refused as `ValueError::MissingBody`, as it is for the other kinds of body.
+    Repair: `--json-body` with a file that holds `{}`, or `-` with `{}` on stdin,
+    sends the empty object. The flag of a required property is demanded of a
+    required body only, and `--json-body` stands for it, as before.
   - A generated wrapper takes a body the document leaves optional as an `Option`:
     `Option<&T>` for a JSON body, `Option<Vec<u8>>` for one sent verbatim and
     `Option<Vec<Part>>` for a multipart body, and `None` sends the request with
@@ -871,9 +873,15 @@ the crate follows [Semantic Versioning][semver].
     `None`. With the `builder` feature the setter is `.body(&body)` as before, and
     may be left out.
 
-  sevdesk-cli met this: 20 of its 30 flat JSON bodies are optional, and its
-  `client.yaml` removes the optional body of `createInvoiceReminder` because the
-  generator made it a required argument. That correction can go.
+  sevdesk-cli met this. 66 of its wrappers take an `Option` body: 20 flat JSON
+  bodies, 42 JSON bodies that go whole, 3 sent verbatim and 1 multipart, and each
+  call of them needs `Some(..)` or `None`. The 20 flat ones are the optional ones
+  of its 30 flat JSON bodies. 8 of the 20 have no required property, so the
+  command line sent `{}` to its server for them, and sends no body now. `addContactAddress` is the
+  one flat body there that is required and has no required property, so it is
+  refused when no flag and no `--json-body` is given. Its `client.yaml` removes
+  the optional body of `createInvoiceReminder` because the generator made it a
+  required argument. That correction can go.
 
 ### Removed
 

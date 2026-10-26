@@ -584,8 +584,8 @@ fn add_body(
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<(), GenerateError> {
-    match op.body() {
-        Body::None => {}
+    let (required, argument) = match op.body() {
+        Body::None => return Ok(()),
         Body::JsonFields {
             media_type,
             required,
@@ -597,52 +597,78 @@ fn add_body(
             ..
         } => {
             let ty = body_type(op, media_type, operation, names)?;
-            let body = out.argument(&format_ident!("body"), "body", "is the request body");
-            if *required {
-                out.args.push(quote! { #body: &#ty });
-                out.builder.push(quote! { .json(crate::to_json(#body)?) });
-            } else {
-                out.args.push(quote! { #body: Option<&#ty> });
-                out.builder.push(quote! {
-                    .body(#body.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json))
-                });
-                out.notes.push(optional_note(&body));
-            }
+            let name = out.argument(&format_ident!("body"), "body", "is the request body");
+            let argument = BodyArgument {
+                ty: quote! { &#ty },
+                call: quote! { .json(crate::to_json(#name)?) },
+                payload: quote! {
+                    #name.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json)
+                },
+                name,
+            };
+            (*required, argument)
         }
         Body::Opaque {
             media_type,
             required,
         } => {
-            let body = out.argument(&format_ident!("body"), "body", "is the request body");
+            let name = out.argument(&format_ident!("body"), "body", "is the request body");
             out.notes.push(format!(
-                "`{body}` is sent verbatim under the document's own `{media_type}`, \
+                "`{name}` is sent verbatim under the document's own `{media_type}`, \
                  which this crate does not assemble."
             ));
-            if *required {
-                out.args.push(quote! { #body: Vec<u8> });
-                out.builder.push(quote! { .raw(#body) });
-            } else {
-                out.args.push(quote! { #body: Option<Vec<u8>> });
-                out.builder
-                    .push(quote! { .body(#body.map(typed_openapi::Payload::Raw)) });
-                out.notes.push(optional_note(&body));
-            }
+            let argument = BodyArgument {
+                ty: quote! { Vec<u8> },
+                call: quote! { .raw(#name) },
+                payload: quote! { #name.map(typed_openapi::Payload::Raw) },
+                name,
+            };
+            (*required, argument)
         }
         Body::Multipart { names, required } => {
-            let parts = out.argument(&format_ident!("parts"), "parts", "carries the body's parts");
-            out.notes.push(multipart_note(&parts, names));
-            if *required {
-                out.args.push(quote! { #parts: Vec<Part> });
-                out.builder.push(quote! { .multipart(#parts) });
-            } else {
-                out.args.push(quote! { #parts: Option<Vec<Part>> });
-                out.builder
-                    .push(quote! { .body(#parts.map(typed_openapi::Payload::Multipart)) });
-                out.notes.push(optional_note(&parts));
-            }
+            let name = out.argument(&format_ident!("parts"), "parts", "carries the body's parts");
+            out.notes.push(multipart_note(&name, names));
+            let argument = BodyArgument {
+                ty: quote! { Vec<Part> },
+                call: quote! { .multipart(#name) },
+                payload: quote! { #name.map(typed_openapi::Payload::Multipart) },
+                name,
+            };
+            (*required, argument)
+        }
+    };
+    argument.add_to(out, required);
+    Ok(())
+}
+
+/// The argument of a body, before the document says whether it is required.
+struct BodyArgument {
+    name: Ident,
+    /// The type of the argument when the body is required.
+    ty: TokenStream,
+    /// The `Values` call that a required body is passed to.
+    call: TokenStream,
+    /// The `Option<Payload>` that an optional body is turned into.
+    payload: TokenStream,
+}
+
+impl BodyArgument {
+    fn add_to(self, out: &mut Signature, required: bool) {
+        let Self {
+            name,
+            ty,
+            call,
+            payload,
+        } = self;
+        if required {
+            out.args.push(quote! { #name: #ty });
+            out.builder.push(call);
+        } else {
+            out.args.push(quote! { #name: Option<#ty> });
+            out.builder.push(quote! { .body(#payload) });
+            out.notes.push(optional_note(&name));
         }
     }
-    Ok(())
 }
 
 /// What a wrapper's documentation says about the argument of a body the
