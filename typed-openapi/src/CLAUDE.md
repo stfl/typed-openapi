@@ -555,15 +555,24 @@ schema's.
 What has a flag decides which flags move, and what a command line sends. A flag
 goes to the first claimant, the parameters in the order of the list and then the
 properties of the body, so a value that gains a flag takes it from a later
-parameter or property, which becomes `--param-<name>` or `--body-<name>`. A body
-that gains a flat shape loses its template, and a body that gains a template
-gains `--json-body-template`. A value that gains a flag is asked its rules and
-its name, so a document that loaded can be refused (`Unrunnable`,
+parameter or property, which becomes `--param-<name>` or `--body-<name>`, and a
+value that loses its flag (a `readOnly` property) gives it to a later one. A
+body that gains a flat shape loses its template, and a body that gains a
+template gains `--json-body-template`. A body is flat when each property has a
+flag or is `readOnly`, so a body goes flat when its wrapper is read, when a
+scalar that `openapiv3` holds as `AnySchema` gains a flag, and when a `readOnly`
+property stops sending it whole. A value that gains a flag is asked its rules
+and its name, so a document that loaded can be refused (`Unrunnable`,
 `Unresolvable`, `HeaderName`, `GateTakenByName`, `CommitTakenByName`), and the
 rules of a property of a JSON body are asked whether or not its body goes whole.
-A change to what `stated`, `scalar_of`, `array_of` or `json_body` read lists all
-of these in the CHANGELOG, each with its repair, because they are what an
-adopter sees of it.
+`fields_of` claims the properties of a body one at a time in document order and
+stops at the first that sends the body whole, so the name of a property is asked
+up to that one, in a flat body and in a body that goes whole, and a change to
+what sends a body whole moves which names are asked: a property that had a flag
+all along is refused for its name once an earlier property stops sending the
+body whole. A change to what `stated`, `scalar_of`, `array_of`, `read_only_of` or
+`json_body` read, or to what `fields_of` stops at, lists all of these in the
+CHANGELOG, each with its repair, because they are what an adopter sees of it.
 
 Every flag a user types passes `names::spelled`, which is why a body property
 spelled `*` sends its body whole rather than claiming a flag called `""`. The

@@ -1934,6 +1934,12 @@ fn json_body(
 /// disclosure: the template `--json-body-template` prints carries the key, where
 /// a flag called `""` names it nowhere. A property the API sets is carried by no
 /// request, so it has no flag and decides nothing.
+///
+/// The properties claim their flags in document order. A property listed before
+/// the one that sends the body whole has claimed its flag by then, and so has
+/// been asked its name: a name that consent is given by refuses the document
+/// whether or not the body goes whole, and a property listed after that one is
+/// not asked.
 fn fields_of(
     id: &str,
     object: &ObjectType,

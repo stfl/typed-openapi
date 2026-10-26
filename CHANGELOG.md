@@ -897,6 +897,22 @@ the crate follows [Semantic Versioning][semver].
     is an `allOf` of one element (the spelling that keeps a flag beside a
     reference) with the flag on the wrapper or on the schema it wraps.
     `writeOnly` is not read.
+  - A body that went whole only for a `readOnly` property is flat now: a
+    `readOnly` property that is nested, that is a list, or whose name has no
+    spelling (`*`) no longer sends the body whole. It has a flag for each of its
+    other properties, `--json-body` as a base document that the flags merge over,
+    and no `--json-body-template`; it was `Body::JsonWhole`, which takes the file
+    whole and has the template. `{ type: object, required: [name], properties:
+    { meta: { type: object, readOnly: true }, name: { type: string } } }` had the
+    template and has `--name`. The repair is the one of every body that is flat
+    now, in the entry on scalars below.
+  - The flag of a `readOnly` property goes to a later property with the same
+    spelling. In `{ fooBar: { type: string, readOnly: true }, foo-bar: { type:
+    string } }`, `--foo-bar` set `fooBar` and `--body-foo-bar` set `foo-bar`;
+    `--foo-bar` sets `foo-bar` now, and `--body-foo-bar` is a clap error. The same
+    command line sends another body. Repair: a command line drops the flag that
+    set the `readOnly` property, which the API sets, and names the other property
+    with `--foo-bar`.
   - `--json-body-template` leaves out a `readOnly` property, one that the schema
     requires and one that an `example` carries. An `example` is the template as
     it stands, but it is walked beside its schema through an object and a list
@@ -964,17 +980,20 @@ the crate follows [Semantic Versioning][semver].
   its types, and holds each as `AnySchema`. This crate read every such schema as
   no scalar. A parameter was then "neither a value nor a list of values", which
   is false of a number, a required one refused the document under that reason,
-  and a body that held one lost every flag. A list parameter, a JSON body and a
-  multipart body that is an `allOf` of one element were not read through it
-  either, because the reading of a list's array, of a JSON body and of the parts
-  of a multipart body did not unwrap it. The items of a list were unwrapped.
+  and a body that held one as a property went whole: it had the template and no
+  flag. A list parameter, a JSON body and a multipart body that is an `allOf` of
+  one element were not read through it either, because the reading of a list's
+  array, of a JSON body and of the parts of a multipart body did not unwrap it.
+  The items of a list were unwrapped.
   Now:
   - An `AnySchema` whose `type` is a scalar and whose keywords all belong to
     that type is read as that scalar. `{ type: integer, minimum: 0.0 }` is an
     integer with a lower bound of 0, and a required parameter of that schema
-    loads. The template of a body writes such a value as the empty value of its
-    type (`0`), where it wrote `null`. A body that is the value has the template
-    `0`, where it had none, so its operation has `--json-body-template`.
+    loads. The template of a body that still goes whole writes such a value as
+    the empty value of its type (`0`), where it wrote `null`. A body that is the
+    value has the template `0`, where it had none, so its operation has
+    `--json-body-template`. A body that has such a value as a property is flat
+    now, as the bullet on flat bodies below says.
   - An integer's bound that `openapiv3` holds as a double is read where the
     double names the integers the bound admits. A bound with a fraction is the
     integer next inside it, whatever `exclusiveMinimum` or `exclusiveMaximum`
@@ -1007,12 +1026,31 @@ the crate follows [Semantic Versioning][semver].
   - A single-element `allOf` is read as the schema it wraps for a list
     parameter, a JSON body and a multipart body, as it is for a value and for
     the items of a list. A list parameter inside one had no flag, and has the
-    flag of the list it wraps. A JSON body that is one is flat when the object
-    it wraps is: it has a flag for each scalar property, `--json-body` as a base
-    document that the flags merge over, and no `--json-body-template`. It was
-    `Body::JsonWhole`, which takes the file whole and has the template. A
-    multipart body that is one names its parts on the long help, where it named
-    none.
+    flag of the list it wraps. A JSON body that is one is read as the object it
+    wraps, and is flat when that object is (the next bullet). A multipart body
+    that is one names its parts in the help of `--file` and in the doc of its
+    generated wrapper (`The document declares: file, note.`), where it named
+    none. Run the bless step again and commit `ops.rs`.
+  - A JSON body that went whole is flat now when each of its properties has a
+    flag or is `readOnly`. Such a body has a flag for each property that is not
+    `readOnly`, `--json-body` as a base document that the flags merge over, and
+    no `--json-body-template`. It was `Body::JsonWhole`, which takes the file
+    whole and has the template. Three kinds of body are flat now:
+    1. A body that is an `allOf` of one element around such an object.
+    2. A body with a property that is a scalar that `openapiv3` holds as
+       `AnySchema`, bare or inside an `allOf` of one element.
+       `{ type: object, required: [n, s], properties: { n: { type: integer,
+       minimum: 0.0 }, s: { type: string } } }` had the template
+       `{"n": null, "s": ""}` and has `--n` and `--s`.
+    3. A body that went whole only for a `readOnly` property (the entry above).
+
+    A body with a nested property, a list or a name with no spelling still goes
+    whole. Repair: a command line that passes `--json-body` is read as before,
+    because the file is the base document and, with no flag beside it, the body
+    goes out as the file has it. A command line that passes
+    `--json-body-template` to such an operation is a clap error, and the long
+    help lists the flag of each property. Code that reads `Body::JsonWhole` for
+    such an operation finds `Body::JsonFields`.
   - An object or an array that states a keyword its `type` does not have is
     `Unsupported::Keyword`, naming the keyword, as a scalar is. A list of
     strings that states `minLength` was "neither a value nor a list of values".
@@ -1077,23 +1115,34 @@ the crate follows [Semantic Versioning][semver].
        list parameter and as a JSON body.
     4. A property of a JSON body that is an `allOf` of one element, whatever its
        scalar is (`{ type: integer }`, `{ type: string }`, `{ $ref: Code }`),
-       because the body is flat now.
+       because the wrapper is read now.
 
     The rules of a property of a JSON body are read whether or not its body goes
     whole, so a property of the first or the fourth kind is held to its rules in
-    a body that has a nested property too. Its name is asked only where the body
-    is flat, because a body that goes whole has no flag.
+    a body that has a nested property too. Its name is asked in document order.
+    The flags of a body are claimed one property at a time, and the claim stops
+    at the first property that sends the body whole: a nested one, a list, a
+    schema that is no scalar this crate reads, or a name with no spelling. A
+    `readOnly` property is skipped. So a property that has a flag is asked its
+    name when every property listed before it has a flag or is `readOnly`, also
+    in a body that goes whole, and it is not asked when a property that sends the
+    body whole is listed before it. The claim reaches further than it did: a
+    property of the first kind has a flag and a `readOnly` property sends
+    nothing whole, so neither stops it, and a body that is an `allOf` of one
+    element is read. A property that had a flag all along, `{ type: integer }`
+    among them, is asked its name now where an earlier property stopped the
+    claim before.
     - A rule that cannot run is `LoadError::Unrunnable`, as it is on any scalar
-      that has a flag: a step of 0 or less, an `enum` that lists `null` alone and
-      a `pattern` that no engine reads. The scalar of the first kind is, for
-      example, `{ type: integer, minimum: 0.0, multipleOf: 0 }` or
+      that has a flag: a step of 0 or less and an `enum` that lists `null`
+      alone. The scalar of the first kind is, for example,
+      `{ type: integer, minimum: 0.0, multipleOf: 0 }` or
       `{ type: integer, minimum: 0.0, enum: [null] }`, as a parameter, as the
       items of a list parameter and as a property of a JSON body. The items of a
       list parameter of the second and third kind are, for example,
       `{ type: integer, multipleOf: 0 }`. A property of the fourth kind is, for
       example, `{ type: integer, multipleOf: 0 }` or
       `{ type: string, enum: [null] }`. Repair: an Overlay that corrects the
-      step, the `enum` or the `pattern`, or removes it.
+      step or the `enum`, or removes it.
     - A `$ref` that leads nowhere is `LoadError::Unresolvable`. It is refused in
       the items of a list parameter of the second and third kind, bare or inside
       an `allOf` of one element. It is refused in a JSON body that is an array
@@ -1109,18 +1158,30 @@ the crate follows [Semantic Versioning][semver].
       Repair: an Overlay that corrects the reference.
     - A parameter or a property that has a flag takes its name from the
       namespace of its operation. A query or header parameter of the first,
-      second or third kind is held to it, and so is a property of the first kind
-      and a property of the fourth kind, in a body that is flat. A property that
-      is a list has no flag, so it is not refused.
+      second or third kind is held to it. A property of a JSON body is held to
+      it where it is asked its name (above), whatever its own scalar is. A
+      property that is a list has no flag, so it is not refused.
       - One named like a gate of `x-cli-gates` is `LoadError::GateTakenByName`:
         a query parameter `force` on a write with `x-cli-gates: [force]`, bare
         or inside an `allOf` of one element, and a property `force` of a JSON
-        body, also `{ type: integer }` in a body that is an `allOf` of one
-        element. Repair: an Overlay that renames the gate in `x-cli-gates`, as
-        the refusal says.
+        body. The properties of a body that loaded and are refused are:
+        - `force: { type: integer, minimum: 0.0 }` before a nested property
+          (`n: { type: object }`) or before one whose name has no spelling
+          (`'*': { type: string }`);
+        - `force: { type: integer }` after a property of the first kind
+          (`a: { type: integer, minimum: 0.0 }`), or after a nested property
+          that is `readOnly` (`a: { type: object, readOnly: true }`);
+        - `force` with any scalar in a body that is an `allOf` of one element,
+          also before a nested property:
+          `{ allOf: [{ type: object, properties: { force: { type: integer },
+          n: { type: object } } }] }`.
+
+        Repair: an Overlay that renames the gate in `x-cli-gates`, as the
+        refusal says.
       - One named like the confirmation of a write (`commit`) is
-        `LoadError::CommitTakenByName`. Repair: confirm with another word,
-        `Loading::commit` where the document is loaded or
+        `LoadError::CommitTakenByName`, for the same parameters and the same
+        bodies with `commit` in place of `force`. Repair: confirm with another
+        word, `Loading::commit` where the document is loaded or
         `Settings::commit_word` where a bless step generates, as the refusal
         says.
       - A header parameter whose name is no header name (`X V`) is
