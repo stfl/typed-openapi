@@ -1260,9 +1260,13 @@ the crate follows [Semantic Versioning][semver].
 - **`client::to_json` takes the operation, and a generated wrapper passes it.**
   It is `to_json(op, &value)` where it was `to_json(&value)`, so that the
   `Encode` error of a body that does not serialise names whose body it was. The
-  generated `ops.rs` calls `crate::to_json("createVoucher", body)?`. Repair: run
-  the bless step again and commit `ops.rs`; a wrapper of your own passes its
-  `operationId`.
+  generated `ops.rs` calls `crate::to_json("createVoucher", body)?`, so an
+  `ops.rs` written by an earlier release does not compile. Repair: run the bless
+  step again and commit `ops.rs`; a wrapper of your own passes its
+  `operationId`. A bless step that links the crate it writes, as sevdesk-cli's
+  `xtask` does for its `surface` task, does not build until that crate compiles,
+  so the first bless after the upgrade is run with that dependency cut for the
+  one run.
 - **`client::Error::Status` no longer prints the server's body.** It printed
   `<status>: <body>`, and the body can hold a credential or a client's data,
   where an error is printed to a log. It prints

@@ -230,7 +230,7 @@ fn a_planned_read_is_sent_without_an_answer() {
 }
 
 /// A named gate is asked of a typed call as it is of a command line, beside the
-/// confirmation and never instead of it.
+/// confirmation and not in its place.
 #[test]
 fn a_planned_call_is_held_by_every_gate_its_operation_names() {
     let client = client();
