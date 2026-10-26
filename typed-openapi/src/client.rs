@@ -2,7 +2,12 @@
 //!
 //! [`Client`] holds one document and hands out [`Call`]s by `operationId`.
 //! `Call` knows what its answer deserialises into, so sending is one expression
-//! in each flavour and a caller never names a response type twice.
+//! in each flavour and a caller never names a response type twice. A caller that
+//! wants the gate a command line has plans the call with its [`Answers`] and
+//! sends what it planned ([`Call::plan`], [`Planned`]).
+//!
+//! Every error a call raises when it runs names the operation, and none of them
+//! prints what the server sent: the body is a field of the error.
 //!
 //! Nothing here is specific to one API. A generated wrapper is the typed door
 //! onto [`Client::call`]: it names the `operationId`, names the arguments under
@@ -20,6 +25,7 @@ use thiserror::Error;
 
 use crate::body_reader::{Read, Step, read};
 use crate::model::{Document, DocumentError, DriftError, Operation};
+use crate::plan::{Answers, Plan};
 use crate::request::{Invocation, RequestError, ValueError, without_userinfo_and_query};
 use crate::transport::{AsyncClient, HttpRequest, HttpResponse, SyncClient};
 use crate::values::Values;
@@ -59,25 +65,44 @@ pub enum Error {
     #[error(transparent)]
     Request(#[from] RequestError),
     /// A typed argument that does not serialise to JSON, so there is no body to
-    /// send. The cause is `serde_json`'s reading of the value.
-    #[error("cannot serialise the request body")]
-    Encode(#[source] serde_json::Error),
+    /// send.
+    #[error("{op}: cannot serialise the request body")]
+    Encode {
+        /// The `operationId` of the operation the argument is the body of.
+        op: String,
+        /// `serde_json`'s reading of the value.
+        #[source]
+        source: serde_json::Error,
+    },
     /// The client refused the request or never got an answer, carrying the
     /// error the client itself returned.
     ///
     /// Boxed, so this type does not grow a parameter for the client. Whether
     /// the request left is a reading only an adapter can make, so it belongs
     /// above the seam, and a failure nobody has classified is one that may have
-    /// arrived. The concrete error is here to be read: `downcast_ref` recovers
-    /// `C::Error`, and [`Call::request`] hands back the bytes for a caller who
-    /// would rather send them through the client's own `send` and box nothing.
-    /// `docs/client.md` shows both.
-    #[error("the transport failed")]
-    Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// arrived. The concrete error is here to be read: `downcast_ref` on the
+    /// `source` recovers `C::Error`, and [`Call::request`] hands back the bytes
+    /// for a caller who would rather send them through the client's own `send`
+    /// and box nothing. `docs/client.md` shows both.
+    #[error("{op}: the transport failed")]
+    Transport {
+        /// The `operationId` of the operation whose request was sent.
+        op: String,
+        /// The error the client returned.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// The server answered with a status that is not a success. Nothing is
     /// deserialised out of such a response, whatever its body holds.
-    #[error("{status}: {body}")]
+    ///
+    /// The message names the operation and the status and nothing the server
+    /// sent: the body is the server's, it can hold a credential or a client's
+    /// data, and the message is printed where a log reads it. A caller that
+    /// needs the body reads the field, or [`Error::body`].
+    #[error("{op}: the server answered {status}")]
     Status {
+        /// The `operationId` of the operation whose request was answered.
+        op: String,
         /// The status the server answered.
         status: StatusCode,
         /// The response body as text, with bytes that are not UTF-8 replaced.
@@ -85,8 +110,10 @@ pub enum Error {
     },
     /// A success response whose body is not the type the document promises for
     /// it.
-    #[error("the response is not the shape the document promises")]
+    #[error("{op}: the response is not the shape the document promises")]
     Decode {
+        /// The `operationId` of the operation whose request was answered.
+        op: String,
         /// `serde_json`'s reading of the body, with the line and column where
         /// it stopped.
         #[source]
@@ -94,6 +121,28 @@ pub enum Error {
         /// The response body as text, with bytes that are not UTF-8 replaced.
         raw: String,
     },
+}
+
+impl Error {
+    /// What the server sent, for the two errors that hold a response: the body
+    /// of a [`Error::Status`], and the text a [`Error::Decode`] could not read.
+    /// Bytes that are not UTF-8 are replaced.
+    ///
+    /// It is a method and not part of any message, because the body is the
+    /// server's and a message is printed where a log reads it.
+    #[must_use]
+    pub fn body(&self) -> Option<&str> {
+        match self {
+            Self::Status { body, .. } => Some(body),
+            Self::Decode { raw, .. } => Some(raw),
+            Self::Document(_)
+            | Self::Drift(_)
+            | Self::Values(_)
+            | Self::Request(_)
+            | Self::Encode { .. }
+            | Self::Transport { .. } => None,
+        }
+    }
 }
 
 /// One document, one server, and a typed way to call anything in it.
@@ -125,9 +174,13 @@ impl Client {
     /// `Client::over(Document::load(document, overlay)?)` and handles the load
     /// failure under its own type, so no shape on this page depends on which
     /// build a reader is looking at.
-    pub fn over(document: Document) -> Result<Self, Error> {
+    ///
+    /// It cannot fail: the reduction is in hand, and the base is the one it
+    /// carries.
+    #[must_use]
+    pub fn over(document: Document) -> Self {
         let base = document.base().clone();
-        Ok(Self { document, base })
+        Self { document, base }
     }
 
     /// Point at a different server than the document's first one.
@@ -532,15 +585,13 @@ impl<T> fmt::Debug for Call<'_, T> {
     }
 }
 
-impl<T: DeserializeOwned> Call<'_, T> {
+impl<'a, T: DeserializeOwned> Call<'a, T> {
     /// What the document says about the operation this call was built from:
     /// whether it writes, and which gates it stands behind.
     ///
     /// A Rust caller is trusted and is stopped by nothing here. A caller that
-    /// wants the same gate a CLI has hands this to [`Plan::decide`], which is
-    /// what the `finalize-voucher` verb in the example does.
-    ///
-    /// [`Plan::decide`]: crate::Plan::decide
+    /// wants the same gate a CLI has plans the call with [`Call::plan`], which
+    /// is what the `finalize-voucher` verb in the example does.
     #[must_use]
     pub fn operation(&self) -> &Operation {
         self.invocation.operation()
@@ -552,27 +603,146 @@ impl<T: DeserializeOwned> Call<'_, T> {
         Ok(self.invocation.request(self.base)?)
     }
 
+    /// Put the call to the gate: a read is sent on sight, and a write is sent
+    /// once `answers` confirm it and answer every gate it names.
+    ///
+    /// The request is built here, once, and the [`Planned`] that comes back
+    /// holds it. What a caller prints as a dry run and what [`Planned::send`]
+    /// sends are that one value, so the two cannot drift. Nothing is sent and no
+    /// client is asked for.
+    pub fn plan(&self, answers: &Answers) -> Result<Planned<'a, T>, Error> {
+        Ok(Planned {
+            operation: self.invocation.operation(),
+            plan: Plan::decide(&self.invocation, self.base, answers)?,
+            response: PhantomData,
+        })
+    }
+
     /// Send it and deserialise the answer.
     pub fn send<C: SyncClient>(&self, client: &C) -> Result<T, Error> {
-        parse(&client.send(self.request()?).map_err(transport)?)
+        deliver(self.operation().id(), client, self.request()?)
     }
 
     /// The same, inside a runtime.
     pub async fn send_async<C: AsyncClient>(&self, client: &C) -> Result<T, Error> {
-        parse(&client.send(self.request()?).await.map_err(transport)?)
+        deliver_async(self.operation().id(), client, self.request()?).await
     }
 }
 
-fn transport<E: std::error::Error + Send + Sync + 'static>(error: E) -> Error {
-    Error::Transport(Box::new(error))
+/// A call that the gate has decided about, holding the request it decided on.
+///
+/// [`Call::plan`] is the only way to one. The verdict, the request it is about
+/// and the type of the answer are one value, so a request cannot be sent through
+/// a call that did not plan it, and a dry run cannot be sent at all: [`send`]
+/// answers `None` for it and asks the client for nothing.
+///
+/// [`send`]: Planned::send
+pub struct Planned<'a, T> {
+    operation: &'a Operation,
+    plan: Plan,
+    response: PhantomData<fn() -> T>,
+}
+
+/// The verdict and the operation, and not the request: a `Debug` goes to logs,
+/// and the request holds the header values and the body the caller gave.
+impl<T> fmt::Debug for Planned<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Planned")
+            .field("operation", &self.operation.id())
+            .field(
+                "verdict",
+                &match self.plan {
+                    Plan::Send(_) => "Send",
+                    Plan::DryRun(_) => "DryRun",
+                },
+            )
+            .field("response", &std::any::type_name::<T>())
+            .finish()
+    }
+}
+
+impl<T> Planned<'_, T> {
+    /// What the gate decided, with the request: [`Plan::Send`] for a read and
+    /// for a write that was confirmed, [`Plan::DryRun`] for a write that was
+    /// not.
+    #[must_use]
+    pub fn plan(&self) -> &Plan {
+        &self.plan
+    }
+
+    /// The request, whichever way the gate went. A dry run prints exactly the
+    /// bytes that [`Planned::send`] sends.
+    #[must_use]
+    pub fn request(&self) -> &HttpRequest {
+        self.plan.request()
+    }
+}
+
+impl<T: DeserializeOwned> Planned<'_, T> {
+    /// Carry out what the gate decided: send the planned request and
+    /// deserialise the answer, or, for a dry run, send nothing and answer
+    /// `None`.
+    ///
+    /// It consumes the plan, so the request is built once and sent at most once.
+    pub fn send<C: SyncClient>(self, client: &C) -> Result<Option<T>, Error> {
+        match self.plan {
+            Plan::Send(request) => deliver(self.operation.id(), client, request).map(Some),
+            Plan::DryRun(_) => Ok(None),
+        }
+    }
+
+    /// The same, inside a runtime.
+    pub async fn send_async<C: AsyncClient>(self, client: &C) -> Result<Option<T>, Error> {
+        match self.plan {
+            Plan::Send(request) => deliver_async(self.operation.id(), client, request)
+                .await
+                .map(Some),
+            Plan::DryRun(_) => Ok(None),
+        }
+    }
+}
+
+/// Send `request` for the operation `op`, and read the answer.
+fn deliver<T: DeserializeOwned, C: SyncClient>(
+    op: &str,
+    client: &C,
+    request: HttpRequest,
+) -> Result<T, Error> {
+    parse(
+        op,
+        &client.send(request).map_err(|error| transport(op, error))?,
+    )
+}
+
+/// The same, inside a runtime.
+async fn deliver_async<T: DeserializeOwned, C: AsyncClient>(
+    op: &str,
+    client: &C,
+    request: HttpRequest,
+) -> Result<T, Error> {
+    parse(
+        op,
+        &client
+            .send(request)
+            .await
+            .map_err(|error| transport(op, error))?,
+    )
+}
+
+fn transport<E: std::error::Error + Send + Sync + 'static>(op: &str, error: E) -> Error {
+    Error::Transport {
+        op: op.to_owned(),
+        source: Box::new(error),
+    }
 }
 
 /// Status first, then the body — never deserialise the success type out of an
 /// error response.
-fn parse<T: DeserializeOwned>(response: &HttpResponse) -> Result<T, Error> {
+fn parse<T: DeserializeOwned>(op: &str, response: &HttpResponse) -> Result<T, Error> {
     let body = response.body();
     if !response.status().is_success() {
         return Err(Error::Status {
+            op: op.to_owned(),
             status: response.status(),
             body: String::from_utf8_lossy(body).into_owned(),
         });
@@ -580,14 +750,20 @@ fn parse<T: DeserializeOwned>(response: &HttpResponse) -> Result<T, Error> {
     // An empty body is how "no content" arrives; `NoContent` accepts `null`.
     let bytes = if body.is_empty() { b"null" } else { &body[..] };
     serde_json::from_slice(bytes).map_err(|source| Error::Decode {
+        op: op.to_owned(),
         source,
         raw: String::from_utf8_lossy(body).into_owned(),
     })
 }
 
-/// The request body of a typed wrapper, as JSON.
-pub fn to_json<T: Serialize>(value: &T) -> Result<serde_json::Value, Error> {
-    serde_json::to_value(value).map_err(Error::Encode)
+/// The request body of a typed wrapper, as JSON. `op` is the `operationId` of
+/// the operation the value is the body of, and the error that a value which does
+/// not serialise raises names it.
+pub fn to_json<T: Serialize>(op: &str, value: &T) -> Result<serde_json::Value, Error> {
+    serde_json::to_value(value).map_err(|source| Error::Encode {
+        op: op.to_owned(),
+        source,
+    })
 }
 
 #[cfg(test)]

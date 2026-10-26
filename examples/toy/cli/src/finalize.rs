@@ -9,8 +9,8 @@
 //! vendor revision drops `enshrineVoucher`, this file stops compiling and names
 //! it — the CLI does not discover it at run time against a customer's ledger.
 
-use api::{Api, Call, Voucher, VoucherStatus};
-use typed_openapi::{Answers, Plan, SyncClient, render};
+use api::{Api, Call, OperationId, Voucher, VoucherStatus};
+use typed_openapi::{Answers, SyncClient, render};
 
 use crate::app::Error;
 use crate::output::Output;
@@ -99,16 +99,16 @@ pub fn run<C: SyncClient>(
 
     let mut wrote = Wrote::Nothing;
     for step in steps {
-        let step = call(api, step)?;
         // The same gate the `raw` path uses, asked once per request, so the
         // chain cannot disagree with a single operation about what a dry run
         // is — including which words it wants: the enshrine stands behind
         // `--enshrine` here for the same reason it does under `raw`, because
-        // both ask the operation.
-        let decided = Plan::decide(step.operation(), answers, step.request()?);
-        printed.push(render(decided.request()));
-        if let Plan::Send(_) = decided {
-            wrote = Wrote::Everything(step.send(client)?);
+        // both ask the operation. The plan holds the request the gate decided
+        // on, so the request printed below is the request `send` sends.
+        let planned = call(api, step)?.plan(answers)?;
+        printed.push(render(planned.request()));
+        if let Some(last) = planned.send(client)? {
+            wrote = Wrote::Everything(last);
         }
     }
 
@@ -116,8 +116,11 @@ pub fn run<C: SyncClient>(
     Ok(match wrote {
         Wrote::Nothing => Output::note(
             printed,
-            "dry run: the fetch above ran, the writes did not. \
-             Add --commit to send them.\n",
+            format!(
+                "dry run: the fetch above ran, the writes did not. \
+                 Add --{} to send them.\n",
+                api.operation(OperationId::EnshrineVoucher).commit()
+            ),
         ),
         Wrote::Everything(last) => Output::value(&printed, &last),
     })

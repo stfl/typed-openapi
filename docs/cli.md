@@ -791,10 +791,25 @@ Named gates: --enshrine. Each one is required, and demanded in addition to
 --commit.
 ```
 
-A verb you write yourself joins in through the same three calls the generated
-surface uses: `tree::gates` puts the flags on your command, `tree::answers`
-reads them back, and `Plan::decide` does the rest. The flags are spelled in one
-place, so the two command lines cannot come to disagree about one operation.
+A verb you write yourself joins in through the same calls the generated surface
+uses: `tree::confirmation` and `tree::gates` put the flags on your command,
+`tree::answers` reads them back, and `Call::plan` puts a typed call to the gate
+with them. The flags are spelled in one place, in the document's own words, so
+the two command lines cannot come to disagree about one operation. A document
+whose bless step confirms with `yes` has `--yes` on your verb too, and its gate
+flags say "in addition to --yes".
+
+The plan holds the request the gate decided on. What your verb prints for a dry
+run and what it sends once the write is confirmed are that one value, and a dry
+run has nothing to send:
+
+```rust,ignore
+let planned = api.enshrine_voucher(id)?.plan(&answers)?;
+println!("{}", render(planned.request()));
+if let Some(voucher) = planned.send(&client)? {
+    // the write was confirmed, it was sent, and this is its typed answer
+}
+```
 
 A flag your command does not declare reads as **unanswered**, which holds the
 request back. So a command built before an Overlay named a new gate goes on

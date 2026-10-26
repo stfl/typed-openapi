@@ -108,6 +108,10 @@ name = "summary"
 required-features = ["document"]
 
 [[test]]
+name = "typed_call"
+required-features = ["document"]
+
+[[test]]
 name = "values"
 required-features = ["document", "clap"]
 

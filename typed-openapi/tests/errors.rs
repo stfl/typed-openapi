@@ -375,18 +375,23 @@ fn calling() -> Vec<Case> {
         ),
         case(
             "client::Error::Encode",
-            ClientError::Encode(
-                serde_json::to_vec(&BTreeMap::from([((1, 2), 3)]))
+            ClientError::Encode {
+                op: "createThing".to_owned(),
+                source: serde_json::to_vec(&BTreeMap::from([((1, 2), 3)]))
                     .expect_err("a JSON object key is a string"),
-            ),
+            },
         ),
         case(
             "client::Error::Transport",
-            ClientError::Transport(Box::new(io_error())),
+            ClientError::Transport {
+                op: "listThings".to_owned(),
+                source: Box::new(io_error()),
+            },
         ),
         case(
             "client::Error::Decode",
             ClientError::Decode {
+                op: "listThings".to_owned(),
                 source: json_error(),
                 raw: "x".to_owned(),
             },

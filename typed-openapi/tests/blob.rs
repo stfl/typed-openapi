@@ -759,9 +759,8 @@ fn a_write_held_as_a_read_would_be_sent_without_a_confirmation() {
     let doc = forged(edit);
     let op = doc.get("archiveVoucher").expect("the fixture describes it");
     let invocation = Invocation::new(op, Values::new().param("id", 5)).expect("values");
-    let request = invocation.request(doc.base()).expect("a request");
     assert!(matches!(
-        Plan::decide(op, &Answers::new(), request),
+        Plan::decide(&invocation, doc.base(), &Answers::new()).expect("a request"),
         Plan::Send(_)
     ));
     assert!(Document::from_blob(&blob_edited(edit)).is_err());
@@ -813,9 +812,11 @@ fn a_gated_get_held_as_a_read_is_sent_on_sight_and_refused_by_its_gate() {
     let forged = forged_from(&gated, held_as_a_read);
     let op = forged.get("renderVoucher").expect("it is still there");
     let invocation = Invocation::new(op, Values::new().param("id", 5)).expect("values");
-    let request = invocation.request(forged.base()).expect("a request");
     assert!(
-        matches!(Plan::decide(op, &Answers::new(), request), Plan::Send(_)),
+        matches!(
+            Plan::decide(&invocation, forged.base(), &Answers::new()).expect("a request"),
+            Plan::Send(_)
+        ),
         "with no check, it goes out on sight"
     );
 

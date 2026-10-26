@@ -279,7 +279,7 @@ struct OptionalBody {
     what: &'static str,
     wrapper: &'static str,
     argument: &'static str,
-    builder: &'static str,
+    builder: String,
     note: &'static str,
 }
 
@@ -287,42 +287,48 @@ struct OptionalBody {
 /// leaves optional: a flat body with a required property, a flat body with none,
 /// a body that goes whole, a body sent verbatim and a multipart body.
 fn optional_bodies() -> [OptionalBody; 5] {
-    let json = ".body(body.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json))";
+    // The wrapper names its operation, so that a body that does not serialise
+    // says whose it was.
+    let json = |id: &str| {
+        format!(
+            ".body(body.map(|body|crate::to_json(\"{id}\",body)).transpose()?.map(typed_openapi::Payload::Json))"
+        )
+    };
     let note = "`body` is optional: with `None` the request carries no body.";
     [
         OptionalBody {
             what: "a flat body with a required property",
             wrapper: "create_reminder",
             argument: "body:Option<&crate::types::CreateReminderBody>",
-            builder: json,
+            builder: json("createReminder"),
             note,
         },
         OptionalBody {
             what: "a flat body with no required property",
             wrapper: "create_note",
             argument: "body:Option<&crate::types::CreateNoteBody>",
-            builder: json,
+            builder: json("createNote"),
             note,
         },
         OptionalBody {
             what: "a body that goes whole",
             wrapper: "create_export",
             argument: "body:Option<&crate::types::CreateExportBody>",
-            builder: json,
+            builder: json("createExport"),
             note,
         },
         OptionalBody {
             what: "a body sent verbatim",
             wrapper: "upload_attachment",
             argument: "body:Option<Vec<u8>>",
-            builder: ".body(body.map(typed_openapi::Payload::Raw))",
+            builder: ".body(body.map(typed_openapi::Payload::Raw))".to_owned(),
             note,
         },
         OptionalBody {
             what: "a multipart body",
             wrapper: "upload_scan",
             argument: "parts:Option<Vec<Part>>",
-            builder: ".body(parts.map(typed_openapi::Payload::Multipart))",
+            builder: ".body(parts.map(typed_openapi::Payload::Multipart))".to_owned(),
             note: "`parts` is optional: with `None` the request carries no body.",
         },
     ]
@@ -349,7 +355,7 @@ fn an_optional_body_is_an_option_argument_that_none_leaves_out() {
             "{what} is not optional:\n{text}"
         );
         assert!(
-            dense.contains(case.builder),
+            dense.contains(&case.builder),
             "{what} is not left out by `None`:\n{text}"
         );
         assert!(
@@ -380,7 +386,7 @@ fn a_required_body_is_a_plain_argument() {
             &toy,
             "create_voucher",
             "body:&crate::types::Voucher",
-            ".json(crate::to_json(body)?)",
+            ".json(crate::to_json(\"createVoucher\",body)?)",
         ),
         (
             "a body sent verbatim",
@@ -401,14 +407,14 @@ fn a_required_body_is_a_plain_argument() {
             &optional,
             "create_label",
             "body:&crate::types::CreateLabelBody",
-            ".json(crate::to_json(body)?)",
+            ".json(crate::to_json(\"createLabel\",body)?)",
         ),
         (
             "a flat body with a required property",
             &optional,
             "create_tag",
             "body:&crate::types::CreateTagBody",
-            ".json(crate::to_json(body)?)",
+            ".json(crate::to_json(\"createTag\",body)?)",
         ),
     ] {
         let text = wrapper(ops, wrapper_name);

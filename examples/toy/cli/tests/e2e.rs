@@ -1041,6 +1041,42 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
     );
 }
 
+/// The chain decides on one request for each write and sends that one: the
+/// requests the dry run printed are, parsed back into method, target, headers and
+/// body, the requests `--commit` handed the transport. A chain that built a
+/// request to decide on and another to send would be equal here only while
+/// building is pure.
+#[test]
+fn the_chain_sends_the_requests_it_printed() {
+    let script = || {
+        Recorder::new()
+            .answering(StatusCode::OK, &voucher("open"))
+            .answering(StatusCode::OK, &voucher("paid"))
+            .answering(StatusCode::OK, &voucher("paid"))
+    };
+    let dry = run(&script(), FINALIZE);
+    let wet = script();
+    let committed: Vec<&str> = FINALIZE.iter().copied().chain(["--commit"]).collect();
+    run(&wet, &committed);
+
+    let printed: Vec<Printed> = dry.stdout.split("\n\n").map(Printed::parse).collect();
+    let sent: Vec<Printed> = wet.take().iter().map(Printed::of).collect();
+
+    assert_eq!(printed.len(), 3, "the fetch and the two writes");
+    assert_eq!(printed, sent);
+    assert_eq!(
+        printed
+            .iter()
+            .map(|request| format!("{} {}", request.method, request.target))
+            .collect::<Vec<_>>(),
+        [
+            "GET /vouchers/5",
+            "POST /vouchers/5/enshrine",
+            "GET /vouchers/5/render",
+        ]
+    );
+}
+
 #[test]
 fn commit_runs_the_whole_chain_in_order() {
     let client = Recorder::new()

@@ -11,6 +11,8 @@ any feature combination, and it never will. The primer is
 - [A reference to a client is a client](#a-reference-to-a-client-is-a-client)
 - [Writing an adapter](#writing-an-adapter)
 - [Classifying a transport failure](#classifying-a-transport-failure)
+- [A typed call and the gate](#a-typed-call-and-the-gate)
+- [What a call's error says](#what-a-calls-error-says)
 - [`Recorder`, the one client this crate ships](#recorder-the-one-client-this-crate-ships)
 
 ## The seam
@@ -143,8 +145,9 @@ if let Err(DispatchError::Transport(boxed)) = run(&document, client, &matches)
 ```
 
 **Send it yourself.** Build the request through `Plan` — `Selection::plan` from
-a command line, `Call::request` on the typed side — and hand it to the client's
-own `send`. Nothing is boxed and the error is the client's own type:
+a command line, `Call::plan` or `Call::request` on the typed side — and hand it
+to the client's own `send`. Nothing is boxed and the error is the client's own
+type:
 
 ```rust,ignore
 let Plan::Send(request) = Plan::build(op, base, values, &answers)? else {
@@ -155,6 +158,53 @@ let response = client.send(request)?; // the client's own error, untouched
 
 This route also keeps the gate away from the network: it decides with no socket
 and no credential, so a dry run needs neither.
+
+## A typed call and the gate
+
+`Call::send` sends whatever it was built for: a Rust caller is trusted, and
+nothing stops a write. A caller that wants the gate a command line has plans the
+call with what it answered. The request is built once, in `plan`, and the
+`Planned` that comes back holds it:
+
+```rust,ignore
+let answers = Answers::new().commit().gate("enshrine");
+let planned = api.enshrine_voucher(5)?.plan(&answers)?;
+
+println!("{}", render(planned.request()));   // what a dry run prints ...
+let sent = planned.send(&client)?;           // ... is what is sent
+```
+
+`send` answers `Some` with the typed answer when the gate let the request
+through, and `None` when it did not: a write that was not confirmed, or whose
+gates were not all answered, is a dry run, and a dry run has nothing to send and
+asks the client for nothing. `send_async` is the same inside a runtime.
+`Planned::plan` is the verdict, `Plan::Send` or `Plan::DryRun`, for a caller who
+wants to match on it.
+
+The verdict and the request are one value. `Plan::decide` takes the
+`Invocation`, which holds its operation, and builds the request from it, so no
+signature takes an operation and a request side by side. Only `Call::plan` makes
+a `Planned`, so it sends the request of the call it was planned from, and no
+other.
+
+## What a call's error says
+
+Every error a call raises when it runs says which operation it was, in the words
+of the `operationId`, so a log line needs no context to be read:
+
+| `client::Error` | message |
+|---|---|
+| `Encode { op, source }` | `createVoucher: cannot serialise the request body` |
+| `Transport { op, source }` | `getVoucher: the transport failed` |
+| `Status { op, status, body }` | `getVoucher: the server answered 404 Not Found` |
+| `Decode { op, source, raw }` | `getVoucher: the response is not the shape the document promises` |
+
+None of them prints what the server sent. The body of a response is the
+server's: it can hold a credential or a client's data, and an error is printed
+where a log reads it. It stays in the error. `Status` has it in `body`, `Decode`
+has the text it could not read in `raw`, and `Error::body()` reads whichever the
+error holds. A cause is printed once, on its own line, by whoever walks
+`source()`.
 
 ## `Recorder`, the one client this crate ships
 

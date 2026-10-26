@@ -9,9 +9,15 @@ in the root `CLAUDE.md`, and the rules of the example are in
 **The gate is default-closed and derived from the document.** `Plan::decide` in
 `src/plan.rs` is the only place that decides whether a request is sent. A write
 without confirmation is a `DryRun` carrying the exact request a confirmed run
-would send — the same value, so the two cannot drift. Whether an operation
-writes comes from the HTTP method plus the document's `x-cli-writes` marker,
-never from a name or a heuristic.
+would send — the same value, so the two cannot drift. `Plan::decide` takes the
+`Invocation`, which holds its operation, and builds the request from it, so the
+verdict and the request are about one operation by construction: no signature
+takes an operation and a request side by side, and a read's verdict cannot be
+put on a write's request. A typed call reaches it through `Call::plan`, whose
+`Planned` holds the plan and is the only thing that sends it (`Planned::send`),
+so the request a caller printed is the request that goes out and a dry run
+cannot be sent. Whether an operation writes comes from the HTTP method plus the
+document's `x-cli-writes` marker, never from a name or a heuristic.
 
 An operation may name further gates in `x-cli-gates`, and they are demanded
 *in addition to* the confirmation: `Plan::Send` wants the commit and every gate
@@ -43,16 +49,19 @@ sight has nothing for a gate to hold. The chosen word travels in the blob on the
 document and on every operation, so a help page, the summary and a generated doc
 comment all name the flag the binary accepts.
 
-`tree::gates` is the one place a gate becomes a flag, and `tree::command` goes
-through it, so a hand-written verb and a generated subcommand cannot spell one
-gate two ways. `tree::answers` reads a flag the command never declared as
-unanswered rather than panicking, which is what makes the reading safe to point
-at a command this crate did not build. `tree::values` reads every flag the same
-way, with `try_get_*`: a flag the command never declared was not given, a flag
-stored as another type is `ArgError::FlagType`, which names it, and a field's
-flag that the field's rule refuses is `ArgError::FieldValue`. A command of the
-adopter's own can declare a flag with any parser, and nothing after `values`
-holds a body field to its rule.
+`tree::gates` is the one place a gate becomes a flag, and `tree::confirmation`
+the one place the confirmation does, in the word the operation carries.
+`tree::command` goes through both, so a hand-written verb and a generated
+subcommand cannot spell one gate, or the confirmation, two ways, and a verb
+spells neither word itself. A read declares no confirmation, so
+`tree::confirmation` hands its command back as it was given. `tree::answers`
+reads a flag the command never declared as unanswered rather than panicking,
+which is what makes the reading safe to point at a command this crate did not
+build. `tree::values` reads every flag the same way, with `try_get_*`: a flag
+the command never declared was not given, a flag stored as another type is
+`ArgError::FlagType`, which names it, and a field's flag that the field's rule
+refuses is `ArgError::FieldValue`. A command of the adopter's own can declare a
+flag with any parser, and nothing after `values` holds a body field to its rule.
 
 **Both command names are decided while the document is reduced.** `Grouping` in
 `src/names.rs` reads the rule off every path once; an `Operation` carries the
@@ -838,6 +847,18 @@ the same. The query is left out with the userinfo because a key goes there, and
 a request from a base that holds one is refused. The text of the operator's own
 argument is the operator's, and clap repeats it in its own errors.
 
+**A call-time error names its operation and prints no byte the server sent.**
+`client::Error::{Encode, Transport, Status, Decode}` carry `op`, the
+`operationId`, and their messages begin with it, so a log line says which call
+failed. `Status` prints the operation and the status and never the body: the
+body is the server's and can hold a credential or a client's data, and
+sevdesk-cli re-exports the type as its own error, where its rule "No peer bytes
+in an error" applies. The body is the field, and `Error::body` reads it for
+`Status` and for the `raw` of `Decode`, which a message does not print either. A
+variant added to the call-time group carries `op`. `to_json` takes it, because
+only the generated wrapper knows which operation a body is the body of, so an
+argument that does not serialise names it.
+
 **A request body is held to the generated type in one place, and an undeclared
 property has no way through.** `client::fits` is where a JSON body meets the
 type of its operation. The library cannot name that type, so the adopter's seam
@@ -1167,16 +1188,17 @@ which is the whole defect this exists to retire, and deriving also keeps the
 postcard blob the size it is. The type is feature-free, because a shipped binary
 that loaded a blob has to answer the question a bless step answered.
 
-`Summary`'s `Display` is the page a bless step renders, and the counts a test
-asserts against are the accessors on the same value — so the sentence a reader
-is shown and the number a test pins cannot drift apart. The page carries its
-provenance from `Settings::summary_header`, beside the headers the other
-generated files get: the command that counts it again and the documents it was
-counted from, because a count a reader cannot re-take is a claim rather than a
-measurement, and the two look identical on the page.
-`examples/toy/api/tests/summary.rs` is the demonstration that the shape is
-right — it builds the toy README's own sentences out of the summary — and any
-count this crate adds owes a row there.
+`Summary`'s `Display` is the page a bless step renders, and a name the document
+chose goes into a table cell through `cell`, which escapes `|` as a Markdown
+reader needs, in a code span too. The counts a test asserts against are the
+accessors on the same value — so the sentence a reader is shown and the number a
+test pins cannot drift apart. The page carries its provenance from
+`Settings::summary_header`, beside the headers the other generated files get:
+the command that counts it again and the documents it was counted from, because
+a count a reader cannot re-take is a claim rather than a measurement, and the
+two look identical on the page. `examples/toy/api/tests/summary.rs` is the
+demonstration that the shape is right — it builds the toy README's own sentences
+out of the summary — and any count this crate adds owes a row there.
 
 **The value is derived for everyone; the file is asked for.** `Settings::write_to`
 writes four artefacts and answers with what it wrote;
