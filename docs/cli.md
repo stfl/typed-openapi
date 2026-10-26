@@ -185,7 +185,7 @@ own type rather than the box `DispatchError::Transport` carries.
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
 | a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE`; a property is required exactly when the body and the property both are, unless `--json-body` is given |
 | a property of a JSON body that the schema marks `readOnly` | nothing: the API sets it, so the subcommand's long help names it, and the body is flat or whole without regard to it |
-| any other JSON body — an array, no schema, or an object with a nested property, a name with no spelling or a schema this CLI does not read as a value | `--json-body FILE`, plus `--json-body-template` where the document describes a shape |
+| any other JSON body — an array, no schema, or an object with a nested property, a name with no spelling or a schema this CLI does not read as a value | `--json-body FILE`, plus `--json-body-template` where the document describes a shape, except for the object that the text below names |
 | a JSON body declared under `application/merge-patch+json`, `application/vnd.api+json` or any other `+json` type that is not a range | the same flags, and the body is sent under that key, not under `application/json` |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
 | any other media type | `--raw-body FILE`, sent verbatim under that media type |
@@ -210,6 +210,13 @@ that body as it is, and one that holds it to the generated type does so at its
 own seam, as *With a check of your own in the middle* says. The help names no
 reason for it: a parameter that has no flag has nothing else to fall back on, and
 a body has the file.
+
+An object that states a keyword its `type` does not have (`minLength` beside
+`type: object`), or a keyword with no content (`enum: []`), is held by
+`openapiv3` as `AnySchema`, and this CLI reads no object from that. A body that
+is one goes whole, and its properties are not read at all: it has no
+`--json-body-template`, unless it carries an `example`, which is the template as
+the document has it, and the long help names none of its `readOnly` properties.
 
 **A property the API sets has no flag, and it is not asked for.** OpenAPI 3.0.3
 says of a `readOnly` property that it "SHOULD NOT be sent as part of the
@@ -669,6 +676,11 @@ enshrineVoucher: the property `enshrine` and the gate `enshrine` both want `--en
 
 [Choosing the confirmation word](generating.md#choosing-the-confirmation-word)
 has the call; `typed-openapi/examples/README.md` walks the whole collision.
+
+Only a value that has a flag is held to this. A property of a body that goes
+whole has no flag, so one named like a gate or like the confirmation loads
+wherever it stands among the other properties, and so does a parameter that has
+no flag.
 
 ## Value checking
 

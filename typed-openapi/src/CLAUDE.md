@@ -345,18 +345,18 @@ the values that the reduction reads for a scalar, with a flag or without one: a
 parameter that `declared` keeps and that is sent in the path, the query or a
 header with a `schema` (its items, for a list), and a property of a JSON body
 whose schema is an object. `json_body` sends the whole body through
-`--json-body` at the first property that has no flag, a nested one or one whose
-name has no spelling, so it reads every property (`properties_of`) before it
-decides whether the body is flat. A property the API sets is read for no rule. A
-rule asked only of the properties listed before that one would make a document
-that loads depend on which property comes first. A cookie parameter, a parameter
-stated with `content`, a property of a form or multipart body or of a body whose
-schema is an `allOf` of more than one schema, and the items of an array body are
-not read by it. The walk asks them the escape rule and nothing else, so a
-`multipleOf` of 0 or a `pattern` that no engine reads loads there. A rule of
-this kind that is added for a value is added in `runnable_scalar`, which
-`shape_of` and `properties_of` share, and a rule of every schema is added to the
-walk.
+`--json-body` when a property has no flag, a nested one or one whose name has no
+spelling, wherever it stands, so it reads every property (`properties_of`)
+before it decides whether the body is flat. A property the API sets is read for
+no rule. A rule asked only of the properties listed before the one that sends
+the body whole would make a document that loads depend on which property comes
+first. A cookie parameter, a parameter stated with `content`, a property of a
+form or multipart body or of a body whose schema is an `allOf` of more than one
+schema, and the items of an array body are not read by it. The walk asks them
+the escape rule and nothing else, so a `multipleOf` of 0 or a `pattern` that no
+engine reads loads there. A rule of this kind that is added for a value is added
+in `runnable_scalar`, which `shape_of` and `properties_of` share, and a rule of
+every schema is added to the walk.
 
 **A document is read as the version it says, or refused by name.**
 `Document::load_with` asks the vendor's `openapi` right after it reads the
@@ -522,7 +522,12 @@ keyword that states nothing (`properties: {}`, `enum: []`), `array_of` reads it,
 and `items_of`, `list_type` and the template walk (`Walk::skeleton` and
 `Walk::without_read_only`) ask `array_of`, so such an array has the list flag
 its twin has, and a body that is one has the template its twin has. No object is
-read as a value. Every other shape is an `Unsupported` that is true of it:
+read as a value, and `json_body` and the template walk read a body's object only
+where `openapiv3` holds it as an object. A body that is an object it holds as
+`AnySchema` (one that states a keyword of another type, or a keyword with no
+content such as `enum: []`) goes whole, with no template but its `example` as the
+document has it and with no read-only names. Every other shape is an
+`Unsupported` that is true of it:
 `Keyword` for a composition, for a keyword the `type` does not have, for an
 `enum` that lists a value of another type and for a `type` that is none of the
 six, `Untyped` for a schema with no `type` and no composition, and `Structured`
@@ -565,14 +570,16 @@ property stops sending it whole. A value that gains a flag is asked its rules
 and its name, so a document that loaded can be refused (`Unrunnable`,
 `Unresolvable`, `HeaderName`, `GateTakenByName`, `CommitTakenByName`), and the
 rules of a property of a JSON body are asked whether or not its body goes whole.
-`fields_of` claims the properties of a body one at a time in document order and
-stops at the first that sends the body whole, so the name of a property is asked
-up to that one, in a flat body and in a body that goes whole, and a change to
-what sends a body whole moves which names are asked: a property that had a flag
-all along is refused for its name once an earlier property stops sending the
-body whole. A change to what `stated`, `scalar_of`, `array_of`, `read_only_of` or
-`json_body` read, or to what `fields_of` stops at, lists all of these in the
-CHANGELOG, each with its repair, because they are what an adopter sees of it.
+The name of a property is asked only where its body is flat, as a
+parameter with no flag is not asked its name: `fields_of` decides that the body
+is flat before it claims a flag, and then claims the flags in document order. A
+body that goes whole claims none, so none of its properties is asked, in
+whatever order they stand, and a name that consent is given by never refuses a
+document for a flag that is not made. A change to what makes a body flat moves
+which names are asked. A change to what `stated`, `scalar_of`, `array_of`,
+`read_only_of` or `json_body` read, or to what makes a body flat, lists all of
+these in the CHANGELOG, each with its repair, because they are what an adopter
+sees of it.
 
 Every flag a user types passes `names::spelled`, which is why a body property
 spelled `*` sends its body whole rather than claiming a flag called `""`. The
