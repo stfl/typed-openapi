@@ -741,7 +741,7 @@ fn a_rule_a_named_schema_states_reaches_the_property_pointing_at_it() {
     let total = fields.iter().find(|f| f.name() == "total").unwrap();
     assert_eq!(
         total.scalar().note().as_deref(),
-        Some(r"matches ^-?[0-9]+(\.[0-9]{1,2})?$"),
+        Some(r"a match for ^-?[0-9]+(\.[0-9]{1,2})?$"),
         "the rule the `Money` schema states did not reach `total`"
     );
     assert_eq!(
@@ -750,63 +750,96 @@ fn a_rule_a_named_schema_states_reaches_the_property_pointing_at_it() {
             .parse("1,50")
             .expect_err("a comma is not a decimal point")
             .to_string(),
-        r"`1,50` does not match ^-?[0-9]+(\.[0-9]{1,2})?$"
+        r"`1,50` is not a match for ^-?[0-9]+(\.[0-9]{1,2})?$"
     );
     assert!(total.scalar().parse("12.50").is_ok());
 }
 
+/// The parameters of the test below, one per rule that a scalar can state.
+const RULED_PARAMETERS: &str = "  /vouchers:\n\
+     \x20   get:\n\
+     \x20     operationId: listVouchers\n\
+     \x20     parameters:\n\
+     \x20       - { name: since, in: query, schema: { type: string, pattern: '^[0-9]{4}-[0-9]{2}$' } }\n\
+     \x20       - { name: code, in: query, schema: { type: string, minLength: 3, maxLength: 3 } }\n\
+     \x20       - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, multipleOf: 5 } }\n\
+     \x20       - { name: floor, in: query, schema: { type: number, minimum: 0, exclusiveMinimum: true } }\n\
+     \x20       - { name: ceiling, in: query, schema: { type: integer, maximum: 10, exclusiveMaximum: true } }\n\
+     \x20       - { name: dry, in: query, schema: { type: boolean } }\n\
+     \x20       - { name: status, in: query, schema: { type: integer, enum: [100, 200] } }\n\
+     \x20       - { name: ratio, in: query, schema: { type: number, enum: [0.5, 1.5] } }\n\
+     \x20       - { name: booked, in: query, schema: { type: boolean, enum: [true] } }\n\
+     \x20     responses: { \"200\": { description: OK } }\n";
+
+/// The parameter, the value, and the words of the refusal.
+const REFUSED_VALUES: &[(&str, &str, &str)] = &[
+    (
+        "since",
+        "2026-9",
+        "`2026-9` is not a match for ^[0-9]{4}-[0-9]{2}$",
+    ),
+    ("code", "EU", "`EU` is not at least 3 characters"),
+    ("code", "EURO", "`EURO` is not at most 3 characters"),
+    ("limit", "0", "`0` is not at least 1"),
+    ("limit", "105", "`105` is not at most 100"),
+    ("limit", "7", "`7` is not a multiple of 5"),
+    ("floor", "0", "`0` is not more than 0"),
+    ("floor", "-1", "`-1` is not more than 0"),
+    ("ceiling", "10", "`10` is not less than 10"),
+    ("ceiling", "11", "`11` is not less than 10"),
+    ("dry", "yes", "`yes` is not `true` or `false`"),
+    ("dry", "TRUE", "`TRUE` is not `true` or `false`"),
+    ("dry", "", "`` is not `true` or `false`"),
+    ("status", "7", "`7` is not one of 100, 200"),
+    ("ratio", "1", "`1` is not one of 0.5, 1.5"),
+    ("booked", "false", "`false` is not one of true"),
+];
+
+/// The parameter and a value at the edge of its rule.
+const ADMITTED_VALUES: &[(&str, &str)] = &[
+    ("since", "2026-09"),
+    ("code", "EUR"),
+    ("limit", "25"),
+    ("floor", "0.01"),
+    ("ceiling", "9"),
+    ("dry", "true"),
+    ("dry", "false"),
+    ("status", "100"),
+    ("status", "+200"),
+    ("ratio", "5e-1"),
+    ("booked", "true"),
+];
+
 /// A parameter never passes through a generated body type, so what the document
 /// says about one is the only thing that can ever check it. All of it is
 /// checked, and every refusal carries the document's own number.
+///
+/// Each keyword has a row that is refused and a row that is admitted at its
+/// edge. An exclusive bound is refused at its own value (`floor` at 0 and
+/// `ceiling` at 10) and a boolean is refused any word but `true` and `false`
+/// (`dry`), so a rule that is read as another one, such as an exclusive bound as
+/// an inclusive one or a word that is no boolean as `false`, fails a row here.
 #[test]
 fn every_rule_a_parameter_states_is_checked_because_nothing_else_can_check_it() {
-    const PARAMETERS: &str = "  /vouchers:\n\
-         \x20   get:\n\
-         \x20     operationId: listVouchers\n\
-         \x20     parameters:\n\
-         \x20       - { name: since, in: query, schema: { type: string, pattern: '^[0-9]{4}-[0-9]{2}$' } }\n\
-         \x20       - { name: code, in: query, schema: { type: string, minLength: 3, maxLength: 3 } }\n\
-         \x20       - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, multipleOf: 5 } }\n\
-         \x20     responses: { \"200\": { description: OK } }\n";
-
-    let doc = Document::load(&synthetic(PARAMETERS), &[]).expect("a document");
+    let doc = Document::load(&synthetic(RULED_PARAMETERS), &[]).expect("a document");
     let op = doc.get("listVouchers").unwrap();
-    // The refusal names the parameter in its own layer and the rule in its
-    // cause, so the variant says whose rule it was and the cause says what the
-    // value broke.
-    let refused = |name: &str, value: &str| {
-        let error = Invocation::new(op, Values::new().param(name, value))
+    for (name, value, words) in REFUSED_VALUES {
+        let error = Invocation::new(op, Values::new().param(*name, *value))
             .expect_err("the document refuses it");
+        // The refusal names the parameter in its own layer and the rule in its
+        // cause, so the variant says whose rule it was and the cause says what the
+        // value broke.
         assert!(
             matches!(&error, ValueError::BadValue { op: operation, name: parameter, .. }
                 if operation == "listVouchers" && parameter == name),
-            "{error:?}"
+            "{name} {value}: {error:?}"
         );
-        cause(&error)
-    };
-
-    assert_eq!(
-        refused("since", "2026-9"),
-        "`2026-9` does not match ^[0-9]{4}-[0-9]{2}$"
-    );
-    assert_eq!(refused("code", "EU"), "`EU` is shorter than 3 characters");
-    assert_eq!(
-        refused("code", "EURO"),
-        "`EURO` is longer than 3 characters"
-    );
-    assert_eq!(refused("limit", "0"), "`0` is not at least 1");
-    assert_eq!(refused("limit", "105"), "`105` is not at most 100");
-    assert_eq!(refused("limit", "7"), "`7` is not a multiple of 5");
-    assert!(
-        Invocation::new(
-            op,
-            Values::new()
-                .param("since", "2026-09")
-                .param("code", "EUR")
-                .param("limit", "25"),
-        )
-        .is_ok()
-    );
+        assert_eq!(cause(&error), *words, "{name} {value}");
+    }
+    for (name, value) in ADMITTED_VALUES {
+        let verdict = Invocation::new(op, Values::new().param(*name, *value));
+        assert!(verdict.is_ok(), "{name} {value}: {:?}", verdict.err());
+    }
 }
 
 /// Two query parameters that only mean something together, the way a
@@ -1091,7 +1124,7 @@ fn a_single_element_all_of_is_read_as_the_schema_it_wraps() {
     // The rule the named schema states arrives through the wrapper.
     assert_eq!(
         field("booked").scalar().note().as_deref(),
-        Some(r"matches ^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+        Some(r"a match for ^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
     );
     assert!(field("booked").scalar().parse("2026-09-14").is_ok());
     assert!(field("booked").scalar().parse("14.09.2026").is_err());
@@ -1365,7 +1398,7 @@ fn a_kind_reaches_no_flags_help_line() {
     let op = doc.get("createPosting").expect("createPosting");
     let rendered = tree::command(op).render_long_help().to_string();
     assert!(
-        rendered.contains("matches ^[0-9]"),
+        rendered.contains("a match for ^[0-9]"),
         "the rule is on the line: {rendered}"
     );
     for kind in ["ledger-day", "int64"] {

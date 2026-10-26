@@ -597,6 +597,32 @@
           }
         }
       ]
+    },
+    "Pair": {
+      "type": "object",
+      "properties": {
+        "pair": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "Spread": {
+      "type": "object",
+      "properties": {
+        "spread": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 3
+        }
+      }
     }
   }
 }

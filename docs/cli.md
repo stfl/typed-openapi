@@ -181,7 +181,7 @@ own type rather than the box `DispatchError::Transport` carries.
 | what the document says | what the subcommand grows |
 |---|---|
 | a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is; none for the three headers [OpenAPI ignores](#headers-openapi-says-to-ignore) |
-| the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode` |
+| the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode`, and held to the array's `minItems`, `maxItems` and `uniqueItems` |
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
 | a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE` |
 | any other JSON body — nested, an array, no schema | `--json-body FILE`, plus `--json-body-template` where the document describes a shape |
@@ -252,6 +252,7 @@ What is in it:
 | `example` on a property | that value, taken whole |
 | `example` on the schema a property points at | that value, where the property states none of its own |
 | `enum: [draft, open, paid]` | `"draft"` — the first value it lists |
+| `enum: [7, 19]` on an integer or a number, `enum: [true]` on a boolean | `7`, `true` — the first value it lists |
 | `type: string` / `integer` / `number` / `boolean` | `""` / `0` / `0.0` / `false` |
 | a nested object | a nested object, to the depth the document nests it |
 | an array | a one-element list, the element a skeleton of `items` |
@@ -559,10 +560,11 @@ shape for one kind of mistake.
 | the document says | value name | accepted |
 |---|---|---|
 | `type: string` | `<STRING>` | whatever its `pattern`, `minLength` and `maxLength` allow |
-| `type: integer` | `<INT>` | an `i64` inside its `minimum`, `maximum` and `multipleOf` |
-| `type: number` | `<NUMBER>` | a finite `f64`, under the same three |
-| `type: boolean` | `<BOOL>` | `true` or `false` |
+| `type: integer` | `<INT>` | an `i64` inside its `minimum`, `maximum` and `multipleOf`, and one of its `enum` |
+| `type: number` | `<NUMBER>` | a finite `f64`, under the same four |
+| `type: boolean` | `<BOOL>` | `true` or `false`, or the one value its `enum` lists |
 | `enum: [...]` on a string | `<STRING>` | one of the listed values, and these complete |
+| an array of scalars | repeatable | each value as above, and the list inside `minItems`, `maxItems` and `uniqueItems` |
 
 Every rule a scalar schema states is enforced, and the ones that constrain a
 value are on the flag's help line, written by the same code that refuses it.
@@ -572,7 +574,7 @@ behind `pattern` costs a binary.
 
 ```console
 $ toy raw vouchers create --total 12.505 --currency EUR --status open
-error: invalid value '12.505' for '--total <STRING>': `12.505` does not match ^-?[0-9]+(\.[0-9]{1,2})?$
+error: invalid value '12.505' for '--total <STRING>': `12.505` is not a match for ^-?[0-9]+(\.[0-9]{1,2})?$
 
 $ toy raw vouchers create --total 12.50 --currency EUR --status void
 error: invalid value 'void' for '--status <STRING>'

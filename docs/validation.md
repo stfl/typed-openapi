@@ -1,9 +1,11 @@
 # What is checked, and what checking costs
 
-Every rule the document states about a scalar value is enforced. The primer is
-[the README](../README.md); this page is the reference for someone deciding how
-much of their API's contract they get for free, and what the engine that
-provides it costs their binary.
+Every rule the document states about a scalar value, and about a list of them,
+is enforced on a parameter and on a body field's flag. The generated type of a
+body field runs fewer of them, and [Where each rule runs](#where-each-rule-runs)
+says which. The primer is [the README](../README.md); this page is the reference
+for someone deciding how much of their API's contract they get for free, and
+what the engine that provides it costs their binary.
 
 ## The rules
 
@@ -14,9 +16,9 @@ one, and `Scalar::parse` checks all of it.
 | the document says | value name | a refusal reads |
 |---|---|---|
 | `type: string` | `<STRING>` | — |
-| `minLength: 3` | | `` `EU` is shorter than 3 characters `` |
-| `maxLength: 3` | | `` `EURO` is longer than 3 characters `` |
-| `pattern: ^[A-Z]+$` | | `` `x1` does not match ^[A-Z]+$ `` |
+| `minLength: 3` | | `` `EU` is not at least 3 characters `` |
+| `maxLength: 3` | | `` `EURO` is not at most 3 characters `` |
+| `pattern: ^[A-Z]+$` | | `` `x1` is not a match for ^[A-Z]+$ `` |
 | `enum: [draft, paid]` | `<STRING>` | `` `void` is not one of draft, paid `` — and these complete |
 | `type: integer` | `<INT>` | `` `5.0` is not an integer `` |
 | `type: integer`, past an `i64` | | `` `9223372036854775808` is out of range: an integer here is between -9223372036854775808 and 9223372036854775807 `` |
@@ -27,11 +29,37 @@ one, and `Scalar::parse` checks all of it.
 | `maximum: 100` | | `` `101` is not at most 100 `` |
 | `maximum: 10`, `exclusiveMaximum: true` | | `` `10` is not less than 10 `` |
 | `multipleOf: 5` | | `` `7` is not a multiple of 5 `` |
+| `multipleOf: 0.01` | | `` `0.005` is not a multiple of 0.01 `` |
+| `enum: [100, 200]` on an integer or a number | | `` `7` is not one of 100, 200 `` |
 | `type: boolean` | `<BOOL>` | `` `yes` is not `true` or `false` `` |
+| `type: boolean`, `enum: [true]` | `<BOOL>` | `` `false` is not one of true `` |
 
 Lengths count characters rather than bytes, so a three-character `€€€` passes a
 `maxLength: 3`. A number JSON cannot carry — an infinity, a NaN — is *not a
 number* rather than a `null` on the wire.
+
+**A refusal is built from the note of its rule.** Every rule has one note, the
+words that finish "is not …", and its refusal is "is not" and those words. The
+help line below shows the note and the refusal says it, so the two cannot
+describe different rules. The one exception is a string `enum`, which has no
+note: the flag lists its values, and they complete.
+
+**A numeric `enum` admits a value, not a spelling.** `enum: [100, 200]` on an
+integer admits `+200` and `0200` as it admits `200`, and on a number it admits
+`2e2` and `200.0` too; the request carries `200`. An `enum` beside a bound or a
+step keeps both. An `enum` that lists `null` and no other value names no value a
+flag can send, so it refuses the document while it is reduced, as a `pattern` that
+cannot run does. A boolean `enum` of one value, `[true]`,
+admits that value only; one that lists both says what `type: boolean` says and
+adds no note.
+
+**`multipleOf` is decided on digits.** The value is the digits it was typed
+with and the step is the shortest text that reads back as the step, scaled to
+whole numbers, so `0.07`, `0.29` and `19.99` are multiples of `0.01`. A binary
+float divides `0.07` by `0.01` to `7.000000000000001`, which refused about one
+amount in six, and divides `1e17` by `3` to a whole number, which admitted a
+value that is not a multiple. A `multipleOf` that is not more than 0 has no
+multiples to admit and refuses the document while it is reduced.
 
 **A number is refused when it would be sent as another number.** An integer past
 `i64` is a number all the same, and `typify` writes a `u64` for `minimum: 0`, so
@@ -51,12 +79,33 @@ The same rules are the flag's help line, rendered by the same code:
 ```console
 $ toy raw vouchers update --help
       --total <STRING>
-          A decimal amount carried in a string. (matches ^-?[0-9]+(\.[0-9]{1,2})?$)
+          A decimal amount carried in a string. (a match for ^-?[0-9]+(\.[0-9]{1,2})?$)
 ```
 
 A rule that reaches `--help` and not the parser would be a promise the server
 has to keep instead, so `Scalar::note` and the refusal are one rendering and
 cannot come apart.
+
+### A list parameter
+
+A parameter that is an array of scalars is a flag that may be given again. Each
+value meets the rules of the array's `items` above, and the values taken together
+meet the rules of the array itself:
+
+| the document says | the help line | a refusal reads |
+|---|---|---|
+| `minItems: 2` | `at least 2 values` | `` `a` is not a list of at least 2 values `` |
+| `maxItems: 2` | `at most 2 values` | `` `1, 2, 3` is not a list of at most 2 values `` |
+| `uniqueItems: true` | `different values` | `` `1, 1` is not a list of different values `` |
+
+The three are one value, `typed_openapi::scalar::Items`, with one check
+(`Items::check`) and one note (`Items::note`). `Invocation::new` asks it for
+every list parameter that was given at least once, after each value has met its
+own rules, so the command line and a typed call are refused alike
+(`ValueError::BadList`). A list that is not given is not a list of too few.
+`uniqueItems` compares the values as the items' rule reads them: `1` and `01` are
+one integer, and `0` and `-0` are one number. The refusal prints the values as
+they were given.
 
 **No `format` is enforced.** A format names a rule; it is not one. `format: money`
 tells a consumer that somebody somewhere knows what an amount is, and a
@@ -92,6 +141,61 @@ listVouchers: `since` states a rule that cannot run
   caused by: `[unterminated` is not a regular expression: Unbalanced bracket
 ```
 
+A rule that cannot run refuses the document wherever its value stands, for each
+value that the reduction reads for its rules: a path, query or header parameter
+with a `schema` (its items, for a list; `Accept`, `Content-Type` and
+`Authorization` are not parameters, as OpenAPI says), and a property of a JSON
+body whose schema is an object. A body goes whole through `--json-body` at its
+first property that has no flag, a nested one or one whose name has no spelling,
+and a property listed after it is read for its rules all the same, so the
+verdict does not depend on the order of the properties. A cookie parameter, a
+parameter stated with `content`, a property of a form, a multipart or an `allOf`
+body and the items of an array body are not read that way. Only the escape below
+is asked of them.
+
+**A `pattern` with `\p{`, `\P{` or `\u{` is refused the same way.** Without the
+Unicode flag `\p{L}` is the text `p{L}` and `\u{41}` is the letter `u` forty-one
+times, and with it they are a property and a code point. The command line and the
+generated type run a pattern without the flag, and a vendor's server may run it
+with, so a name such as `Müller` would be refused by one side and `p{L}` accepted
+by the other. A backslash takes the character after it, so `\\p{3}` is a
+backslash and then a `p`. The repair is an Overlay that states the pattern
+another way, and the class is a choice the adopter makes: `[A-Za-zÀ-ÿ]` refuses
+`Łukasz` and admits `a×b`, where `\p{L}` with the flag does the opposite. An
+Overlay that removes the `pattern` leaves the rule to the server.
+
+```
+listPeople: `surname` states a rule that cannot run
+  caused by: `^\p{L}+$` holds `\p{`, which means one thing with the Unicode flag and another without it, and a generated type cannot be given the flag
+```
+
+A flag is one place out of many, because the generated types are made of every
+named schema, of an inline body and of an inline response, and each of them runs
+its `pattern` without the flag too. So the refusal reads every schema that the
+object model reads. A `pattern` of a value in the list above is refused as above,
+with a flag or without one. A `pattern` in any other schema is refused as
+`LoadError::UnrunnablePattern`: a response, a named schema, the items of an array
+body, a property of a nested object, a cookie parameter, and a string whose
+`enum` the flag keeps and whose `pattern` it drops. It names the operation where
+the schema stands in one, and the schema as an Overlay names a target. A
+component that operations reach names none, because one schema serves many
+operations and the Overlay line is made at the component:
+
+```
+getPerson: `$.paths['/people/{id}'].get.responses['200'].content['application/json'].schema.properties.surname` states a rule that cannot run
+  caused by: `^\p{L}+$` holds `\p{`, which means one thing with the Unicode flag and another without it, and a generated type cannot be given the flag
+```
+
+That reaches the schema of an error response and of a callback, which no type is
+made of; the `pattern` there is the same disagreement, and the Overlay line that
+repairs it is the one the others need. A schema that stands beside a `$ref` that
+is text, in an object that can be a reference (a schema, a parameter, a header, a
+request body, a response, or a callback under `components`), is not read: the
+object model keeps the reference alone, as OpenAPI 3.0.3 says of the Reference
+Object, so a `pattern` there is no part of the document. In any other object (a
+media type, an operation, an encoding) a `$ref` is a key like any other, and the
+schema beside it is read.
+
 ## Where each rule runs
 
 A parameter and a body field take different roads, and the difference is worth
@@ -100,15 +204,31 @@ knowing before you decide how much to put in the document.
 | the value | checked by | when |
 |---|---|---|
 | a path, query or header parameter | `Scalar::parse`, in the flag's value parser, and again in `Invocation::new`, which keeps the parsed text (`Scalar::wire`) that is sent | the command line, and every typed call |
+| the values of a list parameter, taken together | `Items::check`, in `Invocation::new` | the command line, and every typed call |
 | a body field, from a per-field flag | `Scalar::parse`, in the flag's value parser | the command line |
 | a body field, in a generated type | the type's own `FromStr` / `Deserialize` | every typed call, and every response |
 | a whole body from `--json-body FILE` | `client::fits`, called by the adopter's own seam | the command line, before the request is built |
 
 A parameter never passes through a generated type, so `Scalar` is the only thing
-that can ever check one. A body field has both roads, and they run the same rule
-for as long as the rule is one the *schema* states: the flag runs every rule
-`Scalar` carries, and a `pattern` among them is the same expression on the same
-engine the generated newtype's `FromStr` runs.
+that can ever check one. A body field has both roads, and the flag runs every
+rule `Scalar` carries. The generated type runs fewer, as typify 0.8 writes it:
+
+- **Both roads run** a `pattern`, which is the same expression on the same engine
+  as the generated newtype's `FromStr`, `minLength`, `maxLength`, and an `enum` of
+  strings, integers or numbers.
+- **Both roads run an integer's range** only as far as the Rust integer that
+  typify picks holds it: `u64` for `minimum: 0`, `NonZeroU64` for `minimum: 1`,
+  `i8` for `-128` to `127`.
+- **Only the flag runs** a boolean `enum`, `multipleOf`, a bound that no Rust
+  integer holds (`maximum: 100` is an `i64`), and a bound of a `number`, which is
+  an `f64`. A typed call, and `client::fits` over a whole body, accept what the
+  flag refuses, and the server is the one that refuses it.
+- **No road runs** `minItems`, `maxItems` and `uniqueItems` of an array in a
+  body: typify writes a `Vec`, and `Items` is read for parameters only. The one
+  exception is an array whose `minItems` and `maxItems` are equal and more than
+  0, with a `uniqueItems` that is not true: typify writes a fixed-size array
+  (`minItems: 2, maxItems: 2` is `[String; 2]`), a typed call cannot hold another
+  count, and `client::fits` refuses a body list of another count as a `Mismatch`.
 
 The roads part where a field's reading lives in a Rust type rather than in the
 schema. **An integer format is one such place.** `format: int32` is a name and not
@@ -338,9 +458,9 @@ and a list as a list. A generated type does, and so does a type named in
 `Settings::replace` that reads a string and writes one. A type that cannot be
 written back is `Unwritable`.
 
-Two things are not read at all: an `enum` on a numeric schema, and every
-keyword that describes a shape no flag carries — `minItems`, `minProperties`
-and the rest belong to bodies, which go through a file.
+Every keyword that describes a shape no flag carries is not read at all:
+`minProperties`, and `minItems` on the array of a body, belong to bodies, which
+go through a file.
 
 ## What it costs
 

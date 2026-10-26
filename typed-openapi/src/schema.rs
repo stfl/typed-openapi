@@ -20,8 +20,8 @@
 use std::collections::BTreeSet;
 
 use openapiv3::{
-    ArrayType, Components, IntegerType, NumberType, ObjectType, ReferenceOr, Schema, SchemaKind,
-    StringType, Type, VariantOrUnknownOrEmpty,
+    ArrayType, BooleanType, Components, IntegerType, NumberType, ObjectType, ReferenceOr, Schema,
+    SchemaKind, StringType, Type, VariantOrUnknownOrEmpty,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -206,9 +206,37 @@ pub(crate) fn scalar_of(
         Type::String(s) => Some(string_scalar(s)),
         Type::Number(n) => Some(Scalar::Number(number_bounds(n))),
         Type::Integer(i) => Some(Scalar::Integer(integer_bounds(i))),
-        Type::Boolean(_) => Some(Scalar::Boolean),
+        Type::Boolean(b) => Some(Scalar::Boolean(only_boolean(b))),
         Type::Object(_) | Type::Array(_) => None,
     })
+}
+
+/// Whether this schema's `enum` lists values and every one of them is `null`.
+///
+/// A flag cannot send `null`, so [`scalar_of`] leaves such an `enum` out, and the
+/// scalar it reads then admits every value, where JSON Schema admits none that is
+/// not `null`. The reduction asks this beside `scalar_of` and refuses the schema,
+/// because reading it as no rule at all would be the approximation it forbids.
+pub(crate) fn lists_only_null(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+) -> Result<bool, RefError> {
+    let schema = stated(schema, components)?;
+    let SchemaKind::Type(ty) = &schema.schema_kind else {
+        return Ok(false);
+    };
+    Ok(match ty {
+        Type::String(s) => only_null(&s.enumeration),
+        Type::Number(n) => only_null(&n.enumeration),
+        Type::Integer(i) => only_null(&i.enumeration),
+        Type::Boolean(b) => only_null(&b.enumeration),
+        Type::Object(_) | Type::Array(_) => false,
+    })
+}
+
+/// Whether an `enum` lists something, and that something is `null` alone.
+fn only_null<T>(enumeration: &[Option<T>]) -> bool {
+    !enumeration.is_empty() && enumeration.iter().all(Option::is_none)
 }
 
 /// What a property says about itself, and what it inherits by pointing
@@ -436,9 +464,15 @@ fn array_skeleton(
 fn empty(scalar: &Scalar) -> Value {
     match scalar {
         Scalar::Text(_) => Value::String(String::new()),
-        Scalar::Integer(_) => Value::from(0),
-        Scalar::Number(_) => Value::from(0.0),
-        Scalar::Boolean => Value::Bool(false),
+        Scalar::Integer(bounds) => bounds
+            .allowed
+            .first()
+            .map_or_else(|| Value::from(0), |first| Value::from(*first)),
+        Scalar::Number(bounds) => bounds
+            .allowed
+            .first()
+            .map_or_else(|| Value::from(0.0), |first| Value::from(*first)),
+        Scalar::Boolean(only) => Value::Bool(only.unwrap_or(false)),
         Scalar::Choice(values) => values
             .first()
             .map_or(Value::Null, |first| Value::String(first.clone())),
@@ -470,6 +504,7 @@ fn number_bounds(n: &NumberType) -> Bounds<f64> {
         low: limit(n.minimum, n.exclusive_minimum),
         high: limit(n.maximum, n.exclusive_maximum),
         multiple_of: n.multiple_of,
+        allowed: n.enumeration.iter().flatten().copied().collect(),
     }
 }
 
@@ -478,7 +513,16 @@ fn integer_bounds(i: &IntegerType) -> Bounds<i64> {
         low: limit(i.minimum, i.exclusive_minimum),
         high: limit(i.maximum, i.exclusive_maximum),
         multiple_of: i.multiple_of,
+        allowed: i.enumeration.iter().flatten().copied().collect(),
     }
+}
+
+/// The one value a boolean's `enum` allows, and `None` where it allows both or
+/// lists none: `[true, false]` says what `type: boolean` says already.
+fn only_boolean(b: &BooleanType) -> Option<bool> {
+    let mut listed = b.enumeration.iter().flatten().copied();
+    let first = listed.next()?;
+    listed.all(|value| value == first).then_some(first)
 }
 
 /// One end of a range. OpenAPI 3.0 states exclusivity as a flag beside the

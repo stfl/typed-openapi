@@ -647,6 +647,108 @@ the crate follows [Semantic Versioning][semver].
   where the field was dropped from the body in silence. `ArgError` is
   `#[non_exhaustive]`, so both are no break. Repair: declare the flag as text,
   which is what `values` reads, and type a value that the field's rule accepts.
+- **A numeric or boolean `enum`, and a list's `minItems`, `maxItems` and
+  `uniqueItems`, are enforced on flags.** `--status 7` against
+  `enum: [100, 200]` was sent, `--help` listed no value, and the generated type
+  refused the `7` that the flag sent. `--ids 1 --ids 1 --ids 3` against
+  `maxItems: 2` was sent too. `Scalar::parse` checks the enum and
+  `Scalar::note` renders it (`one of 100, 200`), as a bound is, and a value is
+  admitted whatever its spelling (`+200`). A list is held to its rules in
+  `Invocation::new`, so the command line and the typed call are refused alike,
+  as `ValueError::BadList { op, name }` with the values as they were given in
+  its cause (`` `1, 1, 3` is not a list of at most 2 values ``). `ValueError`
+  is `#[non_exhaustive]`, so the variant is no break. sevdesk-cli has 14 numeric
+  enums in its corrected document, and four of them are query parameters
+  (`GET /Invoice`, `/Order` and `/Voucher` `status`, and
+  `getTotalDataExportCount`'s required `status`): its CLI enforces them when it
+  moves its rev. `--json-body-template` shows the first value that an `enum` of
+  integers or numbers lists, where it showed `0` or `0.0`, and the one value that
+  a boolean `enum` admits, where it showed `false`; an `enum` that lists both
+  booleans still shows `false`. Repair: none, the template is a shape and not a
+  request. The model changes, so this is a break of three public shapes
+  and of the blob:
+  - `Scalar::Boolean` is `Scalar::Boolean(Option<bool>)`, with the one value that
+    an `enum` of `type: boolean` lists, and `None` where there is none or it
+    lists both. Repair: match `Boolean(_)`, and build `Boolean(None)`.
+  - `scalar::Bounds<T>` gains `allowed: Vec<T>`, the `enum` in the document's
+    order, and is no longer `Copy`. Repair: build it with `..Bounds::default()`,
+    and clone where you copied.
+  - `Shape::Flag`'s `join: Option<Join>` is `list: Option<List>`, where
+    `List { join: Join, items: scalar::Items }` and `Items { min, max, unique }`
+    hold the three rules of the array. `Shape::repeatable` is unchanged. Repair:
+    read `list.map(|list| list.join)` where you read `join`.
+  - `Document::MODEL_LAYOUT` is 6. Repair: run the bless step again and commit
+    `src/model.postcard`; a blob of layout 5 is `DocumentError::Stale`.
+- **A refusal is worded from the note of its rule.** The sentences that
+  `Scalar::parse` gives for a length and a `pattern` are the note of the rule
+  after "is not", as those for a bound already were:
+  `` `EU` is shorter than 3 characters `` is `` `EU` is not at least 3 characters ``,
+  `longer than` is `is not at most`, and `` does not match ^[A-Z]+$ `` is
+  `` is not a match for ^[A-Z]+$ ``. The note on the help line reads `a match for
+  ^[A-Z]+$` where it read `matches ^[A-Z]+$`. The variant is `ScalarError::Rule`
+  as before. Repair: none for a user; a test or a script that matches the old
+  sentence reads the new one.
+- **`multipleOf` is decided on the digits of the value and of the step.** A
+  binary float divides `0.07` by `0.01` to `7.000000000000001`, so 159 of the
+  first 1000 amounts in cents, `0.07` and `0.29` among them, were refused with a
+  false reason, and `1e17` was admitted as a multiple of `3`. The digits
+  are exact, so `0.07`, `0.29` and `19.99` are multiples of `0.01`, and the
+  remainder of an integer cannot panic. A value that the flag admitted wrongly is
+  refused now: `1e17` is no multiple of `3`. Repair: none for a value that the
+  flag refused wrongly, which is accepted now; for a value that it admitted
+  wrongly, send a multiple.
+- **A `pattern` with `\p{`, `\P{` or `\u{` is refused while the document is
+  loaded, in every schema the model reads.** Without the Unicode flag `\p{L}` is
+  the text `p{L}`, and with it a letter. The command line and the generated type
+  run a `pattern` without the flag, and each generated type that holds one
+  refuses `Müller` and accepts `p{L}` where a vendor's server that runs it with
+  the flag does the opposite. On a `pattern` that a path, query or header
+  parameter or a property of a JSON body carries, with a flag or without one, the
+  document is refused as `LoadError::Unrunnable { op, name, source }`. In any
+  other schema (a response, a property of a nested object, the items of an array
+  body, a named schema) it is refused as the new
+  `LoadError::UnrunnablePattern { op, at, source }`, which names the operation
+  where one holds the schema and the schema as an Overlay names a target. A
+  schema beside a `$ref` that is text, in an object that can be a reference, is
+  not read, because the model keeps the reference alone. `LoadError` is
+  `#[non_exhaustive]`, so the variant is no break.
+  The cause prints the pattern and the escape. A backslash takes the character
+  after it, so `\\p{3}` loads. sevdesk-cli's 43 patterns use none. Repair: an
+  Overlay that states the pattern another way, and the class is a choice. A
+  class such as `[A-Za-zÀ-ÿ]` refuses `Łukasz` and admits `a×b`, where `\p{L}`
+  with the flag does the opposite; an Overlay that removes the `pattern` leaves
+  the rule to the server.
+- **An `enum` that lists `null` and no other value is refused while the document
+  is reduced.** A flag cannot send `null`, so the `enum` left no rule and the
+  flag admitted every value, where JSON Schema admits no integer under
+  `{ type: integer, enum: [null] }`. The document is refused as
+  `LoadError::Unrunnable { op, name, source }` on a path, query or header
+  parameter, on the items of such a list and on a property of a JSON body whose
+  schema is an object. `null` beside a value stays the way OpenAPI 3.0 says that
+  a value may be `null`. Repair: an Overlay that removes the `enum`, or lists the
+  values.
+- **A `multipleOf` that is not more than 0 is refused while the document is
+  reduced.** A step of 0 refused every value, and `multipleOf: -1` with the value
+  `i64::MIN` made `Scalar::parse` panic. The document is refused as
+  `LoadError::Unrunnable { op, name, source }`, as a `pattern` that no engine
+  reads is. sevdesk-cli states no `multipleOf`. Repair: an Overlay that removes
+  the keyword or states the step as a positive number.
+- **A property of a body is read for its rules wherever it stands among its
+  siblings.** A body goes whole through `--json-body` at its first property that
+  has no flag, a nested one or one whose name has no spelling, and the
+  properties listed after it were not read for their rules, so a `pattern` that
+  no engine reads refused a document or not by the order of the properties.
+  Every property of the object that a JSON body's schema is, is read now, and the
+  three refusals above hold wherever it stands. A document that loaded and
+  failed the bless is refused with the property named: a `pattern` such as `[`,
+  an `enum` of `null` alone (`LoadError::Unrunnable`) and a `$ref` that does not
+  resolve, which made typify panic (`LoadError::Unresolvable`). A document that
+  loaded and blessed is refused too, after a nested property or one whose name
+  has no spelling: a `multipleOf` that is not more than 0, and a `$ref` that the
+  reduction cannot follow because it is a cycle or points inside a component
+  (`LoadError::Unresolvable`). Repair: an Overlay that states the rule another
+  way or removes it, or that makes the `$ref` name a component schema
+  (`#/components/schemas/<name>`) that does not lead back to itself.
 
 ### Removed
 

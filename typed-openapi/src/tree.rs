@@ -810,11 +810,11 @@ fn param_arg(op: &Operation, param: &Param) -> Option<Arg> {
         flag,
         location,
         scalar,
-        join,
+        list,
         // The kind the document calls this value is not a rule about it, and
-        // the help line carries rules: every note beside a flag is something
-        // `Scalar::parse` refuses a value for, and a format is something
-        // nothing here can refuse a value for.
+        // the help line carries rules: every rule note beside a flag is something
+        // `Scalar::parse` refuses a value for, or `Items::check` refuses a list
+        // for, and a format is something nothing here can refuse a value for.
         format: _,
     } = param.shape()
     else {
@@ -837,9 +837,10 @@ fn param_arg(op: &Operation, param: &Param) -> Option<Arg> {
         |text| Some(text.to_owned()),
     );
     let companions = companion_flags(op, param);
-    let notes = join
-        .map(|join| join.note().to_owned())
+    let notes = list
+        .map(|list| list.join.note().to_owned())
         .into_iter()
+        .chain(list.and_then(|list| list.items.note()))
         .chain(wire(renamed(flag, param.name()), param.name()))
         .chain(
             companions
@@ -852,7 +853,7 @@ fn param_arg(op: &Operation, param: &Param) -> Option<Arg> {
         help_line(described.as_deref(), scalar, notes),
         param.required(),
     );
-    if join.is_some() {
+    if list.is_some() {
         arg = arg.action(ArgAction::Append);
     }
     // The parser refuses the flag without its companions, the way it refuses a
@@ -996,7 +997,7 @@ fn value_arg(flag: &str, scalar: &Scalar, help: Option<String>, required: bool) 
         Scalar::Integer(_) | Scalar::Number(_) | Scalar::Text(_) | Scalar::Choice(_) => {
             arg.allow_hyphen_values(true)
         }
-        Scalar::Boolean => arg,
+        Scalar::Boolean(_) => arg,
     };
     if let Some(help) = help {
         arg = arg.help(help);

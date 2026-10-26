@@ -1,12 +1,13 @@
 //! Where the specification puts each object of an OpenAPI 3.0 document: which
 //! key of which object leads to another object, and what the keys of a map are.
 //!
-//! Two walks read the overlaid document before the object model does.
-//! [`required`](crate::required) looks for a schema that requires a key nothing
-//! declares, and [`markers`](crate::markers) looks for an `x-cli-` key that
-//! nothing reads. Each has to tell an object the specification gives fixed
-//! fields from a name somebody chose and from JSON that is the vendor's own, so
-//! they read one table.
+//! Three walks read the overlaid document. [`required`](crate::required) and
+//! [`markers`](crate::markers) read it before the object model does, and look
+//! for a schema that requires a key nothing declares and for an `x-cli-` key that
+//! nothing reads. [`patterns`](crate::patterns) reads it after the reduction, and
+//! looks for a `pattern` that the Unicode flag reads another way. Each has to
+//! tell an object the specification gives fixed fields from a name somebody chose
+//! and from JSON that is the vendor's own, so they read one table.
 //!
 //! # The table is a list of what is entered
 //!
@@ -22,9 +23,9 @@
 //!   3.0 schema.
 //!
 //! A list of what is entered fails toward a position unread. The schema walk
-//! misses a phantom there, and the marker walk misses a marker. A list of what is
-//! not entered fails toward a document wrongly refused at every field nobody put
-//! on it, and neither walk may do that.
+//! misses a phantom there, the marker walk a marker, and the pattern walk a
+//! `pattern`. A list of what is not entered fails toward a document wrongly
+//! refused at every field nobody put on it, and no walk may do that.
 //!
 //! An `x-…` key of an object that a walk enters is an extension, and the walk
 //! asks about it by its name. In a map of names somebody chose it is a name like
@@ -39,8 +40,8 @@
 //! Paths Object that is no path, and a key of the Responses Object that is no
 //! status code. A walk says how far it reaches with a [`Reach`].
 //!
-//! Both walks enter what 3.0.3 defines, so a map added to the table for a route
-//! of that kind is added for both. Only the schema walk enters the rest, and
+//! Every walk enters what 3.0.3 defines, so a map added to the table for a route
+//! of that kind is added for all of them. Only the schema walk enters the rest, and
 //! [`Reach::Whole`] is where the table says why:
 //!
 //! - The marker walk judges a key by where it stands. Nothing builds a request
@@ -55,6 +56,10 @@
 use openapiv3::StatusCode;
 use serde::Deserialize as _;
 use serde::de::value::{Error, StrDeserializer};
+use serde_json::{Map, Value};
+
+/// The key that makes an object a reference to another object of the document.
+const REF: &str = "$ref";
 
 /// A specification extension: where the specification lets an object carry one,
 /// an `x-…` key holds the vendor's own arbitrary JSON rather than a part of the
@@ -168,7 +173,8 @@ pub(crate) enum Reach {
     /// What OpenAPI 3.0.3 defines, and so what the object model reads. The walk
     /// of [`markers`](crate::markers) reaches this far, because it judges a key
     /// by where it stands, and a key under a position that the model drops
-    /// stands nowhere.
+    /// stands nowhere. So does the walk of [`patterns`](crate::patterns), because
+    /// a generated type is made of what the model reads and of nothing it drops.
     Defined,
     /// What 3.0.3 defines, and the routes and keys beside it that a 3.0
     /// document may carry and the model drops. The walk of
@@ -256,6 +262,57 @@ impl Kind {
             Reach::Defined => None,
             Reach::Whole => self.undefined(key),
         })
+    }
+
+    /// Whether the object model reads this object as the reference it holds and
+    /// as nothing else: an object of a kind that can be a reference, with a
+    /// `$ref` that is text.
+    ///
+    /// `openapiv3` reads such a node as `ReferenceOr::Reference` and drops every
+    /// other key, as OpenAPI 3.0.3 says of the Reference Object: "any properties
+    /// added SHALL be ignored". So the walk of `patterns.rs`, which reaches what
+    /// the model reads, stops at one, and what stands beside the `$ref` is no
+    /// part of the document. A `$ref` that is not text is no reference, and the
+    /// node is the object it is.
+    ///
+    /// A path item is not in the list. The model reads one as a reference under
+    /// `paths` only, and the load refuses a path item that is a `$ref`
+    /// (`LoadError::PathItem`) before a walk that reads the model asks. A
+    /// callback is in the list for `components.callbacks` only: an operation
+    /// holds `Callback`s and not references to them, so the load refuses a
+    /// callback of an operation that is a `$ref` (`LoadError::Shape`) before a
+    /// walk asks, and the walk need not tell the two places apart.
+    pub(crate) fn is_read_as_reference(self, fields: &Map<String, Value>) -> bool {
+        let referable = match self {
+            Self::Schema
+            | Self::Parameter
+            | Self::Header
+            | Self::RequestBody
+            | Self::Response
+            | Self::Link
+            | Self::Example
+            // Under `components.callbacks` only, as the doc above says.
+            | Self::Callback
+            | Self::SecurityScheme => true,
+            Self::Root
+            | Self::Info
+            | Self::Contact
+            | Self::License
+            | Self::Server
+            | Self::ServerVariable
+            | Self::Tag
+            | Self::ExternalDocs
+            | Self::Components
+            | Self::PathItem
+            | Self::Operation
+            | Self::MediaType
+            | Self::Encoding
+            | Self::OAuthFlows
+            | Self::OAuthFlow
+            | Self::Discriminator
+            | Self::Xml => false,
+        };
+        referable && fields.get(REF).is_some_and(Value::is_string)
     }
 
     /// The routes that OpenAPI 3.0.3 defines.

@@ -3,8 +3,9 @@
 //! `createLedgerEntry` states its request body inline rather than under a name
 //! in `components.schemas` — an ordinary thing for a document to do, and no
 //! statement at all about how much the document describes. This one states a
-//! `required` list and points a property at a named schema carrying a
-//! `pattern`, so there is a rule to run and something to run it on.
+//! `required` list, points a property at a named schema carrying a `pattern`,
+//! and lists the VAT rates an entry may carry as a numeric `enum`, so there are
+//! two kinds of rule to run and something to run each on.
 //!
 //! What makes that worth a test of its own is how easily it reads as the
 //! opposite. A body check that accepts anything is indistinguishable from a
@@ -17,15 +18,22 @@
 //! `--json-body` file goes through in
 //! [`cli/src/raw.rs`](../../cli/src/raw.rs).
 //!
-//! A vendor revision that widens the rule, or a bless step that stops reaching
+//! A vendor revision that widens a rule, or a bless step that stops reaching
 //! it, fails here rather than quietly admitting values the document forbids.
+//! The two rules are of two kinds because a `pattern` is read by one engine on
+//! every road, and a numeric `enum` is read by the flag from the schema and by
+//! the type from a list of values that `typify` writes: a rule that the model
+//! carries for a string is not thereby one that it carries for a number.
 
 #![expect(
     clippy::expect_used,
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
-use api::{CreateLedgerEntryBody, DOCUMENT, LedgerAccount, Memo, OperationId, money};
+use api::{
+    CreateLedgerEntryBody, CreateLedgerEntryBodyVatRate, DOCUMENT, LedgerAccount, Memo,
+    OperationId, money,
+};
 use typed_openapi::{Document, Scalar};
 
 /// Every edge the `LedgerAccount` schema's `pattern` has, and whether the
@@ -79,6 +87,31 @@ fn field(name: &str) -> (Scalar, bool) {
     (field.scalar().clone(), field.required())
 }
 
+/// Every value of `vatRate` the tests below try, and whether the document's
+/// `enum` of `0`, `7` and `19` admits it.
+///
+/// A rate that is a rate elsewhere (`20`, `5`), one that is a digit of the
+/// right ones (`1`, `9`, `190`), one that is below and above them, and one that
+/// no `i64` is bigger than.
+const RATES: &[(i64, bool)] = &[
+    (0, true),
+    (7, true),
+    (19, true),
+    (-7, false),
+    (1, false),
+    (5, false),
+    (8, false),
+    (9, false),
+    (20, false),
+    (190, false),
+    (i64::MAX, false),
+];
+
+/// The rule the command line runs on `--vat-rate`, read off the reduced model.
+fn rates() -> Scalar {
+    field("vatRate").0
+}
+
 /// A body carrying `account`, and the two other properties filled in well.
 fn body(account: &str) -> serde_json::Value {
     serde_json::json!({ "account": account, "amount": "12.50", "memo": "PO-1234" })
@@ -101,7 +134,7 @@ fn a_value_the_documents_pattern_forbids_does_not_deserialise_into_the_body() {
     // A rule that says nothing would make every row below pass on all three
     // sides, so the test would hold nothing.
     assert!(
-        rule.note().is_some_and(|note| note.contains("matches")),
+        rule.note().is_some_and(|note| note.contains("a match for")),
         "`--account` carries no `pattern`, so this test can no longer tell an \
          admitted value from a forbidden one: the document has stopped saying \
          what a ledger account is"
@@ -139,6 +172,57 @@ fn a_value_the_documents_pattern_forbids_does_not_deserialise_into_the_body() {
     }
 }
 
+/// The same claim for a numeric `enum`, which `Scalar` carries for a number as it
+/// does for a string.
+///
+/// Were the `enum` no rule of the number, `--vat-rate 5` would be sent, the
+/// generated type would refuse `5`, and `--help` would list no rate: the three
+/// readings would part at the one rule that only a string had. The document's
+/// reading is the flag's own check, `Scalar::parse`, which takes the text an
+/// operator types.
+#[test]
+fn a_value_the_documents_enum_forbids_does_not_deserialise_into_the_body() {
+    let rule = rates();
+    // A rule that says nothing would make every row below pass on all three
+    // sides, so the test would hold nothing.
+    assert_eq!(
+        rule.note().as_deref(),
+        Some("one of 0, 7, 19"),
+        "`--vat-rate` carries no `enum`, so this test cannot tell an admitted \
+         value from a forbidden one"
+    );
+
+    for (rate, admitted) in RATES {
+        let by_document = rule.parse(&rate.to_string()).is_ok();
+        assert_eq!(
+            by_document,
+            *admitted,
+            "the document's rule has moved: it now {} `{rate}`",
+            verdict(by_document)
+        );
+
+        let sent = serde_json::json!({ "account": "4400", "amount": "12.50", "vatRate": rate });
+        let by_type = serde_json::from_value::<CreateLedgerEntryBody>(sent.clone()).is_ok();
+        assert_eq!(
+            by_type,
+            by_document,
+            "`{rate}`: the document {} it and the generated body type {} it",
+            verdict(by_document),
+            verdict(by_type)
+        );
+
+        let by_check = OperationId::CreateLedgerEntry.check_body(&sent).is_ok();
+        assert_eq!(
+            by_check,
+            by_document,
+            "`{rate}`: the document {} it and the check a `--json-body` file goes \
+             through {} it",
+            verdict(by_document),
+            verdict(by_check)
+        );
+    }
+}
+
 /// The other direction, which the one above cannot give: a body the document
 /// admits arrives as the values that were sent, and goes back out as the bytes
 /// they came in as.
@@ -168,6 +252,19 @@ fn a_body_the_document_admits_round_trips_through_the_generated_type() {
         serde_json::to_value(&parsed).expect("a body serialises"),
         sent,
         "the body does not go back out as the bytes it came in as"
+    );
+
+    let rated = serde_json::json!({ "account": "4400", "amount": "12.50", "vatRate": 19 });
+    let parsed: CreateLedgerEntryBody =
+        serde_json::from_value(rated.clone()).expect("the document admits a rate of 19");
+    assert_eq!(
+        parsed.vat_rate,
+        Some(CreateLedgerEntryBodyVatRate::try_from(19).expect("19 is listed"))
+    );
+    assert_eq!(
+        serde_json::to_value(&parsed).expect("a body serialises"),
+        rated,
+        "the rate does not go back out as the number it came in as"
     );
 }
 

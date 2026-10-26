@@ -70,6 +70,9 @@ const URL: &str = "http://localhost";
 const SOUND: &str = "{ name: n, in: query, schema: { type: integer } }";
 const UNRESOLVABLE: &str = "{ name: n, in: query, schema: { $ref: '#/components/schemas/Nope' } }";
 const UNRUNNABLE: &str = "{ name: n, in: query, schema: { type: string, pattern: '(?P<n>' } }";
+/// A schema that no flag is made of, which holds an escape of the Unicode flag.
+const UNICODE_SCHEMA: &str =
+    "{ name: n, in: cookie, schema: { type: string, pattern: '^\\p{L}+$' } }";
 
 /// Text that is not YAML.
 const NOT_YAML: &str = "actions: [\n";
@@ -117,6 +120,14 @@ fn bad_value() -> ValueError {
     let op = doc.get("listThings").expect("the one operation");
     Invocation::new(op, Values::new().param("n", "s3cr3t-value"))
         .expect_err("`s3cr3t-value` is not an integer")
+}
+
+/// A list parameter that takes each value once, given a value twice.
+fn bad_list() -> ValueError {
+    let list = "{ name: n, in: query, schema: { type: array, uniqueItems: true, items: { type: integer } } }";
+    let doc = Document::load(&document(URL, list), &[]).expect("a document");
+    let op = doc.get("listThings").expect("the one operation");
+    Invocation::new(op, Values::new().each("n", [7, 7])).expect_err("`7` is given twice")
 }
 
 /// A verb of the adopter's own that declares `--n` with a parser that stores an
@@ -275,6 +286,11 @@ fn loading() -> Vec<Case> {
             load(&document(URL, UNRUNNABLE), &[]),
             |e| matches!(e, LoadError::Unrunnable { .. }),
         ),
+        from_input(
+            "LoadError::UnrunnablePattern",
+            load(&document(URL, UNICODE_SCHEMA), &[]),
+            |e| matches!(e, LoadError::UnrunnablePattern { .. }),
+        ),
     ]
 }
 
@@ -283,6 +299,9 @@ fn requesting() -> Vec<Case> {
     vec![
         from_input("ValueError::BadValue", bad_value(), |e| {
             matches!(e, ValueError::BadValue { .. })
+        }),
+        from_input("ValueError::BadList", bad_list(), |e| {
+            matches!(e, ValueError::BadList { .. })
         }),
         case(
             "PlanError::Request",

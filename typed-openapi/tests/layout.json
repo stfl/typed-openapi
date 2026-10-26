@@ -1,5 +1,5 @@
 {
-  "model_layout": 5,
+  "model_layout": 6,
   "traces": {
     "Bounds<f64>": {
       "Bounds": {
@@ -21,6 +21,11 @@
           {
             "multiple_of": {
               "OPTION": "F64"
+            }
+          },
+          {
+            "allowed": {
+              "SEQ": "F64"
             }
           }
         ]
@@ -117,6 +122,11 @@
             "multiple_of": {
               "OPTION": "I64"
             }
+          },
+          {
+            "allowed": {
+              "SEQ": "I64"
+            }
           }
         ]
       },
@@ -175,6 +185,23 @@
           }
         ]
       },
+      "Items": {
+        "STRUCT": [
+          {
+            "min": {
+              "OPTION": "U64"
+            }
+          },
+          {
+            "max": {
+              "OPTION": "U64"
+            }
+          },
+          {
+            "unique": "BOOL"
+          }
+        ]
+      },
       "Join": {
         "ENUM": {
           "0": {
@@ -198,6 +225,20 @@
             }
           }
         }
+      },
+      "List": {
+        "STRUCT": [
+          {
+            "join": {
+              "TYPENAME": "Join"
+            }
+          },
+          {
+            "items": {
+              "TYPENAME": "Items"
+            }
+          }
+        ]
       },
       "Location": {
         "ENUM": {
@@ -331,7 +372,11 @@
             }
           },
           "3": {
-            "Boolean": "UNIT"
+            "Boolean": {
+              "NEWTYPE": {
+                "OPTION": "BOOL"
+              }
+            }
           },
           "4": {
             "Choice": {
@@ -361,9 +406,9 @@
                   }
                 },
                 {
-                  "join": {
+                  "list": {
                     "OPTION": {
-                      "TYPENAME": "Join"
+                      "TYPENAME": "List"
                     }
                   }
                 },

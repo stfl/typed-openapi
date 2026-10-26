@@ -601,8 +601,8 @@ fn add_param(
     declared: &[&Parameter],
     names: &Names,
 ) -> Result<(), GenerateError> {
-    let join = match param.shape() {
-        Shape::Flag { join, .. } => join,
+    let list = match param.shape() {
+        Shape::Flag { list, .. } => list,
         Shape::Unreachable(why) => {
             out.notes.push(format!(
                 "The document's `{}` parameter is not an argument: it is {why}. \
@@ -626,7 +626,7 @@ fn add_param(
     );
     let schema = param_schema(declared, param.name())?;
     let wire = param.name();
-    if join.is_some() {
+    if list.is_some() {
         // A list parameter is the wire name given once per value, which is the
         // repetition a repeated flag reaches the request builder with.
         let ty = list_type(param.name(), schema, names)?;

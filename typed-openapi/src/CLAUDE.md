@@ -105,14 +105,28 @@ keys are extensions.
 
 A route is one that 3.0.3 defines or one that only the schema walk enters
 (`Reach::Defined` and `Reach::Whole`), and each has one place in the table. A
-map added for a route that 3.0.3 defines is added for both walks. The schema
-walk also enters the rest, because `required::check` judges a schema by what it
-holds and not by where it stands: wherever it can tell that a name is declared
-nowhere it refuses the phantom, although typify writes no type there (F-81), and
-the refusal names an Overlay. A marker is judged by where it stands, so the scan
-stops at what the model reads. A route that the table gains for the schema walk
-alone gets a row in `tests/required.rs` and one in the marker test of the keys
-that 3.0.3 does not define.
+map added for a route that 3.0.3 defines is added for all three walks. The
+schema walk also enters the rest, because `required::check` judges a schema by
+what it holds and not by where it stands: wherever it can tell that a name is
+declared nowhere it refuses the phantom, although typify writes no type there
+(F-81), and the refusal names an Overlay. A marker is judged by where it stands,
+so the scan stops at what the model reads. So does the walk of `src/patterns.rs`,
+because a generated type is made of nothing that the model drops. A route that
+the table gains for the schema walk alone gets a row in `tests/required.rs` and
+one in the marker test of the keys that 3.0.3 does not define.
+
+An object of a kind that can be a reference, and that holds a string `$ref`, is
+to the model the reference alone, and OpenAPI 3.0.3 says of the Reference Object
+that "any properties added SHALL be ignored". `Kind::is_read_as_reference`
+answers it for the kinds the model reads as a `ReferenceOr`, and the walk of
+`src/patterns.rs` judges nothing in such an object and enters none of its other
+keys. A `pattern` beside a `$ref` there is not a `pattern` of the document, and
+refusing it would refuse a document for data that nobody reads. In an object
+that cannot be a reference (a media type, an operation, the path item of a
+callback, an encoding) a `$ref` is a key like any other, and the schema beside
+it is read. A callback is a reference under `components.callbacks` only, because
+the model refuses a callback of an operation that is a `$ref`
+(`LoadError::Shape`), so the kind needs no second answer.
 
 A list of what is entered fails toward a marker missed, which the docs accept. A
 list of what is not entered fails toward a document wrongly refused at each
@@ -131,20 +145,53 @@ example to its own convention.
 
 **Every rule the document states about a value is enforced, in one place.**
 `Scalar` carries what the schema said — `pattern`, `minLength`/`maxLength`, the
-bounds, `multipleOf` — and `Scalar::parse` is the only thing that checks any of
-them. `Scalar::wire` is the text of a parameter that goes on the wire, and it
-asks `parse`'s own reading of a number, so there is no second check: the number
-that is checked is the number that is sent, and `Invocation::new` keeps the
-text. An `f64` reads the nearest float of its digits, so a number is refused
-when that float is another number (`exact` compares decimal numbers, not text),
-and an integer past `i64` is out of range and not "not an integer". A rule that
-reaches `--help` and not the parser is the defect this invariant exists to
-prevent, so `Scalar::note` and the refusal are one rendering. `pattern` runs on
-`regress`, the engine typify puts inside a generated newtype's `FromStr`, so a
-value the command line accepts is a value the generated type accepts by
-construction. No `format` is special-cased: a format names a rule and is not
-one, and a document that wants a rule states it in JSON Schema everything can
-read.
+bounds, `multipleOf`, and an `enum` of strings, numbers or booleans — and
+`Scalar::parse` is the only thing that checks any of them. `Scalar::wire` is the
+text of a parameter that goes on the wire, and it asks `parse`'s own reading of
+a number, so there is no second check: the number that is checked is the number
+that is sent, and `Invocation::new` keeps the text. An `f64` reads the nearest
+float of its digits, so a number is refused when that float is another number
+(`exact` compares decimal numbers, not text), and an integer past `i64` is out of
+range and not "not an integer". A numeric `enum` admits a value and not a
+spelling (`+200` for `200`), and a boolean `enum` of both values is `None`,
+because it states what `type: boolean` states.
+
+A rule that reaches `--help` and not the parser is the defect this invariant
+exists to prevent, so a rule has one note, the words that finish "is not …", and
+its refusal is those words after "is not" (`ScalarError::refusal`). A refusal
+that is worded on its own is a second rendering that can drift from the first. A
+string `enum` is the one rule with no note, because the flag lists its values and
+clap's parser enforces them as `parse` does. `ScalarError::Choice` is every
+`enum`'s refusal, and it and the note spell the list once (`one_of`).
+
+`multipleOf` is decided on digits and never in `f64`: the value is the text
+`exact` accepted and the step the shortest text that reads back as the float,
+both as `Decimal`, and the quotient is whole when the digits of the step divide
+the digits of the value once the powers of ten are lined up
+(`Decimal::is_multiple_of`). A float quotient refuses `0.07` against `0.01` and
+admits `1e17` against `3`. An integer's remainder is `checked_rem`, so no value
+makes `parse` panic, whatever step a hand-built `Scalar` holds.
+
+A list parameter's `minItems`, `maxItems` and `uniqueItems` are one value,
+`Items`, in the `List` that `Shape::Flag` carries beside the `Join`. A scalar
+cannot hold them because no one value breaks them. `Items::check` is the only
+place they are enforced and `Items::note` the only rendering, and its refusal is
+the note after "is not a list of". `Invocation::new` asks it (`listed`) for each
+parameter given at least once, after every value has met the rules of `items`,
+so the command line and the typed call are refused alike
+(`ValueError::BadList`). `uniqueItems` compares what the items' rule reads, so
+`1` and `01` are one integer. `Items` is read for parameters only. A list rule
+that a body's array states is checked by no road, bar one case. typify 0.8
+enforces neither `minItems` nor `maxItems` and writes a `Vec`, except for an
+array whose two are equal and more than 0 and whose `uniqueItems` is not true:
+that is a fixed-size array `[T; N]`, which both roads hold (`tests/shapes.rs`).
+`docs/validation.md` says so.
+
+`pattern` runs on `regress`, the engine typify puts inside a generated newtype's
+`FromStr`, so a value the command line accepts is a value the generated type
+accepts by construction. No `format` is special-cased: a format names a rule and
+is not one, and a document that wants a rule states it in JSON Schema everything
+can read.
 
 `Scalar` reads the document, and that is deliberate rather than incidental.
 progenitor decides the same question the other way — `cli.rs` asks typify
@@ -162,16 +209,16 @@ and the bounds `Scalar::parse` enforces.
 `Field` carry the `format` the value's schema declares, in the document's own
 spelling; `Operation::carrying` asks which values of an operation are of a kind,
 and `Carrier` says which half of the request each is in. It is deliberately
-*not* on `Scalar`: everything a `Scalar` carries is a
-rule `Scalar::parse` enforces and `Scalar::note` renders, so a format placed
-there would be a rule by the back door — the defect the invariant above exists
-to prevent. Where there is no value there is no kind, which is why an
-`Unreachable` parameter and a `JsonWhole` body report none, and why the format
-is read off the same schema the `Scalar` was read off — the items' for a list.
-`schema::format_of` reads it off `stated()`, which is what `Settings::replace`
-keys on too, so the generated types and the reduced model name one vocabulary.
-Unlike `description_of`, the named schema wins over the field: a sentence is
-about the field, a kind is about the value.
+*not* on `Scalar`: everything a `Scalar` carries is a rule `Scalar::parse`
+enforces and `Scalar::note` renders, bar a string `enum`, whose values the flag
+lists, so a format placed there would be a rule by the back door — the defect
+the invariant above exists to prevent. Where there is no value there is no kind,
+which is why an `Unreachable` parameter and a `JsonWhole` body report none, and
+why the format is read off the same schema the `Scalar` was read off — the
+items' for a list. `schema::format_of` reads it off `stated()`, which is what
+`Settings::replace` keys on too, so the generated types and the reduced model
+name one vocabulary. Unlike `description_of`, the named schema wins over the
+field: a sentence is about the field, a kind is about the value.
 
 **`Operation::carrying` is the whole question; `Body::fields` and
 `Param::format` are its parts, and all three are public.** `Body::fields` is the
@@ -192,7 +239,55 @@ name alone does not say where the value goes.
 the document saying something this crate has no reading for, so both are a
 `LoadError` naming the operation and the thing that could not be read — guessing
 what the vendor meant is a correction, and a correction is the adopter's to
-write in an Overlay where a reviewer can see it.
+write in an Overlay where a reviewer can see it. `Scalar::runnable` asks the
+rules of a value that run but not as the vendor means: a `pattern` with `\p{`,
+`\P{` or `\u{`, which has another meaning with the Unicode flag than without it,
+and the generated type cannot be given the flag, and a `multipleOf` that is not
+more than 0. Both are `LoadError::Unrunnable`, whose cause prints the pattern or
+the step, and so is an `enum` that lists `null` and no other value, which
+`runnable_scalar` in `src/model/reduce.rs` asks beside it because `Scalar` holds
+no `null` and the rule would otherwise read as no rule. The escape is found by
+reading the pattern, a backslash taking the character after it, so `\\p{3}` is
+not one. Compiling both sides with the flag is the alternative that is out of
+scope, because it is a change to typify.
+
+The escape rule is asked of every schema the model reads, and not only of the
+`pattern` that a scalar carries, because the generated types are made of the
+named schemas, the inline body and the inline response, and each of them runs its
+`pattern` without the flag. The line between the two refusals is
+`runnable_scalar` and not the flag. A `pattern` that the scalar of
+`runnable_scalar` carries is `LoadError::Unrunnable`, which names the value, and
+it is that with a flag or without one: a body property listed after a nested
+one, a parameter with a `deepObject` style, a parameter whose name has no
+spelling. `src/patterns.rs` walks the overlaid document by the table of
+`src/shape.rs` at `Reach::Defined`, after the reduction, and every other
+`pattern` is `LoadError::UnrunnablePattern`: one in a schema that
+`runnable_scalar` does not read (a response, a named schema, the items of an
+array body, a property of a nested object, a cookie parameter), and one that the
+scalar drops because it keeps the `enum`. It names the operation where the
+schema stands in one and the schema as an Overlay names a target. A component
+that operations reach names none, because one schema serves many and the repair
+is made at the component. The walk reaches a few schemas that no type is made
+of, such as an error response's. Both ask `scalar::unflagged`, so the rule is
+written once.
+
+`runnable_scalar` in `src/model/reduce.rs` is where the rules of a value are
+asked, `Scalar::runnable` and the `enum` of `null` alone among them. It reads the
+values that the reduction reads for a scalar, with a flag or without one: a
+parameter that `declared` keeps and that is sent in the path, the query or a
+header with a `schema` (its items, for a list), and a property of a JSON body
+whose schema is an object. `json_body` sends the whole body through
+`--json-body` at the first property that has no flag, a nested one or one whose
+name has no spelling, so it reads every property (`properties_of`) before it
+decides whether the body is flat. A rule asked only of the properties listed
+before that one would make a document that loads depend on which property comes
+first. A cookie parameter, a parameter stated with `content`, a property of a
+form or multipart body or of a body whose schema is an `allOf`, and the items of
+an array body are not read by it. The walk asks them the escape rule and nothing
+else, so a `multipleOf` of 0 or a `pattern` that no engine reads loads there. A
+rule of this kind that is added for a value is added in `runnable_scalar`, which
+`shape_of` and `properties_of` share, and a rule of every schema is added to the
+walk.
 
 **A document is read as the version it says, or refused by name.**
 `Document::load_with` asks the vendor's `openapi` right after it reads the

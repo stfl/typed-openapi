@@ -1,18 +1,25 @@
 //! The value kinds a command-line flag can carry, the rules the document states
 //! about them, and how a raw argument string becomes the JSON the wire wants.
 //!
-//! A [`Scalar`] is the only thing this crate knows about a schema: everything
-//! richer than these five kinds is a whole-body affair and never reaches a flag.
-//! What one carries is what the document said — a `pattern`, a length, a bound,
-//! a step — and every one of those is enforced by [`Scalar::parse`], because a
-//! rule that only reaches `--help` is a rule the user finds out about from the
-//! server.
+//! A [`Scalar`], and the [`Items`] of a list parameter, are the only things this
+//! crate knows about a schema: everything richer than these five kinds is a
+//! whole-body affair and never reaches a flag. What a `Scalar` carries is what the
+//! document said — a `pattern`, a length, a bound, a step, an `enum` — and every
+//! one of those is enforced by [`Scalar::parse`], because a rule that only reaches
+//! `--help` is a rule the user finds out about from the server. [`Items`] holds
+//! what an array says about its values taken together, which no single value can
+//! break: `minItems`, `maxItems` and `uniqueItems`.
 //!
 //! `pattern` runs on `regress`, the ECMA-262 engine typify puts inside a
 //! generated newtype's `FromStr`. One engine, one rule, one set of bytes: a
 //! value the command line accepts is a value the generated type accepts by
 //! construction, rather than by a hand-written rule kept in step.
+//!
+//! A rule has one note, the words that finish "is not …", and its refusal is
+//! those words after "is not": the help line and the refusal cannot describe
+//! two rules.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use regress::Regex;
@@ -30,8 +37,10 @@ pub enum Scalar {
     Integer(Bounds<i64>),
     /// `type: number`, with whatever the document states about it.
     Number(Bounds<f64>),
-    /// `type: boolean`.
-    Boolean,
+    /// `type: boolean`. `Some` is the one value that its `enum` lists, and
+    /// `None` is a schema that admits both: an `enum` of `true` and `false`
+    /// states nothing.
+    Boolean(Option<bool>),
     /// `enum: [..]` on a string schema. These values complete.
     Choice(Vec<String>),
 }
@@ -52,7 +61,7 @@ pub struct Text {
 }
 
 /// What a numeric schema states beyond being a number.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Bounds<T> {
     /// `minimum`, with `exclusiveMinimum` folded into it.
     pub low: Option<Limit<T>>,
@@ -60,6 +69,9 @@ pub struct Bounds<T> {
     pub high: Option<Limit<T>>,
     /// `multipleOf`.
     pub multiple_of: Option<T>,
+    /// `enum`, in the document's order, and empty where the document lists no
+    /// value. A value is admitted when it is one of these, whatever its spelling.
+    pub allowed: Vec<T>,
 }
 
 /// One end of a range.
@@ -75,7 +87,28 @@ pub enum Limit<T> {
     Exclusive(T),
 }
 
-/// A raw argument the document's schema rejects.
+/// What an array schema states about the values of a list parameter taken
+/// together, which no single value can break.
+///
+/// One value, one check and one note: [`Items::check`] is the only place
+/// `minItems`, `maxItems` and `uniqueItems` are enforced, and [`Items::note`]
+/// the only place they are rendered. The default states nothing.
+///
+/// An adopter's own command that takes a list asks them as one that takes a
+/// value asks [`Scalar::parse`] and [`Scalar::note`]: the check for the values
+/// the operator gave, and the note for the help line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Items {
+    /// `minItems`.
+    pub min: Option<usize>,
+    /// `maxItems`.
+    pub max: Option<usize>,
+    /// `uniqueItems`: no two values are the same value.
+    pub unique: bool,
+}
+
+/// What the document's schema refuses: a value the operator typed, the values
+/// given for a list parameter, or a rule of the document that cannot be run.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ScalarError {
     /// Not the kind of value the document asks for at all.
@@ -89,7 +122,7 @@ pub enum ScalarError {
     },
     /// Outside the document's `enum` — the one refusal that can say what to
     /// type instead, which is why it carries the list rather than a sentence.
-    #[error("`{raw}` is not one of {}", .allowed.join(", "))]
+    #[error("`{raw}` is not {}", one_of(.allowed))]
     Choice {
         /// The argument as the operator typed it.
         raw: String,
@@ -97,16 +130,23 @@ pub enum ScalarError {
         /// the operator types them.
         allowed: Vec<String>,
     },
-    /// The right kind of value, refused by a rule the document states. `rule`
-    /// finishes the sentence and carries the document's own number, which is
-    /// the only part a user can act on; nothing branches on which keyword it
-    /// came from.
+    /// What a rule the document states says is not so, in the document's own
+    /// number: a value of the right kind that breaks the rule, a list that breaks
+    /// the rules of its array, or a rule that has no meaning, such as a `pattern`
+    /// that cannot be run as the vendor means it or an `enum` that lists no value
+    /// a flag can send. `rule` finishes the sentence and carries the document's
+    /// own number where the rule has one, which is the only part a user can act
+    /// on; nothing branches on which keyword it came from.
     #[error("`{raw}` {rule}")]
     Rule {
-        /// The argument as the operator typed it.
+        /// What the sentence is about. The argument as the operator typed it, for
+        /// a value; the values given for a list parameter, joined with `, `; the
+        /// `pattern` or the `multipleOf` step as the document spells it, or the
+        /// `null` that an `enum` lists alone, for a rule that cannot be run.
         raw: String,
-        /// The rest of the sentence: what the value broke, with the document's
-        /// own number in it.
+        /// The rest of the sentence: what `raw` is not, what it holds, or what it
+        /// is all of (the one value an `enum` lists), with the document's own
+        /// number in it where the rule has one.
         rule: String,
     },
     /// A `pattern` the engine cannot read. Every value is refused, because a
@@ -137,6 +177,23 @@ impl ScalarError {
             wanted,
         }
     }
+
+    /// `raw`, which is not what a rule's note says. Every refusal of a rule but an
+    /// `enum`'s is built here, from the note that `--help` shows for it, so a
+    /// refusal cannot describe a different rule from the one the help line
+    /// advertised. [`ScalarError::outside`] builds the refusal of an `enum`, from
+    /// the list that its note spells (`one_of`).
+    fn refusal(raw: &str, note: &str) -> Self {
+        Self::rule(raw, format!("is not {note}"))
+    }
+
+    /// `raw`, outside an `enum` that lists `allowed`.
+    fn outside<T: fmt::Display>(raw: &str, allowed: &[T]) -> Self {
+        Self::Choice {
+            raw: raw.to_owned(),
+            allowed: spelled(allowed),
+        }
+    }
 }
 
 impl Scalar {
@@ -147,18 +204,22 @@ impl Scalar {
             Self::Text(text) => text.check(raw).map(|()| raw.into()),
             Self::Integer(bounds) => bounded(bounds, raw).map(|(_, json)| json),
             Self::Number(bounds) => bounded(bounds, raw).map(|(_, json)| json),
-            Self::Boolean => raw
-                .parse::<bool>()
-                .map(Into::into)
-                .map_err(|_| ScalarError::kind(raw, "`true` or `false`")),
+            Self::Boolean(only) => {
+                let value = raw
+                    .parse::<bool>()
+                    .map_err(|_| ScalarError::kind(raw, "`true` or `false`"))?;
+                match only {
+                    Some(allowed) if *allowed != value => {
+                        Err(ScalarError::outside(raw, &[allowed]))
+                    }
+                    Some(_) | None => Ok(value.into()),
+                }
+            }
             Self::Choice(allowed) => {
                 if allowed.iter().any(|value| value == raw) {
                     Ok(raw.into())
                 } else {
-                    Err(ScalarError::Choice {
-                        raw: raw.to_owned(),
-                        allowed: allowed.clone(),
-                    })
+                    Err(ScalarError::outside(raw, allowed))
                 }
             }
         }
@@ -177,22 +238,27 @@ impl Scalar {
         match self {
             Self::Integer(bounds) => bounded(bounds, raw).map(|(value, _)| value.to_string()),
             Self::Number(bounds) => bounded(bounds, raw).map(|(value, _)| value.to_string()),
-            Self::Text(_) | Self::Boolean | Self::Choice(_) => {
+            Self::Text(_) | Self::Boolean(_) | Self::Choice(_) => {
                 self.parse(raw).map(|_| raw.to_owned())
             }
         }
     }
 
-    /// Whether every rule this carries can be run at all.
+    /// Whether every rule this carries can be run as the document means it.
     ///
-    /// A `pattern` the engine cannot read is the only rule that can fail this
-    /// way, and it fails on every value — so a document is held to this while
-    /// it is reduced, and the failure names the operation rather than turning
-    /// up at a user's flag.
+    /// Three rules fail this way, and each fails on every value or on a value
+    /// that means something else elsewhere, so a document is held to this while
+    /// it is reduced and the failure names the operation rather than turning up
+    /// at a user's flag. A `pattern` the engine cannot read refuses every value.
+    /// A `pattern` with `\p{`, `\P{` or `\u{` means one thing with the Unicode
+    /// flag and another without it, and a generated type cannot be given the
+    /// flag. A `multipleOf` that is not more than 0 has no multiples to admit.
     pub fn runnable(&self) -> Result<(), ScalarError> {
         match self {
-            Self::Text(text) => text.pattern.as_deref().map(compiled).transpose().map(drop),
-            Self::Integer(_) | Self::Number(_) | Self::Boolean | Self::Choice(_) => Ok(()),
+            Self::Text(text) => text.runnable(),
+            Self::Integer(bounds) => bounds.runnable(),
+            Self::Number(bounds) => bounds.runnable(),
+            Self::Boolean(_) | Self::Choice(_) => Ok(()),
         }
     }
 
@@ -204,7 +270,7 @@ impl Scalar {
             Self::Text(_) | Self::Choice(_) => "STRING",
             Self::Integer(_) => "INT",
             Self::Number(_) => "NUMBER",
-            Self::Boolean => "BOOL",
+            Self::Boolean(_) => "BOOL",
         }
     }
 
@@ -212,16 +278,133 @@ impl Scalar {
     /// line. Every note is a rule [`Scalar::parse`] enforces, in the document's
     /// own numbers — help and refusal cannot come apart, because one rendering
     /// serves both.
+    ///
+    /// A string `enum` has no note: the flag lists its values, and they
+    /// complete.
     #[must_use]
     pub fn note(&self) -> Option<String> {
         let notes = match self {
             Self::Text(text) => text.notes(),
             Self::Integer(bounds) => bounds.notes(),
             Self::Number(bounds) => bounds.notes(),
-            Self::Boolean | Self::Choice(_) => Vec::new(),
+            Self::Boolean(only) => only.iter().map(|only| one_of(&[only])).collect(),
+            Self::Choice(_) => Vec::new(),
         };
-        (!notes.is_empty()).then(|| notes.join("; "))
+        joined(&notes)
     }
+}
+
+impl Items {
+    /// Hold the values given for one list parameter to the rules of the array.
+    ///
+    /// `raws` are the arguments as the operator typed them, in the order they
+    /// were given, and `scalar` is the rule each of them has to meet. Two values
+    /// are the same value when `scalar` reads them as the same: `+1` and `01` are
+    /// one integer, and `0` and `-0` are one number.
+    pub fn check(&self, scalar: &Scalar, raws: &[&str]) -> Result<(), ScalarError> {
+        let refuse = |note: String| ScalarError::refusal(&raws.join(", "), &list_of(&note));
+        if let Some(least) = self.min
+            && raws.len() < least
+        {
+            return Err(refuse(at_least(least)));
+        }
+        if let Some(most) = self.max
+            && raws.len() > most
+        {
+            return Err(refuse(at_most(most)));
+        }
+        if self.unique && repeats(scalar, raws)? {
+            return Err(refuse(DIFFERENT.to_owned()));
+        }
+        Ok(())
+    }
+
+    /// What the document states about the list, for the flag's help line, and
+    /// the words [`Items::check`] refuses with.
+    #[must_use]
+    pub fn note(&self) -> Option<String> {
+        joined(&self.notes())
+    }
+
+    fn notes(&self) -> Vec<String> {
+        let mut notes = Vec::new();
+        // A list of at least 0 values is any list, so the rule states nothing.
+        if let Some(least) = self.min.filter(|least| *least > 0) {
+            notes.push(at_least(least));
+        }
+        if let Some(most) = self.max {
+            notes.push(at_most(most));
+        }
+        if self.unique {
+            notes.push(DIFFERENT.to_owned());
+        }
+        notes
+    }
+}
+
+/// What `uniqueItems` asks of the values, finishing "a list of …".
+const DIFFERENT: &str = "different values";
+
+/// "a list of …", which a refusal of a list says and its notes leave out: the
+/// help line is beside a flag that is a list already.
+fn list_of(note: &str) -> String {
+    format!("a list of {note}")
+}
+
+/// `minItems`.
+fn at_least(count: usize) -> String {
+    format!("at least {}", n_values(count))
+}
+
+/// `maxItems`.
+fn at_most(count: usize) -> String {
+    format!("at most {}", n_values(count))
+}
+
+fn n_values(count: usize) -> String {
+    if count == 1 {
+        "1 value".to_owned()
+    } else {
+        format!("{count} values")
+    }
+}
+
+/// Whether one value is given twice, as `scalar` reads the values.
+fn repeats(scalar: &Scalar, raws: &[&str]) -> Result<bool, ScalarError> {
+    let mut seen = HashSet::new();
+    for raw in raws {
+        if !seen.insert(identity(&scalar.parse(raw)?)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// One value as `uniqueItems` compares it. A value is the JSON that `Scalar`
+/// reads, so two spellings of one number are one key, and `-0` is `0` as it is to
+/// JSON Schema.
+fn identity(value: &serde_json::Value) -> String {
+    if let serde_json::Value::Number(number) = value
+        && number.as_f64() == Some(0.0)
+    {
+        return "0".to_owned();
+    }
+    value.to_string()
+}
+
+/// The notes of one value, joined as a help line carries them.
+fn joined(notes: &[String]) -> Option<String> {
+    (!notes.is_empty()).then(|| notes.join("; "))
+}
+
+/// An `enum`, as a note and as the end of a refusal.
+fn one_of<T: fmt::Display>(allowed: &[T]) -> String {
+    format!("one of {}", spelled(allowed).join(", "))
+}
+
+/// The values of an `enum`, spelled as the operator types them.
+fn spelled<T: fmt::Display>(allowed: &[T]) -> Vec<String> {
+    allowed.iter().map(ToString::to_string).collect()
 }
 
 impl Text {
@@ -232,18 +415,12 @@ impl Text {
         if let Some(least) = self.min_length
             && length < least
         {
-            return Err(ScalarError::rule(
-                raw,
-                format!("is shorter than {least} characters"),
-            ));
+            return Err(ScalarError::refusal(raw, &at_least_long(least)));
         }
         if let Some(most) = self.max_length
             && length > most
         {
-            return Err(ScalarError::rule(
-                raw,
-                format!("is longer than {most} characters"),
-            ));
+            return Err(ScalarError::refusal(raw, &at_most_long(most)));
         }
         let Some(pattern) = self.pattern.as_deref() else {
             return Ok(());
@@ -252,24 +429,93 @@ impl Text {
         // so an unanchored pattern matches anywhere in the value. Anchoring it
         // here would refuse values the document allows.
         if compiled(pattern)?.find(raw).is_none() {
-            return Err(ScalarError::rule(raw, format!("does not match {pattern}")));
+            return Err(ScalarError::refusal(raw, &a_match_for(pattern)));
         }
         Ok(())
+    }
+
+    /// Whether the pattern can be run as the document means it.
+    fn runnable(&self) -> Result<(), ScalarError> {
+        let Some(pattern) = self.pattern.as_deref() else {
+            return Ok(());
+        };
+        compiled(pattern)?;
+        unflagged(pattern)
     }
 
     fn notes(&self) -> Vec<String> {
         let mut notes = Vec::new();
         if let Some(least) = self.min_length {
-            notes.push(format!("at least {least} characters"));
+            notes.push(at_least_long(least));
         }
         if let Some(most) = self.max_length {
-            notes.push(format!("at most {most} characters"));
+            notes.push(at_most_long(most));
         }
         if let Some(pattern) = &self.pattern {
-            notes.push(format!("matches {pattern}"));
+            notes.push(a_match_for(pattern));
         }
         notes
     }
+}
+
+/// `minLength`.
+fn at_least_long(count: usize) -> String {
+    format!("at least {count} characters")
+}
+
+/// `maxLength`.
+fn at_most_long(count: usize) -> String {
+    format!("at most {count} characters")
+}
+
+/// `pattern`.
+fn a_match_for(pattern: &str) -> String {
+    format!("a match for {pattern}")
+}
+
+/// Refuse a `pattern` that means one thing with the Unicode flag and another
+/// without it, naming the escape. The reduction asks it of every `pattern` that
+/// the scalar of a value carries, and `patterns` asks it of every schema the
+/// model reads.
+pub(crate) fn unflagged(pattern: &str) -> Result<(), ScalarError> {
+    match flagged_escape(pattern) {
+        Some(escape) => Err(ScalarError::rule(
+            pattern,
+            format!(
+                "holds `{escape}`, which means one thing with the Unicode flag and another \
+                 without it, and a generated type cannot be given the flag"
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The escape in `pattern` that the Unicode flag gives another meaning: `\p{`,
+/// `\P{` or `\u{`.
+///
+/// Without the flag `\p{L}` is the text `p{L}` and `\u{41}` is the letter `u`
+/// forty-one times, and with it they are a property and a code point. The
+/// command line and the generated type run a pattern without the flag, so a
+/// vendor's server that runs it with does not agree with either. A backslash
+/// takes the character after it, so `\\p{3}` is a backslash and then a `p`.
+fn flagged_escape(pattern: &str) -> Option<&'static str> {
+    let mut chars = pattern.chars();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            continue;
+        }
+        let escaped = chars.next();
+        let opens = chars.clone().next() == Some('{');
+        if opens {
+            match escaped {
+                Some('p') => return Some(r"\p{"),
+                Some('P') => return Some(r"\P{"),
+                Some('u') => return Some(r"\u{"),
+                Some(_) | None => {}
+            }
+        }
+    }
+    None
 }
 
 impl<T> Bounds<T> {
@@ -278,19 +524,37 @@ impl<T> Bounds<T> {
     where
         T: Numeric,
     {
-        let refuse = |rule: String| ScalarError::rule(raw, format!("is not {rule}"));
+        if !self.allowed.is_empty() && !self.allowed.contains(&value) {
+            return Err(ScalarError::outside(raw, &self.allowed));
+        }
         if let Some(low) = self.low {
-            low.floor(value).map_err(refuse)?;
+            low.floor(value)
+                .map_err(|note| ScalarError::refusal(raw, &note))?;
         }
         if let Some(high) = self.high {
-            high.ceiling(value).map_err(refuse)?;
+            high.ceiling(value)
+                .map_err(|note| ScalarError::refusal(raw, &note))?;
         }
         if let Some(step) = self.multiple_of
-            && !value.divisible_by(step)
+            && !value.is_multiple_of(raw, step)
         {
-            return Err(refuse(format!("a multiple of {step}")));
+            return Err(ScalarError::refusal(raw, &a_multiple_of(step)));
         }
         Ok(())
+    }
+
+    /// Whether the step, if there is one, has multiples to admit.
+    fn runnable(&self) -> Result<(), ScalarError>
+    where
+        T: Numeric,
+    {
+        match self.multiple_of {
+            Some(step) if !step.is_step() => Err(ScalarError::rule(
+                &step.to_string(),
+                "is not a step: `multipleOf` has to be more than 0".to_owned(),
+            )),
+            Some(_) | None => Ok(()),
+        }
     }
 
     fn notes(&self) -> Vec<String>
@@ -298,6 +562,9 @@ impl<T> Bounds<T> {
         T: Numeric,
     {
         let mut notes = Vec::new();
+        if !self.allowed.is_empty() {
+            notes.push(one_of(&self.allowed));
+        }
         if let Some(low) = self.low {
             notes.push(low.note("at least", "more than"));
         }
@@ -305,10 +572,15 @@ impl<T> Bounds<T> {
             notes.push(high.note("at most", "less than"));
         }
         if let Some(step) = self.multiple_of {
-            notes.push(format!("a multiple of {step}"));
+            notes.push(a_multiple_of(step));
         }
         notes
     }
+}
+
+/// `multipleOf`.
+fn a_multiple_of<T: fmt::Display>(step: T) -> String {
+    format!("a multiple of {step}")
 }
 
 impl<T> Limit<T> {
@@ -399,10 +671,7 @@ fn has_only_number_characters(raw: &str) -> bool {
 /// so the two are compared as decimal numbers, whatever the spelling: `1.0`,
 /// `1e0` and `001` are one number.
 fn exact(raw: &str, value: f64) -> bool {
-    match (Decimal::of(raw), Decimal::of(&format!("{value:e}"))) {
-        (Some(spelled), Some(printed)) => spelled == printed,
-        (Some(_), None) | (None, _) => false,
-    }
+    Decimal::beside(raw, value).is_some_and(|(spelled, printed)| spelled == printed)
 }
 
 /// A decimal number, without its spelling: the digits from the first one that is
@@ -416,6 +685,13 @@ struct Decimal {
 }
 
 impl Decimal {
+    /// The number `raw` spells and the number `float` stands for, which is the
+    /// shortest text that reads back as the float, or `None` when either has no
+    /// reading.
+    fn beside(raw: &str, float: f64) -> Option<(Self, Self)> {
+        Some((Self::of(raw)?, Self::of(&format!("{float:e}"))?))
+    }
+
     /// `text` as a number, when it is spelled as `f64::from_str` reads one:
     /// a sign, digits with a point somewhere among them, and an exponent. Zero
     /// is zero whatever its exponent says, so `0e99999999999999999999` is read
@@ -454,6 +730,47 @@ impl Decimal {
             exponent: exponent.checked_add(i64::try_from(trailing).ok()?)?,
         })
     }
+
+    /// Whether this number is a whole number of `step`s.
+    ///
+    /// Both are `digits × 10^exponent`, so the quotient is whole when the digits
+    /// of the step divide the digits of the value once the powers of ten are
+    /// lined up. Zero is a multiple of every step. The digits of a number that
+    /// `exact` has accepted, and of the step of a float, are the shortest text of
+    /// a float: at most 17, so they and the remainders between them fit a `u128`
+    /// with room to spare, and no digit is lost to a rounding.
+    fn is_multiple_of(&self, step: &Self) -> bool {
+        // A step of 0 has no digits and no multiples, not even 0.
+        let Ok(step_digits) = step.digits.parse::<u128>() else {
+            return false;
+        };
+        if self.digits.is_empty() {
+            return true;
+        }
+        let Ok(value) = self.digits.parse::<u128>() else {
+            return false;
+        };
+        let Some(lift) = self.exponent.checked_sub(step.exponent) else {
+            return false;
+        };
+        if lift >= 0 {
+            // `value × 10^lift` is divided one digit at a time, as a long division
+            // is, so the product is never written down.
+            let mut rest = value % step_digits;
+            for _ in 0..lift {
+                rest = rest * 10 % step_digits;
+            }
+            rest == 0
+        } else {
+            // `value` is divided by `step × 10^-lift`. A divisor past a `u128` is
+            // past any value, and then only zero is a multiple.
+            u32::try_from(lift.unsigned_abs())
+                .ok()
+                .and_then(|power| 10_u128.checked_pow(power))
+                .and_then(|scale| scale.checked_mul(step_digits))
+                .is_some_and(|divisor| value % divisor == 0)
+        }
+    }
 }
 
 /// The two number kinds a document can ask one flag for.
@@ -478,8 +795,13 @@ pub(crate) trait Numeric: Copy + PartialOrd + fmt::Display {
     /// another number than the one that was checked.
     fn read(raw: &str) -> Result<(Self, serde_json::Value), ScalarError>;
 
-    /// `multipleOf`: whether dividing by `step` leaves a whole number.
-    fn divisible_by(self, step: Self) -> bool;
+    /// `multipleOf`: whether `self`, which `raw` spells, is a whole number of
+    /// `step`s. No remainder panics and no float divides: a number is divisible
+    /// by what its digits say.
+    fn is_multiple_of(self, raw: &str, step: Self) -> bool;
+
+    /// Whether a `multipleOf` can be this number: more than 0.
+    fn is_step(self) -> bool;
 }
 
 impl Numeric for i64 {
@@ -509,8 +831,14 @@ impl Numeric for i64 {
             })
     }
 
-    fn divisible_by(self, step: Self) -> bool {
-        step != 0 && self % step == 0
+    fn is_multiple_of(self, _raw: &str, step: Self) -> bool {
+        // `i64::MIN % -1` overflows, and its remainder is 0 as it is for every
+        // multiple. A step of 0 has no multiple but 0, and that is no rule.
+        self.checked_rem(step).map_or(step != 0, |rest| rest == 0)
+    }
+
+    fn is_step(self) -> bool {
+        self > 0
     }
 }
 
@@ -544,9 +872,17 @@ impl Numeric for f64 {
     }
 
     // `multipleOf` is exact division by definition, so the comparison is the
-    // document's rule rather than an approximation of it.
-    fn divisible_by(self, step: Self) -> bool {
-        step != 0.0 && (self / step).fract() == 0.0
+    // document's rule rather than an approximation of it. `0.07 / 0.01` is
+    // `7.000000000000001` in a binary float and `1e17 / 3.0` is a whole number,
+    // so neither the value nor the step is divided as a float: the value is
+    // the digits `raw` spells, and the step the shortest text that reads back as
+    // the float, which is the number the document wrote.
+    fn is_multiple_of(self, raw: &str, step: Self) -> bool {
+        Decimal::beside(raw, step).is_some_and(|(value, step)| value.is_multiple_of(&step))
+    }
+
+    fn is_step(self) -> bool {
+        self.is_finite() && self > 0.0
     }
 }
 
@@ -579,7 +915,7 @@ mod tests {
             amount.parse("1,50"),
             Err(ScalarError::Rule {
                 raw: "1,50".to_owned(),
-                rule: r"does not match ^-?[0-9]+(\.[0-9]{1,2})?$".to_owned(),
+                rule: r"is not a match for ^-?[0-9]+(\.[0-9]{1,2})?$".to_owned(),
             })
         );
         for raw in ["12.5x", "", "12.505", ".5", "-", "1e3"] {
@@ -626,14 +962,14 @@ mod tests {
             code.parse("EU"),
             Err(ScalarError::Rule {
                 raw: "EU".to_owned(),
-                rule: "is shorter than 3 characters".to_owned(),
+                rule: "is not at least 3 characters".to_owned(),
             })
         );
         assert_eq!(
             code.parse("EURO"),
             Err(ScalarError::Rule {
                 raw: "EURO".to_owned(),
-                rule: "is longer than 3 characters".to_owned(),
+                rule: "is not at most 3 characters".to_owned(),
             })
         );
     }
@@ -643,7 +979,7 @@ mod tests {
         let inclusive = Scalar::Integer(Bounds {
             low: Some(Limit::Inclusive(1)),
             high: Some(Limit::Inclusive(100)),
-            multiple_of: None,
+            ..Bounds::default()
         });
         assert!(inclusive.parse("1").is_ok());
         assert!(inclusive.parse("100").is_ok());
@@ -665,7 +1001,7 @@ mod tests {
         let exclusive = Scalar::Number(Bounds {
             low: Some(Limit::Exclusive(0.0)),
             high: Some(Limit::Exclusive(1.0)),
-            multiple_of: None,
+            ..Bounds::default()
         });
         assert!(exclusive.parse("0.5").is_ok());
         assert_eq!(
@@ -705,6 +1041,156 @@ mod tests {
         });
         assert!(by_quarter.parse("1.75").is_ok());
         assert!(by_quarter.parse("1.3").is_err());
+    }
+
+    fn stepped(step: f64) -> Scalar {
+        Scalar::Number(Bounds {
+            multiple_of: Some(step),
+            ..Bounds::default()
+        })
+    }
+
+    /// `probes/A3b/scalars` (`multiple`): a binary float divides `0.07` by `0.01`
+    /// to `7.000000000000001`, which is no whole number, and the same is true of 159
+    /// of the 1000 amounts in cents. The value is the digits it was written with,
+    /// and so is the step.
+    #[test]
+    fn a_decimal_step_is_decided_on_the_digits_and_not_in_a_float() {
+        let cents = stepped(0.01);
+        for raw in ["0.07", "0.29", "19.99"] {
+            assert_eq!(
+                cents.parse(raw),
+                Ok(serde_json::json!(raw.parse::<f64>().unwrap_or(f64::NAN))),
+                "{raw}"
+            );
+        }
+        for cent in 0..1000_u32 {
+            let raw = format!("{}.{:02}", cent / 100, cent % 100);
+            assert!(cents.parse(&raw).is_ok(), "{raw}");
+        }
+        let tenths = stepped(0.1);
+        for tenth in 0..100_u32 {
+            let raw = format!("{}.{}", tenth / 10, tenth % 10);
+            assert!(tenths.parse(&raw).is_ok(), "{raw}");
+        }
+        // The same number, spelled another way.
+        for raw in ["7e-2", "+0.07", ".07", "0.070", "700e-4", "0.07E0", "-0.07"] {
+            assert!(cents.parse(raw).is_ok(), "{raw}");
+        }
+        // What is no multiple of a cent is refused with the document's number.
+        for raw in ["0.005", "0.071", "19.995", "1e-3", "0.0699999", "100.001"] {
+            assert_eq!(
+                cents.parse(raw),
+                Err(ScalarError::Rule {
+                    raw: raw.to_owned(),
+                    rule: "is not a multiple of 0.01".to_owned(),
+                }),
+                "{raw}"
+            );
+        }
+        // Zero is a multiple of every step, however it is spelled.
+        for raw in ["0", "-0", "0.00", "0e5"] {
+            assert!(cents.parse(raw).is_ok(), "{raw}");
+        }
+    }
+
+    /// A quotient in a float also says yes where it should say no: `1e17 / 3.0` is
+    /// `33333333333333332`, a whole number, and `1e17` is not a multiple of 3.
+    #[test]
+    fn a_step_is_not_met_because_a_float_rounded_the_quotient_to_a_whole_number() {
+        let by_three = stepped(3.0);
+        assert!(by_three.parse("100000000000000000").is_err());
+        assert!(by_three.parse("9007199254740996").is_ok());
+        assert!(by_three.parse("9007199254740991").is_err());
+        assert!(stepped(2.0).parse("9007199254740992").is_ok());
+    }
+
+    /// The digits of a float's text are at most 17, and the powers of ten between
+    /// the value and the step reach a few hundred.
+    #[test]
+    fn a_step_is_decided_across_the_whole_range_of_a_float() {
+        let tiny = stepped(1e-300);
+        assert!(tiny.parse("1e300").is_ok());
+        assert!(tiny.parse("3e-300").is_ok());
+        assert!(tiny.parse("1.5e-300").is_err());
+        let huge = stepped(1e300);
+        assert!(huge.parse("1e300").is_ok());
+        assert!(huge.parse("5").is_err());
+        assert!(huge.parse("0").is_ok());
+        assert!(stepped(5e-324).parse("1e-323").is_ok());
+        assert!(stepped(0.5).parse("1e-323").is_err());
+        assert!(stepped(1.5).parse("4.5").is_ok());
+        assert!(stepped(1.5).parse("-4.5").is_ok());
+        assert!(stepped(1.5).parse("4.6").is_err());
+    }
+
+    /// `probes/A3b/scalars` (`panic`): `i64::MIN % -1` overflows, and the remainder
+    /// of every integer by a step of 0 is a division by zero. No value makes
+    /// `parse` panic. A document that states either step is refused while it is
+    /// reduced (`runnable`), so these are the answers for a model nobody checked.
+    #[test]
+    fn no_value_makes_the_remainder_panic() {
+        let by = |step: i64| {
+            Scalar::Integer(Bounds {
+                multiple_of: Some(step),
+                ..Bounds::default()
+            })
+        };
+        let minus_one = by(-1);
+        assert_eq!(
+            minus_one.parse("-9223372036854775808"),
+            Ok(serde_json::json!(i64::MIN))
+        );
+        assert!(minus_one.parse("5").is_ok());
+        let zero = by(0);
+        for raw in ["0", "5", "-9223372036854775808"] {
+            assert!(zero.parse(raw).is_err(), "{raw}");
+        }
+        // The same step as a number has no multiples either, not even 0.
+        for raw in ["0", "-0", "5", "0.5"] {
+            assert!(stepped(0.0).parse(raw).is_err(), "{raw}");
+        }
+        assert!(by(i64::MIN).parse("-9223372036854775808").is_ok());
+        assert!(by(i64::MIN).parse("5").is_err());
+        assert!(by(i64::MAX).parse("9223372036854775807").is_ok());
+    }
+
+    /// A step has to be more than 0, and a float has to be a number as well.
+    #[test]
+    fn a_step_that_is_not_more_than_zero_cannot_run() {
+        let integer = |step: i64| {
+            Scalar::Integer(Bounds {
+                multiple_of: Some(step),
+                ..Bounds::default()
+            })
+        };
+        for (scalar, raw) in [
+            (integer(0), "0"),
+            (integer(-1), "-1"),
+            (integer(i64::MIN), "-9223372036854775808"),
+            (stepped(0.0), "0"),
+            (stepped(-0.0), "-0"),
+            (stepped(-0.25), "-0.25"),
+            (stepped(f64::NAN), "NaN"),
+            (stepped(f64::INFINITY), "inf"),
+        ] {
+            assert_eq!(
+                scalar.runnable(),
+                Err(ScalarError::Rule {
+                    raw: raw.to_owned(),
+                    rule: "is not a step: `multipleOf` has to be more than 0".to_owned(),
+                }),
+                "{raw}"
+            );
+        }
+        for scalar in [
+            integer(1),
+            integer(i64::MAX),
+            stepped(0.01),
+            stepped(5e-324),
+        ] {
+            assert_eq!(scalar.runnable(), Ok(()));
+        }
     }
 
     #[test]
@@ -923,7 +1409,7 @@ mod tests {
             let text = typed.to_string();
             assert_eq!(number.wire(&text), Ok(text), "{typed}");
         }
-        assert_eq!(Scalar::Boolean.wire("true").as_deref(), Ok("true"));
+        assert_eq!(Scalar::Boolean(None).wire("true").as_deref(), Ok("true"));
         assert_eq!(
             Scalar::Text(Text::default()).wire("+5 ").as_deref(),
             Ok("+5 ")
@@ -953,7 +1439,7 @@ mod tests {
         });
         assert_eq!(
             code.note().as_deref(),
-            Some("at least 2 characters; at most 4 characters; matches ^[A-Z]+$")
+            Some("at least 2 characters; at most 4 characters; a match for ^[A-Z]+$")
         );
         assert!(code.parse("A").is_err());
         assert!(code.parse("ABCDE").is_err());
@@ -964,12 +1450,361 @@ mod tests {
             low: Some(Limit::Inclusive(1)),
             high: Some(Limit::Exclusive(10)),
             multiple_of: Some(3),
+            ..Bounds::default()
         });
         assert_eq!(
             count.note().as_deref(),
             Some("at least 1; less than 10; a multiple of 3")
         );
-        assert_eq!(Scalar::Boolean.note(), None);
+        assert_eq!(Scalar::Boolean(None).note(), None);
         assert_eq!(Scalar::Text(Text::default()).note(), None);
+    }
+    fn integers(allowed: &[i64]) -> Scalar {
+        Scalar::Integer(Bounds {
+            allowed: allowed.to_vec(),
+            ..Bounds::default()
+        })
+    }
+
+    fn outside(raw: &str, allowed: &[&str]) -> ScalarError {
+        ScalarError::Choice {
+            raw: raw.to_owned(),
+            allowed: allowed.iter().map(|value| (*value).to_owned()).collect(),
+        }
+    }
+
+    /// `probes/A3b/scalars` (`schemas`): `--v 4` against `enum: [1, 2, 3]` is sent
+    /// and `--help` lists no value, unless the enum is a rule of the value as a
+    /// bound is.
+    #[test]
+    fn an_integer_enum_is_enforced_and_noted() {
+        let one_of = integers(&[1, 2, 3]);
+        for raw in ["1", "2", "3", "+2", "002"] {
+            assert!(one_of.parse(raw).is_ok(), "{raw}");
+        }
+        assert_eq!(one_of.parse("4"), Err(outside("4", &["1", "2", "3"])));
+        assert_eq!(
+            refusal(&one_of, "4").to_string(),
+            "`4` is not one of 1, 2, 3"
+        );
+        assert!(matches!(
+            one_of.parse("2.0"),
+            Err(ScalarError::Kind {
+                wanted: "an integer",
+                ..
+            })
+        ));
+        assert_eq!(one_of.note().as_deref(), Some("one of 1, 2, 3"));
+        // The text that is sent is the value that was admitted.
+        assert_eq!(one_of.wire("+2").as_deref(), Ok("2"));
+        assert_eq!(one_of.wire("4"), Err(outside("4", &["1", "2", "3"])));
+    }
+
+    #[test]
+    fn a_number_enum_admits_the_value_and_not_the_spelling() {
+        let ratio = Scalar::Number(Bounds {
+            allowed: vec![0.5, 1.5, 100.0],
+            ..Bounds::default()
+        });
+        for raw in ["0.5", "5e-1", ".5", "1.50", "1e2", "100"] {
+            assert!(ratio.parse(raw).is_ok(), "{raw}");
+        }
+        assert_eq!(ratio.parse("1"), Err(outside("1", &["0.5", "1.5", "100"])));
+        assert_eq!(ratio.note().as_deref(), Some("one of 0.5, 1.5, 100"));
+    }
+
+    /// An enum is one rule among the others. All of them are enforced, and each is
+    /// in the note, the enum first.
+    #[test]
+    fn an_enum_beside_a_bound_keeps_both() {
+        let both = Scalar::Integer(Bounds {
+            low: Some(Limit::Inclusive(2)),
+            allowed: vec![1, 2, 3],
+            ..Bounds::default()
+        });
+        assert!(both.parse("2").is_ok());
+        assert!(both.parse("1").is_err(), "inside the enum, below the bound");
+        assert!(
+            both.parse("5").is_err(),
+            "above the bound, outside the enum"
+        );
+        assert_eq!(both.note().as_deref(), Some("one of 1, 2, 3; at least 2"));
+    }
+
+    /// The `enum: [true]` of `A7/docs/boolenum.yaml`: `--v false` is sent unless the
+    /// enum is a rule.
+    #[test]
+    fn a_boolean_enum_admits_the_one_value_it_lists() {
+        let only = Scalar::Boolean(Some(true));
+        assert_eq!(only.parse("true"), Ok(serde_json::json!(true)));
+        assert_eq!(only.parse("false"), Err(outside("false", &["true"])));
+        assert_eq!(only.note().as_deref(), Some("one of true"));
+        assert_eq!(only.wire("false"), Err(outside("false", &["true"])));
+        // The kind is asked first, so a word that is no boolean is none.
+        assert!(matches!(
+            only.parse("yes"),
+            Err(ScalarError::Kind {
+                wanted: "`true` or `false`",
+                ..
+            })
+        ));
+
+        let either = Scalar::Boolean(None);
+        assert_eq!(either.parse("false"), Ok(serde_json::json!(false)));
+        assert_eq!(either.note(), None);
+        for raw in ["yes", "TRUE", "1", "", "True"] {
+            assert!(
+                matches!(
+                    either.parse(raw),
+                    Err(ScalarError::Kind {
+                        wanted: "`true` or `false`",
+                        ..
+                    })
+                ),
+                "{raw}"
+            );
+        }
+    }
+
+    /// `minItems`, `maxItems` and `uniqueItems` are one value with one check and
+    /// one note. The refusal names the list as it was given.
+    #[test]
+    fn a_list_is_held_to_its_count_and_to_its_uniqueness() {
+        let ids = Scalar::Integer(Bounds::default());
+        let items = Items {
+            min: Some(2),
+            max: Some(3),
+            unique: true,
+        };
+        let words = |raws: &[&str]| match items.check(&ids, raws) {
+            Ok(()) => None,
+            Err(ScalarError::Rule { rule, .. }) => Some(rule),
+            Err(other) => panic!("{other:?}"),
+        };
+        assert_eq!(words(&["1", "2"]), None);
+        assert_eq!(words(&["1", "2", "3"]), None);
+        assert_eq!(
+            words(&["1"]).as_deref(),
+            Some("is not a list of at least 2 values")
+        );
+        assert_eq!(
+            words(&["1", "2", "3", "4"]).as_deref(),
+            Some("is not a list of at most 3 values")
+        );
+        assert_eq!(
+            words(&["1", "2", "1"]).as_deref(),
+            Some("is not a list of different values")
+        );
+        assert_eq!(
+            items.check(&ids, &["1", "2", "1"]),
+            Err(ScalarError::Rule {
+                raw: "1, 2, 1".to_owned(),
+                rule: "is not a list of different values".to_owned(),
+            })
+        );
+        assert_eq!(
+            items.note().as_deref(),
+            Some("at least 2 values; at most 3 values; different values")
+        );
+    }
+
+    /// Two values are the same when the rule reads them as the same value.
+    #[test]
+    fn two_spellings_of_one_value_are_one_value_to_a_list() {
+        let unique = Items {
+            unique: true,
+            ..Items::default()
+        };
+        let integers = Scalar::Integer(Bounds::default());
+        assert!(unique.check(&integers, &["1", "01"]).is_err());
+        assert!(unique.check(&integers, &["1", "+1"]).is_err());
+        assert!(unique.check(&integers, &["1", "2"]).is_ok());
+        let numbers = Scalar::Number(Bounds::default());
+        assert!(unique.check(&numbers, &["1", "1.0"]).is_err());
+        assert!(unique.check(&numbers, &["0", "-0"]).is_err());
+        assert!(unique.check(&numbers, &["0.1", "0.10"]).is_err());
+        assert!(unique.check(&numbers, &["0.1", "0.2"]).is_ok());
+        let text = Scalar::Text(Text::default());
+        assert!(unique.check(&text, &["a", "A", " a"]).is_ok());
+        assert!(unique.check(&text, &["a", "b", "a"]).is_err());
+        assert!(
+            unique
+                .check(&Scalar::Boolean(None), &["true", "true"])
+                .is_err()
+        );
+    }
+
+    /// A list of one value is a list, and its note says "1 value".
+    #[test]
+    fn a_list_rule_counts_one_value_in_the_singular() {
+        let items = Items {
+            min: Some(1),
+            max: Some(1),
+            unique: false,
+        };
+        assert_eq!(
+            items.note().as_deref(),
+            Some("at least 1 value; at most 1 value")
+        );
+        let text = Scalar::Text(Text::default());
+        assert!(items.check(&text, &["a"]).is_ok());
+        assert!(items.check(&text, &["a", "b"]).is_err());
+        assert!(Items::default().check(&text, &[]).is_ok());
+        assert_eq!(Items::default().note(), None);
+    }
+
+    /// A `minItems` of 0 asks for nothing, so the help line carries no note for it
+    /// and every list meets it.
+    #[test]
+    fn a_list_of_at_least_no_values_states_no_rule() {
+        let items = Items {
+            min: Some(0),
+            ..Items::default()
+        };
+        assert_eq!(items.note(), None);
+        assert!(items.check(&Scalar::Text(Text::default()), &[]).is_ok());
+        let capped = Items {
+            max: Some(2),
+            ..items
+        };
+        assert_eq!(capped.note().as_deref(), Some("at most 2 values"));
+    }
+
+    /// A value that its own rule refuses is refused as that value, so a list
+    /// checked on its own meets the same words that the value had alone.
+    #[test]
+    fn a_list_with_a_value_the_rule_refuses_is_refused_for_that_value() {
+        let unique = Items {
+            unique: true,
+            ..Items::default()
+        };
+        assert_eq!(
+            unique.check(&integers(&[1, 2]), &["1", "7"]),
+            Err(outside("7", &["1", "2"]))
+        );
+    }
+
+    /// An integer that states the one rule given: a low end, a high end, or a step.
+    fn integer_with(
+        low: Option<Limit<i64>>,
+        high: Option<Limit<i64>>,
+        multiple_of: Option<i64>,
+    ) -> Scalar {
+        Scalar::Integer(Bounds {
+            low,
+            high,
+            multiple_of,
+            ..Bounds::default()
+        })
+    }
+
+    /// One scalar for each rule it can state, and a value that breaks it.
+    fn one_rule_each() -> Vec<(Scalar, &'static str)> {
+        let lengths = |min_length, max_length| {
+            Scalar::Text(Text {
+                min_length,
+                max_length,
+                ..Text::default()
+            })
+        };
+        vec![
+            (lengths(Some(3), None), "ab"),
+            (lengths(None, Some(3)), "abcd"),
+            (text("^[0-9]+$"), "x"),
+            (integer_with(Some(Limit::Inclusive(1)), None, None), "0"),
+            (integer_with(Some(Limit::Exclusive(1)), None, None), "1"),
+            (integer_with(None, Some(Limit::Inclusive(9)), None), "10"),
+            (integer_with(None, Some(Limit::Exclusive(9)), None), "9"),
+            (integer_with(None, None, Some(5)), "7"),
+            (stepped(0.25), "0.3"),
+            (integers(&[100, 200]), "7"),
+            (
+                Scalar::Number(Bounds {
+                    allowed: vec![0.5, 1.5],
+                    ..Bounds::default()
+                }),
+                "1",
+            ),
+            (Scalar::Boolean(Some(false)), "true"),
+        ]
+    }
+
+    /// F-82: a refusal is "is not" and the note of the rule it enforces, whichever
+    /// the rule, so `--help` and the refusal cannot describe two rules.
+    #[test]
+    fn every_refusal_is_built_from_its_note() {
+        for (scalar, raw) in one_rule_each() {
+            let Some(note) = scalar.note() else {
+                panic!("{scalar:?} states a rule and renders none");
+            };
+            assert_eq!(
+                refusal(&scalar, raw).to_string(),
+                format!("`{raw}` is not {note}"),
+                "{scalar:?}"
+            );
+        }
+    }
+
+    /// A list is a list of what its note says.
+    #[test]
+    fn the_refusal_of_a_list_is_built_from_its_note() {
+        let items = Items {
+            min: Some(2),
+            ..Items::default()
+        };
+        let Some(note) = items.note() else {
+            panic!("{items:?} states a rule and renders none");
+        };
+        let Err(refused) = items.check(&Scalar::Text(Text::default()), &["a"]) else {
+            panic!("one value is fewer than two");
+        };
+        assert_eq!(refused.to_string(), format!("`a` is not a list of {note}"));
+    }
+
+    /// `enum` on a string is the one rule that has no note: the flag lists its
+    /// values, and they complete. Its refusal says the same list.
+    #[test]
+    fn a_string_enum_is_listed_by_the_flag_and_refused_with_the_list() {
+        let status = Scalar::Choice(vec!["draft".to_owned(), "paid".to_owned()]);
+        assert_eq!(status.note(), None);
+        assert_eq!(
+            refusal(&status, "void").to_string(),
+            "`void` is not one of draft, paid"
+        );
+    }
+
+    /// The scalars a document states with a rule that cannot run are told apart
+    /// from those it states with a rule that does.
+    #[test]
+    fn a_pattern_with_an_escape_the_unicode_flag_changes_cannot_run() {
+        for (pattern, escape) in [
+            (r"^\p{L}+$", r"\p{"),
+            (r"^\P{L}+$", r"\P{"),
+            (r"^\u{41}$", r"\u{"),
+            (r"[\p{L}\d]", r"\p{"),
+            (r"\\\p{L}", r"\p{"),
+        ] {
+            assert_eq!(
+                text(pattern).runnable(),
+                Err(ScalarError::Rule {
+                    raw: pattern.to_owned(),
+                    rule: format!(
+                        "holds `{escape}`, which means one thing with the Unicode flag and \
+                         another without it, and a generated type cannot be given the flag"
+                    ),
+                }),
+                "{pattern}"
+            );
+        }
+        for pattern in [r"^\\p{3}$", r"^p\{L\}$", r"^\u0041$", r"^\d+\p$", r"^\\$"] {
+            assert_eq!(text(pattern).runnable(), Ok(()), "{pattern}");
+        }
+        // A pattern the engine cannot read is that, whatever it holds.
+        for pattern in [r"[\p{L}", r"\"] {
+            assert!(
+                matches!(text(pattern).runnable(), Err(ScalarError::Pattern { .. })),
+                "{pattern}"
+            );
+        }
     }
 }

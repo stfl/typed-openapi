@@ -36,7 +36,7 @@ pub use self::reduce::{ConfirmationError, LoadError, Loading};
 pub(crate) use self::reduce::{declared, entry_of_flag};
 use crate::names::{CommandName, NameError, renamed, spelled};
 use crate::request::without_userinfo_and_query;
-use crate::scalar::Scalar;
+use crate::scalar::{Items, Scalar};
 
 /// Whole-body flag, for every operation that takes JSON.
 pub const JSON_BODY: &str = "json-body";
@@ -361,7 +361,7 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Shape {
     /// The flag this parameter grows, where its value goes, and what the flag
-    /// accepts. `join` is `None` for a parameter that takes one value, and
+    /// accepts. `list` is `None` for a parameter that takes one value, and
     /// `Some` for a list — a flag that may be given again.
     Flag {
         /// The long flag as the user types it, without the leading `--`.
@@ -371,9 +371,9 @@ pub enum Shape {
         /// The rules the document states about one value, which the flag's
         /// parser enforces and its help line renders.
         scalar: Scalar,
-        /// How the repeats of the flag reach the request, and `None` for a
-        /// parameter that takes one value.
-        join: Option<Join>,
+        /// What the repeats of the flag make, and `None` for a parameter that
+        /// takes one value.
+        list: Option<List>,
         /// The `format` the document declares about this value, in its own
         /// spelling, and `None` where it declares none. It sits beside the
         /// rules rather than among them: nothing in this crate reads it, and
@@ -383,6 +383,19 @@ pub enum Shape {
     /// Nothing a flag carries. The subcommand names the parameter in its long
     /// help and grows nothing for it, and the request goes out without it.
     Unreachable(Unsupported),
+}
+
+/// A parameter that takes a list of values: how they reach the request, and
+/// what the document states about the list as a whole.
+///
+/// The fields are public because there is nothing here to keep true: each one
+/// is read straight off the parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct List {
+    /// How the values reach the request.
+    pub join: Join,
+    /// `minItems`, `maxItems` and `uniqueItems`, which no one value can break.
+    pub items: Items,
 }
 
 /// How the values of a list parameter reach the request.
@@ -504,7 +517,7 @@ impl Shape {
     /// given again, and a list on the wire.
     #[must_use]
     pub fn repeatable(&self) -> bool {
-        matches!(self, Self::Flag { join: Some(_), .. })
+        matches!(self, Self::Flag { list: Some(_), .. })
     }
 }
 
@@ -883,7 +896,7 @@ impl Document {
     /// for the same document and no type changed. The crate's own tests trace
     /// the layout and fail on a change to a type that left the number where it
     /// was.
-    pub const MODEL_LAYOUT: u32 = 5;
+    pub const MODEL_LAYOUT: u32 = 6;
 
     /// The same reduction, already done and written down.
     ///
