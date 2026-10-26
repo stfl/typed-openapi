@@ -1068,21 +1068,28 @@ fn a_value_that_has_a_flag_is_held_to_the_words_consent_is_given_by() {
 }
 
 /// The properties of a body, `NAME` for the one that is named like a word that
-/// consent is given by, and whether the load asks that property its name.
-const NAMES_ASKED: [(&str, &str, bool); 8] = [
+/// consent is given by, and whether the body is flat, which is whether the load asks
+/// the property its name.
+///
+/// A property "of the first kind" is a scalar that `openapiv3` holds as
+/// `AnySchema`, such as `{ type: integer, minimum: 0.0 }`. A property that is no
+/// scalar this crate reads is one of `{ type: string, oneOf: [{ type: string }] }`,
+/// `{ readOnly: true }` and an `allOf` of two schemas.
+const NAMES_ASKED: [(&str, &str, bool); 22] = [
+    ("a plain property alone", "NAME: { type: integer }", true),
     (
-        "a plain property before a nested one",
-        "NAME: { type: integer }, n: { type: object }",
+        "a property of the first kind alone",
+        "NAME: { type: integer, minimum: 0.0 }",
         true,
     ),
     (
-        "a property of the first kind before a nested one",
-        "NAME: { type: integer, minimum: 0.0 }, n: { type: object }",
+        "a property of the first kind before a plain one",
+        "NAME: { type: integer, minimum: 0.0 }, name: { type: string }",
         true,
     ),
     (
-        "a property before one whose name has no spelling",
-        "NAME: { type: integer }, '*': { type: string }",
+        "a property of the first kind after a plain one",
+        "name: { type: string }, NAME: { type: integer, minimum: 0.0 }",
         true,
     ),
     (
@@ -1094,6 +1101,51 @@ const NAMES_ASKED: [(&str, &str, bool); 8] = [
         "a plain property after a nested `readOnly` property",
         "a: { type: object, readOnly: true }, NAME: { type: integer }",
         true,
+    ),
+    (
+        "a plain property before a nested `readOnly` property",
+        "NAME: { type: integer }, a: { type: object, readOnly: true }",
+        true,
+    ),
+    (
+        "a plain property after a `readOnly` list",
+        "a: { type: array, items: { type: string }, readOnly: true }, NAME: { type: integer }",
+        true,
+    ),
+    (
+        "a plain property after a `readOnly` property whose name has no spelling",
+        "'*': { type: string, readOnly: true }, NAME: { type: integer }",
+        true,
+    ),
+    (
+        "a plain property after a `readOnly` property of no schema",
+        "a: { readOnly: true }, NAME: { type: integer }",
+        true,
+    ),
+    (
+        "a plain property after a `readOnly` `oneOf`",
+        "a: { type: string, oneOf: [{ type: string }], readOnly: true }, NAME: { type: integer }",
+        true,
+    ),
+    (
+        "a plain property after a `readOnly` `allOf` of two",
+        "a: { allOf: [{ type: string }, { type: string }], readOnly: true }, NAME: { type: integer }",
+        true,
+    ),
+    (
+        "a plain property before a nested one",
+        "NAME: { type: integer }, n: { type: object }",
+        false,
+    ),
+    (
+        "a property of the first kind before a nested one",
+        "NAME: { type: integer, minimum: 0.0 }, n: { type: object }",
+        false,
+    ),
+    (
+        "a property before one whose name has no spelling",
+        "NAME: { type: integer }, '*': { type: string }",
+        false,
     ),
     (
         "a plain property after a nested one",
@@ -1108,6 +1160,26 @@ const NAMES_ASKED: [(&str, &str, bool); 8] = [
     (
         "a property of the first kind after a nested one",
         "n: { type: object }, NAME: { type: integer, minimum: 0.0 }",
+        false,
+    ),
+    (
+        "a plain property before a list",
+        "NAME: { type: integer }, l: { type: array, items: { type: string } }",
+        false,
+    ),
+    (
+        "a plain property after a list",
+        "l: { type: array, items: { type: string } }, NAME: { type: integer }",
+        false,
+    ),
+    (
+        "a plain property before a schema that is no scalar this crate reads",
+        "NAME: { type: integer }, o: { type: string, oneOf: [{ type: string }] }",
+        false,
+    ),
+    (
+        "a plain property after a schema that is no scalar this crate reads",
+        "o: { type: string, oneOf: [{ type: string }] }, NAME: { type: integer }",
         false,
     ),
 ];
@@ -1128,35 +1200,35 @@ fn body_with_properties(properties: &str, word: Word, wrapped: bool) -> String {
 }
 
 /// Each row of `NAMES_ASKED` for each word, bare and wrapped: what the case is,
-/// the word, whether the load asks the name, and the document.
+/// the word, whether the body is flat, and the document.
 fn names_asked() -> Vec<(String, Word, bool, String)> {
     let mut rows = Vec::new();
-    for (label, properties, asked) in NAMES_ASKED {
+    for (label, properties, flat) in NAMES_ASKED {
         for word in [Word::Gate, Word::Confirmation] {
             for wrapped in [false, true] {
                 let case = format!("{label}, `{}`, wrapped: {wrapped}", word.name());
                 let text = body_with_properties(properties, word, wrapped);
-                rows.push((case, word, asked, text));
+                rows.push((case, word, flat, text));
             }
         }
     }
     rows
 }
 
-/// The flags of a body are claimed one property at a time, in document order, and
-/// the claim stops at the first property that sends the body whole: a nested one,
-/// or one whose name has no spelling. A `readOnly` property is skipped, and a
-/// property of the first kind has a flag. So a property is asked its name when
-/// every property listed before it has a flag or is `readOnly`, also in a body
-/// that goes whole, and it is not asked when a property that sends the body
-/// whole is listed before it. Each row is tried bare and wrapped in an `allOf` of
-/// one element. A row that is asked is refused with the variant and the words of
-/// its word, and a row that is not asked loads as a body that goes whole.
+/// A property is asked its name only where its body is flat, because only a flat
+/// body has a flag for the name to clash with. A body is flat when each property
+/// that is not `readOnly` has a flag. A nested property, a list, a schema that is no
+/// scalar this crate reads and a name with no spelling each send the body whole
+/// wherever they stand in the list, so no property of such a body is asked, the ones
+/// listed before it included. A `readOnly` property decides nothing, whatever its
+/// schema is. Each row is tried bare and wrapped in an `allOf` of one element. A row
+/// whose body is flat is refused with the variant and the words of its word, and a
+/// row whose body goes whole loads as `Body::JsonWhole`.
 #[test]
-fn a_property_is_asked_its_name_up_to_the_first_property_that_sends_the_body_whole() {
-    for (case, word, asked, text) in names_asked() {
+fn a_property_is_asked_its_name_only_where_its_body_is_flat() {
+    for (case, word, flat, text) in names_asked() {
         let loaded = Document::load(&text, &[]);
-        if asked {
+        if flat {
             let refused = loaded.expect_err(&case);
             assert!(word.refused_by(&refused, "property"), "{case}: {refused:?}");
             assert_eq!(refused.to_string(), word.words("property"), "{case}");

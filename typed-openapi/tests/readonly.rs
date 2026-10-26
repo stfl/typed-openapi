@@ -818,6 +818,26 @@ fn an_example_stays_as_the_document_has_it_where_the_walk_does_not_go() {
     }
 }
 
+/// An object that `openapiv3` holds as `AnySchema`, here one that states an empty
+/// `enum`, is no object to this crate, so a body that is one goes whole as a body
+/// does for any shape it does not read: no flag, no template, and no name for the
+/// `readOnly` property that it states. With an `example` the template is the
+/// example as the document has it, which
+/// `an_example_stays_as_the_document_has_it_where_the_walk_does_not_go` holds.
+#[test]
+fn a_body_that_openapiv3_holds_as_any_schema_goes_whole_and_names_no_read_only_property() {
+    let doc = loaded(&creating(
+        "{ type: object, enum: [], required: [id, name], properties: { id: { type: integer, \
+         readOnly: true }, name: { type: string } } }",
+        PET,
+    ));
+    let body = operation(&doc, "createPet").body();
+    assert!(
+        matches!(body, Body::JsonWhole { template: None, read_only, .. } if read_only.is_empty()),
+        "{body:?}"
+    );
+}
+
 /// A property no flag could carry is read for no rule. A step of 0 is the one
 /// rule that only a flag runs, so a read-only property that states it loads; the
 /// same body with the property sent is refused.

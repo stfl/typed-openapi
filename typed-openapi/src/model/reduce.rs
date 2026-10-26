@@ -1927,19 +1927,19 @@ fn json_body(
 /// goes whole.
 ///
 /// One nested property is enough to send the whole body through `--json-body`,
-/// and no sibling gets a flag the request builder would then throw away. A
-/// property whose name has no kebab-case spelling has no flag either, and the
-/// body's rule is about whether a property has one rather than about why it has
-/// none — so it goes the way a nested property goes. What that buys is the
-/// disclosure: the template `--json-body-template` prints carries the key, where
-/// a flag called `""` names it nowhere. A property the API sets is carried by no
-/// request, so it has no flag and decides nothing.
+/// wherever it stands in the list, and no sibling gets a flag the request builder
+/// would then throw away. A property whose name has no kebab-case spelling has no
+/// flag either, and the body's rule is about whether a property has one rather
+/// than about why it has none — so it goes the way a nested property goes. What
+/// that buys is the disclosure: the template `--json-body-template` prints carries
+/// the key, where a flag called `""` names it nowhere. A property the API sets is
+/// carried by no request, so it has no flag and decides nothing.
 ///
-/// The properties claim their flags in document order. A property listed before
-/// the one that sends the body whole has claimed its flag by then, and so has
-/// been asked its name: a name that consent is given by refuses the document
-/// whether or not the body goes whole, and a property listed after that one is
-/// not asked.
+/// The flags are claimed once the body is known to be flat, in document order. A
+/// body that goes whole has no flag, so none of its properties is asked its name,
+/// whatever the order they stand in: a name that consent is given by refuses the
+/// document where a flag would answer to it, and nobody can type a flag that is
+/// never made. [`shape_of`] asks a parameter's name on the same terms.
 fn fields_of(
     id: &str,
     object: &ObjectType,
@@ -1947,21 +1947,17 @@ fn fields_of(
     components: &Components,
     flags: &mut Namespace,
 ) -> Result<Option<Vec<Field>>, LoadError> {
-    let mut fields = Vec::with_capacity(properties.len());
-    for Property {
+    let Some(flagged) = flagged_properties(properties) else {
+        return Ok(None);
+    };
+    let mut fields = Vec::with_capacity(flagged.len());
+    for Flagged {
         name,
         schema: property,
-        role,
-    } in properties
+        scalar,
+        spelling,
+    } in flagged
     {
-        let scalar = match role {
-            Role::ReadOnly => continue,
-            Role::Flag(scalar) => scalar,
-            Role::Nested => return Ok(None),
-        };
-        let Ok(spelling) = spelled("property", name) else {
-            return Ok(None);
-        };
         fields.push(Field {
             flag: flags
                 .claim(&spelling, "body")
@@ -1974,6 +1970,36 @@ fn fields_of(
         });
     }
     Ok(Some(fields))
+}
+
+/// A property that gets a flag, with the spelling the flag will have.
+struct Flagged<'a> {
+    name: &'a String,
+    schema: ReferenceOr<Schema>,
+    scalar: Scalar,
+    spelling: String,
+}
+
+/// The properties that the request carries, each with the spelling of its flag, or
+/// `None` where one of them sends the body whole. No flag is claimed here: whether
+/// a body is flat is decided before any property is asked its name.
+fn flagged_properties(properties: Vec<Property<'_>>) -> Option<Vec<Flagged<'_>>> {
+    let mut flagged = Vec::with_capacity(properties.len());
+    for Property { name, schema, role } in properties {
+        let scalar = match role {
+            Role::ReadOnly => continue,
+            Role::Flag(scalar) => scalar,
+            Role::Nested => return None,
+        };
+        let spelling = spelled("property", name).ok()?;
+        flagged.push(Flagged {
+            name,
+            schema,
+            scalar,
+            spelling,
+        });
+    }
+    Some(flagged)
 }
 
 /// A property of a body and what the request does with it.
