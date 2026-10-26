@@ -313,9 +313,10 @@ fn an_unsigned_64_bit_id_is_an_integer_of_at_least_0() {
     );
 }
 
-/// A step is read where it is a whole number below 2^53 and refused by its keyword
-/// where it is not: `2.5` states that an integer is a multiple of 5, and no step
-/// that this crate reads says so.
+/// A step is read as a bound is: a whole double below 2^53 is that integer, whatever
+/// text gave it, so `2.00000000000000001` is the step 2. A double with a fraction
+/// and a whole one from 2^53 are refused by their keyword: `2.5` states that an
+/// integer is a multiple of 5, and no step that this crate reads says so.
 #[test]
 fn an_integers_step_that_openapiv3_holds_as_a_double_is_read_only_where_it_is_whole() {
     for (schema, expected) in [
@@ -339,6 +340,11 @@ fn an_integers_step_that_openapiv3_holds_as_a_double_is_read_only_where_it_is_wh
     ] {
         assert_eq!(range_of(schema).map(drop), expected, "{schema}");
     }
+    // The reader keeps the double and not the text.
+    let doc = loaded("{ type: integer, minimum: 0.0, multipleOf: 2.00000000000000001 }");
+    let scalar = param_of(&doc).expect("a scalar");
+    assert!(scalar.parse("4").is_ok());
+    assert!(scalar.parse("3").is_err());
 }
 
 /// An `enum` that lists a value of another type is why `openapiv3` holds the
