@@ -600,7 +600,7 @@ fn integer_end(
 
 /// An integer's `multipleOf`, which `openapiv3` holds as an `f64` once it is no
 /// `i64`: `2.0` and `1e3` are the integers 2 and 1000. A whole double below 2^53 is
-/// that integer, whatever text gave it, as a bound is: the reader keeps the double
+/// that integer, whatever text gave it, as for a bound: the reader keeps the double
 /// and not the text, so `multipleOf: 2.00000000000000001` is the step 2. A double
 /// with a fraction is refused, because an integer is a multiple of 2.5 when it is
 /// a multiple of 5 and no step that this crate reads says so, and so is a whole one
@@ -868,11 +868,13 @@ impl Walk<'_> {
     /// The example is a value and the schema beside it says which of its keys are
     /// read-only, so the two are walked together: an object by its properties, a
     /// list by its items. The walk goes through an object and a list that this
-    /// crate reads, and into the value of a key that the object's `properties`
-    /// declare. The example stays as the document has it everywhere else: the
-    /// value under a key that `properties` does not declare, everything below a
-    /// schema this walk reads no further (a composition, or an object that
-    /// `openapiv3` holds as `AnySchema`) and everything below one that cannot be
+    /// crate reads, where the example has their shape, and into the value of a key
+    /// that the object's `properties` declare. The example stays as the document
+    /// has it wherever the walk does not go: the value under a key that
+    /// `properties` does not declare, and everything below a schema this walk reads
+    /// no further, such as a composition, a schema with `properties` and no `type`,
+    /// an object or an array that states a keyword its `type` does not have, an
+    /// object that `openapiv3` holds as `AnySchema`, or one that cannot be
     /// followed, because a template is no place to refuse a document that loads. A
     /// list of several elements names a property once.
     fn without_read_only(
@@ -1017,7 +1019,8 @@ impl Walk<'_> {
 /// That floor is not a promise that a template cannot be sent. An
 /// enumeration's first value is one the enumeration admits, and the `example`
 /// [`skeleton`] takes is one the document states about the API — so a template
-/// drawing every key from those two carries nothing the document forbids. A
+/// drawing every key from those two carries nothing the document forbids, bar a
+/// `readOnly` key that an `example` carries where the walk does not go. A
 /// template is checked against nothing and is not meant to go out unread: it says
 /// where the values belong, and the values are the caller's to put there.
 fn empty(scalar: &Scalar) -> Value {

@@ -236,9 +236,13 @@ that this CLI reads, into the value of each key that the object's `properties`
 declare, and loses its `readOnly` keys there. So a `readOnly` property below the
 body's own object that the document does not require and no `example` carries is
 left out of nothing and is not named. One that an `example` carries where the
-walk does not go stays in the template and is named nowhere: that is below a
-composition, in an object that `openapiv3` holds as `AnySchema`, under a key that
-`properties` does not declare, and below a schema that cannot be followed.
+walk does not go stays in the template and is named nowhere. The walk goes where
+the schema is an object or a list that this CLI reads and the `example` has its
+shape. So it does not go where the schema is none, such as a composition, a
+schema with `properties` and no `type`, an object or an array that states a
+keyword its `type` does not have, an object that `openapiv3` holds as
+`AnySchema`, or a schema that cannot be followed, and it does not go under a key
+that `properties` does not declare.
 
 A property is `readOnly` when its own schema says so, when it points with a
 `$ref` at a named schema that says so, or when it is an `allOf` of one element
@@ -327,7 +331,8 @@ Where the document does offer something, the template carries it: an enumeration
 has no empty member, so it shows the first value listed, and an `example` is the
 template of the schema it is stated on, less the `readOnly` properties that the
 walk reaches. Both are values the API admits, so a template drawing every key
-from those two holds nothing the document forbids.
+from those two holds nothing the document forbids, bar a `readOnly` key that an
+`example` carries where the walk does not go.
 
 **A template is checked against nothing.** It is a skeleton to read and fill in,
 not a body to send unread. What holds the file you then pass to `--json-body` is
@@ -448,9 +453,10 @@ and so does a `minimum` below every one, so an unsigned 64-bit id (`minimum: 0`,
 every `i64` and a `maximum` below every one are met by no integer of a flag, and
 a whole bound from 2^53 to 2^63 is the double of more than one integer's text,
 so each is named by its keyword and rounded no further. A step (`multipleOf`) is
-read the same way: a whole double below 2^53 is that integer, whatever text gave
-it, so `multipleOf: 2.00000000000000001` is the step 2, and one with a fraction or
-a whole one from 2^53 is named by its keyword.
+read as an integer only where it is whole: a whole double below 2^53 is that
+integer, whatever text gave it, as for a bound, so `multipleOf: 2.00000000000000001`
+is the step 2. A step with a fraction is named by its keyword, because no step
+says that an integer is a multiple of 2.5, and so is a whole one from 2^53.
 
 The parameters of an operation are one list. It holds the path item's
 parameters in the order the path item lists them, with a parameter of the
@@ -628,6 +634,15 @@ $ toy raw vouchers update --help
       --body-id <INT>
           Server-assigned id (sends `id`)
 ```
+
+A flag goes to the first claimant: a parameter before a later one, and a
+parameter before a property of the body. A value that has a flag takes it before
+the ones after it, so which one moves depends on which values have a flag. A
+scalar that `openapiv3` holds as `AnySchema`, a list inside an `allOf` of one
+element and an array that states an empty keyword have a flag, so a later header
+`Id` after a query parameter `id` of one of them is `--param-id`, and a property
+`id` of the body is `--body-id`. The help line of the moved flag says which name
+it sends.
 
 Each subcommand's namespace starts with `json-body`, `json-body-template`,
 `raw-body`, `file`, `field` and `help` already spent, so a document that names a

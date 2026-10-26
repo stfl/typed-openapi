@@ -537,9 +537,10 @@ integer whatever text gave it, which is the approximation named above. A double
 past every `i64` bounds nothing, or admits none and is refused by its keyword. A
 whole double from 2^53 to 2^63, both ends included, is the double of more than
 one integer's text, so it is refused by its keyword and never rounded again. A
-step is read as a bound is (`integer_step`): a whole double below 2^53 is that
-integer whatever text gave it, which is the approximation named above, and a
-double with a fraction or a whole one from 2^53 is refused by its keyword. A
+step is read as an integer only where it is whole (`integer_step`): a whole
+double below 2^53 is that integer whatever text gave it, as for a bound, which is
+the approximation named above, and a double with a fraction or a whole one from
+2^53 is refused by its keyword. A
 parameter takes the reason as its `Unreachable`, and a property takes it as the
 body going whole, as any property with no flag does. Neither refuses the
 document that holds it, and only a required parameter does.
@@ -550,6 +551,19 @@ wherever it stands, so `items_of`, `json_body` and `part_names` unwrap it as
 `scalar_of` does. `resolve_schema` follows a `$ref` and no more, and is for the
 sentence and the example, which are the field's own before they are the named
 schema's.
+
+What has a flag decides which flags move, and what a command line sends. A flag
+goes to the first claimant, the parameters in the order of the list and then the
+properties of the body, so a value that gains a flag takes it from a later
+parameter or property, which becomes `--param-<name>` or `--body-<name>`. A body
+that gains a flat shape loses its template, and a body that gains a template
+gains `--json-body-template`. A value that gains a flag is asked its rules and
+its name, so a document that loaded can be refused (`Unrunnable`,
+`Unresolvable`, `HeaderName`, `GateTakenByName`, `CommitTakenByName`), and the
+rules of a property of a JSON body are asked whether or not its body goes whole.
+A change to what `stated`, `scalar_of`, `array_of` or `json_body` read lists all
+of these in the CHANGELOG, each with its repair, because they are what an
+adopter sees of it.
 
 Every flag a user types passes `names::spelled`, which is why a body property
 spelled `*` sends its body whole rather than claiming a flag called `""`. The
@@ -721,10 +735,14 @@ leaves out, from the walk that writes the template, so the two cannot part. An
 walks it beside its schema, through an object and a list that this crate reads
 and into the value of each key that the object's `properties` declare. It drops
 a read-only property there whether the document requires it or not, naming it by
-the same path. The example stays as the document has it everywhere else: below a
-composition, in an object that `openapiv3` holds as `AnySchema`, under a key
-that `properties` does not declare, and below a schema that cannot be followed,
-because a template is no place to refuse a document that loads. A read-only key
+the same path. The example stays as the document has it wherever the walk does
+not go, which is wherever the schema is no object and no list that this crate
+reads, or the example has not their shape, or the key is not one that
+`properties` declares. Such places are below a composition, below a schema with
+`properties` and no `type`, in an object or an array that states a keyword its
+`type` does not have, in an object that `openapiv3` holds as `AnySchema`, and
+below a schema that cannot be followed. A template is no place to refuse a
+document that loads. A read-only key
 there stays in the template and is named nowhere, so the template is the
 example, not a body that has been checked. The walk enters a required property
 only, so a read-only property that the document does not require below the

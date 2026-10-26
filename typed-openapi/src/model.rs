@@ -466,10 +466,11 @@ pub enum Unsupported {
     /// next inside it, a whole one below 2^53 is that integer whatever text gave it
     /// (`openapiv3` keeps the double and not the text, so `1.00000000000000001` is
     /// 1), and one past every `i64` bounds nothing, or admits none and is refused.
-    /// A `multipleOf` is read as a bound is: a whole double below 2^53 is that
-    /// integer, whatever text gave it. A whole bound from 2^53 to 2^63, where the
-    /// texts of more than one integer are one double, and a `multipleOf` that has
-    /// a fraction or is whole from 2^53 are refused by their keyword.
+    /// A `multipleOf` is read only where it is whole: a whole double below 2^53 is
+    /// that integer, whatever text gave it, as for a bound. A whole bound from
+    /// 2^53 to 2^63, where the texts of more than one integer are one double, and a
+    /// `multipleOf` that has a fraction or is whole from 2^53 are refused by their
+    /// keyword.
     ///
     /// Reading the value anyway would be a guess at what the vendor meant, and a
     /// correction is the adopter's to write in an Overlay where a reviewer can
@@ -630,12 +631,15 @@ pub enum Body {
         /// Then come the ones the template leaves out below it, in the order its
         /// walk meets them: the required ones, and the ones an `example` carries
         /// where the walk goes through the example, because the template writes only
-        /// those. The walk goes through an object and a list that this crate reads,
-        /// into the value of each key that the object's `properties` declare. An
-        /// `example` stays as the document has it below a composition, in an object
-        /// that `openapiv3` holds as `AnySchema`, under a key that `properties` does
-        /// not declare, and below a schema that cannot be followed: a `readOnly`
-        /// key there stays in the template and is named nowhere.
+        /// those. The walk goes through an object and a list that this crate reads
+        /// and an `example` that has their shape, into the value of each key that
+        /// the object's `properties` declare. Wherever it does not go the `example`
+        /// stays as the document has it, such as below a composition, below a schema
+        /// with `properties` and no `type`, in an object or an array that states a
+        /// keyword its `type` does not have, in an object that `openapiv3` holds as
+        /// `AnySchema`, under a key that `properties` does not declare, and below a
+        /// schema that cannot be followed: a `readOnly` key there stays in the
+        /// template and is named nowhere.
         ///
         /// [`BodyError`]: crate::client::BodyError
         read_only: Vec<String>,
