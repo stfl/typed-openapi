@@ -85,8 +85,8 @@ fn command_of(op: &Operation) -> (Vec<String>, String) {
     (longs, help)
 }
 
-/// The probe's finding: `--id` was demanded, so a caller had to invent an id that
-/// the API says not to send.
+/// The probe's input: `id` is required and read-only, and the caller is never
+/// asked to invent an id that the API says not to send, so `--id` is no flag.
 #[test]
 fn a_read_only_property_gets_no_flag_even_when_the_schema_requires_it() {
     let doc = loaded(&pet());
@@ -637,11 +637,11 @@ const WALK_SCHEMAS: &str = "    Pet:
         s: { type: string }
 ";
 
-/// The documents in which the example walk does not go: the schema beside the
-/// example is a composition (an `allOf` of two schemas, an `anyOf`, a `oneOf` at a
-/// property), an object that `openapiv3` holds as `AnySchema`, or the example has a
-/// key that `properties` does not declare. Each is the label, the document and the
-/// example, which the template is.
+/// The documents in which the example walk does not go because of the schema
+/// beside the example: a composition (an `allOf` of two schemas, an `anyOf`, a
+/// `oneOf` at a property), an object that `openapiv3` holds as `AnySchema`, or an
+/// example with a key that `properties` does not declare. Each is the label, the
+/// document and the example, which the template is.
 fn examples_the_walk_does_not_enter() -> Vec<(&'static str, String, Value)> {
     let named = |schema: &str| creating(schema, WALK_SCHEMAS);
     vec![
@@ -688,14 +688,57 @@ fn examples_the_walk_does_not_enter() -> Vec<(&'static str, String, Value)> {
     ]
 }
 
+/// The documents in which the example walk does not go because the schema beside
+/// the example is no object and no array that this crate reads: an array that
+/// states a keyword its `type` does not have, a schema that has `properties` and no
+/// `type`, as the body and as a required property, and a `not`. Each is the label,
+/// the document and the example, which the template is.
+fn examples_beside_a_schema_that_is_not_read() -> Vec<(&'static str, String, Value)> {
+    let named = |schema: &str| creating(schema, WALK_SCHEMAS);
+    let untyped = "properties: { id: { type: integer, readOnly: true }, name: { type: string } }";
+    let rex = json!({ "id": 1, "name": "Rex" });
+    vec![
+        (
+            "an array that states a keyword its type does not have",
+            named(
+                "{ type: array, minLength: 1, items: { $ref: '#/components/schemas/Pet' }, \
+                 example: [{ id: 1, name: Rex }] }",
+            ),
+            json!([rex]),
+        ),
+        (
+            "properties and no type",
+            named(&format!("{{ {untyped}, example: {{ id: 1, name: Rex }} }}")),
+            rex.clone(),
+        ),
+        (
+            "properties and no type, as a required property",
+            named(&format!(
+                "{{ type: object, required: [pet], properties: {{ pet: {{ {untyped}, \
+                 example: {{ id: 1, name: Rex }} }} }} }}"
+            )),
+            json!({ "pet": rex }),
+        ),
+        (
+            "a not",
+            named("{ not: { type: string }, example: { id: 1, name: Rex } }"),
+            rex,
+        ),
+    ]
+}
+
 /// The example walk goes through an object and a list that this crate reads, and
-/// into the keys that `properties` declares. Everywhere else the example is the
-/// template as the document has it, a `readOnly` key in it included, and no path
-/// is named: the template is a skeleton to read, and the walk refuses nothing it
-/// cannot follow.
+/// into the keys that `properties` declares. Wherever it does not go, because the
+/// schema beside the example is no object and no list that this crate reads or the
+/// example has no key of the schema, the example is the template as the document
+/// has it, a `readOnly` key in it included, and no path is named: the template is a
+/// skeleton to read, and the walk refuses nothing it cannot follow.
 #[test]
 fn an_example_stays_as_the_document_has_it_where_the_walk_does_not_go() {
-    for (label, text, example) in examples_the_walk_does_not_enter() {
+    for (label, text, example) in examples_the_walk_does_not_enter()
+        .into_iter()
+        .chain(examples_beside_a_schema_that_is_not_read())
+    {
         let (template, read_only) = template_of(&loaded(&text));
         assert_eq!(template, example, "{label}");
         assert!(read_only.is_empty(), "{label}: {read_only:?}");
@@ -729,8 +772,43 @@ fn a_read_only_property_is_read_for_no_rule_of_a_flag() {
     );
 }
 
+/// A property no flag could carry takes no name from the namespace of its
+/// operation, so a read-only property may be named `force` beside the gate `force`
+/// and `commit` beside the confirmation. The same property without `readOnly` has a
+/// flag, and the load refuses the name.
+#[test]
+fn a_read_only_property_may_be_named_like_a_word_of_consent() {
+    for name in ["force", "commit"] {
+        let body = |read_only: &str| {
+            document(
+                &format!(
+                    "  /pets:\n    post:\n      operationId: createPet\n      \
+                     x-cli-gates: [force]\n      requestBody:\n        content:\n          \
+                     application/json:\n            schema: {{ type: object, properties: \
+                     {{ {name}: {{ type: integer{read_only} }} }} }}\n      \
+                     responses: {{ '201': {{ description: Created }} }}\n"
+                ),
+                "    Unused: { type: string }\n",
+            )
+        };
+        let doc = loaded(&body(", readOnly: true"));
+        let op = operation(&doc, "createPet");
+        assert!(op.body().fields().is_empty(), "{name}");
+        assert_eq!(op.body().read_only(), [name]);
+
+        let refused = Document::load(&body(""), &[]).expect_err("a flag named like a word");
+        assert!(
+            matches!(
+                refused,
+                LoadError::GateTakenByName { .. } | LoadError::CommitTakenByName { .. }
+            ),
+            "{name}: {refused:?}"
+        );
+    }
+}
+
 /// The pattern of a read-only property is a rule of the document that a generated
-/// type runs on a response, so it is still refused where no engine runs it. The
+/// type runs on a response, so it is refused where no engine runs it. The
 /// refusal is the walk over every schema, which names the schema as an Overlay
 /// names a target, and not the flag, which the property does not have.
 #[test]
@@ -805,8 +883,8 @@ fn optional(ty: &str) -> bool {
     ty.starts_with("::std::option::Option<")
 }
 
-/// The probe's other half: typify required `id` of the type, so a body that
-/// leaves it out could not be built.
+/// The probe's other half: the generated type of a request body does not require
+/// `id`, so a body that leaves it out can be built.
 #[test]
 fn a_type_a_request_body_reaches_does_not_require_a_read_only_property() {
     let types = types_of("readonly-reached", &pet());
@@ -879,7 +957,7 @@ fn a_type_only_responses_reach_keeps_the_documents_required() {
     );
     let receipt = struct_of(&types, "Receipt");
     assert_eq!(field_type(receipt, "id"), "i64", "{receipt}");
-    // The type of the request still stops requiring it.
+    // The type of the request does not require it.
     assert_eq!(field_type(struct_of(&types, "Pet"), "id"), OPTIONAL_ID);
 }
 

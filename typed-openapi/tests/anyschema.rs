@@ -116,8 +116,8 @@ fn an_integer_with_a_bound_spelled_as_a_float_is_an_integer() {
     }
 }
 
-/// The probe's second case: the parameter is required, and the document was
-/// refused for a reason that was not true.
+/// The probe's second case: a parameter that the document requires loads when its
+/// schema is an integer with a bound spelled as a float, because that is a value.
 #[test]
 fn a_required_integer_with_a_bound_spelled_as_a_float_loads() {
     let doc = Document::load(&document("{ type: integer, minimum: 0.0 }", true), &[])
@@ -313,8 +313,9 @@ fn an_unsigned_64_bit_id_is_an_integer_of_at_least_0() {
     );
 }
 
-/// A step is read as a bound is: a whole double below 2^53 is that integer, whatever
-/// text gave it, so `2.00000000000000001` is the step 2. A double with a fraction
+/// A step is read as an integer only where it is whole: a whole double below 2^53 is
+/// that integer, whatever text gave it, as for a bound, so `2.00000000000000001` is
+/// the step 2. A double with a fraction
 /// and a whole one from 2^53 are refused by their keyword: `2.5` states that an
 /// integer is a multiple of 5, and no step that this crate reads says so.
 #[test]
@@ -682,6 +683,15 @@ fn template_of_body(schema: &str) -> (serde_json::Value, Vec<String>) {
     )
 }
 
+/// The long help of the subcommand of a JSON body of this schema.
+fn long_help_of_body(schema: &str) -> String {
+    let doc = Document::load(&operation_with("", "", schema), &[]).expect("the document loads");
+    tree::command(operation(&doc, "op"))
+        .get_long_about()
+        .expect("a long help")
+        .to_string()
+}
+
 /// The array is the array in a body too: the template writes one element of it,
 /// and takes its `example` less the properties the API sets, as it does for an
 /// array that `openapiv3` holds as a type.
@@ -710,12 +720,21 @@ fn the_read_only_properties_of_the_items_of_such_an_array_are_named_by_their_pat
     let (template, read_only) = template_of_body(list);
     assert_eq!(template, serde_json::json!([{ "sku": "" }]));
     assert_eq!(read_only, ["[].id"]);
+    assert!(
+        long_help_of_body(list).contains("`[].id` is `readOnly`"),
+        "{}",
+        long_help_of_body(list)
+    );
 
-    let (template, read_only) = template_of_body(&format!(
-        "{{ type: object, required: [tags], properties: {{ tags: {list} }} }}"
-    ));
+    let property = format!("{{ type: object, required: [tags], properties: {{ tags: {list} }} }}");
+    let (template, read_only) = template_of_body(&property);
     assert_eq!(template, serde_json::json!({ "tags": [{ "sku": "" }] }));
     assert_eq!(read_only, ["tags[].id"]);
+    assert!(
+        long_help_of_body(&property).contains("`tags[].id` is `readOnly`"),
+        "{}",
+        long_help_of_body(&property)
+    );
 }
 
 /// A composition is not a value that fits on a flag, and it names itself.
@@ -786,10 +805,10 @@ fn a_type_that_is_none_of_the_six_is_named() {
     );
 }
 
-/// What the scalar of a plain schema was before the change is what it is, so the
-/// fix reads nothing that `openapiv3` already held as a type in another way.
+/// A schema that `openapiv3` holds as a type reads the same way whatever else the
+/// crate reads from an `AnySchema`: its scalar is the one its type states.
 #[test]
-fn a_scalar_that_openapiv3_holds_as_a_type_is_read_as_before() {
+fn a_scalar_that_openapiv3_holds_as_a_type_is_read_by_its_type() {
     let doc = loaded("{ type: integer, minimum: 0, maximum: 10, enum: [1, 2, 3] }");
     let scalar = param_of(&doc).expect("a scalar");
     assert!(scalar.parse("2").is_ok());
@@ -803,6 +822,7 @@ fn a_scalar_that_openapiv3_holds_as_a_type_is_read_as_before() {
 
 /// One operation of this test's own: `parameters` is its parameter list, and
 /// `gates` what it says in `x-cli-gates`. Its body is `body`, as the JSON schema.
+/// The schema `Arr` is a list of strings, for a parameter that points at one.
 fn operation_with(parameters: &str, gates: &str, body: &str) -> String {
     format!(
         "openapi: 3.0.3
@@ -820,7 +840,21 @@ paths:
           application/json:
             schema: {body}
       responses: {{ '200': {{ description: OK }} }}
+components:
+  schemas:
+    Arr: {{ type: array, items: {{ type: string }} }}
 "
+    )
+}
+
+/// An operation whose one parameter is `name`, in `place` (`query` or `header`),
+/// with `schema`, and whose body is an object with no properties. `gates` is what
+/// the operation says in `x-cli-gates`.
+fn one_parameter(place: &str, name: &str, schema: &str, gates: &str) -> String {
+    operation_with(
+        &format!("{{ name: '{name}', in: {place}, schema: {schema} }}"),
+        gates,
+        "{ type: object }",
     )
 }
 
@@ -835,13 +869,7 @@ fn rules_that_cannot_run() -> Vec<(&'static str, String)> {
             &format!("{{ type: object, properties: {{ v: {schema} }} }}"),
         )
     };
-    let parameter = |schema: &str| {
-        operation_with(
-            &format!("{{ name: v, in: query, schema: {schema} }}"),
-            "",
-            "{ type: object }",
-        )
-    };
+    let parameter = |schema: &str| one_parameter("query", "v", schema, "");
     vec![
         (
             "a step of 0 on a parameter",
@@ -873,6 +901,22 @@ fn rules_that_cannot_run() -> Vec<(&'static str, String)> {
                 "",
                 "",
                 "{ allOf: [{ type: object, properties: { v: { type: integer, multipleOf: 0 } } }] }",
+            ),
+        ),
+        (
+            "an `enum` of `null` on a property of a wrapped body",
+            operation_with(
+                "",
+                "",
+                "{ allOf: [{ type: object, properties: { v: { type: string, enum: [null] } } }] }",
+            ),
+        ),
+        (
+            "a step of 0 on a property of a body that goes whole",
+            operation_with(
+                "",
+                "",
+                "{ type: object, properties: { n: { type: object }, v: { type: integer, minimum: 0.0, multipleOf: 0 } } }",
             ),
         ),
     ]
@@ -965,10 +1009,12 @@ impl Word {
 
 /// The documents in which a value that has a flag is named like a word that consent
 /// is given by. Each is the place that holds the name, the word and the document.
-/// The values are a scalar that `openapiv3` holds as `AnySchema`, a list of them,
-/// an array that states an empty keyword, and a list inside an `allOf` of one
-/// element, each as a query parameter; and the scalar as a property of a JSON
-/// body, bare and inside a wrapped body.
+/// The values are a scalar that `openapiv3` holds as `AnySchema`, as a query
+/// parameter and as a header; a list of them, an array that states an empty
+/// keyword, and a list inside an `allOf` of one element, each as a query
+/// parameter; that scalar as a property of a JSON body; and, as a property of a
+/// body that is an `allOf` of one element, that scalar and a plain `integer` and
+/// `string`.
 fn named_like_consent() -> Vec<(&'static str, Word, String)> {
     let scalar = "{ type: integer, minimum: 0.0 }";
     let lists = [
@@ -979,16 +1025,11 @@ fn named_like_consent() -> Vec<(&'static str, Word, String)> {
     ];
     let mut rows = Vec::new();
     for word in [Word::Gate, Word::Confirmation] {
-        let parameter = |schema: &str| {
-            operation_with(
-                &format!("{{ name: {}, in: query, schema: {schema} }}", word.name()),
-                word.gates(),
-                "{ type: object }",
-            )
-        };
-        let property = |wrapped: bool| {
+        let parameter =
+            |place: &str, schema: &str| one_parameter(place, word.name(), schema, word.gates());
+        let property = |schema: &str, wrapped: bool| {
             let body = format!(
-                "{{ type: object, properties: {{ {}: {scalar} }} }}",
+                "{{ type: object, properties: {{ {}: {schema} }} }}",
                 word.name()
             );
             let body = if wrapped {
@@ -998,12 +1039,17 @@ fn named_like_consent() -> Vec<(&'static str, Word, String)> {
             };
             operation_with("", word.gates(), &body)
         };
-        rows.push(("parameter", word, parameter(scalar)));
+        rows.push(("parameter", word, parameter("query", scalar)));
+        rows.push(("parameter", word, parameter("header", scalar)));
         for list in &lists {
-            rows.push(("parameter", word, parameter(list)));
+            rows.push(("parameter", word, parameter("query", list)));
         }
-        rows.push(("property", word, property(false)));
-        rows.push(("property", word, property(true)));
+        rows.push(("property", word, property(scalar, false)));
+        // Every scalar property of a body that is an `allOf` of one element has a
+        // flag, whatever the scalar is.
+        for plain in [scalar, "{ type: integer }", "{ type: string }"] {
+            rows.push(("property", word, property(plain, true)));
+        }
     }
     rows
 }
@@ -1056,8 +1102,9 @@ const MISSING: &str = "`#/components/schemas/Missing` does not resolve";
 const HEADER_NAME: &str =
     "op: the header parameter `X V` is not a header name; correct or remove it in an Overlay";
 
-/// A list that had no flag and has one: an array that states an empty keyword, or
-/// a list inside an `allOf` of one element. `items` are its items.
+/// A list that has a flag because of how `openapiv3` holds it: an array that
+/// states an empty keyword, or a list inside an `allOf` of one element. `items`
+/// are its items.
 fn list_of(wrapped: bool, items: &str) -> String {
     if wrapped {
         format!("{{ allOf: [{{ type: array, items: {items} }}] }}")
@@ -1068,26 +1115,12 @@ fn list_of(wrapped: bool, items: &str) -> String {
 
 /// The query parameter `v` whose schema is such a list.
 fn query_of(wrapped: bool, items: &str) -> String {
-    operation_with(
-        &format!(
-            "{{ name: v, in: query, schema: {} }}",
-            list_of(wrapped, items)
-        ),
-        "",
-        "{ type: object }",
-    )
+    one_parameter("query", "v", &list_of(wrapped, items), "")
 }
 
 /// The header `X V`, which is no header name, whose schema is such a list.
 fn header_of(wrapped: bool) -> String {
-    operation_with(
-        &format!(
-            "{{ name: 'X V', in: header, schema: {} }}",
-            list_of(wrapped, "{ type: string }")
-        ),
-        "",
-        "{ type: object }",
-    )
+    one_parameter("header", "X V", &list_of(wrapped, "{ type: string }"), "")
 }
 
 /// The documents of a list that has a flag and is refused for it, as the query
@@ -1139,40 +1172,69 @@ fn lists_with_a_flag() -> Vec<Refusal> {
 
 /// The documents of a JSON body, or a property of one, whose `$ref` leads nowhere
 /// where the template follows it: a body that is an array that states an empty
-/// keyword, bare and inside an `allOf` of one element, a property that the body
-/// requires and whose schema is such an array, and a property of a body that is an
-/// `allOf` of one element.
+/// keyword, bare and inside an `allOf` of one element, and a property that the
+/// body requires and whose schema is such an array.
 fn bodies_the_template_follows() -> Vec<Refusal> {
     let list = "{ type: array, items: { $ref: '#/components/schemas/Missing' }, enum: [] }";
-    let row = |what: &str, body: &str, words| Refusal {
+    let row = |what: &str, body: &str| Refusal {
         label: what.to_owned(),
         text: operation_with("", "", body),
         is: is_unresolvable,
-        words,
+        words: UNRESOLVABLE_BODY,
         cause: Some(MISSING),
     };
     vec![
-        row(
-            "a body that is an array with an empty keyword",
-            list,
-            UNRESOLVABLE_BODY,
-        ),
+        row("a body that is an array with an empty keyword", list),
         row(
             "the same inside an `allOf`",
             &format!("{{ allOf: [{list}] }}"),
-            UNRESOLVABLE_BODY,
         ),
         row(
             "a required property of a body",
             &format!("{{ type: object, required: [v], properties: {{ v: {list} }} }}"),
-            UNRESOLVABLE_BODY,
-        ),
-        row(
-            "a property of a body that is an `allOf`",
-            "{ allOf: [{ type: object, properties: { v: { allOf: [{ $ref: '#/components/schemas/Missing' }] } } }] }",
-            UNRESOLVABLE,
         ),
     ]
+}
+
+/// The documents of a property whose `$ref` leads nowhere in a JSON body that is an
+/// `allOf` of one element. The body is read through the wrapper, so each property of
+/// it has a flag to give, and the cause is the wrapper of the body and not of the
+/// property: the same property in a body that is no wrapper is refused without it,
+/// so the first row holds a bare `$ref`.
+fn properties_of_a_wrapped_body() -> Vec<Refusal> {
+    let row = |what: &str, property: &str| Refusal {
+        label: what.to_owned(),
+        text: operation_with(
+            "",
+            "",
+            &format!("{{ allOf: [{{ type: object, properties: {{ v: {property} }} }}] }}"),
+        ),
+        is: is_unresolvable,
+        words: UNRESOLVABLE,
+        cause: Some(MISSING),
+    };
+    vec![
+        row(
+            "a bare `$ref` that leads nowhere",
+            "{ $ref: '#/components/schemas/Missing' }",
+        ),
+        row(
+            "the same inside an `allOf` of its own",
+            "{ allOf: [{ $ref: '#/components/schemas/Missing' }] }",
+        ),
+    ]
+}
+
+/// Asserts that every row is refused as it says: the variant, the words, and the
+/// words of the cause.
+fn assert_refused(rows: impl IntoIterator<Item = Refusal>) {
+    for row in rows {
+        let refused = Document::load(&row.text, &[]).expect_err(&row.label);
+        assert!((row.is)(&refused), "{}: {refused:?}", row.label);
+        assert_eq!(refused.to_string(), row.words, "{}", row.label);
+        let cause = std::error::Error::source(&refused).map(ToString::to_string);
+        assert_eq!(cause.as_deref(), row.cause, "{}", row.label);
+    }
 }
 
 /// A list that has a flag is held to what every flag is held to: its items'
@@ -1183,16 +1245,19 @@ fn bodies_the_template_follows() -> Vec<Refusal> {
 /// words and its cause's.
 #[test]
 fn a_list_with_a_flag_is_held_to_what_a_flag_is_held_to() {
-    for row in lists_with_a_flag()
-        .into_iter()
-        .chain(bodies_the_template_follows())
-    {
-        let refused = Document::load(&row.text, &[]).expect_err(&row.label);
-        assert!((row.is)(&refused), "{}: {refused:?}", row.label);
-        assert_eq!(refused.to_string(), row.words, "{}", row.label);
-        let cause = std::error::Error::source(&refused).map(ToString::to_string);
-        assert_eq!(cause.as_deref(), row.cause, "{}", row.label);
-    }
+    assert_refused(
+        lists_with_a_flag()
+            .into_iter()
+            .chain(bodies_the_template_follows()),
+    );
+}
+
+/// A JSON body that is an `allOf` of one element is read through the wrapper, so
+/// each of its properties is read as the property of a bare body is, and a `$ref`
+/// that leads nowhere refuses the document.
+#[test]
+fn a_property_of_a_wrapped_body_is_held_to_what_a_flag_is_held_to() {
+    assert_refused(properties_of_a_wrapped_body());
 }
 
 // ---------------------------------------------------------------- the wrapper
@@ -1336,4 +1401,193 @@ paths:
         refused.to_string(),
         "upload: `requestBody` has a `$ref` that cannot be followed"
     );
+}
+
+// ----------------------------------------------- what a value with a flag changes
+
+/// The flag of the parameter `name` of the operation `op`, and `None` where it has
+/// none.
+fn flag_of(doc: &Document, name: &str) -> Option<String> {
+    match operation(doc, "op")
+        .param(name)
+        .expect("the parameter")
+        .shape()
+    {
+        Shape::Flag { flag, .. } => Some(flag.clone()),
+        Shape::Unreachable(_) => None,
+    }
+}
+
+/// The flag of the property `name` of the JSON body of the operation `op`.
+fn body_flag_of(doc: &Document, name: &str) -> String {
+    let fields = operation(doc, "op").body().fields();
+    let field = fields.iter().find(|field| field.name() == name);
+    field.expect("the property").flag().to_owned()
+}
+
+/// A document in which two things want one flag, and the flag that each of them
+/// gets.
+struct Claim {
+    label: &'static str,
+    parameters: &'static str,
+    body: &'static str,
+    /// The flag of each parameter, by name.
+    params: &'static [(&'static str, &'static str)],
+    /// The flag of each property of the body, by name.
+    fields: &'static [(&'static str, &'static str)],
+}
+
+const SCALAR: &str = "{ type: integer, minimum: 0.0 }";
+const ID_BODY: &str = "{ type: object, properties: { id: { type: integer } } }";
+
+/// The documents in which a value that has a flag meets a later parameter or a
+/// property of the body with the same flag.
+const CLAIMS: [Claim; 5] = [
+    Claim {
+        label: "a scalar, then a property of the body",
+        parameters: "{ name: id, in: query, schema: { type: integer, minimum: 0.0 } }",
+        body: ID_BODY,
+        params: &[("id", "id")],
+        fields: &[("id", "body-id")],
+    },
+    Claim {
+        label: "a list inside an `allOf` of one element, then a property of the body",
+        parameters: "{ name: id, in: query, schema: { allOf: [{ type: array, items: { type: string } }] } }",
+        body: ID_BODY,
+        params: &[("id", "id")],
+        fields: &[("id", "body-id")],
+    },
+    Claim {
+        label: "an array with an empty keyword, then a property of the body",
+        parameters: "{ name: id, in: query, schema: { type: array, items: { type: string }, enum: [] } }",
+        body: ID_BODY,
+        params: &[("id", "id")],
+        fields: &[("id", "body-id")],
+    },
+    Claim {
+        label: "a scalar, then a header",
+        parameters: "{ name: id, in: query, schema: { type: integer, minimum: 0.0 } }, \
+                     { name: Id, in: header, schema: { type: string } }",
+        body: "{ type: object }",
+        params: &[("id", "id"), ("Id", "param-id")],
+        fields: &[],
+    },
+    Claim {
+        label: "a scalar, then a header with the same kebab-case spelling",
+        parameters: "{ name: fooBar, in: query, schema: { type: integer, minimum: 0.0 } }, \
+                     { name: foo-bar, in: header, schema: { type: string } }",
+        body: "{ type: object }",
+        params: &[("fooBar", "foo-bar"), ("foo-bar", "param-foo-bar")],
+        fields: &[],
+    },
+];
+
+/// A flag goes to the first thing that wants it, in the order of the parameters and
+/// then the properties of the body. A value that has a flag takes it before the
+/// parameters after it and before the properties of the body, so the later one is
+/// `--param-<name>` or `--body-<name>`, and `--id` sets the value that has the
+/// flag.
+#[test]
+fn a_value_that_has_a_flag_takes_it_before_the_things_after_it() {
+    for claim in CLAIMS {
+        let text = operation_with(claim.parameters, "", claim.body);
+        let doc = Document::load(&text, &[]).unwrap_or_else(|why| panic!("{}: {why}", claim.label));
+        for (name, flag) in claim.params {
+            assert_eq!(
+                flag_of(&doc, name).as_deref(),
+                Some(*flag),
+                "{}: {name}",
+                claim.label
+            );
+        }
+        for (name, flag) in claim.fields {
+            assert_eq!(body_flag_of(&doc, name), *flag, "{}: {name}", claim.label);
+        }
+    }
+}
+
+/// A body that is an `allOf` of one element is read as the object it wraps, so it
+/// is flat when that object is: a flag for each property, `--json-body` as the base
+/// document that they merge over, and no `--json-body-template`. A body that goes
+/// whole has the template.
+#[test]
+fn a_body_that_is_an_all_of_of_one_element_is_flat_when_the_object_it_wraps_is() {
+    let object = "{ type: object, required: [name], properties: { name: { type: string } } }";
+    for body in [object.to_owned(), format!("{{ allOf: [{object}] }}")] {
+        let doc = Document::load(&operation_with("", "", &body), &[]).expect("the document loads");
+        let op = operation(&doc, "op");
+        assert!(
+            matches!(op.body(), Body::JsonFields { .. }),
+            "{body}: {:?}",
+            op.body()
+        );
+        let names: Vec<&str> = op
+            .body()
+            .fields()
+            .iter()
+            .map(typed_openapi::Field::name)
+            .collect();
+        assert_eq!(names, ["name"], "{body}");
+        let command = tree::command(op);
+        let templates = command
+            .get_arguments()
+            .filter(|arg| arg.get_long() == Some("json-body-template"))
+            .count();
+        assert_eq!(templates, 0, "{body}");
+    }
+}
+
+/// A body that is a scalar goes whole, and its template is the empty value of its
+/// type, so the operation has `--json-body-template`: `0` for an integer with a
+/// bound spelled as a float.
+#[test]
+fn a_body_that_is_a_scalar_has_the_template_of_its_type() {
+    let (template, read_only) = template_of_body(SCALAR);
+    assert_eq!(template, serde_json::json!(0));
+    assert!(read_only.is_empty(), "{read_only:?}");
+}
+
+/// A parameter that the document requires loads when its value has a flag: a list
+/// inside an `allOf` of one element, bare and over a `$ref` to an array, as a
+/// query, a header and a path parameter.
+#[test]
+fn a_required_list_inside_an_all_of_of_one_element_loads() {
+    for place in ["query", "header", "path"] {
+        for schema in [
+            "{ allOf: [{ type: array, items: { type: string } }] }",
+            "{ allOf: [{ $ref: '#/components/schemas/Arr' }] }",
+        ] {
+            let parameter = format!("{{ name: v, in: {place}, required: true, schema: {schema} }}");
+            let path = if place == "path" { "/x/{v}" } else { "/x" };
+            let text = operation_with(&parameter, "", "{ type: object }")
+                .replace("/x:", &format!("{path}:"));
+            let doc =
+                Document::load(&text, &[]).unwrap_or_else(|why| panic!("{place}, {schema}: {why}"));
+            assert!(flag_of(&doc, "v").is_some(), "{place}, {schema}");
+        }
+    }
+}
+
+/// A parameter whose `x-cli-requires` lists a value that has a flag loads. The
+/// value is a scalar that `openapiv3` holds as `AnySchema`, an array with an empty
+/// keyword, or a list inside an `allOf` of one element.
+#[test]
+fn a_parameter_that_requires_a_value_with_a_flag_loads() {
+    for schema in [
+        SCALAR.to_owned(),
+        list_of(false, "{ type: string }"),
+        list_of(true, "{ type: string }"),
+    ] {
+        let parameters = format!(
+            "{{ name: a, in: query, schema: {{ type: string }}, x-cli-requires: [v] }}, \
+             {{ name: v, in: query, schema: {schema} }}"
+        );
+        let doc = Document::load(&operation_with(&parameters, "", "{ type: object }"), &[])
+            .unwrap_or_else(|why| panic!("{schema}: {why}"));
+        assert_eq!(
+            operation(&doc, "op").param("a").expect("a").requires(),
+            ["v"],
+            "{schema}"
+        );
+    }
 }
