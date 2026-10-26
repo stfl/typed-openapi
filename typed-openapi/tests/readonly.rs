@@ -1020,7 +1020,7 @@ fn the_composition_only_a_response_reaches_keeps_its_required() {
 
 /// A member that is a `$ref` is a named schema, and one type wherever it is used:
 /// its own `required` stays. The composition that another member makes read-only
-/// does not reach into it, so a request that names the member alone still requires
+/// does not reach into it, so a request that names the member alone requires
 /// what it declares without `readOnly`. That is the first of the two limits
 /// `docs/generating.md` states. The second is a body behind
 /// `#/components/requestBodies/`. A member that declares the property read-only

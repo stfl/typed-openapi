@@ -887,8 +887,8 @@ fn a_scalar_read_from_an_any_schema_is_held_to_the_names_that_a_flag_has() {
     );
 }
 
-/// The documents in which a value that is read as a scalar now is named like a
-/// word that consent is given by: the gate `force` of `x-cli-gates`, or the
+/// The documents in which a scalar that `openapiv3` holds as `AnySchema` is named
+/// like a word that consent is given by: the gate `force` of `x-cli-gates`, or the
 /// confirmation `commit`. Each is the place, the word it is named like, and the
 /// document.
 fn named_like_consent() -> Vec<(&'static str, &'static str, String)> {
