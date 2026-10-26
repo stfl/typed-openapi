@@ -39,8 +39,9 @@ use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
 use crate::scalar::{Items, Scalar, ScalarError};
 use crate::schema::{
-    RefError, description_of, format_of, is_content_type, is_json, is_media_range, is_media_type,
-    is_multipart, lists_only_null, resolve, resolve_schema, scalar_of, template,
+    Fit, RefError, Template, array_of, description_of, format_of, is_content_type, is_json,
+    is_media_range, is_media_type, is_multipart, lists_only_null, read_only_of, resolve, scalar_of,
+    stated, template,
 };
 
 /// What a refusal calls the request body.
@@ -742,6 +743,8 @@ fn repair(place: Place, name: &str, why: &Unsupported) -> String {
             Unsupported::Cookie
             | Unsupported::Encoded
             | Unsupported::Structured
+            | Unsupported::Keyword(_)
+            | Unsupported::Untyped
             | Unsupported::Style(_),
         ) => "correct the parameter in an Overlay".to_owned(),
         (_, Unsupported::Shared(Place::Path)) => {
@@ -767,6 +770,8 @@ fn repair(place: Place, name: &str, why: &Unsupported) -> String {
             Unsupported::Cookie
             | Unsupported::Encoded
             | Unsupported::Structured
+            | Unsupported::Keyword(_)
+            | Unsupported::Untyped
             | Unsupported::Style(_)
             | Unsupported::Unspellable,
         ) => "correct the parameter in an Overlay, or drop its `required`".to_owned(),
@@ -1654,8 +1659,9 @@ fn shape_of(
         Some((items, rules)) => (Cow::Owned(items), Some(rules)),
         None => (Cow::Borrowed(schema), None),
     };
-    let Some(scalar) = runnable_scalar(&value, components, op, &data.name)? else {
-        return Ok(Shape::Unreachable(Unsupported::Structured));
+    let scalar = match runnable_scalar(&value, components, op, &data.name)? {
+        Fit::Scalar(scalar) => scalar,
+        Fit::Other(why) => return Ok(Shape::Unreachable(why)),
     };
     // The style is read whatever the schema is, because it is not only about
     // delimiters: `matrix` puts a `;name=` in front of one path value as surely
@@ -1751,8 +1757,8 @@ fn items_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
 ) -> Result<Option<(ReferenceOr<Schema>, Items)>, RefError> {
-    let schema = resolve_schema(schema, components)?;
-    let SchemaKind::Type(openapiv3::Type::Array(array)) = &schema.schema_kind else {
+    let schema = stated(schema, components)?;
+    let Some(array) = array_of(&schema.schema_kind) else {
         return Ok(None);
     };
     let rules = Items {
@@ -1858,6 +1864,13 @@ struct JsonEntry<'a> {
 /// A body that goes whole carries its skeleton, because going whole is exactly
 /// what leaves the command line with nothing saying what the body wants. The
 /// walk that decided it has already seen the shape.
+///
+/// A property the API sets (`readOnly`) is no part of the request, so it has no
+/// flag and does not send the body whole, whatever its schema is. The body names
+/// it, for the help to say where its flag went. A body that goes whole names the
+/// properties of its own object, each of them, and then the ones its skeleton
+/// leaves out below it ([`Template::read_only`]): both are what the help says to
+/// leave out of the file.
 fn json_body(
     id: &str,
     entry: JsonEntry<'_>,
@@ -1875,43 +1888,76 @@ fn json_body(
             media_type,
             required,
             template: None,
+            read_only: Vec::new(),
         });
     };
-    let whole = || {
+    let whole = |own: Vec<String>| {
+        let Template { text, read_only } = under(template(schema, components), id, BODY)?;
         Ok(Body::JsonWhole {
             media_type: media_type.clone(),
             required,
-            template: under(template(schema, components), id, BODY)?,
+            template: text,
+            read_only: [own, read_only].concat(),
         })
     };
     let SchemaKind::Type(openapiv3::Type::Object(object)) =
-        &under(resolve_schema(schema, components), id, BODY)?.schema_kind
+        &under(stated(schema, components), id, BODY)?.schema_kind
     else {
-        return whole();
+        return whole(Vec::new());
     };
 
     let properties = properties_of(object, components, id)?;
-    let mut fields = Vec::with_capacity(properties.len());
-    for Property {
+    let read_only: Vec<String> = properties
+        .iter()
+        .filter(|property| matches!(property.role, Role::ReadOnly))
+        .map(|property| property.name.clone())
+        .collect();
+    match fields_of(id, object, properties, components, flags)? {
+        Some(fields) => Ok(Body::JsonFields {
+            media_type,
+            required,
+            fields,
+            read_only,
+        }),
+        None => whole(read_only),
+    }
+}
+
+/// One flag for each property that the request carries, or `None` where the body
+/// goes whole.
+///
+/// One nested property is enough to send the whole body through `--json-body`,
+/// wherever it stands in the list, and no sibling gets a flag the request builder
+/// would then throw away. A property whose name has no kebab-case spelling has no
+/// flag either, and the body's rule is about whether a property has one rather
+/// than about why it has none — so it goes the way a nested property goes. What
+/// that buys is the disclosure: the template `--json-body-template` prints carries
+/// the key, where a flag called `""` names it nowhere. A property the API sets is
+/// carried by no request, so it has no flag and decides nothing.
+///
+/// The flags are claimed once the body is known to be flat, in document order. A
+/// body that goes whole has no flag, so none of its properties is asked its name,
+/// whatever the order they stand in: a name that consent is given by refuses the
+/// document where a flag would answer to it, and nobody can type a flag that is
+/// never made. [`shape_of`] asks a parameter's name on the same terms.
+fn fields_of(
+    id: &str,
+    object: &ObjectType,
+    properties: Vec<Property<'_>>,
+    components: &Components,
+    flags: &mut Namespace,
+) -> Result<Option<Vec<Field>>, LoadError> {
+    let Some(flagged) = flagged_properties(properties) else {
+        return Ok(None);
+    };
+    let mut fields = Vec::with_capacity(flagged.len());
+    for Flagged {
         name,
         schema: property,
         scalar,
-    } in properties
+        spelling,
+    } in flagged
     {
-        let Some(scalar) = scalar else {
-            // One nested property is enough: the whole body goes through
-            // `--json-body`, and no sibling gets a flag the request builder
-            // would then throw away.
-            return whole();
-        };
-        // A property whose name has no kebab-case spelling has no flag either,
-        // and the body's rule is about whether a property has one rather than
-        // about why it has none — so it goes the way a nested property goes.
-        // What that buys is the disclosure: the template `--json-body-template`
-        // prints carries the key, where a flag called `""` names it nowhere.
-        let Ok(spelling) = spelled("property", name) else {
-            return whole();
-        };
         fields.push(Field {
             flag: flags
                 .claim(&spelling, "body")
@@ -1923,19 +1969,55 @@ fn json_body(
             description: under(description_of(&property, components), id, name)?,
         });
     }
-    Ok(Body::JsonFields {
-        media_type,
-        required,
-        fields,
-    })
+    Ok(Some(fields))
 }
 
-/// A property of a body and the scalar its schema states, once every rule it
-/// carries is known to run. `None` is a property that does not fit on a flag.
+/// A property that gets a flag, with the spelling the flag will have.
+struct Flagged<'a> {
+    name: &'a String,
+    schema: ReferenceOr<Schema>,
+    scalar: Scalar,
+    spelling: String,
+}
+
+/// The properties that the request carries, each with the spelling of its flag, or
+/// `None` where one of them sends the body whole. No flag is claimed here: whether
+/// a body is flat is decided before any property is asked its name.
+fn flagged_properties(properties: Vec<Property<'_>>) -> Option<Vec<Flagged<'_>>> {
+    let mut flagged = Vec::with_capacity(properties.len());
+    for Property { name, schema, role } in properties {
+        let scalar = match role {
+            Role::ReadOnly => continue,
+            Role::Flag(scalar) => scalar,
+            Role::Nested => return None,
+        };
+        let spelling = spelled("property", name).ok()?;
+        flagged.push(Flagged {
+            name,
+            schema,
+            scalar,
+            spelling,
+        });
+    }
+    Some(flagged)
+}
+
+/// A property of a body and what the request does with it.
 struct Property<'a> {
     name: &'a String,
     schema: ReferenceOr<Schema>,
-    scalar: Option<Scalar>,
+    role: Role,
+}
+
+/// What a request does with one property of the body's object.
+enum Role {
+    /// The API sets it, and a request leaves it out: no flag, and no effect on
+    /// whether the body is flat.
+    ReadOnly,
+    /// A scalar once every rule it carries is known to run: one flag.
+    Flag(Scalar),
+    /// Anything else: the body goes whole.
+    Nested,
 }
 
 /// Every property of the object, read for the rules it states.
@@ -1944,7 +2026,8 @@ struct Property<'a> {
 /// because a rule that cannot run is a fault of the document and not of the
 /// flag it would have been. A nested property sends the body whole, and a
 /// property listed after it states the same rule all the same, so the verdict
-/// cannot depend on which one comes first.
+/// cannot depend on which one comes first. A read-only property is read for no
+/// rule: it is no part of the request, so no flag could have carried its rules.
 fn properties_of<'a>(
     object: &'a ObjectType,
     components: &Components,
@@ -1955,12 +2038,15 @@ fn properties_of<'a>(
         .iter()
         .map(|(name, property)| {
             let schema = property.clone().unbox();
-            let scalar = runnable_scalar(&schema, components, id, name)?;
-            Ok(Property {
-                name,
-                schema,
-                scalar,
-            })
+            let role = if under(read_only_of(&schema, components), id, name)? {
+                Role::ReadOnly
+            } else {
+                match runnable_scalar(&schema, components, id, name)? {
+                    Fit::Scalar(scalar) => Role::Flag(scalar),
+                    Fit::Other(_) => Role::Nested,
+                }
+            };
+            Ok(Property { name, schema, role })
         })
         .collect()
 }
@@ -2006,7 +2092,7 @@ fn under<T>(read: Result<T, RefError>, op: &str, name: &str) -> Result<T, LoadEr
 }
 
 /// The scalar a value's schema states, once every rule it carries is known to
-/// run, and `None` where the schema does not fit on a flag.
+/// run, and why there is none where the schema does not fit on a flag.
 ///
 /// The one place a parameter and a body property are read for their rules, so
 /// that the two cannot refuse different things.
@@ -2015,9 +2101,10 @@ fn runnable_scalar(
     components: &Components,
     op: &str,
     name: &str,
-) -> Result<Option<Scalar>, LoadError> {
-    let Some(scalar) = under(scalar_of(schema, components), op, name)? else {
-        return Ok(None);
+) -> Result<Fit, LoadError> {
+    let scalar = match under(scalar_of(schema, components), op, name)? {
+        Fit::Scalar(scalar) => scalar,
+        other @ Fit::Other(_) => return Ok(other),
     };
     if under(lists_only_null(schema, components), op, name)? {
         return Err(LoadError::Unrunnable {
@@ -2030,7 +2117,7 @@ fn runnable_scalar(
         });
     }
     runnable(&scalar, op, name)?;
-    Ok(Some(scalar))
+    Ok(Fit::Scalar(scalar))
 }
 
 /// Refuse a rule that cannot be run as the document means it, naming the
@@ -2062,7 +2149,7 @@ fn part_names(
     let Some(schema) = &media.schema else {
         return Ok(Vec::new());
     };
-    let schema = resolve_schema(schema, components)?;
+    let schema = stated(schema, components)?;
     let SchemaKind::Type(openapiv3::Type::Object(object)) = &schema.schema_kind else {
         return Ok(Vec::new());
     };

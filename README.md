@@ -122,13 +122,15 @@ answers a test from a script instead, are in [docs/client.md][client].
   or `anyOf` body goes out as one `--json-body FILE`, held to being JSON and no
   further — holding its *content* to a schema needs the generated `struct`,
   which only your crate can name. The typed wrapper takes that type either way.
-- **No object parameters.** An object, an `in: cookie`, a `content`-described
-  parameter, an unserialisable `style`, a name that will not kebab-case and a
-  name that an earlier parameter of the operation has carry no flag: each is
-  named on its subcommand's help, and refuses the document only where it is
-  `required`. The headers `Accept`, `Content-Type` and `Authorization` are not
-  parameters at all, as OpenAPI says, so the `Authorization` header is never a
-  flag. A credential that the document declares under another name still is one.
+- **No object parameters.** An object, a schema that states a keyword the crate
+  does not read as a value, a schema with no `type`, an `in: cookie`, a
+  `content`-described parameter, an unserialisable `style`, a name that will not
+  kebab-case and a name that an earlier parameter of the operation has carry no
+  flag: each is named on its subcommand's help, and refuses the document only
+  where it is `required`. The headers `Accept`, `Content-Type` and
+  `Authorization` are not parameters at all, as OpenAPI says, so the
+  `Authorization` header is never a flag. A credential that the document
+  declares under another name still is one.
 - **No OpenAPI 3.1.** The crate reads OpenAPI 3.0. A document whose `openapi`
   says another version is refused, and the refusal names it: 3.1 spells some
   rules another way and means others that 3.0 does not have, so a reading as

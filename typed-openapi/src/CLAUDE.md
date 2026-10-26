@@ -310,6 +310,15 @@ by reading the pattern, a backslash taking the character after it, so `\\p{3}` i
 not one. Compiling both sides with the flag is the alternative that is out of
 scope, because it is a change to typify.
 
+One reading approximates, and no code here can mend it: `openapiv3` keeps an
+integer's bound and step as a double and not as their text, so a text with a
+fraction that rounds to a whole double (`minimum: 1.00000000000000001`,
+`multipleOf: 2.00000000000000001`) is read as that whole number. The flag then
+accepts or refuses one integer against the document for a bound, and holds the
+integers to the multiples of the whole number and not of the text for a step.
+*A scalar is read however the object model holds it* says which doubles are
+read.
+
 The escape rule is asked of every schema the model reads, and not only of the
 `pattern` that a scalar carries, because the generated types are made of the
 named schemas, the inline body and the inline response, and each of them runs its
@@ -331,22 +340,23 @@ of, such as an error response's. Both ask `scalar::unflagged`, so the rule is
 written once.
 
 `runnable_scalar` in `src/model/reduce.rs` is where the rules of a value are
-asked, `Scalar::runnable` and the `enum` of `null` alone among them. It reads the
-values that the reduction reads for a scalar, with a flag or without one: a
+asked, `Scalar::runnable` and the `enum` of `null` alone among them. It reads
+the values that the reduction reads for a scalar, with a flag or without one: a
 parameter that `declared` keeps and that is sent in the path, the query or a
 header with a `schema` (its items, for a list), and a property of a JSON body
 whose schema is an object. `json_body` sends the whole body through
-`--json-body` at the first property that has no flag, a nested one or one whose
-name has no spelling, so it reads every property (`properties_of`) before it
-decides whether the body is flat. A rule asked only of the properties listed
-before that one would make a document that loads depend on which property comes
+`--json-body` when a property has no flag, a nested one or one whose name has no
+spelling, wherever it stands, so it reads every property (`properties_of`)
+before it decides whether the body is flat. A property the API sets is read for
+no rule. A rule asked only of the properties listed before the one that sends
+the body whole would make a document that loads depend on which property comes
 first. A cookie parameter, a parameter stated with `content`, a property of a
-form or multipart body or of a body whose schema is an `allOf`, and the items of
-an array body are not read by it. The walk asks them the escape rule and nothing
-else, so a `multipleOf` of 0 or a `pattern` that no engine reads loads there. A
-rule of this kind that is added for a value is added in `runnable_scalar`, which
-`shape_of` and `properties_of` share, and a rule of every schema is added to the
-walk.
+form or multipart body or of a body whose schema is an `allOf` of more than one
+schema, and the items of an array body are not read by it. The walk asks them
+the escape rule and nothing else, so a `multipleOf` of 0 or a `pattern` that no
+engine reads loads there. A rule of this kind that is added for a value is added
+in `runnable_scalar`, which `shape_of` and `properties_of` share, and a rule of
+every schema is added to the walk.
 
 **A document is read as the version it says, or refused by name.**
 `Document::load_with` asks the vendor's `openapi` right after it reads the
@@ -481,10 +491,12 @@ it, and a call per hop overflows the stack at 7,000 of them, on a thread of
 adds no recursion to either walk.
 
 **A shape this crate cannot spell stops at the operation, not at the document.**
-A parameter that is `in: cookie`, described by `content`, neither a value nor a
-list of values, declaring a `style` this crate does not serialise, *named* in a
-way `names::spelled` refuses, or sharing its name with an earlier parameter of
-the operation (`Unsupported::Shared(Place)`), is carried as `Shape::Unreachable` —
+A parameter that is `in: cookie`, described by `content`, an object, or an array
+whose items are not values (`Unsupported::Structured`), stated with a keyword
+this crate does not read as a value (`Keyword`) or with no `type` (`Untyped`),
+declaring a `style` this crate does not serialise, *named* in a way
+`names::spelled` refuses, or sharing its name with an earlier parameter of the
+operation (`Unsupported::Shared(Place)`), is carried as `Shape::Unreachable` —
 named on the subcommand's long help and in the wrapper's documentation, and
 given no flag, no argument and no place in the request — and only a *required*
 one is a `LoadError`, because an operation that could never build a correct
@@ -492,11 +504,94 @@ request is worth refusing by name. It is the rule a body already follows, where
 one nested property sends the whole body through `--json-body` rather than
 refusing the document that holds it.
 
+**A scalar is read however the object model holds it, and any other shape names
+its keyword.** `openapiv3` holds a schema as `AnySchema` when it fits none of
+its types: an integer bound spelled `0.0` or `1e3` is an `f64`, a bound past
+`i64` is one too, and a `string` beside an `allOf`, a `pattern` beside an
+`integer` or a `minLength` beside an `array` has the keywords of no type.
+`typed` in `src/schema.rs` is the one place that reads such a schema, and
+`scalar_of`, `lists_only_null`, `format_of` and `array_of` ask it. `any_type`
+matches the `type` once, and the arm gives the keywords that type has with the
+way it is read, so a keyword is named for each of the six types, an object and
+an array included. The unit test in `src/schema.rs` puts each keyword beside
+each type, because a keyword of the table that nothing exercises is a keyword
+read as no word at all. An `AnySchema` whose `type` is a scalar or an array and
+whose keywords all belong to that type is read as the type `openapiv3` would
+have made. That holds for an array: `openapiv3` holds it as `AnySchema` for a
+keyword that states nothing (`properties: {}`, `enum: []`), `array_of` reads it,
+and `items_of`, `list_type` and the template walk (`Walk::skeleton` and
+`Walk::without_read_only`) ask `array_of`, so such an array has the list flag
+its twin has, and a body that is one has the template its twin has. No object is
+read as a value, and `json_body` and the template walk read a body's object only
+where `openapiv3` holds it as an object. A body that is an object it holds as
+`AnySchema` (one that states a keyword of another type, or a keyword with no
+content such as `enum: []`) goes whole, with no template but its `example` as the
+document has it and with no read-only names. Every other shape is an
+`Unsupported` that is true of it:
+`Keyword` for a composition, for a keyword the `type` does not have, for an
+`enum` that lists a value of another type and for a `type` that is none of the
+six, `Untyped` for a schema with no `type` and no composition, and `Structured`
+for an object whose keywords all belong to it and for an array whose items are
+no value. The keyword is the first the schema states, in one fixed order with
+the compositions first, because the object model keeps no order among them. An
+integer's bound is read wherever its double names the integers the bound admits
+(`integer_end`). A double with a fraction is the integer next inside it, as an
+inclusive bound, because the text of an integer gives a whole double and no
+integer lies between the text and the double. A whole double below 2^53 is that
+integer whatever text gave it, which is the approximation named above. A double
+past every `i64` bounds nothing, or admits none and is refused by its keyword. A
+whole double from 2^53 to 2^63, both ends included, is the double of more than
+one integer's text, so it is refused by its keyword and never rounded again. A
+step is read as an integer only where it is whole (`integer_step`): a whole
+double below 2^53 is that integer whatever text gave it, as for a bound, which is
+the approximation named above, and a double with a fraction or a whole one from
+2^53 is refused by its keyword. A
+parameter takes the reason as its `Unreachable`, and a property takes it as the
+body going whole, as any property with no flag does. Neither refuses the
+document that holds it, and only a required parameter does.
+
+`stated` is the one reader of a value's schema, a list's, a JSON body's and a
+multipart body's. A single-element `allOf` is a `$ref` that kept its siblings
+wherever it stands, so `items_of`, `json_body` and `part_names` unwrap it as
+`scalar_of` does. `resolve_schema` follows a `$ref` and no more, and is for the
+sentence and the example, which are the field's own before they are the named
+schema's.
+
+What has a flag decides which flags move, and what a command line sends. A flag
+goes to the first claimant, the parameters in the order of the list and then the
+properties of the body, so a value that gains a flag takes it from a later
+parameter or property, which becomes `--param-<name>` or `--body-<name>`, and a
+value that loses its flag (a `readOnly` property) gives it to a later one. A
+body that gains a flat shape loses its template, and a body that gains a
+template gains `--json-body-template`. A body is flat when each property has a
+flag or is `readOnly`, so a body goes flat when its wrapper is read, when a
+scalar that `openapiv3` holds as `AnySchema` gains a flag, and when a `readOnly`
+property stops sending it whole. A value that gains a flag is asked its rules
+and its name, so a document that loaded can be refused (`Unrunnable`,
+`Unresolvable`, `HeaderName`, `GateTakenByName`, `CommitTakenByName`), and the
+rules of a property of a JSON body are asked whether or not its body goes whole.
+The name of a property is asked only where its body is flat, as a
+parameter with no flag is not asked its name: `fields_of` decides that the body
+is flat before it claims a flag, and then claims the flags in document order. A
+body that goes whole claims none, so none of its properties is asked, in
+whatever order they stand, and a name that consent is given by never refuses a
+document for a flag that is not made. A change to what makes a body flat moves
+which names are asked. A change to what `stated`, `scalar_of`, `array_of`,
+`read_only_of` or `json_body` read, or to what makes a body flat, lists all of
+these in the CHANGELOG, each with its repair, because they are what an adopter
+sees of it.
+
 Every flag a user types passes `names::spelled`, which is why a body property
 spelled `*` sends its body whole rather than claiming a flag called `""`. The
 body's rule turns on whether a property has a flag and never on why it has none,
-so an unspellable property and a nested one reach the same answer — and the
-`Body::JsonWhole` template is then the one place the key is written down.
+so an unspellable property, a nested one and one that is no scalar this crate
+reads (a composition, a keyword its `type` does not have, no `type`) reach the
+same answer — and the `Body::JsonWhole` template is then the one place the key
+is written down. The body is no `LoadError` for any of them and the long help
+states no reason for any: a parameter has nothing to fall back on and a body has
+the file, which is read as JSON and, at the adopter's seam, held to the
+generated type by `fits`. A property the API sets is the one outside that rule:
+it is no part of the request, so it has no flag and decides nothing.
 
 `spelled` refuses a name that holds a character outside ASCII, and
 transliterates nothing. `kebab` would turn that character into a separator, so
@@ -540,18 +635,25 @@ list is `Unsupported::Shared(Place)`, the place of the earlier one, whatever the
 shape or the place of either, and unless it has a reason of its own: a reason of
 its own wins over `Shared`. It claims no flag, and a required one is
 `LoadError::Parameter`. The earlier one keeps the name even when it has no flag
-itself (`in: cookie`, `content`), and a required path parameter that comes
-later refuses the document. `docs/cli.md` says the repairs of both costs. A
-rule by reachability would make `Operation::param` "the first parameter with a
-flag", and a rule by place would add a second order beside the list. Both would
-widen a public seam for a rare document, and both would contradict spec F-10
-("the one the document lists later"). The values under a name are the first parameter's, so
-`Invocation::new` counts the given values of a parameter with a flag only. The
-generator reads the same list: `entry_of_flag` finds the entry that a flag was
-read from in what `declared` returns, which is the first entry with the flag's
-name, because the first entry keeps the name and no later one has a flag. So a
-wrapper's argument is typed by the entry that won, inline or by a `$ref`, and
-the generator keeps no second copy of the merge.
+itself (`in: cookie`, `content`), and a required path parameter that comes later
+refuses the document. `docs/cli.md` says the repairs of both costs. A rule by
+reachability would make `Operation::param` "the first parameter with a flag",
+and a rule by place would add a second order beside the list. Both would widen a
+public seam for a rare document, and both would contradict spec F-10 ("the one
+the document lists later"). The values under a name are the first parameter's,
+so `Invocation::new` counts the given values of a parameter with a flag only.
+The generator reads the same list: `entry_of_flag` finds the entry that a flag
+was read from in what `declared` returns, which is the first entry with the
+flag's name, because the first entry keeps the name and no later one has a flag.
+So a wrapper's argument is typed by the entry that won, inline or by a `$ref`,
+and the generator keeps no second copy of the merge. The entry is read as the
+reduction read it: `unwrap_inline` in `src/generate/ops.rs` unwraps an `allOf`
+of one element and leaves a `$ref` for `ref_name`, which wants the name of a
+named schema where it stops, and `scalar_type` asks `schema::typed`, so an
+argument has the type of the flag that carries the value. A list's array is read
+through `schema::stated` with the `components` that `gather` holds
+(`list_type`), as `items_of` reads it, so a list whose array is a `$ref` is a
+`Vec` argument and the reduction and the generator read one schema.
 
 A header parameter that would claim a flag and whose name `HeaderName` refuses
 is `LoadError::HeaderName`, because no request could carry it. A parameter with
@@ -630,6 +732,65 @@ is. `Asked` and `Outcome::Template` are arms rather than a flag left
 lying about: an adopter cannot declare the flag and fail to print it, which is
 the defect progenitor's `cli.rs` ships.
 
+**A property the API sets is no part of the request, and both roads say so.** A
+`readOnly` property has no flag, whether or not the schema requires it: OpenAPI
+3.0.3 says that a request "SHOULD NOT" send it and that its `required` takes
+effect on the response only. `properties_of` in `src/model/reduce.rs` sorts
+every property of a body's object by what a request does with it (`Role`): the
+API sets it, it is a scalar and gets a flag, or it is anything else and the body
+goes whole. The first decides nothing about the body, so it neither sends the
+body whole nor needs to be a scalar, and its rules are read by no flag. The two
+JSON variants of `Body` carry the names (`read_only`), for the long help in
+`tree::long_about`, which says where the flag went. `Walk::object_skeleton` in
+`src/schema.rs` leaves the property out of the template at every depth of the
+skeleton, and notes each one it leaves out below the body's own object, by its
+path as a `BodyError` spells a key, with `[]` for any item of a list
+(`address.aid`, `positions[].id`, `[].id`): the help names what the template
+leaves out, from the walk that writes the template, so the two cannot part. An
+`example` is the better source of a template, and `Walk::without_read_only`
+walks it beside its schema, through an object and a list that this crate reads
+and into the value of each key that the object's `properties` declare. It drops
+a read-only property there whether the document requires it or not, naming it by
+the same path. The example stays as the document has it wherever the walk does
+not go, which is wherever the schema is no object and no list that this crate
+reads, or the example has not their shape, or the key is not one that
+`properties` declares. Such places are below a composition, below a schema with
+`properties` and no `type`, in an object or an array that states a keyword its
+`type` does not have, in an object that `openapiv3` holds as `AnySchema`, and
+below a schema that cannot be followed. A template is no place to refuse a
+document that loads. A read-only key
+there stays in the template and is named nowhere, so the template is the
+example, not a body that has been checked. The walk enters a required property
+only, so a read-only property that the document does not require below the
+body's own object, and that no `example` carries, is left out of nothing and is
+not named. The own object's names come from `Role`, each of them, and a body
+that goes whole carries those first. A property is `readOnly` through
+`schema::read_only_of`, which asks every schema that `stated` passes: the
+property's own, the one a `$ref` leads to, and an `allOf` of one element and its
+element. A `$ref` erases the flag beside it, and the wrapper is the spelling
+that keeps it. `writeOnly` is not read.
+
+The generator makes the same decision for the types (`NotRequired` in
+`src/generate/types.rs`). A type that a request body reaches does not require
+the property, and a type that only responses reach keeps the document's
+`required`, because there it takes effect. A body reaches the schemas it names
+or states and every schema those refer to (`reached`), found on the schemas as
+`schemars` holds them, so an `example` that spells a `$ref` reaches nothing. The
+visitor reads a property as `read_only_of` does, in `schemars` types: the
+property is marked, it refers to a schema that `read_only_of` found read-only,
+or it is an `allOf` of one element that is. `tests/readonly.rs` runs every
+spelling through both roads, so the flag is gone exactly where the type stops
+requiring the property. A schema that is an `allOf` is one type in typify, so
+`NotRequired::declared` reads the properties that the schema and every member
+declare read-only, a member that is a `$ref` through the named schema it leads
+to, and `relax` takes each off the `required` of the schema and of every member
+stated inline in it. A member that is a `$ref` keeps its own `required`, because
+the named schema is one type wherever it is used, and a body that names it alone
+requires what it declares without `readOnly`. That is the first of two limits.
+The second is a body that is a `$ref` to `#/components/requestBodies/`: the
+generator follows none, so a type that only such a body reaches keeps the
+document's `required`.
+
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
@@ -677,23 +838,24 @@ the same. The query is left out with the userinfo because a key goes there, and
 a request from a base that holds one is refused. The text of the operator's own
 argument is the operator's, and clap repeats it in its own errors.
 
-**A request body is held to the generated type in one place, and an
-undeclared property has no way through.** `client::fits` is where a JSON body
-meets the type of its operation. The library cannot name that type, so the
-adopter's seam calls it (`tree::select`, then the generated
-`OperationId::check_body`), and a CLI that only calls `tree::dispatch` has none.
-Each refusal is its own `BodyError` variant: is the body an object where the
-type takes one (`NotAnObject`), do the values have the right types (`Mismatch`),
-and does the type write back everything the body holds (`Undeclared` for a
-property, `NotAnObject` for a list that serde read by place). A type that cannot
-be written back is `Unwritable`, because there is nothing to hold the body
-beside, and the gate fails closed. A new refusal is a new variant, since
-`BodyError` is `#[non_exhaustive]`. `Undeclared` and `NotAnObject` print no value
-of the body, which can be a credential or a client's data. The cause of a
-`Mismatch` is serde's message, which can quote it. A path is spelled as
-`serde_path_to_error` spells one (`address.extra`, `positions[1].flag`), and
-`client::spelled` is the one place that spells a place, whether the walk found it
-or the read did.
+**A request body is held to the generated type in one place, and an undeclared
+property has no way through.** `client::fits` is where a JSON body meets the
+type of its operation. The library cannot name that type, so the adopter's seam
+calls it (`tree::select`, then the generated `OperationId::check_body`), and a
+CLI that only calls `tree::dispatch` has none. Each refusal is its own
+`BodyError` variant: is the body an object where the type takes one
+(`NotAnObject`), do the values have the right types (`Mismatch`), and does the
+type write back everything the body holds (`Undeclared` for a property,
+`NotAnObject` for a list that serde read by place). A type that cannot be
+written back is `Unwritable`, because there is nothing to hold the body beside,
+and the gate fails closed. A new refusal is a new variant, since `BodyError` is
+`#[non_exhaustive]`. `Undeclared` and `NotAnObject` print no value of the body,
+which can be a credential or a client's data. The cause of a `Mismatch` is
+serde's message, which can quote it. A path is spelled as `serde_path_to_error`
+spells one (`address.extra`, `positions[1].flag`), and `client::spelled` is the
+one place that spells the place of a refusal, whether the walk found it or the
+read did. `schema::Place` spells the path of a read-only property with `[]` for
+any item, because the path names the property of every element.
 
 D4: no flag, setting or cargo feature lets an undeclared property through on a
 call. The repair is an Overlay that declares it, which an adopter blesses and a

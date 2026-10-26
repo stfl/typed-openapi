@@ -858,6 +858,143 @@ components:
         id: { type: integer }
 "##;
 
+/// A parameter that `openapiv3` holds as `AnySchema` (an integer bound spelled
+/// `0.0`), a one-element `allOf` over a named schema, over an array, and an array
+/// of such wrappers: each has a flag, so each has an argument of the type the
+/// flag carries.
+const SCALARS: &str = r##"
+openapi: 3.0.3
+info: { title: Scalars, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - { name: floor, in: query, schema: { type: integer, minimum: 0.0 } }
+        - { name: code, in: query, schema: { allOf: [{ $ref: "#/components/schemas/Code" }], description: A code. } }
+        - { name: days, in: query, schema: { allOf: [{ type: array, items: { type: string } }], description: Days. } }
+        - { name: codes, in: query, required: true, schema: { type: array, items: { allOf: [{ $ref: "#/components/schemas/Code" }] } } }
+        - { name: ratio, in: query, required: true, schema: { type: number, maximum: 1e3 } }
+        - { name: mixed, in: query, schema: { type: string, allOf: [{ $ref: "#/components/schemas/Code" }] } }
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Code: { type: string, pattern: "^[A-Z]{3}$" }
+"##;
+
+/// The wrapper of an operation takes what the command line takes. A parameter
+/// whose schema `openapiv3` holds as `AnySchema`, or inside a one-element
+/// `allOf`, has a flag, so it has an argument, typed as a bare one is. One that
+/// has no flag is said in the documentation and is no argument.
+#[test]
+fn a_scalar_read_through_a_wrapper_or_an_any_schema_is_an_argument_of_its_type() {
+    let dir = out("scalars");
+    Settings::new(wrote(&dir, "scalars.yaml", SCALARS))
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = read(&dir.join("src/ops.rs"));
+
+    for argument in [
+        "floor: Option<i64>",
+        "code: Option<crate::types::Code>",
+        "days: Vec<&str>",
+        "codes: Vec<crate::types::Code>",
+        "ratio: f64",
+    ] {
+        assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
+    }
+    assert!(!ops.contains("mixed:"), "{ops}");
+    assert!(
+        ops.contains(
+            "The document's `mixed` parameter is not an argument: it is stated with `allOf`, \
+             which this CLI does not read as a value."
+        ),
+        "the wrapper does not say why `mixed` is not an argument:\n{ops}"
+    );
+}
+
+/// A list parameter whose array is named: bare, in a wrapper of one element, and
+/// with items that are named too.
+const NAMED_LISTS: &str = r##"
+openapi: 3.0.3
+info: { title: Lists, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - { name: days, in: query, schema: { $ref: "#/components/schemas/Days" } }
+        - { name: weeks, in: query, schema: { allOf: [{ $ref: "#/components/schemas/Days" }], description: Weeks. } }
+        - { name: codes, in: query, required: true, schema: { $ref: "#/components/schemas/Codes" } }
+        - { name: kinds, in: query, schema: { allOf: [{ $ref: "#/components/schemas/Codes" }] } }
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Days: { type: array, items: { type: string } }
+    Codes: { type: array, items: { $ref: "#/components/schemas/Code" } }
+    Code: { type: string, pattern: "^[A-Z]{3}$" }
+"##;
+
+/// The reduction reads a list through a `$ref`, so the wrapper does too: the
+/// argument is the `Vec` of the items' type, as it is for an array stated inline.
+#[test]
+fn a_list_parameter_whose_array_is_named_is_a_vec_argument() {
+    let dir = out("named-lists");
+    Settings::new(wrote(&dir, "lists.yaml", NAMED_LISTS))
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = read(&dir.join("src/ops.rs"));
+
+    for argument in [
+        "days: Vec<&str>",
+        "weeks: Vec<&str>",
+        "codes: Vec<crate::types::Code>",
+        "kinds: Vec<crate::types::Code>",
+    ] {
+        assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
+    }
+}
+
+/// An array that `openapiv3` holds as `AnySchema` for an empty keyword has a list
+/// flag, so its wrapper takes a `Vec` of its items' type, as the same array without
+/// the keyword does.
+#[test]
+fn a_list_that_openapiv3_holds_as_any_is_a_vec_argument() {
+    let dir = out("any-lists");
+    Settings::new(wrote(&dir, "lists.yaml", ANY_LISTS))
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = read(&dir.join("src/ops.rs"));
+
+    for argument in ["days: Vec<&str>", "codes: Vec<crate::types::Code>"] {
+        assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
+    }
+}
+
+/// Two list parameters whose arrays state an empty keyword: one with items stated
+/// inline, one with items that are named.
+const ANY_LISTS: &str = r##"
+openapi: 3.0.3
+info: { title: Lists, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - { name: days, in: query, schema: { type: array, items: { type: string }, properties: {} } }
+        - { name: codes, in: query, required: true, schema: { type: array, items: { $ref: "#/components/schemas/Code" }, enum: [] } }
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Code: { type: string, pattern: "^[A-Z]{3}$" }
+"##;
+
 /// A CLI and a Rust caller reach one request builder, so a parameter has to
 /// mean the same thing on both roads: a list is a `Vec` argument filled the way
 /// a repeated flag fills it, and a parameter neither can supply is an argument
