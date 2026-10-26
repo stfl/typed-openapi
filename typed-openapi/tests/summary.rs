@@ -287,3 +287,72 @@ fn an_empty_list_is_a_sentence_and_not_an_empty_table() {
     );
     assert!(page.contains("| operations | 1 |"), "{page}");
 }
+
+/// `A1/errs` (`page`): a parameter named `a|b` in a cookie, one named `|` in the
+/// query, and an `operationId` that holds a pipe, which the page lists in the
+/// table of parameters carried without a flag.
+const PIPES: &str = r#"
+openapi: 3.0.3
+info: { title: Pipes, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /a:
+    get:
+      operationId: list|A
+      parameters:
+        - { name: 'a|b', in: cookie, schema: { type: string } }
+        - { name: '|', in: query, schema: { type: string } }
+      responses: { "200": { description: OK } }
+"#;
+
+/// The cells of a table row, split where a pipe is a column break: a pipe that a
+/// backslash precedes is text in the cell, as a Markdown reader takes it, inside
+/// a code span too.
+fn cells(row: &str) -> Vec<String> {
+    let inner = row
+        .strip_prefix('|')
+        .and_then(|rest| rest.strip_suffix('|'))
+        .expect("a row starts and ends with a pipe");
+    let mut cells: Vec<String> = Vec::new();
+    let mut escaped = false;
+    for piece in inner.split('|') {
+        match cells.last_mut() {
+            Some(last) if escaped => {
+                last.push('|');
+                last.push_str(piece);
+            }
+            _ => cells.push(piece.to_owned()),
+        }
+        escaped = piece.ends_with('\\');
+    }
+    cells.iter().map(|cell| cell.trim().to_owned()).collect()
+}
+
+/// A name is the document's and may hold a pipe, and a pipe in a cell is the end
+/// of the cell. Each row of the table has its three cells whatever the names say.
+#[test]
+fn a_pipe_in_a_name_stays_in_its_cell() {
+    let page = summary(PIPES, &[]).to_string();
+
+    let rows: Vec<&str> = page
+        .lines()
+        .skip_while(|line| !line.starts_with("## Parameters"))
+        .filter(|line| line.starts_with("| `"))
+        .collect();
+    assert_eq!(rows.len(), 2, "both parameters are listed:\n{page}");
+    let mut operations = Vec::new();
+    let mut parameters = Vec::new();
+    for row in rows {
+        let Ok([operation, parameter, _why]) = <[String; 3]>::try_from(cells(row)) else {
+            panic!("a pipe broke the row `{row}`");
+        };
+        operations.push(operation);
+        parameters.push(parameter);
+    }
+    assert_eq!(parameters, ["`a\\|b`", "`\\|`"], "{page}");
+    assert_eq!(
+        operations,
+        ["`list\\|A`", "`list\\|A`"],
+        "the operation is escaped too:\n{page}"
+    );
+}
