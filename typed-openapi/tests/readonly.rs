@@ -232,34 +232,107 @@ fn a_property_that_is_not_read_only_keeps_its_flag() {
 /// A body goes whole when a property has no flag for a reason of its own: it is
 /// nested, or it has no spelling. A read-only property has no flag because it is
 /// not part of the request, so it neither sends the body whole nor needs to be
-/// a scalar.
+/// a scalar. A body whose only property with no flag is a read-only one is flat:
+/// it has a flag for each of its other properties and `--json-body`, and no
+/// `--json-body-template`. A body that goes whole has the flag that prints its
+/// template.
 #[test]
 fn a_read_only_property_does_not_send_the_body_whole() {
-    let properties = |meta: &str| {
+    let properties = |key: &str, meta: &str| {
         creating(
             "{ $ref: '#/components/schemas/Pet' }",
             &format!(
                 "    Pet:\n      type: object\n      required: [name]\n      properties:\n        \
-                 name: {{ type: string }}\n        meta: {meta}\n        \
+                 name: {{ type: string }}\n        {key}: {meta}\n        \
                  audit: {{ type: array, items: {{ type: string }}, readOnly: true }}\n"
             ),
         )
     };
     let nested = "{ type: object, properties: { a: { type: string } } }";
 
-    let doc = loaded(&properties(nested));
+    let doc = loaded(&properties("meta", nested));
     let body = operation(&doc, "createPet").body();
     assert!(matches!(body, Body::JsonWhole { .. }), "{body:?}");
     // Whole, and `audit` is named all the same.
     assert_eq!(body.read_only(), &["audit"]);
+    let (longs, _) = command_of(operation(&doc, "createPet"));
+    assert!(
+        longs.contains(&"json-body-template".to_owned()),
+        "{longs:?}"
+    );
 
-    let doc = loaded(&properties(
-        "{ type: object, readOnly: true, properties: { a: { type: string } } }",
-    ));
-    let body = operation(&doc, "createPet").body();
-    assert!(matches!(body, Body::JsonFields { .. }), "{body:?}");
-    assert_eq!(names(body.fields()), ["name"]);
-    assert_eq!(body.read_only(), &["meta", "audit"]);
+    for (key, meta, read_only) in [
+        (
+            "meta",
+            "{ type: object, readOnly: true, properties: { a: { type: string } } }",
+            &["meta", "audit"],
+        ),
+        // A name with no spelling would send the body whole, and the API sets it.
+        ("'*'", "{ type: string, readOnly: true }", &["*", "audit"]),
+    ] {
+        let doc = loaded(&properties(key, meta));
+        let op = operation(&doc, "createPet");
+        assert!(
+            matches!(op.body(), Body::JsonFields { .. }),
+            "{key}: {:?}",
+            op.body()
+        );
+        assert_eq!(names(op.body().fields()), ["name"], "{key}");
+        assert_eq!(op.body().read_only(), read_only, "{key}");
+        let (longs, _) = command_of(op);
+        assert!(longs.contains(&"name".to_owned()), "{key}: {longs:?}");
+        assert!(longs.contains(&"json-body".to_owned()), "{key}: {longs:?}");
+        assert!(
+            !longs.contains(&"json-body-template".to_owned()),
+            "{key}: {longs:?}"
+        );
+    }
+}
+
+/// A read-only property claims no flag, so a later property with the same
+/// spelling takes it: `fooBar` and `foo-bar` are both `--foo-bar`, and the one the
+/// API sets does not hold it. Without `readOnly` the first holds it and the second
+/// is `--body-foo-bar`.
+#[test]
+fn a_read_only_property_gives_its_flag_to_a_later_property_with_the_same_spelling() {
+    let body = |read_only: &str| {
+        creating(
+            &format!(
+                "{{ type: object, properties: {{ fooBar: {{ type: string{read_only} }}, \
+                 foo-bar: {{ type: string }} }} }}"
+            ),
+            "    Unused: { type: string }\n",
+        )
+    };
+    let flags = |read_only: &str| {
+        let doc = loaded(&body(read_only));
+        let op = operation(&doc, "createPet");
+        let flags: Vec<(String, String)> = op
+            .body()
+            .fields()
+            .iter()
+            .map(|field| (field.name().to_owned(), field.flag().to_owned()))
+            .collect();
+        let (longs, _) = command_of(op);
+        (flags, longs, op.body().read_only().to_vec())
+    };
+
+    let (fields, longs, read_only) = flags(", readOnly: true");
+    assert_eq!(fields, [("foo-bar".to_owned(), "foo-bar".to_owned())]);
+    assert_eq!(read_only, ["fooBar"]);
+    assert!(longs.contains(&"foo-bar".to_owned()), "{longs:?}");
+    assert!(!longs.contains(&"body-foo-bar".to_owned()), "{longs:?}");
+
+    let (fields, longs, read_only) = flags("");
+    assert_eq!(
+        fields,
+        [
+            ("fooBar".to_owned(), "foo-bar".to_owned()),
+            ("foo-bar".to_owned(), "body-foo-bar".to_owned()),
+        ]
+    );
+    assert!(read_only.is_empty(), "{read_only:?}");
+    assert!(longs.contains(&"body-foo-bar".to_owned()), "{longs:?}");
 }
 
 /// The skeleton `--json-body-template` prints names the keys the document
@@ -775,36 +848,60 @@ fn a_read_only_property_is_read_for_no_rule_of_a_flag() {
 /// A property no flag could carry takes no name from the namespace of its
 /// operation, so a read-only property may be named `force` beside the gate `force`
 /// and `commit` beside the confirmation. The same property without `readOnly` has a
-/// flag, and the load refuses the name.
+/// flag, and the load refuses the name: `force` as the gate, `commit` as the
+/// confirmation, each with its own words.
 #[test]
 fn a_read_only_property_may_be_named_like_a_word_of_consent() {
+    let body = |name: &str, read_only: &str| {
+        document(
+            &format!(
+                "  /pets:\n    post:\n      operationId: createPet\n      \
+                 x-cli-gates: [force]\n      requestBody:\n        content:\n          \
+                 application/json:\n            schema: {{ type: object, properties: \
+                 {{ {name}: {{ type: integer{read_only} }} }} }}\n      \
+                 responses: {{ '201': {{ description: Created }} }}\n"
+            ),
+            "    Unused: { type: string }\n",
+        )
+    };
     for name in ["force", "commit"] {
-        let body = |read_only: &str| {
-            document(
-                &format!(
-                    "  /pets:\n    post:\n      operationId: createPet\n      \
-                     x-cli-gates: [force]\n      requestBody:\n        content:\n          \
-                     application/json:\n            schema: {{ type: object, properties: \
-                     {{ {name}: {{ type: integer{read_only} }} }} }}\n      \
-                     responses: {{ '201': {{ description: Created }} }}\n"
-                ),
-                "    Unused: { type: string }\n",
-            )
-        };
-        let doc = loaded(&body(", readOnly: true"));
+        let doc = loaded(&body(name, ", readOnly: true"));
         let op = operation(&doc, "createPet");
         assert!(op.body().fields().is_empty(), "{name}");
         assert_eq!(op.body().read_only(), [name]);
-
-        let refused = Document::load(&body(""), &[]).expect_err("a flag named like a word");
-        assert!(
-            matches!(
-                refused,
-                LoadError::GateTakenByName { .. } | LoadError::CommitTakenByName { .. }
-            ),
-            "{name}: {refused:?}"
-        );
     }
+
+    let gate = Document::load(&body("force", ""), &[]).expect_err("a flag named like the gate");
+    assert!(
+        matches!(
+            &gate,
+            LoadError::GateTakenByName { what: "property", name, gate, .. }
+                if name == "force" && gate == "force"
+        ),
+        "{gate:?}"
+    );
+    assert_eq!(
+        gate.to_string(),
+        "createPet: the property `force` and the gate `force` both want `--force`; rename \
+         the gate in `x-cli-gates`, to `gate-force` or another word"
+    );
+
+    let commit =
+        Document::load(&body("commit", ""), &[]).expect_err("a flag named like the confirmation");
+    assert!(
+        matches!(
+            &commit,
+            LoadError::CommitTakenByName { what: "property", name, commit, .. }
+                if name == "commit" && commit == "commit"
+        ),
+        "{commit:?}"
+    );
+    assert_eq!(
+        commit.to_string(),
+        "createPet: the property `commit` and the confirmation both want `--commit`; confirm \
+         with another word \u{2014} `Loading::commit`, or `Settings::commit_word` where a \
+         bless step generates"
+    );
 }
 
 /// The pattern of a read-only property is a rule of the document that a generated

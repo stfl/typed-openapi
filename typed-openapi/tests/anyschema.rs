@@ -1067,6 +1067,107 @@ fn a_value_that_has_a_flag_is_held_to_the_words_consent_is_given_by() {
     }
 }
 
+/// The properties of a body, `NAME` for the one that is named like a word that
+/// consent is given by, and whether the load asks that property its name.
+const NAMES_ASKED: [(&str, &str, bool); 8] = [
+    (
+        "a plain property before a nested one",
+        "NAME: { type: integer }, n: { type: object }",
+        true,
+    ),
+    (
+        "a property of the first kind before a nested one",
+        "NAME: { type: integer, minimum: 0.0 }, n: { type: object }",
+        true,
+    ),
+    (
+        "a property before one whose name has no spelling",
+        "NAME: { type: integer }, '*': { type: string }",
+        true,
+    ),
+    (
+        "a plain property after a property of the first kind",
+        "a: { type: integer, minimum: 0.0 }, NAME: { type: integer }",
+        true,
+    ),
+    (
+        "a plain property after a nested `readOnly` property",
+        "a: { type: object, readOnly: true }, NAME: { type: integer }",
+        true,
+    ),
+    (
+        "a plain property after a nested one",
+        "n: { type: object }, NAME: { type: integer }",
+        false,
+    ),
+    (
+        "a plain property after one whose name has no spelling",
+        "'*': { type: string }, NAME: { type: integer }",
+        false,
+    ),
+    (
+        "a property of the first kind after a nested one",
+        "n: { type: object }, NAME: { type: integer, minimum: 0.0 }",
+        false,
+    ),
+];
+
+/// The document whose JSON body has `properties`, with `NAME` the word that consent
+/// is given by, and the body wrapped in an `allOf` of one element or not.
+fn body_with_properties(properties: &str, word: Word, wrapped: bool) -> String {
+    let object = format!(
+        "{{ type: object, properties: {{ {} }} }}",
+        properties.replace("NAME", word.name())
+    );
+    let body = if wrapped {
+        format!("{{ allOf: [{object}] }}")
+    } else {
+        object
+    };
+    operation_with("", word.gates(), &body)
+}
+
+/// Each row of `NAMES_ASKED` for each word, bare and wrapped: what the case is,
+/// the word, whether the load asks the name, and the document.
+fn names_asked() -> Vec<(String, Word, bool, String)> {
+    let mut rows = Vec::new();
+    for (label, properties, asked) in NAMES_ASKED {
+        for word in [Word::Gate, Word::Confirmation] {
+            for wrapped in [false, true] {
+                let case = format!("{label}, `{}`, wrapped: {wrapped}", word.name());
+                let text = body_with_properties(properties, word, wrapped);
+                rows.push((case, word, asked, text));
+            }
+        }
+    }
+    rows
+}
+
+/// The flags of a body are claimed one property at a time, in document order, and
+/// the claim stops at the first property that sends the body whole: a nested one,
+/// or one whose name has no spelling. A `readOnly` property is skipped, and a
+/// property of the first kind has a flag. So a property is asked its name when
+/// every property listed before it has a flag or is `readOnly`, also in a body
+/// that goes whole, and it is not asked when a property that sends the body
+/// whole is listed before it. Each row is tried bare and wrapped in an `allOf` of
+/// one element. A row that is asked is refused with the variant and the words of
+/// its word, and a row that is not asked loads as a body that goes whole.
+#[test]
+fn a_property_is_asked_its_name_up_to_the_first_property_that_sends_the_body_whole() {
+    for (case, word, asked, text) in names_asked() {
+        let loaded = Document::load(&text, &[]);
+        if asked {
+            let refused = loaded.expect_err(&case);
+            assert!(word.refused_by(&refused, "property"), "{case}: {refused:?}");
+            assert_eq!(refused.to_string(), word.words("property"), "{case}");
+        } else {
+            let doc = loaded.unwrap_or_else(|why| panic!("{case}: {why}"));
+            let body = operation(&doc, "op").body();
+            assert!(matches!(body, Body::JsonWhole { .. }), "{case}: {body:?}");
+        }
+    }
+}
+
 /// A document that is refused, the variant that refuses it, its words and the
 /// words of its cause.
 struct Refusal {
@@ -1506,34 +1607,72 @@ fn a_value_that_has_a_flag_takes_it_before_the_things_after_it() {
     }
 }
 
-/// A body that is an `allOf` of one element is read as the object it wraps, so it
-/// is flat when that object is: a flag for each property, `--json-body` as the base
-/// document that they merge over, and no `--json-body-template`. A body that goes
-/// whole has the template.
+/// The help of the flag `long` on the subcommand of `op`, or `None` where the
+/// subcommand has no such flag.
+fn help_of_flag(op: &Operation, long: &str) -> Option<String> {
+    tree::command(op)
+        .get_arguments()
+        .find(|arg| arg.get_long() == Some(long))
+        .map(|arg| arg.get_help().map(ToString::to_string).unwrap_or_default())
+}
+
+/// A body whose properties all have a flag is flat, and so is one that is an
+/// `allOf` of one element around such an object. A body that has a scalar that
+/// `openapiv3` holds as `AnySchema` for a property is flat as well. Each has a
+/// flag for each property, `--json-body` with the help that calls it the base
+/// document, and no `--json-body-template`.
 #[test]
-fn a_body_that_is_an_all_of_of_one_element_is_flat_when_the_object_it_wraps_is() {
-    let object = "{ type: object, required: [name], properties: { name: { type: string } } }";
+fn a_body_whose_properties_all_have_a_flag_is_flat() {
+    let plain = "{ type: object, required: [name], properties: { name: { type: string } } }";
+    let any = "{ type: object, required: [n, s], properties: \
+               { n: { type: integer, minimum: 0.0 }, s: { type: string } } }";
+    for (object, flags) in [(plain, &["name"][..]), (any, &["n", "s"][..])] {
+        for body in [object.to_owned(), format!("{{ allOf: [{object}] }}")] {
+            let doc =
+                Document::load(&operation_with("", "", &body), &[]).expect("the document loads");
+            let op = operation(&doc, "op");
+            assert!(
+                matches!(op.body(), Body::JsonFields { .. }),
+                "{body}: {:?}",
+                op.body()
+            );
+            let names: Vec<&str> = op
+                .body()
+                .fields()
+                .iter()
+                .map(typed_openapi::Field::name)
+                .collect();
+            assert_eq!(names, flags, "{body}");
+            let base = help_of_flag(op, "json-body").expect("the base document");
+            assert!(base.contains("It is the base document"), "{body}: {base}");
+            assert_eq!(help_of_flag(op, "json-body-template"), None, "{body}");
+        }
+    }
+}
+
+/// A nested property sends the body whole, wrapped or not, and a body that goes
+/// whole has the template and the flag that prints it.
+#[test]
+fn a_body_with_a_nested_property_goes_whole_and_has_the_template() {
+    let object = "{ type: object, properties: { name: { type: string }, n: { type: object } } }";
     for body in [object.to_owned(), format!("{{ allOf: [{object}] }}")] {
         let doc = Document::load(&operation_with("", "", &body), &[]).expect("the document loads");
         let op = operation(&doc, "op");
         assert!(
-            matches!(op.body(), Body::JsonFields { .. }),
+            matches!(
+                op.body(),
+                Body::JsonWhole {
+                    template: Some(_),
+                    ..
+                }
+            ),
             "{body}: {:?}",
             op.body()
         );
-        let names: Vec<&str> = op
-            .body()
-            .fields()
-            .iter()
-            .map(typed_openapi::Field::name)
-            .collect();
-        assert_eq!(names, ["name"], "{body}");
-        let command = tree::command(op);
-        let templates = command
-            .get_arguments()
-            .filter(|arg| arg.get_long() == Some("json-body-template"))
-            .count();
-        assert_eq!(templates, 0, "{body}");
+        assert!(
+            help_of_flag(op, "json-body-template").is_some(),
+            "{body}: the flag that prints the template"
+        );
     }
 }
 
@@ -1545,6 +1684,12 @@ fn a_body_that_is_a_scalar_has_the_template_of_its_type() {
     let (template, read_only) = template_of_body(SCALAR);
     assert_eq!(template, serde_json::json!(0));
     assert!(read_only.is_empty(), "{read_only:?}");
+
+    let doc = Document::load(&operation_with("", "", SCALAR), &[]).expect("the document loads");
+    assert!(
+        help_of_flag(operation(&doc, "op"), "json-body-template").is_some(),
+        "the flag that prints the template"
+    );
 }
 
 /// A parameter that the document requires loads when its value has a flag: a list
