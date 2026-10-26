@@ -341,13 +341,15 @@ const ARRAY_KEYWORDS: [&str; 4] = ["items", "minItems", "maxItems", "uniqueItems
 /// beside it is one that the type has.
 ///
 /// `openapiv3` holds a schema as `AnySchema` when it cannot hold it as a type, and
-/// the cause of that is one of two things: a keyword that the type does not have,
-/// which is named whatever the type is, or a value. The values that cause it are
-/// an `enum` that lists a value of another type, which is refused by the keyword,
-/// and an integer's bound, step or `enum` value that is no `i64`. The bound is
-/// read where the double gives its integers exactly ([`integer_end`]) and the
-/// step where it is a whole number below 2^53 ([`integer_step`]), because
-/// `openapiv3` holds each as an `f64` and a double that does not is not read.
+/// the cause of that is one of three things. A keyword that the type does not have
+/// is the first, and it is named whatever the type is. A keyword with no content
+/// (`properties: {}`, `enum: []`) is the second: it is not named, because the
+/// schema is the type it is without it. A value that the type cannot hold is the
+/// third: an `enum` that lists a value of another type, which is refused by the
+/// keyword, and an integer's bound, step or `enum` value that is no `i64`.
+/// `openapiv3` holds a bound or a step as an `f64`, so the double is read as
+/// [`integer_end`] and [`integer_step`] say, and a double that they do not read is
+/// refused by its keyword.
 ///
 /// An object with every keyword its type has is [`Unsupported::Structured`]: this
 /// crate reads no object as a value. An array with every keyword its type has is
@@ -555,9 +557,10 @@ impl End {
 /// - A whole double below 2^53 is that integer, whatever text gave it. The reader
 ///   keeps the double and not the text, so a text with a fraction that rounds to a
 ///   whole double (`minimum: 1.00000000000000001`) is read as that whole number,
-///   and no code here can tell it from `1.0`. That is the one approximation.
+///   and no code here can tell it from `1.0`. That is the approximation of this
+///   reading, and the step has it too ([`integer_step`]).
 /// - A whole double from 2^53 to 2^63, both ends included, is the double of more
-///   than one integer's text, so it is refused: this crate rounds no double again.
+///   than one integer's text, so it is refused.
 /// - A double past that, above or below, is past every integer a flag carries. A
 ///   `minimum` above them admits none of them, which no scalar says, so it is
 ///   refused; a `maximum` above them bounds nothing. A `maximum` below them admits
@@ -596,10 +599,12 @@ fn integer_end(
 }
 
 /// An integer's `multipleOf`, which `openapiv3` holds as an `f64` once it is no
-/// `i64`: `2.0` and `1e3` are the integers 2 and 1000. A step with a fraction is
-/// refused, because an integer is a multiple of 2.5 when it is a multiple of 5 and
-/// no step that this crate reads says so, and so is a whole one from 2^53, which
-/// a double does not state exactly.
+/// `i64`: `2.0` and `1e3` are the integers 2 and 1000. A whole double below 2^53 is
+/// that integer, whatever text gave it, as a bound is: the reader keeps the double
+/// and not the text, so `multipleOf: 2.00000000000000001` is the step 2. A double
+/// with a fraction is refused, because an integer is a multiple of 2.5 when it is
+/// a multiple of 5 and no step that this crate reads says so, and so is a whole one
+/// from 2^53, which a double does not state exactly.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the step is whole and below 2^53 in size, which an i64 holds"
@@ -753,9 +758,12 @@ pub(crate) struct Template {
     /// the reduction reads every property of it, and names each.
     ///
     /// These are the keys the skeleton would have written: the walk enters only a
-    /// required property, and takes an `example` whole but for these. A read-only
-    /// property that the document does not require and no `example` carries is
-    /// never written, so it is not left out and is not named.
+    /// required property, and an `example` stands in for the schema it is stated
+    /// on, less these keys where the walk goes through it (see
+    /// [`Walk::without_read_only`]). A read-only property that the document does
+    /// not require and no `example` carries is never written, so it is not left
+    /// out and is not named. One that an `example` carries where the walk does not
+    /// go through it stays in the template and is named nowhere.
     pub(crate) read_only: Vec<String>,
 }
 
@@ -836,8 +844,9 @@ impl Walk<'_> {
         // value that happens to use those words, and descending into it would
         // build a template out of somebody's sample. It comes first because it is
         // the better source: a value the document states round-trips, where one
-        // derived from types alone is only a shape. It is taken whole but for the
-        // properties the API sets.
+        // derived from types alone is only a shape. It is taken as the document
+        // has it, less the properties the API sets where the walk can tell which
+        // they are.
         if let Some(example) = example_of(schema, self.components)? {
             return Ok(self.without_read_only(example, schema, at));
         }
@@ -854,14 +863,18 @@ impl Walk<'_> {
         Ok(Value::Null)
     }
 
-    /// An `example` less each property the API sets, at every depth of the value.
+    /// An `example` less each property the API sets, at every depth of the walk.
     ///
     /// The example is a value and the schema beside it says which of its keys are
     /// read-only, so the two are walked together: an object by its properties, a
-    /// list by its items. A key the schema does not declare stays. So does
-    /// everything below a schema this walk reads no further (a composition) and
-    /// one that cannot be followed, because a template is no place to refuse a
-    /// document that loads. A list of several elements names a property once.
+    /// list by its items. The walk goes through an object and a list that this
+    /// crate reads, and into the value of a key that the object's `properties`
+    /// declare. The example stays as the document has it everywhere else: the
+    /// value under a key that `properties` does not declare, everything below a
+    /// schema this walk reads no further (a composition, or an object that
+    /// `openapiv3` holds as `AnySchema`) and everything below one that cannot be
+    /// followed, because a template is no place to refuse a document that loads. A
+    /// list of several elements names a property once.
     fn without_read_only(
         &mut self,
         example: &Value,
@@ -1003,11 +1016,10 @@ impl Walk<'_> {
 ///
 /// That floor is not a promise that a template cannot be sent. An
 /// enumeration's first value is one the enumeration admits, and the `example`
-/// [`skeleton`] takes whole is one the document states about the API — so a
-/// template drawing every key from those two carries nothing the document
-/// forbids. A template is checked against nothing and is not meant to go out
-/// unread: it says where the values belong, and the values are the caller's to
-/// put there.
+/// [`skeleton`] takes is one the document states about the API — so a template
+/// drawing every key from those two carries nothing the document forbids. A
+/// template is checked against nothing and is not meant to go out unread: it says
+/// where the values belong, and the values are the caller's to put there.
 fn empty(scalar: &Scalar) -> Value {
     match scalar {
         Scalar::Text(_) => Value::String(String::new()),

@@ -18,7 +18,7 @@
 use typed_openapi::model::{Body, Operation, Shape, Unsupported};
 use typed_openapi::scalar::Limit;
 use typed_openapi::tree;
-use typed_openapi::{Document, LoadError, Scalar};
+use typed_openapi::{Document, LoadError, RefError, Scalar};
 
 /// One operation with the schema as the query parameter `v`, and one with it as
 /// the property `v` of a JSON body, as the probe builds them.
@@ -619,13 +619,21 @@ fn an_object_or_an_array_is_structured_unless_it_states_a_keyword_it_does_not_ha
 }
 
 /// `openapiv3` holds an array as `AnySchema` for a keyword that states nothing:
-/// `properties: {}`, `required: []`, `enum: []`, `allOf: []`. It is the list of
+/// `properties: {}`, `required: []`, `enum: []`, `allOf: []`, `oneOf: []`,
+/// `anyOf: []`. It is the list of
 /// values it is without the keyword, so it has the list flag its twin has, with
 /// the rules of the array, and a required one loads. A keyword that states
 /// something is named, as it is above.
 #[test]
 fn an_array_that_openapiv3_holds_as_any_for_an_empty_keyword_is_a_list() {
-    for empty in ["properties: {}", "required: []", "enum: []", "allOf: []"] {
+    for empty in [
+        "properties: {}",
+        "required: []",
+        "enum: []",
+        "allOf: []",
+        "oneOf: []",
+        "anyOf: []",
+    ] {
         let schema = format!(
             "{{ type: array, items: {{ type: string }}, {empty}, minItems: 1, maxItems: 3, \
              uniqueItems: true }}"
@@ -684,6 +692,24 @@ fn the_template_of_a_body_that_openapiv3_holds_as_any_for_an_empty_keyword_is_a_
     ));
     assert_eq!(template, serde_json::json!([{ "sku": "a" }]));
     assert_eq!(read_only, ["[].id"]);
+}
+
+/// The long help names the properties of the items that the template leaves out,
+/// for a body that is such an array and for a property that a body requires and
+/// whose schema is one: `[].id` and `tags[].id`.
+#[test]
+fn the_read_only_properties_of_the_items_of_such_an_array_are_named_by_their_paths() {
+    let list = "{ type: array, enum: [], items: { type: object, required: [id, sku], properties: \
+                { sku: { type: string }, id: { type: integer, readOnly: true } } } }";
+    let (template, read_only) = template_of_body(list);
+    assert_eq!(template, serde_json::json!([{ "sku": "" }]));
+    assert_eq!(read_only, ["[].id"]);
+
+    let (template, read_only) = template_of_body(&format!(
+        "{{ type: object, required: [tags], properties: {{ tags: {list} }} }}"
+    ));
+    assert_eq!(template, serde_json::json!({ "tags": [{ "sku": "" }] }));
+    assert_eq!(read_only, ["tags[].id"]);
 }
 
 /// A composition is not a value that fits on a flag, and it names itself.
@@ -853,101 +879,313 @@ fn rules_that_cannot_run() -> Vec<(&'static str, String)> {
 fn a_scalar_read_from_an_any_schema_is_held_to_the_rules_that_a_flag_runs() {
     for (label, text) in rules_that_cannot_run() {
         let refused = Document::load(&text, &[]).expect_err(label);
-        assert!(
-            matches!(&refused, LoadError::Unrunnable { name, .. } if name == "v"),
-            "{label}: {refused:?}"
-        );
+        assert!(is_unrunnable(&refused), "{label}: {refused:?}");
+        assert_eq!(refused.to_string(), UNRUNNABLE, "{label}");
     }
 }
 
-/// The same holds for the names: a property of a wrapped body that is named like a
-/// gate, and a header parameter that no header is named like, once it has a flag.
+/// A header parameter that no header is named like has no flag while its schema is
+/// read as no value, and the name is refused once the schema is a scalar. The names
+/// of consent are held in `a_value_that_has_a_flag_is_held_to_the_words_consent_is_given_by`.
 #[test]
-fn a_scalar_read_from_an_any_schema_is_held_to_the_names_that_a_flag_has() {
-    let gated = operation_with(
-        "",
-        "x-cli-gates: [force]",
-        "{ allOf: [{ type: object, properties: { force: { type: integer, minimum: 0.0 } } }] }",
-    );
-    let refused = Document::load(&gated, &[]).expect_err("a property named like a gate");
-    assert!(
-        matches!(&refused, LoadError::GateTakenByName { what: "property", name, .. } if name == "force"),
-        "{refused:?}"
-    );
-
+fn a_scalar_read_from_an_any_schema_is_held_to_the_name_that_a_header_has() {
     let header = operation_with(
         "{ name: 'X V', in: header, schema: { type: integer, minimum: 0.0 } }",
         "",
         "{ type: object }",
     );
     let refused = Document::load(&header, &[]).expect_err("no header has this name");
-    assert!(
-        matches!(&refused, LoadError::HeaderName { name, .. } if name == "X V"),
-        "{refused:?}"
-    );
+    assert!(is_header_name(&refused), "{refused:?}");
+    assert_eq!(refused.to_string(), HEADER_NAME);
 }
 
-/// The documents in which a scalar that `openapiv3` holds as `AnySchema` is named
-/// like a word that consent is given by: the gate `force` of `x-cli-gates`, or the
-/// confirmation `commit`. Each is the place, the word it is named like, and the
-/// document.
-fn named_like_consent() -> Vec<(&'static str, &'static str, String)> {
-    let scalar = "{ type: integer, minimum: 0.0 }";
-    let gates = "x-cli-gates: [force]";
-    let parameter = |name: &str, schema: &str, gates: &str| {
-        operation_with(
-            &format!("{{ name: {name}, in: query, schema: {schema} }}"),
-            gates,
-            "{ type: object }",
-        )
-    };
-    let property = |name: &str, gates: &str| {
-        operation_with(
-            "",
-            gates,
-            &format!("{{ type: object, properties: {{ {name}: {scalar} }} }}"),
-        )
-    };
-    vec![
-        ("parameter", "gate", parameter("force", scalar, gates)),
-        (
-            "parameter",
-            "gate",
-            parameter(
-                "force",
-                &format!("{{ type: array, items: {scalar} }}"),
-                gates,
+/// A word that consent is given by: the gate `force` of `x-cli-gates`, or the
+/// confirmation `commit`.
+#[derive(Clone, Copy)]
+enum Word {
+    Gate,
+    Confirmation,
+}
+
+impl Word {
+    /// What a parameter or a property is called to be named like the word.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Gate => "force",
+            Self::Confirmation => "commit",
+        }
+    }
+
+    /// What the operation says in `x-cli-gates`: the gate, or nothing.
+    const fn gates(self) -> &'static str {
+        match self {
+            Self::Gate => "x-cli-gates: [force]",
+            Self::Confirmation => "",
+        }
+    }
+
+    /// The refusal's own words, for the `parameter` or the `property` that holds
+    /// the name.
+    fn words(self, what: &str) -> String {
+        match self {
+            Self::Gate => format!(
+                "op: the {what} `force` and the gate `force` both want `--force`; rename the \
+                 gate in `x-cli-gates`, to `gate-force` or another word"
             ),
-        ),
-        ("property", "gate", property("force", gates)),
-        ("parameter", "confirmation", parameter("commit", scalar, "")),
-        (
-            "parameter",
-            "confirmation",
-            parameter("commit", &format!("{{ type: array, items: {scalar} }}"), ""),
-        ),
-        ("property", "confirmation", property("commit", "")),
-    ]
+            Self::Confirmation => format!(
+                "op: the {what} `commit` and the confirmation both want `--commit`; confirm \
+                 with another word \u{2014} `Loading::commit`, or `Settings::commit_word` where \
+                 a bless step generates"
+            ),
+        }
+    }
+
+    /// Whether `refused` is the refusal of this word, for `what` and the name.
+    fn refused_by(self, refused: &LoadError, what: &str) -> bool {
+        match self {
+            Self::Gate => matches!(
+                refused,
+                LoadError::GateTakenByName { what: found, name, gate, .. }
+                    if *found == what && name == "force" && gate == "force"
+            ),
+            Self::Confirmation => matches!(
+                refused,
+                LoadError::CommitTakenByName { what: found, name, commit, .. }
+                    if *found == what && name == "commit" && commit == "commit"
+            ),
+        }
+    }
+}
+
+/// The documents in which a value that has a flag is named like a word that consent
+/// is given by. Each is the place that holds the name, the word and the document.
+/// The values are a scalar that `openapiv3` holds as `AnySchema`, a list of them,
+/// an array that states an empty keyword, and a list inside an `allOf` of one
+/// element, each as a query parameter; and the scalar as a property of a JSON
+/// body, bare and inside a wrapped body.
+fn named_like_consent() -> Vec<(&'static str, Word, String)> {
+    let scalar = "{ type: integer, minimum: 0.0 }";
+    let lists = [
+        format!("{{ type: array, items: {scalar} }}"),
+        "{ type: array, items: { type: string }, properties: {} }".to_owned(),
+        "{ allOf: [{ type: array, items: { type: string } }] }".to_owned(),
+        "{ allOf: [{ type: array, items: { type: string }, properties: {} }] }".to_owned(),
+    ];
+    let mut rows = Vec::new();
+    for word in [Word::Gate, Word::Confirmation] {
+        let parameter = |schema: &str| {
+            operation_with(
+                &format!("{{ name: {}, in: query, schema: {schema} }}", word.name()),
+                word.gates(),
+                "{ type: object }",
+            )
+        };
+        let property = |wrapped: bool| {
+            let body = format!(
+                "{{ type: object, properties: {{ {}: {scalar} }} }}",
+                word.name()
+            );
+            let body = if wrapped {
+                format!("{{ allOf: [{body}] }}")
+            } else {
+                body
+            };
+            operation_with("", word.gates(), &body)
+        };
+        rows.push(("parameter", word, parameter(scalar)));
+        for list in &lists {
+            rows.push(("parameter", word, parameter(list)));
+        }
+        rows.push(("property", word, property(false)));
+        rows.push(("property", word, property(true)));
+    }
+    rows
 }
 
 /// A value that has a flag takes its name from the namespace of its operation, so
-/// a scalar that `openapiv3` holds as `AnySchema` is held to the words that consent
-/// is given by as any other scalar is: a parameter, the items of a list parameter
-/// and a property of a JSON body each refuse the document, whichever word they
-/// are named like.
+/// every value that is read as one is held to the words that consent is given
+/// by as any other is: each of the places above refuses the document, and the
+/// refusal says its own words.
 #[test]
-fn a_scalar_read_from_an_any_schema_is_held_to_the_words_consent_is_given_by() {
-    for (place, word, text) in named_like_consent() {
-        let refused = Document::load(&text, &[]).expect_err(place);
-        let found = match (&refused, word) {
-            (LoadError::GateTakenByName { what, name, .. }, "gate") => (*what, name.as_str()),
-            (LoadError::CommitTakenByName { what, name, .. }, "confirmation") => {
-                (*what, name.as_str())
-            }
-            _ => panic!("{place} named like the {word}: {refused:?}"),
+fn a_value_that_has_a_flag_is_held_to_the_words_consent_is_given_by() {
+    for (what, word, text) in named_like_consent() {
+        let refused = Document::load(&text, &[]).expect_err(what);
+        assert!(word.refused_by(&refused, what), "{text}: {refused:?}");
+        assert_eq!(refused.to_string(), word.words(what), "{text}");
+    }
+}
+
+/// A document that is refused, the variant that refuses it, its words and the
+/// words of its cause.
+struct Refusal {
+    label: String,
+    text: String,
+    is: fn(&LoadError) -> bool,
+    words: &'static str,
+    cause: Option<&'static str>,
+}
+
+fn is_unrunnable(refused: &LoadError) -> bool {
+    matches!(refused, LoadError::Unrunnable { name, .. } if name == "v")
+}
+
+fn is_unresolvable(refused: &LoadError) -> bool {
+    matches!(
+        refused,
+        LoadError::Unresolvable { source: RefError::Missing { reference }, .. }
+            if reference == "#/components/schemas/Missing"
+    )
+}
+
+fn is_header_name(refused: &LoadError) -> bool {
+    matches!(refused, LoadError::HeaderName { name, .. } if name == "X V")
+}
+
+const UNRUNNABLE: &str = "op: `v` states a rule that cannot run";
+const STEP: &str = "`0` is not a step: `multipleOf` has to be more than 0";
+const ONLY_NULL: &str = "`null` is all that the `enum` lists, and a flag cannot send it";
+const UNRESOLVABLE: &str = "op: `v` has a `$ref` that cannot be followed";
+const UNRESOLVABLE_BODY: &str = "op: `requestBody` has a `$ref` that cannot be followed";
+const MISSING: &str = "`#/components/schemas/Missing` does not resolve";
+const HEADER_NAME: &str =
+    "op: the header parameter `X V` is not a header name; correct or remove it in an Overlay";
+
+/// A list that had no flag and has one: an array that states an empty keyword, or
+/// a list inside an `allOf` of one element. `items` are its items.
+fn list_of(wrapped: bool, items: &str) -> String {
+    if wrapped {
+        format!("{{ allOf: [{{ type: array, items: {items} }}] }}")
+    } else {
+        format!("{{ type: array, items: {items}, properties: {{}} }}")
+    }
+}
+
+/// The query parameter `v` whose schema is such a list.
+fn query_of(wrapped: bool, items: &str) -> String {
+    operation_with(
+        &format!(
+            "{{ name: v, in: query, schema: {} }}",
+            list_of(wrapped, items)
+        ),
+        "",
+        "{ type: object }",
+    )
+}
+
+/// The header `X V`, which is no header name, whose schema is such a list.
+fn header_of(wrapped: bool) -> String {
+    operation_with(
+        &format!(
+            "{{ name: 'X V', in: header, schema: {} }}",
+            list_of(wrapped, "{ type: string }")
+        ),
+        "",
+        "{ type: object }",
+    )
+}
+
+/// The documents of a list that has a flag and is refused for it, as the query
+/// parameter `v` with items that no flag can carry and as the header `X V`, for
+/// each of the two shapes of such a list.
+fn lists_with_a_flag() -> Vec<Refusal> {
+    let mut rows = Vec::new();
+    for (shape, wrapped) in [
+        ("an array with an empty keyword", false),
+        ("a list inside an `allOf`", true),
+    ] {
+        let mut row = |what: &str, text, is, words, cause| {
+            rows.push(Refusal {
+                label: format!("{shape}: {what}"),
+                text,
+                is,
+                words,
+                cause,
+            });
         };
-        assert_eq!(found.0, place, "{text}");
-        assert!(["force", "commit"].contains(&found.1), "{text}");
+        let step = query_of(wrapped, "{ type: integer, multipleOf: 0 }");
+        row("a step of 0", step, is_unrunnable, UNRUNNABLE, Some(STEP));
+        let only_null = query_of(wrapped, "{ type: integer, enum: [null] }");
+        row(
+            "an `enum` of `null`",
+            only_null,
+            is_unrunnable,
+            UNRUNNABLE,
+            Some(ONLY_NULL),
+        );
+        let missing = query_of(wrapped, "{ $ref: '#/components/schemas/Missing' }");
+        row(
+            "a `$ref` that leads nowhere",
+            missing,
+            is_unresolvable,
+            UNRESOLVABLE,
+            Some(MISSING),
+        );
+        row(
+            "a header name that no header has",
+            header_of(wrapped),
+            is_header_name,
+            HEADER_NAME,
+            None,
+        );
+    }
+    rows
+}
+
+/// The documents of a JSON body, or a property of one, whose `$ref` leads nowhere
+/// where the template follows it: a body that is an array that states an empty
+/// keyword, bare and inside an `allOf` of one element, a property that the body
+/// requires and whose schema is such an array, and a property of a body that is an
+/// `allOf` of one element.
+fn bodies_the_template_follows() -> Vec<Refusal> {
+    let list = "{ type: array, items: { $ref: '#/components/schemas/Missing' }, enum: [] }";
+    let row = |what: &str, body: &str, words| Refusal {
+        label: what.to_owned(),
+        text: operation_with("", "", body),
+        is: is_unresolvable,
+        words,
+        cause: Some(MISSING),
+    };
+    vec![
+        row(
+            "a body that is an array with an empty keyword",
+            list,
+            UNRESOLVABLE_BODY,
+        ),
+        row(
+            "the same inside an `allOf`",
+            &format!("{{ allOf: [{list}] }}"),
+            UNRESOLVABLE_BODY,
+        ),
+        row(
+            "a required property of a body",
+            &format!("{{ type: object, required: [v], properties: {{ v: {list} }} }}"),
+            UNRESOLVABLE_BODY,
+        ),
+        row(
+            "a property of a body that is an `allOf`",
+            "{ allOf: [{ type: object, properties: { v: { allOf: [{ $ref: '#/components/schemas/Missing' }] } } }] }",
+            UNRESOLVABLE,
+        ),
+    ]
+}
+
+/// A list that has a flag is held to what every flag is held to: its items'
+/// rules must run, a `$ref` in them must lead somewhere, and a header must have a
+/// header's name. A JSON body that is such an array, and a property that a body
+/// requires and whose schema is one, are followed by the template, so a
+/// reference that leads nowhere refuses the document. Each refusal says its own
+/// words and its cause's.
+#[test]
+fn a_list_with_a_flag_is_held_to_what_a_flag_is_held_to() {
+    for row in lists_with_a_flag()
+        .into_iter()
+        .chain(bodies_the_template_follows())
+    {
+        let refused = Document::load(&row.text, &[]).expect_err(&row.label);
+        assert!((row.is)(&refused), "{}: {refused:?}", row.label);
+        assert_eq!(refused.to_string(), row.words, "{}", row.label);
+        let cause = std::error::Error::source(&refused).map(ToString::to_string);
+        assert_eq!(cause.as_deref(), row.cause, "{}", row.label);
     }
 }
 

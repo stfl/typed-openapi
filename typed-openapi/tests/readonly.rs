@@ -405,8 +405,8 @@ fn template_of(doc: &Document) -> (Value, Vec<String>) {
 /// An `example` is the better source of a template, and it is taken as the
 /// document states it, less the properties the API sets: a template that carried
 /// one would invite the operator to send what a request should not. The first
-/// document is the first probe of Review 2, an example on the body's own object,
-/// and the second is the second probe, an example on a nested one.
+/// document has an example on the body's own object, and the second one on a
+/// nested object.
 #[test]
 fn the_body_template_takes_an_example_less_the_properties_the_api_sets() {
     let doc = loaded(&creating(
@@ -454,10 +454,12 @@ fn the_body_template_takes_an_example_less_the_properties_the_api_sets() {
     assert!(help.contains("`address.aid` is `readOnly`"), "{help}");
 }
 
-/// The example is walked beside its schema at every depth, through a list and
-/// through each spelling of read-only, and a property is dropped whether the
-/// document requires it or not. A key the schema does not declare stays. A
-/// property of several elements of a list is named once.
+/// The example is walked beside its schema at every depth of the value, through
+/// a list. A property is dropped for each spelling of read-only (its own flag, a
+/// bare reference to a read-only schema, a flag on a wrapper of one element, and
+/// a wrapper over a read-only reference), whether the document requires it or
+/// not. A key the schema does not declare stays. A property of several elements
+/// of a list is named once.
 #[test]
 fn an_example_loses_a_read_only_property_at_every_depth_of_the_value() {
     let doc = loaded(&creating(
@@ -469,7 +471,9 @@ fn an_example_loses_a_read_only_property_at_every_depth_of_the_value() {
         name: { type: string }
         positions:
           type: array
-          example: [{ id: 1, qty: 2 }, { id: 3, qty: 4, note: n }]
+          example:
+            - { id: 1, qty: 2, stamp: s, tag: t }
+            - { id: 3, qty: 4, note: n, stamp: u, tag: v }
           items: { $ref: '#/components/schemas/Line' }
         nested:
           type: object
@@ -486,9 +490,12 @@ fn an_example_loses_a_read_only_property_at_every_depth_of_the_value() {
                     keep: { type: string }
     Line:
       type: object
+      required: [id]
       properties:
         id: { type: integer, readOnly: true }
         qty: { type: integer }
+        stamp: { allOf: [{ type: string }], readOnly: true }
+        tag: { $ref: '#/components/schemas/Id' }
     Id: { type: integer, readOnly: true }
 ",
     ));
@@ -503,8 +510,57 @@ fn an_example_loses_a_read_only_property_at_every_depth_of_the_value() {
     );
     assert_eq!(
         read_only,
-        ["positions[].id", "nested.one.id", "nested.one.two.id"]
+        [
+            "positions[].id",
+            "positions[].stamp",
+            "positions[].tag",
+            "nested.one.id",
+            "nested.one.two.id",
+        ]
     );
+}
+
+/// The schema of an example is read as a value's schema is, so a wrapper of one
+/// element leads to the named schema whose read-only properties the example
+/// loses, at a property and at the items of a list.
+#[test]
+fn an_example_under_a_wrapper_of_one_element_loses_the_read_only_properties_of_what_it_wraps() {
+    let doc = loaded(&creating(
+        "{ $ref: '#/components/schemas/Pet' }",
+        "    Pet:
+      type: object
+      required: [name, address, lines]
+      properties:
+        name: { type: string }
+        address:
+          allOf: [{ $ref: '#/components/schemas/Address' }]
+          example: { aid: 9, street: Main }
+        lines:
+          type: array
+          example: [{ lid: 1, sku: a }]
+          items: { allOf: [{ $ref: '#/components/schemas/Line' }] }
+    Address:
+      type: object
+      properties:
+        aid: { type: integer, readOnly: true }
+        street: { type: string }
+    Line:
+      type: object
+      properties:
+        lid: { type: integer, readOnly: true }
+        sku: { type: string }
+",
+    ));
+    let (template, read_only) = template_of(&doc);
+    assert_eq!(
+        template,
+        json!({
+            "name": "",
+            "address": { "street": "Main" },
+            "lines": [{ "sku": "a" }],
+        })
+    );
+    assert_eq!(read_only, ["address.aid", "lines[].lid"]);
 }
 
 /// A body that is a list has a list for an example, and the items' schema says
@@ -1021,10 +1077,8 @@ fn the_composition_only_a_response_reaches_keeps_its_required() {
 /// A member that is a `$ref` is a named schema, and one type wherever it is used:
 /// its own `required` stays. The composition that another member makes read-only
 /// does not reach into it, so a request that names the member alone requires
-/// what it declares without `readOnly`. That is the first of the two limits
-/// `docs/generating.md` states. The second is a body behind
-/// `#/components/requestBodies/`. A member that declares the property read-only
-/// itself is relaxed as any type a request reaches is.
+/// what it declares without `readOnly`. `docs/generating.md` states this as a
+/// limit.
 #[test]
 fn a_member_that_is_a_reference_keeps_its_own_required() {
     let doc = document(

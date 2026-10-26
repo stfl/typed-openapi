@@ -231,9 +231,14 @@ the body's own object, and each one that `--json-body-template` leaves out below
 it, by its path as a body error spells a key, with `[]` for any item of a list:
 `address.aid`, `positions[].id`, and `[].id` for a body that is a list. The
 template writes only the properties that the schema requires and the keys of an
-`example`, which it takes whole but for the properties the API sets. So a
-`readOnly` property below the body's own object that the document does not
-require and no `example` carries is left out of nothing and is not named.
+`example`. An `example` is walked beside its schema through an object and a list
+that this CLI reads, into the value of each key that the object's `properties`
+declare, and loses its `readOnly` keys there. So a `readOnly` property below the
+body's own object that the document does not require and no `example` carries is
+left out of nothing and is not named. One that an `example` carries where the
+walk does not go stays in the template and is named nowhere: that is below a
+composition, in an object that `openapiv3` holds as `AnySchema`, under a key that
+`properties` does not declare, and below a schema that cannot be followed.
 
 A property is `readOnly` when its own schema says so, when it points with a
 `$ref` at a named schema that says so, or when it is an `allOf` of one element
@@ -304,9 +309,9 @@ What is in it:
 | the document says | the template shows |
 |---|---|
 | a required property | the key, with a skeleton of its own schema |
-| a property that the schema marks `readOnly`, required or in an `example` | nothing, at any depth: the API sets it |
+| a property that the schema marks `readOnly`, required or in an `example` | nothing, at every depth of the walk: the API sets it |
 | an optional property | nothing |
-| `example` on a property | that value, less its `readOnly` properties |
+| `example` on a property | that value, less the `readOnly` properties that the walk reaches |
 | `example` on the schema a property points at | that value, where the property states none of its own |
 | `enum: [draft, open, paid]` | `"draft"` — the first value it lists |
 | `enum: [7, 19]` on an integer or a number, `enum: [true]` on a boolean | `7`, `true` — the first value it lists |
@@ -319,10 +324,10 @@ What is in it:
 `pattern` and `0` against a `minimum` are values the document itself rules out,
 so a key nobody filled in is one the server refuses rather than one it acts on.
 Where the document does offer something, the template carries it: an enumeration
-has no empty member, so it shows the first value listed, and an `example` is
-taken whole but for the properties the API sets. Both are values the API admits,
-so a template drawing every key from those two holds nothing the document
-forbids and can go out as it stands.
+has no empty member, so it shows the first value listed, and an `example` is the
+template of the schema it is stated on, less the `readOnly` properties that the
+walk reaches. Both are values the API admits, so a template drawing every key
+from those two holds nothing the document forbids.
 
 **A template is checked against nothing.** It is a skeleton to read and fill in,
 not a body to send unread. What holds the file you then pass to `--json-body` is
@@ -402,14 +407,15 @@ nothing lands on them.
 ### Parameters with no flag
 
 Eight shapes have no command-line spelling: `in: cookie`, a parameter described
-by `content` instead of `schema`, one whose schema is an object or an array of
-objects or of lists, one whose schema states a keyword this CLI does not read as
-a value, one whose schema states no `type`, one declaring a `style` this CLI
-does not write — `spaceDelimited`, `pipeDelimited` or `deepObject` in a query,
-`matrix` or `label` in a path — one whose *name* has no kebab-case spelling, and
-one whose name an earlier parameter of the operation has (the list is below).
-The style is read whatever the schema is, because it is not only about
-delimiters: `matrix` puts a `;name=` in front of a single value too.
+by `content` instead of `schema`, one whose schema is an object, or an array
+that states no `items` or whose items are objects or lists, one whose schema
+states a keyword this CLI does not read as a value, one whose schema states no
+`type`, one declaring a `style` this CLI does not write — `spaceDelimited`,
+`pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — one
+whose *name* has no kebab-case spelling, and one whose name an earlier parameter
+of the operation has (the list is below). The style is read whatever the schema
+is, because it is not only about delimiters: `matrix` puts a `;name=` in front
+of a single value too.
 
 The last two are about the name rather than the value. A flag is `[a-z0-9-]`
 once kebab-cased, the rule a command name and a gate also pass, and a parameter
@@ -425,7 +431,7 @@ reason is true of the schema: `oneOf`, `anyOf`, an `allOf` of more than one
 schema and `not` are named, and so is a keyword that the `type` does not have
 (`allOf` or `pattern` beside `type: integer`, `minLength` beside `type: array`),
 an `enum` that lists a value of another type, and an integer's `multipleOf` that
-is not a whole number below 2^53. A schema that states no `type` and no
+has a fraction or is whole from 2^53. A schema that states no `type` and no
 composition has the reason "stated with no `type`". A single `allOf` element is
 read as the schema it wraps for a list, a JSON body and a multipart body, as it
 is for a value.
@@ -441,7 +447,10 @@ and so does a `minimum` below every one, so an unsigned 64-bit id (`minimum: 0`,
 `maximum: 18446744073709551615`) is an integer of at least 0. A `minimum` above
 every `i64` and a `maximum` below every one are met by no integer of a flag, and
 a whole bound from 2^53 to 2^63 is the double of more than one integer's text,
-so each is named by its keyword and rounded no further.
+so each is named by its keyword and rounded no further. A step (`multipleOf`) is
+read the same way: a whole double below 2^53 is that integer, whatever text gave
+it, so `multipleOf: 2.00000000000000001` is the step 2, and one with a fraction or
+a whole one from 2^53 is named by its keyword.
 
 The parameters of an operation are one list. It holds the path item's
 parameters in the order the path item lists them, with a parameter of the

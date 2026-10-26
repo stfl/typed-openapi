@@ -897,17 +897,24 @@ the crate follows [Semantic Versioning][semver].
     is an `allOf` of one element (the spelling that keeps a flag beside a
     reference) with the flag on the wrapper or on the schema it wraps.
     `writeOnly` is not read.
-  - `--json-body-template` leaves out a `readOnly` property, at every depth: a
-    required one, and one that an `example` carries. The template takes an
-    `example` whole but for these, so `example: { id: 7, name: Rex }` with a
-    read-only `id` is `{ "name": "Rex" }`. The long help names each `readOnly`
-    property of the body's own object, where its flag would have been, and each
-    one that the template leaves out below it, by its path as a `BodyError`
-    spells a key, with `[]` for any item of a list: `address.aid`,
-    `positions[].id`, `[].id` for a body that is a list. The template writes the
-    required properties and the keys of an `example` only, so a `readOnly`
-    property below the body's own object that the document does not require and
-    no `example` carries is left out of nothing and is not named.
+  - `--json-body-template` leaves out a `readOnly` property, one that the schema
+    requires and one that an `example` carries. An `example` is the template as
+    it stands, but it is walked beside its schema through an object and a list
+    that this crate reads, into the value of each key that the object's
+    `properties` declare, and a `readOnly` key goes from it at every depth of
+    that walk: `example: { id: 7, name: Rex }` with a read-only `id` is
+    `{ "name": "Rex" }`. Everywhere else the `example` stays as the document
+    has it: below a composition (an `allOf` of more than one schema, `oneOf`,
+    `anyOf`), in an object that `openapiv3` holds as `AnySchema`, under a key
+    that `properties` does not declare, and below a schema that cannot be
+    followed. A `readOnly` key there stays in the template and is named nowhere.
+    The long help names each `readOnly` property of the body's own object, where
+    its flag would have been, and each one that the template leaves out below it,
+    by its path as a `BodyError` spells a key, with `[]` for any item of a list:
+    `address.aid`, `positions[].id`, `[].id` for a body that is a list. The
+    template writes the required properties and the keys of an `example` only, so
+    a `readOnly` property below the body's own object that the document does not
+    require and no `example` carries is left out of nothing and is not named.
   - `Body::JsonFields` and `Body::JsonWhole` have the field `read_only`: the
     body's own properties first, in document order, then the paths below them in
     the order the template's walk meets them. `Body::read_only()` answers it for
@@ -954,28 +961,38 @@ the crate follows [Semantic Versioning][semver].
   - An `AnySchema` whose `type` is a scalar and whose keywords all belong to
     that type is read as that scalar. `{ type: integer, minimum: 0.0 }` is an
     integer with a lower bound of 0, and a required parameter of that schema
-    loads.
+    loads. The template of a body writes such a value as the empty value of its
+    type (`0`), where it wrote `null`, or none for a body that is the value.
   - An integer's bound that `openapiv3` holds as a double is read where the
     double names the integers the bound admits. A bound with a fraction is the
     integer next inside it, whatever `exclusiveMinimum` or `exclusiveMaximum`
     says: `minimum: 0.5` is at least 1. A whole bound below 2^53 is that
     integer, whatever text gave it: the reader keeps the double and not the text,
     so `minimum: 1.00000000000000001` is at least 1, and the flag accepts 1
-    where the document admits only 2 and above. A `maximum` above every `i64`
-    bounds nothing, and so does a `minimum` below every one, so an unsigned
-    64-bit id (`minimum: 0`, `maximum: 18446744073709551615`) is an integer of
-    at least 0. A `minimum` above every `i64`, a `maximum` below every one and a
-    whole bound from 2^53 to 2^63, which is the double of more than one
+    where the document admits only 2 and above. A step (`multipleOf`) is read the
+    same way, so `multipleOf: 2.00000000000000001` is the step 2. A `maximum`
+    above every `i64` bounds nothing, and so does a `minimum` below every one, so
+    an unsigned 64-bit id (`minimum: 0`, `maximum: 18446744073709551615`) is an
+    integer of at least 0. A `minimum` above every `i64`, a `maximum` below every
+    one and a whole bound from 2^53 to 2^63, which is the double of more than one
     integer's text, are refused by their keyword (`Unsupported::Keyword`) and
-    never rounded. A step (`multipleOf`) is read where it is a whole number
-    below 2^53 and refused by its keyword otherwise.
+    never rounded. A step that is a double with a fraction, or a whole one from
+    2^53, is refused by its keyword too.
   - An array that states a keyword with no content (`properties: {}`,
-    `required: []`, `enum: []`, `allOf: []`) is the array it is, and a list
-    parameter of it has the list flag of the same array without the keyword.
-    `openapiv3` holds such an array as `AnySchema`, and this crate read it as
-    "neither a value nor a list of values".
-  - A single-element `allOf` is read as the schema it wraps for a list's items,
-    a JSON body and a multipart body, as it is for a value.
+    `required: []`, `enum: []`, `allOf: []`, `oneOf: []`, `anyOf: []`) is the
+    array it is. `openapiv3` holds such an array as `AnySchema`, and this crate
+    read it as "neither a value nor a list of values". A list parameter of it
+    has the list flag of the same array without the keyword. A JSON body that is
+    such an array has a template, which writes one element of its items, where it
+    had none, and a required property of such an array is written as a list in
+    the template of the body that holds it (`"tags": [""]`), where it was
+    `null`. So the operation has `--json-body-template`, and its long help names
+    the `readOnly` properties of the items by their paths (`[].id` for the body,
+    `tags[].id` for the property), as it does for an array that `openapiv3` holds
+    as a type.
+  - A single-element `allOf` is read as the schema it wraps for a list parameter
+    and its items, a JSON body and a multipart body, as it is for a value. A list
+    parameter inside one had no flag, and has the flag of the list it wraps.
   - An object or an array that states a keyword its `type` does not have is
     `Unsupported::Keyword`, naming the keyword, as a scalar is. A list of
     strings that states `minLength` was "neither a value nor a list of values".
@@ -1006,39 +1023,70 @@ the crate follows [Semantic Versioning][semver].
     type.
   - A document that was refused and loads now is a required parameter of
     `{ type: integer, minimum: 0.0 }`, of `{ type: integer, minimum: 0.5 }`, of
-    `{ type: integer, minimum: 0, maximum: 18446744073709551615 }`, or of
-    `{ type: array, items: { type: string }, properties: {} }`.
-  - A document that loaded and is refused now. Each holds a scalar or a wrapper
-    that this crate read as no value and reads as one now, so it is held to what
-    a value is held to.
-    - A rule that cannot run, on a scalar that `openapiv3` holds as `AnySchema`,
-      is `LoadError::Unrunnable`, as it is on any scalar that has a flag:
-      `{ type: integer, minimum: 0.0, multipleOf: 0 }` (a step of 0 or less) and
-      `{ type: integer, minimum: 0.0, enum: [null] }` on a parameter or on a
-      property of a JSON body. Repair: an Overlay that corrects the step or the
-      `enum`, or removes it.
-    - The same rule inside an `allOf` of one element, which is unwrapped now:
-      the items of a wrapped list that has `multipleOf: 0`, and a property of a
-      wrapped JSON body that has it. Repair: the same.
-    - A value that has a flag takes its name from the namespace of its
-      operation, so a parameter, the items of a list parameter and a property
-      of a JSON body, wrapped or not, that is read as a scalar now and is named
-      like a gate of `x-cli-gates` is `LoadError::GateTakenByName`:
-      a query parameter `force` of `{ type: integer, minimum: 0.0 }` on a write
-      with `x-cli-gates: [force]`, a list whose items are that schema, and a
-      property `force` of it. Repair: an Overlay that renames the gate in
-      `x-cli-gates`, as the refusal says.
-    - The same three, named like the confirmation of a write (`commit`), are
-      `LoadError::CommitTakenByName`. Repair: confirm with another word,
-      `Loading::commit` where the document is loaded or `Settings::commit_word`
-      where a bless step generates, as the refusal says.
-    - A header parameter whose name is no header name (`X V`) is
-      `LoadError::HeaderName` once it has a flag, which a schema such as
-      `{ type: integer, minimum: 0.0 }` gives it. Repair: an Overlay that
-      corrects the name or removes the parameter, as the refusal says.
+    `{ type: integer, minimum: 0, maximum: 18446744073709551615 }`, of
+    `{ type: array, items: { type: string }, properties: {} }`, or of an array
+    whose items are `{ type: integer, minimum: 0.0 }`.
+  - A document that loaded and is refused now. Each holds a value that this
+    crate read as no value, or as no flag, and reads as one with a flag now, so
+    it is held to what every flag is held to. There are three kinds of such a
+    value: a scalar that `openapiv3` holds as `AnySchema`; a list parameter
+    inside an `allOf` of one element; and an array that states a keyword with no
+    content (`properties: {}`, `required: []`, `enum: []`, `allOf: []`,
+    `oneOf: []`, `anyOf: []`), which is a list parameter and a JSON body now.
+    - A rule that cannot run is `LoadError::Unrunnable`, as it is on any scalar
+      that has a flag: a step of 0 or less and an `enum` that lists `null` alone.
+      It is refused on a scalar such as
+      `{ type: integer, minimum: 0.0, multipleOf: 0 }` or
+      `{ type: integer, minimum: 0.0, enum: [null] }`, as a parameter, as the
+      items of a list parameter and as a property of a JSON body. It is refused
+      on the items of a list parameter that has a flag now, which is an array
+      that states an empty keyword
+      (`{ type: array, items: { type: integer, multipleOf: 0 }, properties: {} }`)
+      or an array inside an `allOf` of one element. It is refused on a property
+      of a JSON body that is an `allOf` of one element, which is unwrapped now.
+      Repair: an Overlay that corrects the step or the `enum`, or removes it.
+    - A `$ref` that leads nowhere is `LoadError::Unresolvable`. It is refused
+      in the items of a list parameter that has a flag now, bare or inside an
+      `allOf` of one element, and in a property of a JSON body that is an `allOf`
+      of one element (`v: { allOf: [{ $ref: Missing }] }`). It is refused in a
+      JSON body that is an array that states an empty keyword
+      (`{ type: array, items: { $ref: Missing }, enum: [] }`), bare or inside an
+      `allOf` of one element, and in a property that a JSON body requires and
+      whose schema is such an array, because the template follows the items now.
+      Repair: an Overlay that corrects the reference.
+    - A parameter or a property of a JSON body that has a flag now takes its
+      name from the namespace of its operation. The values are a scalar such as
+      `{ type: integer, minimum: 0.0 }`, as a parameter, as the items of a list
+      parameter and as a property of a JSON body, wrapped or not; a list
+      parameter that is an array stating an empty keyword
+      (`{ type: array, items: { type: string }, properties: {} }`); and a list
+      parameter inside an `allOf` of one element. A property that is a list has
+      no flag, so it is not refused.
+      - One named like a gate of `x-cli-gates` is `LoadError::GateTakenByName`:
+        a query parameter `force` on a write with `x-cli-gates: [force]`, bare
+        or inside an `allOf` of one element, and a property `force` of a JSON
+        body. Repair: an Overlay that renames the gate in `x-cli-gates`, as the
+        refusal says.
+      - One named like the confirmation of a write (`commit`) is
+        `LoadError::CommitTakenByName`. Repair: confirm with another word,
+        `Loading::commit` where the document is loaded or
+        `Settings::commit_word` where a bless step generates, as the refusal
+        says.
+      - A header parameter whose name is no header name (`X V`) is
+        `LoadError::HeaderName`. Repair: an Overlay that corrects the name or
+        removes the parameter, as the refusal says.
     - A multipart body whose `allOf` of one element leads to a reference that
       does not resolve is `LoadError::Unresolvable`; it was a body with no
       parts. Repair: an Overlay that corrects the reference.
+  - A document that was refused is refused under another variant now, where its
+    value has a flag. A `pattern` that holds `\p{`, `\P{` or `\u{` is
+    `LoadError::Unrunnable`, which names the operation and the value, and was
+    `LoadError::UnrunnablePattern`, which names the schema. A required parameter
+    of such a list, or of a scalar with a rule that cannot run, is
+    `LoadError::Unrunnable` or `LoadError::Unresolvable`, and was
+    `LoadError::Parameter`, which says that the parameter has no flag. Repair:
+    an Overlay that corrects the `pattern`, the rule or the reference, as
+    before.
 
 ### Removed
 

@@ -311,10 +311,13 @@ not one. Compiling both sides with the flag is the alternative that is out of
 scope, because it is a change to typify.
 
 One reading approximates, and no code here can mend it: `openapiv3` keeps an
-integer's bound as a double and not as its text, so a text with a fraction that
-rounds to a whole double (`minimum: 1.00000000000000001`) is read as that whole
-number, and the flag accepts or refuses one integer against the document. *A
-scalar is read however the object model holds it* says which doubles are read.
+integer's bound and step as a double and not as their text, so a text with a
+fraction that rounds to a whole double (`minimum: 1.00000000000000001`,
+`multipleOf: 2.00000000000000001`) is read as that whole number. The flag then
+accepts or refuses one integer against the document for a bound, and holds the
+integers to the multiples of the whole number and not of the text for a step.
+*A scalar is read however the object model holds it* says which doubles are
+read.
 
 The escape rule is asked of every schema the model reads, and not only of the
 `pattern` that a scalar carries, because the generated types are made of the
@@ -512,13 +515,15 @@ matches the `type` once, and the arm gives the keywords that type has with the
 way it is read, so a keyword is named for each of the six types, an object and
 an array included. The unit test in `src/schema.rs` puts each keyword beside
 each type, because a keyword of the table that nothing exercises is a keyword
-read as no word at all. An `AnySchema` whose keywords all belong to its `type`
-is read as the type `openapiv3` would have made. That holds for an array too:
-`openapiv3` holds an array as `AnySchema` for a keyword that states nothing
-(`properties: {}`, `enum: []`), `array_of` reads it, and `items_of` and
-`list_type` ask `array_of`, so such an array has the list flag its twin has. No
-object is read as a value. Every other shape is an `Unsupported` that is true of
-it: `Keyword` for a composition, for a keyword the `type` does not have, for an
+read as no word at all. An `AnySchema` whose `type` is a scalar or an array and
+whose keywords all belong to that type is read as the type `openapiv3` would
+have made. That holds for an array: `openapiv3` holds it as `AnySchema` for a
+keyword that states nothing (`properties: {}`, `enum: []`), `array_of` reads it,
+and `items_of`, `list_type` and the template walk (`Walk::skeleton` and
+`Walk::without_read_only`) ask `array_of`, so such an array has the list flag
+its twin has, and a body that is one has the template its twin has. No object is
+read as a value. Every other shape is an `Unsupported` that is true of it:
+`Keyword` for a composition, for a keyword the `type` does not have, for an
 `enum` that lists a value of another type and for a `type` that is none of the
 six, `Untyped` for a schema with no `type` and no composition, and `Structured`
 for an object whose keywords all belong to it and for an array whose items are
@@ -532,7 +537,9 @@ integer whatever text gave it, which is the approximation named above. A double
 past every `i64` bounds nothing, or admits none and is refused by its keyword. A
 whole double from 2^53 to 2^63, both ends included, is the double of more than
 one integer's text, so it is refused by its keyword and never rounded again. A
-step is read only where it is a whole number below 2^53 (`integer_step`). A
+step is read as a bound is (`integer_step`): a whole double below 2^53 is that
+integer whatever text gave it, which is the approximation named above, and a
+double with a fraction or a whole one from 2^53 is refused by its keyword. A
 parameter takes the reason as its `Unreachable`, and a property takes it as the
 body going whole, as any property with no flag does. Neither refuses the
 document that holds it, and only a required parameter does.
@@ -705,25 +712,29 @@ goes whole. The first decides nothing about the body, so it neither sends the
 body whole nor needs to be a scalar, and its rules are read by no flag. The two
 JSON variants of `Body` carry the names (`read_only`), for the long help in
 `tree::long_about`, which says where the flag went. `Walk::object_skeleton` in
-`src/schema.rs` leaves the property out of the template at every depth, and
-notes each one it leaves out below the body's own object, by its path as a
-`BodyError` spells a key, with `[]` for any item of a list (`address.aid`,
-`positions[].id`, `[].id`): the help names what the template leaves out, from
-the walk that writes the template, so the two cannot part. An `example` is the
-better source of a template and is taken whole but for these:
-`Walk::without_read_only` walks it beside its schema, through objects and lists,
-and drops a read-only property whether the document requires it or not, naming
-it by the same path. Everything below a composition, or a schema that cannot be
-followed, stays as the example has it, because a template is no place to refuse
-a document that loads. The walk enters a required property only, so a read-only
-property that the document does not require below the body's own object, and
-that no `example` carries, is left out of nothing and is not named. The own
-object's names come from `Role`, each of them, and a body that goes whole
-carries those first. A property is `readOnly` through `schema::read_only_of`,
-which asks every schema that `stated` passes: the property's own, the one a
-`$ref` leads to, and an `allOf` of one element and its element. A `$ref` erases
-the flag beside it, and the wrapper is the spelling that keeps it. `writeOnly`
-is not read.
+`src/schema.rs` leaves the property out of the template at every depth of the
+skeleton, and notes each one it leaves out below the body's own object, by its
+path as a `BodyError` spells a key, with `[]` for any item of a list
+(`address.aid`, `positions[].id`, `[].id`): the help names what the template
+leaves out, from the walk that writes the template, so the two cannot part. An
+`example` is the better source of a template, and `Walk::without_read_only`
+walks it beside its schema, through an object and a list that this crate reads
+and into the value of each key that the object's `properties` declare. It drops
+a read-only property there whether the document requires it or not, naming it by
+the same path. The example stays as the document has it everywhere else: below a
+composition, in an object that `openapiv3` holds as `AnySchema`, under a key
+that `properties` does not declare, and below a schema that cannot be followed,
+because a template is no place to refuse a document that loads. A read-only key
+there stays in the template and is named nowhere, so the template is the
+example, not a body that has been checked. The walk enters a required property
+only, so a read-only property that the document does not require below the
+body's own object, and that no `example` carries, is left out of nothing and is
+not named. The own object's names come from `Role`, each of them, and a body
+that goes whole carries those first. A property is `readOnly` through
+`schema::read_only_of`, which asks every schema that `stated` passes: the
+property's own, the one a `$ref` leads to, and an `allOf` of one element and its
+element. A `$ref` erases the flag beside it, and the wrapper is the spelling
+that keeps it. `writeOnly` is not read.
 
 The generator makes the same decision for the types (`NotRequired` in
 `src/generate/types.rs`). A type that a request body reaches does not require
