@@ -22,7 +22,7 @@ use syn::visit_mut::VisitMut as _;
 use super::GenerateError;
 use super::names::{JsonBody, Names, Site};
 use crate::model::{Body, Shape, declared, entry_of_flag};
-use crate::schema::{stated, typed};
+use crate::schema::{array_of, stated, typed};
 use crate::{Document, Operation};
 
 /// What one operation contributes to the generated file.
@@ -775,7 +775,7 @@ fn list_type(
 ) -> Result<TokenStream, GenerateError> {
     let schema = stated(schema, components)
         .map_err(|source| unsupported(format!("`{name}` cannot be followed: {source}")))?;
-    let SchemaKind::Type(Type::Array(array)) = &schema.schema_kind else {
+    let Some(array) = array_of(&schema.schema_kind) else {
         return Err(unsupported(format!(
             "`{name}` is a list that is not an array"
         )));

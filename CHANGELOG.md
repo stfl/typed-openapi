@@ -897,19 +897,24 @@ the crate follows [Semantic Versioning][semver].
     is an `allOf` of one element (the spelling that keeps a flag beside a
     reference) with the flag on the wrapper or on the schema it wraps.
     `writeOnly` is not read.
-  - `--json-body-template` leaves out a required `readOnly` property, at every
-    depth. The long help names each `readOnly` property of the body's own
-    object, where its flag would have been, and each one that the template
-    leaves out below it, by its path as a `BodyError` spells a place:
-    `address.aid`, `positions[].id`, `[].id` for a body that is a list. The
-    template writes the required properties only, so a `readOnly` property below
-    the body's own object that the document does not require is left out of
-    nothing and is not named.
-  - `Body::JsonFields` and `Body::JsonWhole` have the field `read_only`, the
-    paths in document order, and `Body::read_only()` answers it for every kind
-    of body. `Document::MODEL_LAYOUT` is 9. Repair: a `match` that binds every
-    field of either variant adds `read_only` or `..`. Run the bless step again
-    and commit `model.postcard`: a blob of layout 8 is `DocumentError::Stale`.
+  - `--json-body-template` leaves out a `readOnly` property, at every depth: a
+    required one, and one that an `example` carries. The template takes an
+    `example` whole but for these, so `example: { id: 7, name: Rex }` with a
+    read-only `id` is `{ "name": "Rex" }`. The long help names each `readOnly`
+    property of the body's own object, where its flag would have been, and each
+    one that the template leaves out below it, by its path as a `BodyError`
+    spells a key, with `[]` for any item of a list: `address.aid`,
+    `positions[].id`, `[].id` for a body that is a list. The template writes the
+    required properties and the keys of an `example` only, so a `readOnly`
+    property below the body's own object that the document does not require and
+    no `example` carries is left out of nothing and is not named.
+  - `Body::JsonFields` and `Body::JsonWhole` have the field `read_only`: the
+    body's own properties first, in document order, then the paths below them in
+    the order the template's walk meets them. `Body::read_only()` answers it for
+    every kind of body. `Document::MODEL_LAYOUT` is 9. Repair: a `match` that
+    binds every field of either variant adds `read_only` or `..`. Run the bless
+    step again and commit `model.postcard`: a blob of layout 8 is
+    `DocumentError::Stale`.
   - A generated type that a request body reaches does not require a `readOnly`
     property: `id: i64` is `id: Option<i64>`, with the `serde` attributes typify
     writes for an optional field. A request body reaches the schema it names or
@@ -951,16 +956,24 @@ the crate follows [Semantic Versioning][semver].
     integer with a lower bound of 0, and a required parameter of that schema
     loads.
   - An integer's bound that `openapiv3` holds as a double is read where the
-    double states exactly the integers it admits. A bound with a fraction is the
+    double names the integers the bound admits. A bound with a fraction is the
     integer next inside it, whatever `exclusiveMinimum` or `exclusiveMaximum`
-    says: `minimum: 0.5` is at least 1. A `maximum` above every `i64` bounds
-    nothing, and so does a `minimum` below every one, so an unsigned 64-bit id
-    (`minimum: 0`, `maximum: 18446744073709551615`) is an integer of at least 0.
-    A `minimum` above every `i64`, a `maximum` below every one and a whole bound
-    from 2^53 to 2^63, which is the double of more than one integer's text, are
-    refused by their keyword (`Unsupported::Keyword`) and never rounded. A step
-    (`multipleOf`) is read where it is a whole number below 2^53 and refused by
-    its keyword otherwise.
+    says: `minimum: 0.5` is at least 1. A whole bound below 2^53 is that
+    integer, whatever text gave it: the reader keeps the double and not the text,
+    so `minimum: 1.00000000000000001` is at least 1, and the flag accepts 1
+    where the document admits only 2 and above. A `maximum` above every `i64`
+    bounds nothing, and so does a `minimum` below every one, so an unsigned
+    64-bit id (`minimum: 0`, `maximum: 18446744073709551615`) is an integer of
+    at least 0. A `minimum` above every `i64`, a `maximum` below every one and a
+    whole bound from 2^53 to 2^63, which is the double of more than one
+    integer's text, are refused by their keyword (`Unsupported::Keyword`) and
+    never rounded. A step (`multipleOf`) is read where it is a whole number
+    below 2^53 and refused by its keyword otherwise.
+  - An array that states a keyword with no content (`properties: {}`,
+    `required: []`, `enum: []`, `allOf: []`) is the array it is, and a list
+    parameter of it has the list flag of the same array without the keyword.
+    `openapiv3` holds such an array as `AnySchema`, and this crate read it as
+    "neither a value nor a list of values".
   - A single-element `allOf` is read as the schema it wraps for a list's items,
     a JSON body and a multipart body, as it is for a value.
   - An object or an array that states a keyword its `type` does not have is
@@ -984,14 +997,17 @@ the crate follows [Semantic Versioning][semver].
     `not`), a keyword the `type` does not have, an `enum` that lists a value of
     another type, a `type` that is none of the six, and an integer's bound or
     step that is refused as above; `Untyped` is a schema with no `type` and no
-    composition. An object or an array whose keywords all belong to it stays
-    `Structured`. `Document::MODEL_LAYOUT` is 9. Repair: a `match` over
-    `Unsupported` adds the two arms. A body property of these shapes sends the
-    body whole, as a nested property does, and the long help names no reason for
-    it: the whole body is read as JSON and held to the generated type.
+    composition. An object whose keywords all belong to it, and an array whose
+    items are no value, stay `Structured`. `Document::MODEL_LAYOUT` is 9.
+    Repair: a `match` over `Unsupported` adds the two arms. A body property of
+    these shapes sends the body whole, as a nested property does, and the long
+    help names no reason for it: the whole body is read as JSON, and the
+    adopter's seam (`tree::select`, then `check_body`) holds it to the generated
+    type.
   - A document that was refused and loads now is a required parameter of
-    `{ type: integer, minimum: 0.0 }`, of `{ type: integer, minimum: 0.5 }`, or
-    of `{ type: integer, minimum: 0, maximum: 18446744073709551615 }`.
+    `{ type: integer, minimum: 0.0 }`, of `{ type: integer, minimum: 0.5 }`, of
+    `{ type: integer, minimum: 0, maximum: 18446744073709551615 }`, or of
+    `{ type: array, items: { type: string }, properties: {} }`.
   - A document that loaded and is refused now. Each holds a scalar or a wrapper
     that this crate read as no value and reads as one now, so it is held to what
     a value is held to.
@@ -1004,9 +1020,18 @@ the crate follows [Semantic Versioning][semver].
     - The same rule inside an `allOf` of one element, which is unwrapped now:
       the items of a wrapped list that has `multipleOf: 0`, and a property of a
       wrapped JSON body that has it. Repair: the same.
-    - A property of a wrapped JSON body that is named like a gate of
-      `x-cli-gates` is `LoadError::GateTakenByName`. Repair: an Overlay that
-      renames the gate, as the refusal says.
+    - A value that has a flag takes its name from the namespace of its
+      operation, so a parameter, the items of a list parameter and a property
+      of a JSON body, wrapped or not, that is read as a scalar now and is named
+      like a gate of `x-cli-gates` is `LoadError::GateTakenByName`:
+      a query parameter `force` of `{ type: integer, minimum: 0.0 }` on a write
+      with `x-cli-gates: [force]`, a list whose items are that schema, and a
+      property `force` of it. Repair: an Overlay that renames the gate in
+      `x-cli-gates`, as the refusal says.
+    - The same three, named like the confirmation of a write (`commit`), are
+      `LoadError::CommitTakenByName`. Repair: confirm with another word,
+      `Loading::commit` where the document is loaded or `Settings::commit_word`
+      where a bless step generates, as the refusal says.
     - A header parameter whose name is no header name (`X V`) is
       `LoadError::HeaderName` once it has a flag, which a schema such as
       `{ type: integer, minimum: 0.0 }` gives it. Repair: an Overlay that

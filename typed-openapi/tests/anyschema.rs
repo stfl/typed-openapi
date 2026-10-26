@@ -266,7 +266,7 @@ fn spelled(keyword: &str, bound: &str, exclusive: bool) -> String {
 /// An integer's `minimum`, which `openapiv3` holds as a double when it is no
 /// `i64`. A double with a fraction is the text of a number that is no integer, so
 /// the integer next inside it is the bound, with or without `exclusiveMinimum`. A
-/// whole double below 2^53 is that integer. From 2^53 to 2^63, both ends included,
+/// whole double below 2^53 is that integer, whatever text gave it. From 2^53 to 2^63, both ends included,
 /// more than one integer's text is that double, and the bound is refused. A
 /// double above 2^63 is above every integer a flag carries, so none meets it, and
 /// one below −2^63 is below every one, so it bounds nothing.
@@ -618,6 +618,74 @@ fn an_object_or_an_array_is_structured_unless_it_states_a_keyword_it_does_not_ha
     }
 }
 
+/// `openapiv3` holds an array as `AnySchema` for a keyword that states nothing:
+/// `properties: {}`, `required: []`, `enum: []`, `allOf: []`. It is the list of
+/// values it is without the keyword, so it has the list flag its twin has, with
+/// the rules of the array, and a required one loads. A keyword that states
+/// something is named, as it is above.
+#[test]
+fn an_array_that_openapiv3_holds_as_any_for_an_empty_keyword_is_a_list() {
+    for empty in ["properties: {}", "required: []", "enum: []", "allOf: []"] {
+        let schema = format!(
+            "{{ type: array, items: {{ type: string }}, {empty}, minItems: 1, maxItems: 3, \
+             uniqueItems: true }}"
+        );
+        for required in [false, true] {
+            let doc = Document::load(&document(&schema, required), &[])
+                .unwrap_or_else(|why| panic!("{schema}: {why}"));
+            let Shape::Flag { list, scalar, .. } =
+                operation(&doc, "op").param("v").expect("v").shape()
+            else {
+                panic!("{schema}: no flag");
+            };
+            let list = list.as_ref().unwrap_or_else(|| panic!("{schema}: no list"));
+            assert_eq!(list.items.min, Some(1), "{schema}");
+            assert_eq!(list.items.max, Some(3), "{schema}");
+            assert!(list.items.unique, "{schema}");
+            assert!(matches!(scalar, Scalar::Text(_)), "{schema}: {scalar:?}");
+        }
+    }
+    // Without the items there is nothing to put on a flag, and the reason is
+    // the one an array has.
+    let why = param_of(&loaded("{ type: array, properties: {} }")).expect_err("no items");
+    assert_eq!(why, Unsupported::Structured);
+}
+
+/// The template of a JSON body of this schema, and the paths it leaves out.
+fn template_of_body(schema: &str) -> (serde_json::Value, Vec<String>) {
+    let doc = Document::load(&operation_with("", "", schema), &[]).expect("the document loads");
+    let Body::JsonWhole {
+        template: Some(template),
+        read_only,
+        ..
+    } = operation(&doc, "op").body()
+    else {
+        panic!("a list body goes whole: {:?}", operation(&doc, "op").body());
+    };
+    (
+        serde_json::from_str(template).expect("JSON"),
+        read_only.clone(),
+    )
+}
+
+/// The array is the array in a body too: the template writes one element of it,
+/// and takes its `example` less the properties the API sets, as it does for an
+/// array that `openapiv3` holds as a type.
+#[test]
+fn the_template_of_a_body_that_openapiv3_holds_as_any_for_an_empty_keyword_is_a_list() {
+    let items = "items: { type: object, required: [sku], properties: { sku: { type: string }, \
+                 id: { type: integer, readOnly: true } } }";
+    let (template, read_only) = template_of_body(&format!("{{ type: array, enum: [], {items} }}"));
+    assert_eq!(template, serde_json::json!([{ "sku": "" }]));
+    assert!(read_only.is_empty(), "{read_only:?}");
+
+    let (template, read_only) = template_of_body(&format!(
+        "{{ type: array, enum: [], example: [{{ id: 1, sku: a }}], {items} }}"
+    ));
+    assert_eq!(template, serde_json::json!([{ "sku": "a" }]));
+    assert_eq!(read_only, ["[].id"]);
+}
+
 /// A composition is not a value that fits on a flag, and it names itself.
 #[test]
 fn a_composition_names_its_keyword() {
@@ -817,6 +885,70 @@ fn a_scalar_read_from_an_any_schema_is_held_to_the_names_that_a_flag_has() {
         matches!(&refused, LoadError::HeaderName { name, .. } if name == "X V"),
         "{refused:?}"
     );
+}
+
+/// The documents in which a value that is read as a scalar now is named like a
+/// word that consent is given by: the gate `force` of `x-cli-gates`, or the
+/// confirmation `commit`. Each is the place, the word it is named like, and the
+/// document.
+fn named_like_consent() -> Vec<(&'static str, &'static str, String)> {
+    let scalar = "{ type: integer, minimum: 0.0 }";
+    let gates = "x-cli-gates: [force]";
+    let parameter = |name: &str, schema: &str, gates: &str| {
+        operation_with(
+            &format!("{{ name: {name}, in: query, schema: {schema} }}"),
+            gates,
+            "{ type: object }",
+        )
+    };
+    let property = |name: &str, gates: &str| {
+        operation_with(
+            "",
+            gates,
+            &format!("{{ type: object, properties: {{ {name}: {scalar} }} }}"),
+        )
+    };
+    vec![
+        ("parameter", "gate", parameter("force", scalar, gates)),
+        (
+            "parameter",
+            "gate",
+            parameter(
+                "force",
+                &format!("{{ type: array, items: {scalar} }}"),
+                gates,
+            ),
+        ),
+        ("property", "gate", property("force", gates)),
+        ("parameter", "confirmation", parameter("commit", scalar, "")),
+        (
+            "parameter",
+            "confirmation",
+            parameter("commit", &format!("{{ type: array, items: {scalar} }}"), ""),
+        ),
+        ("property", "confirmation", property("commit", "")),
+    ]
+}
+
+/// A value that has a flag takes its name from the namespace of its operation, so
+/// a scalar that `openapiv3` holds as `AnySchema` is held to the words that consent
+/// is given by as any other scalar is: a parameter, the items of a list parameter
+/// and a property of a JSON body each refuse the document, whichever word they
+/// are named like.
+#[test]
+fn a_scalar_read_from_an_any_schema_is_held_to_the_words_consent_is_given_by() {
+    for (place, word, text) in named_like_consent() {
+        let refused = Document::load(&text, &[]).expect_err(place);
+        let found = match (&refused, word) {
+            (LoadError::GateTakenByName { what, name, .. }, "gate") => (*what, name.as_str()),
+            (LoadError::CommitTakenByName { what, name, .. }, "confirmation") => {
+                (*what, name.as_str())
+            }
+            _ => panic!("{place} named like the {word}: {refused:?}"),
+        };
+        assert_eq!(found.0, place, "{text}");
+        assert!(["force", "commit"].contains(&found.1), "{text}");
+    }
 }
 
 // ---------------------------------------------------------------- the wrapper

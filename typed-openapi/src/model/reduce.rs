@@ -39,9 +39,9 @@ use crate::request::BaseUrlError;
 use crate::required::{Step, spelled as target};
 use crate::scalar::{Items, Scalar, ScalarError};
 use crate::schema::{
-    Fit, RefError, Template, description_of, format_of, is_content_type, is_json, is_media_range,
-    is_media_type, is_multipart, lists_only_null, read_only_of, resolve, scalar_of, stated,
-    template,
+    Fit, RefError, Template, array_of, description_of, format_of, is_content_type, is_json,
+    is_media_range, is_media_type, is_multipart, lists_only_null, read_only_of, resolve, scalar_of,
+    stated, template,
 };
 
 /// What a refusal calls the request body.
@@ -1758,7 +1758,7 @@ fn items_of(
     components: &Components,
 ) -> Result<Option<(ReferenceOr<Schema>, Items)>, RefError> {
     let schema = stated(schema, components)?;
-    let SchemaKind::Type(openapiv3::Type::Array(array)) = &schema.schema_kind else {
+    let Some(array) = array_of(&schema.schema_kind) else {
         return Ok(None);
     };
     let rules = Items {

@@ -959,6 +959,42 @@ fn a_list_parameter_whose_array_is_named_is_a_vec_argument() {
     }
 }
 
+/// An array that `openapiv3` holds as `AnySchema` for an empty keyword has a list
+/// flag, so its wrapper takes a `Vec` of its items' type, as the same array without
+/// the keyword does.
+#[test]
+fn a_list_that_openapiv3_holds_as_any_is_a_vec_argument() {
+    let dir = out("any-lists");
+    Settings::new(wrote(&dir, "lists.yaml", ANY_LISTS))
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = read(&dir.join("src/ops.rs"));
+
+    for argument in ["days: Vec<&str>", "codes: Vec<crate::types::Code>"] {
+        assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
+    }
+}
+
+/// Two list parameters whose arrays state an empty keyword: one with items stated
+/// inline, one with items that are named.
+const ANY_LISTS: &str = r##"
+openapi: 3.0.3
+info: { title: Lists, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - { name: days, in: query, schema: { type: array, items: { type: string }, properties: {} } }
+        - { name: codes, in: query, required: true, schema: { type: array, items: { $ref: "#/components/schemas/Code" }, enum: [] } }
+      responses:
+        "200": { description: OK }
+components:
+  schemas:
+    Code: { type: string, pattern: "^[A-Z]{3}$" }
+"##;
+
 /// A CLI and a Rust caller reach one request builder, so a parameter has to
 /// mean the same thing on both roads: a list is a `Vec` argument filled the way
 /// a repeated flag fills it, and a parameter neither can supply is an argument

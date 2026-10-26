@@ -204,10 +204,12 @@ does a property whose schema is no scalar that this CLI reads: a composition (an
 `type` does not have (`pattern` beside `type: integer`), or no `type`. What the
 rule turns on is whether a property has a flag, never why it has none, and
 `--json-body-template` is then where the key that could not be spelled is
-written down. The whole body goes through `--json-body`, which reads it as JSON
-and holds it to the generated type, so the property is read as part of the body.
-The help names no reason for it: a parameter that has no flag has nothing else to
-fall back on, and a body has the file.
+written down. The whole body goes through `--json-body`, which reads it as JSON,
+so the property is a part of the body. A CLI that calls `tree::dispatch` sends
+that body as it is, and one that holds it to the generated type does so at its
+own seam, as *With a check of your own in the middle* says. The help names no
+reason for it: a parameter that has no flag has nothing else to fall back on, and
+a body has the file.
 
 **A property the API sets has no flag, and it is not asked for.** OpenAPI 3.0.3
 says of a `readOnly` property that it "SHOULD NOT be sent as part of the
@@ -226,10 +228,12 @@ out without it.
 A body that goes whole has a line of its own for it: `` `id` is `readOnly`: the
 API sets it, so the body should go out without it. `` It names each property of
 the body's own object, and each one that `--json-body-template` leaves out below
-it, by its path as a body error spells a place: `address.aid`, `positions[].id`,
-and `[].id` for a body that is a list. The template writes only the properties
-that the schema requires, so a `readOnly` property below the body's own object
-that the document does not require is left out of nothing and is not named.
+it, by its path as a body error spells a key, with `[]` for any item of a list:
+`address.aid`, `positions[].id`, and `[].id` for a body that is a list. The
+template writes only the properties that the schema requires and the keys of an
+`example`, which it takes whole but for the properties the API sets. So a
+`readOnly` property below the body's own object that the document does not
+require and no `example` carries is left out of nothing and is not named.
 
 A property is `readOnly` when its own schema says so, when it points with a
 `$ref` at a named schema that says so, or when it is an `allOf` of one element
@@ -300,9 +304,9 @@ What is in it:
 | the document says | the template shows |
 |---|---|
 | a required property | the key, with a skeleton of its own schema |
-| a required property that the schema marks `readOnly` | nothing, at any depth: the API sets it |
+| a property that the schema marks `readOnly`, required or in an `example` | nothing, at any depth: the API sets it |
 | an optional property | nothing |
-| `example` on a property | that value, taken whole |
+| `example` on a property | that value, less its `readOnly` properties |
 | `example` on the schema a property points at | that value, where the property states none of its own |
 | `enum: [draft, open, paid]` | `"draft"` — the first value it lists |
 | `enum: [7, 19]` on an integer or a number, `enum: [true]` on a boolean | `7`, `true` — the first value it lists |
@@ -316,8 +320,9 @@ What is in it:
 so a key nobody filled in is one the server refuses rather than one it acts on.
 Where the document does offer something, the template carries it: an enumeration
 has no empty member, so it shows the first value listed, and an `example` is
-taken whole. Both are values the API admits, so a template drawing every key
-from those two holds nothing the document forbids and can go out as it stands.
+taken whole but for the properties the API sets. Both are values the API admits,
+so a template drawing every key from those two holds nothing the document
+forbids and can go out as it stands.
 
 **A template is checked against nothing.** It is a skeleton to read and fill in,
 not a body to send unread. What holds the file you then pass to `--json-body` is
@@ -398,13 +403,13 @@ nothing lands on them.
 
 Eight shapes have no command-line spelling: `in: cookie`, a parameter described
 by `content` instead of `schema`, one whose schema is an object or an array of
-them, one whose schema states a keyword this CLI does not read as a value, one
-whose schema states no `type`, one declaring a `style` this CLI does not write —
-`spaceDelimited`, `pipeDelimited` or `deepObject` in a query, `matrix` or `label`
-in a path — one whose *name* has no kebab-case spelling, and one whose name an
-earlier parameter of the operation has (the list is below). The style is read
-whatever the schema is, because it is not only about delimiters: `matrix` puts a
-`;name=` in front of a single value too.
+objects or of lists, one whose schema states a keyword this CLI does not read as
+a value, one whose schema states no `type`, one declaring a `style` this CLI
+does not write — `spaceDelimited`, `pipeDelimited` or `deepObject` in a query,
+`matrix` or `label` in a path — one whose *name* has no kebab-case spelling, and
+one whose name an earlier parameter of the operation has (the list is below).
+The style is read whatever the schema is, because it is not only about
+delimiters: `matrix` puts a `;name=` in front of a single value too.
 
 The last two are about the name rather than the value. A flag is `[a-z0-9-]`
 once kebab-cased, the rule a command name and a gate also pass, and a parameter
@@ -426,14 +431,17 @@ read as the schema it wraps for a list, a JSON body and a multipart body, as it
 is for a value.
 
 `openapiv3` holds a bound that is no `i64` as a double, and the double is read
-where it states exactly the integers it admits. A bound with a fraction is the
+where it names the integers the bound admits. A bound with a fraction is the
 integer next inside it, whatever `exclusiveMinimum` or `exclusiveMaximum` says:
-`minimum: 0.5` is at least 1. A `maximum` above every `i64` bounds nothing, and
-so does a `minimum` below every one, so an unsigned 64-bit id (`minimum: 0`,
+`minimum: 0.5` is at least 1. A whole bound below 2^53 is that integer, whatever
+text gave it: the reader keeps the double and not the text, so
+`minimum: 1.00000000000000001` is at least 1, and the flag accepts 1 where the
+document admits only 2 and above. A `maximum` above every `i64` bounds nothing,
+and so does a `minimum` below every one, so an unsigned 64-bit id (`minimum: 0`,
 `maximum: 18446744073709551615`) is an integer of at least 0. A `minimum` above
 every `i64` and a `maximum` below every one are met by no integer of a flag, and
-a whole bound from 2^53 to 2^63 is the double of more than one integer's text, so
-each is named by its keyword and never approximated.
+a whole bound from 2^53 to 2^63 is the double of more than one integer's text,
+so each is named by its keyword and rounded no further.
 
 The parameters of an operation are one list. It holds the path item's
 parameters in the order the path item lists them, with a parameter of the

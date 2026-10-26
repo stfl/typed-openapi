@@ -274,10 +274,11 @@ pub(crate) fn scalar_of(
 ///
 /// `Err` is why there is none: a composition names its keyword, and so does every
 /// `AnySchema` that states a keyword its `type` does not have. An `AnySchema` that
-/// is an object or an array, with every keyword its type has, is
-/// [`Unsupported::Structured`], and one that states no `type` and no composition
-/// is [`Unsupported::Untyped`]. The generator types an argument through this too,
-/// so a value has the Rust type of the flag that carries it.
+/// is an object, with every keyword its type has, is [`Unsupported::Structured`],
+/// and one that states no `type` and no composition is [`Unsupported::Untyped`].
+/// An array with every keyword its type has is the array. The generator types an
+/// argument through this too, so a value has the Rust type of the flag that
+/// carries it.
 pub(crate) fn typed(kind: &SchemaKind) -> Result<Cow<'_, Type>, Unsupported> {
     match kind {
         SchemaKind::Type(ty) => Ok(Cow::Borrowed(ty)),
@@ -286,6 +287,17 @@ pub(crate) fn typed(kind: &SchemaKind) -> Result<Cow<'_, Type>, Unsupported> {
         SchemaKind::AllOf { .. } => Err(keyword("allOf")),
         SchemaKind::AnyOf { .. } => Err(keyword("anyOf")),
         SchemaKind::Not { .. } => Err(keyword("not")),
+    }
+}
+
+/// The array a schema states, when it states one: `type: array` however
+/// `openapiv3` holds it. A list parameter's flag is made of its items, so the
+/// reduction and the generator both ask this for the array and read one schema.
+pub(crate) fn array_of(kind: &SchemaKind) -> Option<Cow<'_, ArrayType>> {
+    match typed(kind).ok()? {
+        Cow::Borrowed(Type::Array(array)) => Some(Cow::Borrowed(array)),
+        Cow::Owned(Type::Array(array)) => Some(Cow::Owned(array)),
+        Cow::Borrowed(_) | Cow::Owned(_) => None,
     }
 }
 
@@ -337,9 +349,11 @@ const ARRAY_KEYWORDS: [&str; 4] = ["items", "minItems", "maxItems", "uniqueItems
 /// step where it is a whole number below 2^53 ([`integer_step`]), because
 /// `openapiv3` holds each as an `f64` and a double that does not is not read.
 ///
-/// An object or an array with every keyword its type has is
-/// [`Unsupported::Structured`]. Only a type of its own can say what is read of
-/// it, and this crate reads neither as a value.
+/// An object with every keyword its type has is [`Unsupported::Structured`]: this
+/// crate reads no object as a value. An array with every keyword its type has is
+/// the array, because `openapiv3` holds an array as `AnySchema` for a keyword
+/// that states nothing (`properties: {}`, `enum: []`), and a list of values is no
+/// less one for it.
 fn any_type(any: &AnySchema) -> Result<Type, Unsupported> {
     let reading = match any.typ.as_deref() {
         Some("string") => Reading::of(&STRING_KEYWORDS, read_string),
@@ -347,7 +361,7 @@ fn any_type(any: &AnySchema) -> Result<Type, Unsupported> {
         Some("integer") => Reading::of(&NUMERIC_KEYWORDS, read_integer),
         Some("boolean") => Reading::of(&BOOLEAN_KEYWORDS, read_boolean),
         Some("object") => Reading::of(&OBJECT_KEYWORDS, structured),
-        Some("array") => Reading::of(&ARRAY_KEYWORDS, structured),
+        Some("array") => Reading::of(&ARRAY_KEYWORDS, |any| Ok(read_array(any))),
         Some(_) => return Err(keyword("type")),
         None => return Err(typeless(any)),
     };
@@ -376,6 +390,15 @@ impl Reading {
 
 fn structured(_: &AnySchema) -> Result<Type, Unsupported> {
     Err(Unsupported::Structured)
+}
+
+fn read_array(any: &AnySchema) -> Type {
+    Type::Array(ArrayType {
+        items: any.items.clone(),
+        min_items: any.min_items,
+        max_items: any.max_items,
+        unique_items: any.unique_items.unwrap_or_default(),
+    })
 }
 
 fn read_string(any: &AnySchema) -> Result<Type, Unsupported> {
@@ -493,9 +516,9 @@ fn listed<T>(
         .collect()
 }
 
-/// The least whole number from which a double does not state one integer: 2^53.
-/// Every whole double below it is the integer of its text, and from it up the
-/// texts of more than one integer round to the same double.
+/// The least whole number from which a double does not name one integer: 2^53.
+/// A whole double below it is read as that integer, whatever text gave it, and from
+/// it up the texts of more than one integer round to the same double.
 const EXACT: f64 = 9_007_199_254_740_992.0;
 
 /// 2^63, the first whole number past `i64`. The doubles from 2^53 to this one,
@@ -522,16 +545,19 @@ impl End {
 
 /// One end of an integer's range, as the integer type holds it: the bound and
 /// whether it is exclusive. `openapiv3` holds a bound that is no `i64` as an `f64`,
-/// so the double is read where it gives the integers it admits exactly, and
-/// refused by its keyword where it does not.
+/// so the double is read where it names the integers the bound admits, and refused
+/// by its keyword where it does not.
 ///
 /// - A double with a fraction. The text of an integer gives a whole double, so
 ///   this is the double of a text that is no integer, and no integer lies between
 ///   the text and the double. The bound is the next integer inside, as an
 ///   inclusive one: `exclusiveMinimum` says nothing that the ceiling does not.
-/// - A whole double below 2^53 is that integer.
+/// - A whole double below 2^53 is that integer, whatever text gave it. The reader
+///   keeps the double and not the text, so a text with a fraction that rounds to a
+///   whole double (`minimum: 1.00000000000000001`) is read as that whole number,
+///   and no code here can tell it from `1.0`. That is the one approximation.
 /// - A whole double from 2^53 to 2^63, both ends included, is the double of more
-///   than one integer's text, so it is refused: the bound is never approximated.
+///   than one integer's text, so it is refused: this crate rounds no double again.
 /// - A double past that, above or below, is past every integer a flag carries. A
 ///   `minimum` above them admits none of them, which no scalar says, so it is
 ///   refused; a `maximum` above them bounds nothing. A `maximum` below them admits
@@ -721,13 +747,15 @@ pub(crate) struct Template {
     /// ask for it.
     pub(crate) text: Option<String>,
     /// The properties the skeleton leaves out because the API sets them (`readOnly`)
-    /// below the body's own object, each by its path as `BodyError` spells a place
-    /// (`address.aid`, `positions[].id`, `[].id`). The body's own object is not
-    /// walked here: the reduction reads every property of it, and names each.
+    /// below the body's own object, each by its path as a `BodyError` spells a key,
+    /// with `[]` for any item of a list (`address.aid`, `positions[].id`, `[].id`),
+    /// in the order the walk meets them. The body's own object is not walked here:
+    /// the reduction reads every property of it, and names each.
     ///
-    /// These are the keys the skeleton would have written, because the walk
-    /// enters only a required property. A read-only property that the document
-    /// does not require is never written, so it is not left out and is not named.
+    /// These are the keys the skeleton would have written: the walk enters only a
+    /// required property, and takes an `example` whole but for these. A read-only
+    /// property that the document does not require and no `example` carries is
+    /// never written, so it is not left out and is not named.
     pub(crate) read_only: Vec<String>,
 }
 
@@ -803,14 +831,15 @@ impl Walk<'_> {
     /// crate cannot describe; at the top it is what [`template`] reads as having no
     /// template to offer.
     fn skeleton(&mut self, schema: &ReferenceOr<Schema>, at: &Place) -> Result<Value, RefError> {
-        // An `example` is instance data, so it is taken whole and never read as a
-        // schema. A vendor whose example spells out a form as `{"required": [...]}`
-        // is writing a value that happens to use those words, and descending into
-        // it would build a template out of somebody's sample. It comes first
-        // because it is the better source: a value the document states round-trips,
-        // where one derived from types alone is only a shape.
+        // An `example` is instance data, so it is never read as a schema. A vendor
+        // whose example spells out a form as `{"required": [...]}` is writing a
+        // value that happens to use those words, and descending into it would
+        // build a template out of somebody's sample. It comes first because it is
+        // the better source: a value the document states round-trips, where one
+        // derived from types alone is only a shape. It is taken whole but for the
+        // properties the API sets.
         if let Some(example) = example_of(schema, self.components)? {
-            return Ok(example.clone());
+            return Ok(self.without_read_only(example, schema, at));
         }
         if let Fit::Scalar(scalar) = scalar_of(schema, self.components)? {
             return Ok(empty(&scalar));
@@ -819,10 +848,81 @@ impl Walk<'_> {
         if let SchemaKind::Type(Type::Object(object)) = &node.schema_kind {
             return self.object_skeleton(object, at);
         }
-        if let SchemaKind::Type(Type::Array(array)) = &node.schema_kind {
-            return self.array_skeleton(array, at);
+        if let Some(array) = array_of(&node.schema_kind) {
+            return self.array_skeleton(&array, at);
         }
         Ok(Value::Null)
+    }
+
+    /// An `example` less each property the API sets, at every depth of the value.
+    ///
+    /// The example is a value and the schema beside it says which of its keys are
+    /// read-only, so the two are walked together: an object by its properties, a
+    /// list by its items. A key the schema does not declare stays. So does
+    /// everything below a schema this walk reads no further (a composition) and
+    /// one that cannot be followed, because a template is no place to refuse a
+    /// document that loads. A list of several elements names a property once.
+    fn without_read_only(
+        &mut self,
+        example: &Value,
+        schema: &ReferenceOr<Schema>,
+        at: &Place,
+    ) -> Value {
+        let Ok(node) = stated(schema, self.components) else {
+            return example.clone();
+        };
+        if let (SchemaKind::Type(Type::Object(object)), Value::Object(entries)) =
+            (&node.schema_kind, example)
+        {
+            return self.object_example(object, entries, at);
+        }
+        if let (Some(array), Value::Array(elements)) = (array_of(&node.schema_kind), example) {
+            return self.array_example(&array, elements, at);
+        }
+        example.clone()
+    }
+
+    /// The entries of an object `example`, less the ones its schema marks read-only.
+    fn object_example(
+        &mut self,
+        object: &ObjectType,
+        entries: &serde_json::Map<String, Value>,
+        at: &Place,
+    ) -> Value {
+        let mut kept = serde_json::Map::new();
+        for (name, value) in entries {
+            let Some(property) = object.properties.get(name) else {
+                kept.insert(name.clone(), value.clone());
+                continue;
+            };
+            let property = property.clone().unbox();
+            let place = at.property(name);
+            if read_only_of(&property, self.components).unwrap_or(false) {
+                self.leave_out(place);
+                continue;
+            }
+            kept.insert(
+                name.clone(),
+                self.without_read_only(value, &property, &place),
+            );
+        }
+        Value::Object(kept)
+    }
+
+    /// The elements of a list `example`, each less the properties its items' schema
+    /// marks read-only.
+    fn array_example(&mut self, array: &ArrayType, elements: &[Value], at: &Place) -> Value {
+        let Some(items) = &array.items else {
+            return Value::Array(elements.to_vec());
+        };
+        let items = items.clone().unbox();
+        let place = at.items();
+        Value::Array(
+            elements
+                .iter()
+                .map(|element| self.without_read_only(element, &items, &place))
+                .collect(),
+        )
     }
 
     /// The required properties, in the order the document declares them, and
@@ -862,8 +962,9 @@ impl Walk<'_> {
 
     /// Notes a property the skeleton leaves out because the API sets it, unless it
     /// is a property of the body's own object, which the reduction names itself.
+    /// A path is noted once, because the elements of an example list share one.
     fn leave_out(&mut self, place: Place) {
-        if place.depth > 1 {
+        if place.depth > 1 && !self.read_only.contains(&place.path) {
             self.read_only.push(place.path);
         }
     }
@@ -1211,8 +1312,8 @@ mod tests {
     }
 
     /// Whether `read` is what a keyword beside a type comes to: named where the type
-    /// does not have it, structured where the type is an object or an array that
-    /// does, and a type read otherwise.
+    /// does not have it, structured where the type is an object that has it, the
+    /// array where it is an array, and the type otherwise.
     fn is_read_as_it_should(
         ty: &str,
         keyword: &str,
@@ -1221,16 +1322,17 @@ mod tests {
     ) -> bool {
         match (has, ty) {
             (false, _) => matches!(read, Err(Unsupported::Keyword(found)) if found == keyword),
-            (true, "object" | "array") => matches!(read, Err(Unsupported::Structured)),
+            (true, "object") => matches!(read, Err(Unsupported::Structured)),
+            (true, "array") => matches!(read, Ok(Type::Array(_))),
             (true, _) => read.is_ok(),
         }
     }
 
     /// Every keyword beside every type of the six: a keyword that the type has is
-    /// read, and an object or an array is structured. A keyword that the type does
-    /// not have is named. The document of a keyword that a type has is not one
-    /// that `openapiv3` holds as `AnySchema`, so this reads the schema with none
-    /// round it.
+    /// read, and an object is structured. A keyword that the type does not have is
+    /// named. The document of a keyword that a type has is not one that
+    /// `openapiv3` holds as `AnySchema`, so this reads the schema with none round
+    /// it.
     #[test]
     fn a_keyword_is_read_where_the_type_has_it_and_named_where_it_does_not() {
         for (ty, keyword, has) in pairs() {

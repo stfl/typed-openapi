@@ -430,8 +430,9 @@ pub enum Join {
 /// flag can carry, because the CLI cannot spell it or because another parameter
 /// already has it.
 ///
-/// The reason is the true one. A schema that is an object or an array is
-/// [`Unsupported::Structured`], a schema that says a keyword this crate cannot
+/// The reason is the true one. A schema that is an object, or an array whose
+/// items are no value, and whose keywords all belong to it, is
+/// [`Unsupported::Structured`]. A schema that says a keyword this crate cannot
 /// read as a value names it ([`Unsupported::Keyword`]), and a schema that says
 /// nothing of what it is ([`Unsupported::Untyped`]) is that.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -442,7 +443,8 @@ pub enum Unsupported {
     /// is a document in some media type, not a value.
     Encoded,
     /// A schema that is neither a value nor a list of values — an object, or an
-    /// array of them.
+    /// array whose items are no value (a list of objects, a list of lists, an
+    /// array that states no `items`).
     ///
     /// There is no spelling here to be exact about. OpenAPI states how a *flat*
     /// object serialises under `deepObject` and states nothing at all for a
@@ -453,17 +455,20 @@ pub enum Unsupported {
     Structured,
     /// A schema that states a keyword this crate cannot read as a value, named
     /// as the document spells it: a composition (`oneOf`, `anyOf`, an `allOf` of
-    /// more than one schema, `not`), a keyword that the schema's scalar `type`
-    /// does not have (`allOf` or `pattern` beside `type: integer`), an `enum` that
+    /// more than one schema, `not`), a keyword that the schema's `type` does not
+    /// have (`allOf` or `pattern` beside `type: integer`, `minLength` beside
+    /// `type: array`), an `enum` that
     /// lists a value of another type, an integer's bound or step that
     /// `openapiv3` holds as a double and that the double does not state as the
     /// integers it admits, or a `type` that is none of the six.
     ///
-    /// A bound whose double gives its integers exactly is read: one with a
-    /// fraction is the integer next inside it, and one past every `i64` bounds
-    /// nothing, or admits none and is refused. A whole bound from 2^53 to 2^63,
-    /// where the texts of more than one integer are one double, and a `multipleOf`
-    /// that is no whole number below 2^53 are refused by their keyword.
+    /// A bound is read as its double names it: one with a fraction is the integer
+    /// next inside it, a whole one below 2^53 is that integer whatever text gave it
+    /// (`openapiv3` keeps the double and not the text, so `1.00000000000000001` is
+    /// 1), and one past every `i64` bounds nothing, or admits none and is refused.
+    /// A whole bound from 2^53 to 2^63, where the texts of more than one integer
+    /// are one double, and a `multipleOf` that is no whole number below 2^53 are
+    /// refused by their keyword.
     ///
     /// Reading the value anyway would be a guess at what the vendor meant, and a
     /// correction is the adopter's to write in an Overlay where a reviewer can
@@ -618,11 +623,12 @@ pub enum Body {
         /// reduced, and `None` where the document describes no shape to render.
         template: Option<String>,
         /// The properties that the schema marks `readOnly` and that a request
-        /// should leave out, each by its path as [`BodyError`] spells a place:
-        /// `address.aid`, `positions[].id`, `[].id`. The properties of the body's
-        /// own object come first, in document order. Then come the ones the
-        /// template leaves out below it, at every depth, which are the required
-        /// ones: the template writes only those.
+        /// should leave out, each by its path as a [`BodyError`] spells a key, with
+        /// `[]` for any item of a list: `address.aid`, `positions[].id`, `[].id`.
+        /// The properties of the body's own object come first, in document order.
+        /// Then come the ones the template leaves out below it, at every depth, in
+        /// the order its walk meets them: the required ones, and the ones an
+        /// `example` carries, because the template writes only those.
         ///
         /// [`BodyError`]: crate::client::BodyError
         read_only: Vec<String>,
@@ -1514,12 +1520,13 @@ impl Body {
     }
 
     /// The properties of the body that the schema marks `readOnly`, each by its
-    /// path as [`BodyError`] spells a place: the API sets each of them, so none has
-    /// a flag and a request should leave each out.
+    /// path as a [`BodyError`] spells a key, with `[]` for any item of a list: the
+    /// API sets each of them, so none has a flag and a request should leave each
+    /// out.
     ///
     /// A body that is flat names the properties of its object, in document order.
     /// A body that goes whole names the same for its own object, and then every
-    /// required property that its template leaves out below it (`address.aid`,
+    /// property that its template leaves out below it (`address.aid`,
     /// `positions[].id`). Every other kind of body answers with nothing, as
     /// [`Body::fields`] does.
     ///

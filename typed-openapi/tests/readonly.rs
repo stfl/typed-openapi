@@ -384,6 +384,184 @@ fn the_long_help_names_each_read_only_property_the_template_leaves_out_by_its_pa
     assert!(help.contains("`[].id` is `readOnly`"), "{help}");
 }
 
+/// The template of the body of `createPet` and the paths it leaves out, for a
+/// body that goes whole.
+fn template_of(doc: &Document) -> (Value, Vec<String>) {
+    let op = operation(doc, "createPet");
+    let Body::JsonWhole {
+        template: Some(template),
+        read_only,
+        ..
+    } = op.body()
+    else {
+        panic!("a nested body goes whole: {:?}", op.body());
+    };
+    (
+        serde_json::from_str(template).expect("JSON"),
+        read_only.clone(),
+    )
+}
+
+/// An `example` is the better source of a template, and it is taken as the
+/// document states it, less the properties the API sets: a template that carried
+/// one would invite the operator to send what a request should not. The first
+/// document is the first probe of Review 2, an example on the body's own object,
+/// and the second is the second probe, an example on a nested one.
+#[test]
+fn the_body_template_takes_an_example_less_the_properties_the_api_sets() {
+    let doc = loaded(&creating(
+        "{ $ref: '#/components/schemas/Pet' }",
+        "    Pet:
+      type: object
+      required: [id, name, address]
+      example: { id: 7, name: Rex, address: { street: Main } }
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        address: { type: object, properties: { street: { type: string } } }
+",
+    ));
+    let (template, read_only) = template_of(&doc);
+    assert_eq!(
+        template,
+        json!({ "name": "Rex", "address": { "street": "Main" } })
+    );
+    assert_eq!(read_only, ["id"]);
+
+    let doc = loaded(&creating(
+        "{ $ref: '#/components/schemas/Pet' }",
+        "    Pet:
+      type: object
+      required: [name, address]
+      properties:
+        name: { type: string }
+        address:
+          type: object
+          required: [aid, street]
+          example: { aid: 9, street: Main }
+          properties:
+            aid: { type: integer, readOnly: true }
+            street: { type: string }
+",
+    ));
+    let (template, read_only) = template_of(&doc);
+    assert_eq!(
+        template,
+        json!({ "name": "", "address": { "street": "Main" } })
+    );
+    assert_eq!(read_only, ["address.aid"]);
+    let (_, help) = command_of(operation(&doc, "createPet"));
+    assert!(help.contains("`address.aid` is `readOnly`"), "{help}");
+}
+
+/// The example is walked beside its schema at every depth, through a list and
+/// through each spelling of read-only, and a property is dropped whether the
+/// document requires it or not. A key the schema does not declare stays. A
+/// property of several elements of a list is named once.
+#[test]
+fn an_example_loses_a_read_only_property_at_every_depth_of_the_value() {
+    let doc = loaded(&creating(
+        "{ $ref: '#/components/schemas/Order' }",
+        "    Order:
+      type: object
+      required: [name, positions, nested]
+      properties:
+        name: { type: string }
+        positions:
+          type: array
+          example: [{ id: 1, qty: 2 }, { id: 3, qty: 4, note: n }]
+          items: { $ref: '#/components/schemas/Line' }
+        nested:
+          type: object
+          example: { one: { id: 6, two: { id: 5, keep: k } }, free: 1 }
+          properties:
+            one:
+              type: object
+              properties:
+                id: { type: integer, readOnly: true }
+                two:
+                  type: object
+                  properties:
+                    id: { allOf: [{ $ref: '#/components/schemas/Id' }] }
+                    keep: { type: string }
+    Line:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        qty: { type: integer }
+    Id: { type: integer, readOnly: true }
+",
+    ));
+    let (template, read_only) = template_of(&doc);
+    assert_eq!(
+        template,
+        json!({
+            "name": "",
+            "positions": [{ "qty": 2 }, { "qty": 4, "note": "n" }],
+            "nested": { "one": { "two": { "keep": "k" } }, "free": 1 },
+        })
+    );
+    assert_eq!(
+        read_only,
+        ["positions[].id", "nested.one.id", "nested.one.two.id"]
+    );
+}
+
+/// A body that is a list has a list for an example, and the items' schema says
+/// which properties of each element the API sets.
+#[test]
+fn the_example_of_a_body_that_is_a_list_loses_the_read_only_properties_of_its_items() {
+    let doc = loaded(&creating(
+        "{ type: array, example: [{ id: 1, sku: a }], items: { $ref: '#/components/schemas/Line' } }",
+        "    Line:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        sku: { type: string }
+",
+    ));
+    let op = operation(&doc, "createPet");
+    let Body::JsonWhole {
+        template: Some(template),
+        read_only,
+        ..
+    } = op.body()
+    else {
+        panic!("a list body goes whole: {:?}", op.body());
+    };
+    let template: Value = serde_json::from_str(template).expect("JSON");
+    assert_eq!(template, json!([{ "sku": "a" }]));
+    assert_eq!(read_only, &["[].id"]);
+}
+
+/// A template is no place to refuse a document that loads, so an example under a
+/// reference that leads nowhere is taken whole, as it is where the schema cannot
+/// say anything about it.
+#[test]
+fn an_example_under_a_reference_that_leads_nowhere_is_taken_whole() {
+    let doc = loaded(&creating(
+        "{ $ref: '#/components/schemas/Pet' }",
+        "    Pet:
+      type: object
+      required: [name, address]
+      properties:
+        name: { type: string }
+        address:
+          type: object
+          example: { owner: { id: 1 }, street: Main }
+          properties:
+            owner: { $ref: '#/components/schemas/Missing' }
+            street: { type: string }
+",
+    ));
+    let (template, read_only) = template_of(&doc);
+    assert_eq!(
+        template,
+        json!({ "name": "", "address": { "owner": { "id": 1 }, "street": "Main" } })
+    );
+    assert!(read_only.is_empty(), "{read_only:?}");
+}
+
 /// A property no flag could carry is read for no rule. A step of 0 is the one
 /// rule that only a flag runs, so a read-only property that states it loads; the
 /// same body with the property sent is refused.
@@ -841,11 +1019,14 @@ fn the_composition_only_a_response_reaches_keeps_its_required() {
 }
 
 /// A member that is a `$ref` is a named schema, and one type wherever it is used:
-/// its own `required` stays unless it declares the property read-only itself. The
-/// composition that another member makes read-only does not reach into it. That is
-/// the one limit left, and a named schema that a request names alone shows it.
+/// its own `required` stays. The composition that another member makes read-only
+/// does not reach into it, so a request that names the member alone still requires
+/// what it declares without `readOnly`. That is the first of the two limits
+/// `docs/generating.md` states. The second is a body behind
+/// `#/components/requestBodies/`. A member that declares the property read-only
+/// itself is relaxed as any type a request reaches is.
 #[test]
-fn a_member_that_is_a_reference_keeps_its_own_required_unless_it_declares_the_property_read_only() {
+fn a_member_that_is_a_reference_keeps_its_own_required() {
     let doc = document(
         "  /pets:
     post:
