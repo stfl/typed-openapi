@@ -273,6 +273,25 @@ because an Overlay's target is matched against the spelling and a key refused fo
 a character that shows as nothing would read as a media type with no fault in it.
 `docs/validation.md` states the rule and `tests/media.rs` pins it.
 
+**Whether a body is required is the body's, and both roads read it from the
+model.** `requestBody.required` is one fact and the `required` list of its
+schema is another: the list says what a body holds once there is one.
+`Body::JsonFields` carries the first beside `Field::required`, which is the
+list's alone, as `JsonWhole`, `Multipart` and `Opaque` carry it, so a required
+flat body in which no property is required differs in the model from an optional
+one. `check_body` in `src/request.rs` refuses a required body that is missing,
+whatever its kind (`ValueError::MissingBody`), and `tree::payload` sends none
+for an optional flat body that nobody filled in: no file and no flag is no body,
+and not `{}`, which the schema may refuse for want of a required property. A
+required flat body in which no property is required goes out as `{}` when
+nothing is typed, because `{}` is a body the document admits. A property's flag
+is demanded of the command line where the body and the property are both
+required (`json_field_args`), and `--json-body` stands for it. The generator
+reads the same field (`add_body` in `src/generate/ops.rs`): a wrapper takes a
+required body as its type and an optional one as an `Option` of it, and `None`
+is `Values::body(None)`, so a body that one road can leave out is a body the
+other can. A body kind that is added carries `required`.
+
 **A shape the reduction cannot read is refused by name, never approximated.** A
 `pattern` no engine runs, a `content` key that is not a media type and one that
 is a media range are each the document saying something this crate has no reading

@@ -69,6 +69,10 @@ name = "media"
 required-features = ["document", "clap"]
 
 [[test]]
+name = "optional"
+required-features = ["document", "clap"]
+
+[[test]]
 name = "reading"
 required-features = ["document"]
 

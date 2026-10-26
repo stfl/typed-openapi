@@ -566,31 +566,90 @@ fn signature_of(
     for param in op.params() {
         add_param(&mut out, param, declared, names)?;
     }
+    add_body(&mut out, op, operation, names)?;
+    Ok(out)
+}
+
+/// What the body adds to a wrapper: an argument and the `Values` call that
+/// fills it.
+///
+/// A body the document requires is an argument of its type. A body it leaves
+/// optional is an `Option` of that type, and `None` adds no body to the request,
+/// which is what the command line sends when its operator gives none. A Rust
+/// caller and a command line reach one request builder, so a body that one can
+/// leave out is a body that the other can.
+fn add_body(
+    out: &mut Signature,
+    op: &Operation,
+    operation: &openapiv3::Operation,
+    names: &Names,
+) -> Result<(), GenerateError> {
     match op.body() {
         Body::None => {}
-        Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
+        Body::JsonFields {
+            media_type,
+            required,
+            ..
+        }
+        | Body::JsonWhole {
+            media_type,
+            required,
+            ..
+        } => {
             let ty = body_type(op, media_type, operation, names)?;
             let body = out.argument(&format_ident!("body"), "body", "is the request body");
-            out.args.push(quote! { #body: &#ty });
-            out.builder.push(quote! { .json(crate::to_json(#body)?) });
+            if *required {
+                out.args.push(quote! { #body: &#ty });
+                out.builder.push(quote! { .json(crate::to_json(#body)?) });
+            } else {
+                out.args.push(quote! { #body: Option<&#ty> });
+                out.builder.push(quote! {
+                    .body(#body.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json))
+                });
+                out.notes.push(optional_note(&body));
+            }
         }
-        Body::Opaque { media_type, .. } => {
+        Body::Opaque {
+            media_type,
+            required,
+        } => {
             let body = out.argument(&format_ident!("body"), "body", "is the request body");
             out.notes.push(format!(
                 "`{body}` is sent verbatim under the document's own `{media_type}`, \
                  which this crate does not assemble."
             ));
-            out.args.push(quote! { #body: Vec<u8> });
-            out.builder.push(quote! { .raw(#body) });
+            if *required {
+                out.args.push(quote! { #body: Vec<u8> });
+                out.builder.push(quote! { .raw(#body) });
+            } else {
+                out.args.push(quote! { #body: Option<Vec<u8>> });
+                out.builder
+                    .push(quote! { .body(#body.map(typed_openapi::Payload::Raw)) });
+                out.notes.push(optional_note(&body));
+            }
         }
-        Body::Multipart { names, .. } => {
+        Body::Multipart { names, required } => {
             let parts = out.argument(&format_ident!("parts"), "parts", "carries the body's parts");
             out.notes.push(multipart_note(&parts, names));
-            out.args.push(quote! { #parts: Vec<Part> });
-            out.builder.push(quote! { .multipart(#parts) });
+            if *required {
+                out.args.push(quote! { #parts: Vec<Part> });
+                out.builder.push(quote! { .multipart(#parts) });
+            } else {
+                out.args.push(quote! { #parts: Option<Vec<Part>> });
+                out.builder
+                    .push(quote! { .body(#parts.map(typed_openapi::Payload::Multipart)) });
+                out.notes.push(optional_note(&parts));
+            }
         }
     }
-    Ok(out)
+    Ok(())
+}
+
+/// What a wrapper's documentation says about the argument of a body the
+/// document leaves optional, because `None` could be read as an empty body, and
+/// no body is what it sends.
+fn optional_note(argument: &Ident) -> String {
+    format!("`{argument}` is optional: with `None` the request carries no body.")
 }
 
 /// What one parameter adds to a wrapper: an argument and the `Values` call that

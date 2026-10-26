@@ -1917,13 +1917,17 @@ fn json_body(
                 .claim(&spelling, "body")
                 .map_err(|clash| clashed(&clash, id, "property", name))?,
             name: name.clone(),
-            required: required && object.required.iter().any(|r| r == name),
+            required: object.required.iter().any(|r| r == name),
             scalar,
             format: under(format_of(&property, components), id, name)?,
             description: under(description_of(&property, components), id, name)?,
         });
     }
-    Ok(Body::JsonFields { media_type, fields })
+    Ok(Body::JsonFields {
+        media_type,
+        required,
+        fields,
+    })
 }
 
 /// A property of a body and the scalar its schema states, once every rule it

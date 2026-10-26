@@ -457,6 +457,14 @@ Three things are worth knowing:
   documentation says which parameter it does not carry and why. An array must
   declare its `items` inline: a `$ref` to an array schema is a
   `GenerateError::Unsupported` naming the parameter.
+- **A body the document leaves optional is an `Option` argument.** A body with
+  `required: true` is an argument of its type: `&T` for a JSON body, `Vec<u8>`
+  for one sent verbatim and `Vec<Part>` for a multipart body. A body without it
+  is `Option<&T>`, `Option<Vec<u8>>` or `Option<Vec<Part>>`, and `None` sends the
+  request with no body and no `Content-Type`, as the command line does when its
+  operator gives no flag and no file. A `Some` goes out as the body it holds. The
+  wrapper's own documentation says which. With the `builder` feature the body is
+  a setter that may be left out.
 - **Two values that reduce to one Rust word get one argument each.** A document
   may name a parameter `self` and another `Self`, or `ref` in the path and `Ref`
   in the query; a function signature binds each name once, so the later of the

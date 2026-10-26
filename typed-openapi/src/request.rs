@@ -2,16 +2,16 @@
 //!
 //! [`Invocation::new`] is the only way to make one, and it validates: an
 //! `Invocation` that exists names an operation, carries every required
-//! parameter, carries nothing the operation does not declare, and holds a body
-//! of the kind the operation asks for. Every value is held to the rules of its
-//! schema and is kept as it was parsed, so `+5` is `5`. Five refusals are of the
-//! request and not of the schema. A path value that is empty, `.` or `..` is
-//! refused, because a server reads it as a step along the path and not as a
-//! name. A header value is refused when a receiver that follows RFC 9110 would
-//! read another value, or another list, than the caller gave: a byte that
-//! [`http::HeaderValue`] refuses, a space or a tab at the start or the end of a
-//! value or of one item of a list, and in a header list a comma inside one item
-//! and an empty item.
+//! parameter, carries nothing the operation does not declare, holds a body of
+//! the kind the operation asks for, and holds one wherever the document
+//! requires one. Every value is held to the rules of its schema and is kept as
+//! it was parsed, so `+5` is `5`. Five refusals are of the request and not of
+//! the schema. A path value that is empty, `.` or `..` is refused, because a
+//! server reads it as a step along the path and not as a name. A header value
+//! is refused when a receiver that follows RFC 9110 would read another value,
+//! or another list, than the caller gave: a byte that [`http::HeaderValue`]
+//! refuses, a space or a tab at the start or the end of a value or of one item
+//! of a list, and in a header list a comma inside one item and an empty item.
 //! [`Invocation::request`] is then a rendering, not a decision. It refuses a
 //! base URL that holds userinfo or a query, because a request would send the one
 //! and drop the other, and it hands on the `http` crate's refusal of anything
@@ -696,7 +696,9 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
     match (op.body(), body) {
         (
             Body::None
-            | Body::JsonFields { .. }
+            | Body::JsonFields {
+                required: false, ..
+            }
             | Body::JsonWhole {
                 required: false, ..
             }
@@ -713,7 +715,8 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
         | (Body::Opaque { .. }, Some(Payload::Raw(_))) => Ok(()),
         (Body::None, Some(_)) => Err(ValueError::UnexpectedBody { op: name() }),
         (
-            Body::JsonWhole { required: true, .. }
+            Body::JsonFields { required: true, .. }
+            | Body::JsonWhole { required: true, .. }
             | Body::Multipart { required: true, .. }
             | Body::Opaque { required: true, .. },
             None,

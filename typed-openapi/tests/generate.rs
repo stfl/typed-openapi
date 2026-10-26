@@ -30,6 +30,7 @@ const CORRECTIONS: &str = concat!(
     "/tests/fixtures/corrections.yaml"
 );
 const CLI: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cli.yaml");
+const OPTIONAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/optional.yaml");
 
 /// A directory of this test's own, emptied first so that nothing it asserts
 /// about can be left over from a previous run.
@@ -270,6 +271,89 @@ fn the_argument_is_typed_by_the_entry_the_body_is_sent_under() {
     assert!(
         ops.contains("body: &crate::types::CreateThingBody"),
         "the wrapper takes no body of the type that was generated:\n{ops}"
+    );
+}
+
+/// A body the document leaves optional is an `Option` argument, of every kind,
+/// and `None` adds no body to the request: the command line sends none when its
+/// operator gives none, and the wrapper is the same call. `A7/docs/optbody.yaml`
+/// is `createReminder`, whose wrapper took a body that it had to be given.
+#[test]
+fn an_optional_body_is_an_option_argument_that_none_leaves_out() {
+    let dir = out("optional-bodies");
+    Settings::new(OPTIONAL)
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = read(&dir.join("src/ops.rs"));
+    let dense = dense(&ops);
+
+    for (what, argument, builder) in [
+        (
+            "a flat body",
+            "body:Option<&crate::types::CreateReminderBody>",
+            ".body(body.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json))",
+        ),
+        (
+            "a body that goes whole",
+            "body:Option<&crate::types::CreateExportBody>",
+            ".body(body.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json))",
+        ),
+        (
+            "a body sent verbatim",
+            "body:Option<Vec<u8>>",
+            ".body(body.map(typed_openapi::Payload::Raw))",
+        ),
+        (
+            "a multipart body",
+            "parts:Option<Vec<Part>>",
+            ".body(parts.map(typed_openapi::Payload::Multipart))",
+        ),
+    ] {
+        assert!(dense.contains(argument), "{what} is not optional:\n{ops}");
+        assert!(
+            dense.contains(builder),
+            "{what} is not left out by `None`:\n{ops}"
+        );
+    }
+    assert!(
+        ops.contains("`body` is optional: with `None` the request carries no body."),
+        "the wrapper does not say what `None` sends:\n{ops}"
+    );
+}
+
+/// A body the document requires stays the argument it was, so no signature of an
+/// adoption whose bodies are all required changes: the toy's are, and so is the
+/// fixture's `createLabel`, in which no property is.
+#[test]
+fn a_required_body_is_still_a_plain_argument() {
+    let dir = out("required-bodies");
+    layered().write_to(&dir).expect("the fixtures generate");
+    let toy = dense(&read(&dir.join("src/ops.rs")));
+    for (what, argument, builder) in [
+        (
+            "a flat body",
+            "body:&crate::types::Voucher",
+            ".json(crate::to_json(body)?)",
+        ),
+        ("a body sent verbatim", "body:Vec<u8>", ".raw(body)"),
+        ("a multipart body", "parts:Vec<Part>", ".multipart(parts)"),
+    ] {
+        assert!(toy.contains(argument), "{what} is not required");
+        assert!(toy.contains(builder), "{what} is not sent as it was");
+    }
+
+    let dir = out("required-flat-body");
+    Settings::new(OPTIONAL)
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = dense(&read(&dir.join("src/ops.rs")));
+    assert!(
+        ops.contains("body:&crate::types::CreateLabelBody"),
+        "a required flat body with no required property is optional"
+    );
+    assert!(
+        ops.contains("body:&crate::types::CreateTagBody"),
+        "a required flat body is optional"
     );
 }
 

@@ -551,6 +551,11 @@ pub enum Body {
         /// parameters included: `application/merge-patch+json` goes out as that.
         /// [`Body::media_type`] is the `Content-Type` that is sent.
         media_type: String,
+        /// Whether the document requires the body. It is the body's and not a
+        /// property's: [`Field::required`] says whether the schema requires a
+        /// property once there is a body, and a body that is not required is
+        /// left out of the request when nothing fills it in.
+        required: bool,
         /// The properties, one flag each, in document order.
         fields: Vec<Field>,
     },
@@ -906,7 +911,7 @@ impl Document {
     /// for the same document and no type changed. The crate's own tests trace
     /// the layout and fail on a change to a type that left the number where it
     /// was.
-    pub const MODEL_LAYOUT: u32 = 7;
+    pub const MODEL_LAYOUT: u32 = 8;
 
     /// The same reduction, already done and written down.
     ///
@@ -1363,7 +1368,9 @@ impl Field {
         renamed(&self.flag, &self.name)
     }
 
-    /// Whether the body's schema requires the property.
+    /// Whether the body's schema requires the property, whether or not the
+    /// document requires the body: a property of an optional body is required
+    /// of the body that is sent, and [`Body::JsonFields`] says if one has to be.
     #[must_use]
     pub fn required(&self) -> bool {
         self.required
