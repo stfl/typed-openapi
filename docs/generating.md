@@ -474,9 +474,29 @@ Three things are worth knowing:
 - **The generator emits from what the document describes, named or not.** A
   `$ref` to a named schema keeps that schema's name; a body or response an
   operation states inline is converted under its own `title`, or under a name
-  derived from the operation. `serde_json::Value` is left for a JSON body the
-  document states no schema for. `requestBody` `$ref`s are not followed, and
-  only `#/components/schemas/` references are.
+  derived from the operation. `serde_json::Value` is left for a JSON body or a
+  JSON response the document states no schema for. A `requestBody` that is a
+  `$ref` to `#/components/requestBodies/` is followed as the command line follows
+  it, a chain of references included, so the wrapper takes the type of the
+  component's schema and is optional where the component is. A schema that a
+  component states inline is a type for each operation that takes the component,
+  named after the operation. Under a `title` it is one type that all of them
+  take, and two operations that state different shapes under one `title` are
+  refused, since a name is one type.
+- **A wrapper answers with the type its success responses state.** A success
+  response is a status from `200` to `299` or the range `2XX`; `default` is not
+  read. A response that is a `$ref` to `#/components/responses/` is followed, a
+  chain of references included. The responses that have a JSON body are the
+  answer, and they have to agree: one schema, whether named or stated inline,
+  gives one type, and a `204` listed beside a `200` takes nothing from it. The
+  answer is `NoContent` when no success response has a JSON body: a `204`, a
+  response with no `content`, and `content` under a media type that is not JSON,
+  which the typed call cannot decode. A response that cannot be followed is
+  refused by name with the reference, and so are success responses that state
+  different schemas, with both statuses; `NoContent` accepts any body and drops
+  it, so it is never the answer to a response the generator could not read. The
+  repair for the second is an Overlay that gives the responses one schema or
+  removes one of them.
 - **A `content` key must be a media type.** A request body declared under a key
   with no `type/subtype` in it — `form-data` where `multipart/form-data` was
   meant — is a `LoadError` naming the operation and the key, rather than bytes
@@ -504,19 +524,19 @@ Three things are worth knowing:
   only". One schema serves a create and a read, so a `required` that lists `id`
   would make a type that a request cannot build. A type that a request body
   reaches does not require such a property, and the field is an `Option`: the
-  schema the body names or states, and every schema those refer to with a `$ref`.
+  schema the body names or states, behind `#/components/requestBodies/` or not,
+  and every schema those refer to with a `$ref`.
   A type that only responses reach keeps the document's `required`, because there
   it takes effect, so the generated type still refuses a response that lacks what
   the API promised. A property is `readOnly` as the command line reads it
   ([docs/cli.md](cli.md#flags)): marked, behind a `$ref` to a schema that is, or
   the `allOf` of one element that is. A schema that is an `allOf` is one type, so
   a property that the schema or any member declares read-only comes off the
-  `required` of the schema and of every member stated inline in it. Two limits. A
+  `required` of the schema and of every member stated inline in it. One limit: a
   member that is a `$ref` is a named schema, one type wherever it is used, so it
   keeps its own `required` unless it declares the property read-only itself: where
   it declares the property without `readOnly` and requires it, the composed type
-  requires it too. And a body that is a `$ref` to `#/components/requestBodies/` is
-  not followed, so what only such a body reaches keeps the document's `required`.
+  requires it too.
 - **A body the document leaves optional is an `Option` argument.** A body with
   `required: true` is an argument of its type: `&T` for a JSON body, `Vec<u8>`
   for one sent verbatim and `Vec<Part>` for a multipart body. A body without it

@@ -783,22 +783,43 @@ The generator makes the same decision for the types (`NotRequired` in
 `src/generate/types.rs`). A type that a request body reaches does not require
 the property, and a type that only responses reach keeps the document's
 `required`, because there it takes effect. A body reaches the schemas it names
-or states and every schema those refer to (`reached`), found on the schemas as
-`schemars` holds them, so an `example` that spells a `$ref` reaches nothing. The
-visitor reads a property as `read_only_of` does, in `schemars` types: the
-property is marked, it refers to a schema that `read_only_of` found read-only,
-or it is an `allOf` of one element that is. `tests/readonly.rs` runs every
-spelling through both roads, so the flag is gone exactly where the type stops
-requiring the property. A schema that is an `allOf` is one type in typify, so
-`NotRequired::declared` reads the properties that the schema and every member
-declare read-only, a member that is a `$ref` through the named schema it leads
-to, and `relax` takes each off the `required` of the schema and of every member
-stated inline in it. A member that is a `$ref` keeps its own `required`, because
-the named schema is one type wherever it is used, and a body that names it alone
-requires what it declares without `readOnly`. That is the first of two limits.
-The second is a body that is a `$ref` to `#/components/requestBodies/`: the
-generator follows none, so a type that only such a body reaches keeps the
-document's `required`.
+or states, behind `#/components/requestBodies/` or not, and every schema those
+refer to (`reached`), found on the schemas as `schemars` holds them, so an
+`example` that spells a `$ref` reaches nothing. The visitor reads a property as
+`read_only_of` does, in `schemars` types: the property is marked, it refers to a
+schema that `read_only_of` found read-only, or it is an `allOf` of one element
+that is. `tests/readonly.rs` runs every spelling through both roads, so the flag
+is gone exactly where the type stops requiring the property. A schema that is an
+`allOf` is one type in typify, so `NotRequired::declared` reads the properties
+that the schema and every member declare read-only, a member that is a `$ref`
+through the named schema it leads to, and `relax` takes each off the `required`
+of the schema and of every member stated inline in it. A member that is a `$ref`
+keeps its own `required`, because the named schema is one type wherever it is
+used, and a body that names it alone requires what it declares without
+`readOnly`.
+
+**The generator follows a reference where the reduction follows it, through the
+same function.** `resolve_request_body` in `src/schema.rs` reads a `requestBody`
+that is a `$ref`, a chain of them included. `Body::build` in the reduction and
+`json_body` in `src/generate/names.rs` both ask it, so the body a command line
+is built from and the type of a wrapper's argument are one entry of one
+`content` map. A copy of the reading in the generator would refuse a document at
+the bless that the command line serves, or type a wrapper from another entry
+than the request sends. A response is no part of a request, so the reduction
+reads none, and `resolve_response` is the generator's alone. `names::success`
+reads every success response, a status from `200` to `299` and the range `2XX`
+but not `default`, and the ones with a JSON body have to state one schema:
+`Answer` is compared as the document spells it, a `$ref` to one name or a schema
+that reads the same. Several schemas, or a response that cannot be followed, is
+a refusal that names the operation, the status and what was found. The
+alternative is `NoContent`, which deserialises any body and drops it, so it is
+the answer only where no success response has a JSON body: a `204`, no
+`content`, `content` that is not JSON. `Names::read` refuses one Rust name for
+two schemas. typify answers a name it holds with the type it holds, whatever the
+schema that asks, so the same id does not say that the schema is the same, and
+`Claims::record` lets a second claimant through only when it asks for the same
+type with the same schema: a component that two operations share, under a
+`title`.
 
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command

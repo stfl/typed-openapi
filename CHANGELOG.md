@@ -978,11 +978,9 @@ the crate follows [Semantic Versioning][semver].
     schema and of every member stated inline in it, whichever member lists it.
     Repair: code that builds such a type writes `Some(id)` or leaves the field
     out, and code that reads it handles `None`. Run the bless step again and
-    commit `types.rs`. Two limits. A member that is a `$ref` keeps its own
+    commit `types.rs`. One limit: a member that is a `$ref` keeps its own
     `required` unless it declares the property read-only itself, because a named
-    schema is one type wherever it is used. And a type that only a body behind
-    `#/components/requestBodies/` reaches keeps the document's `required`,
-    because the generator follows no such body.
+    schema is one type wherever it is used.
   - A `readOnly` property is read for no rule of a flag, so a `multipleOf` of 0
     on one loads, where it was `LoadError::Unrunnable`. A `pattern` that no
     engine runs on one is still refused, as `LoadError::UnrunnablePattern`,
@@ -1360,6 +1358,52 @@ the crate follows [Semantic Versioning][semver].
   `generate` feature gains `pulldown-cmark` 0.11, which is the version rustdoc
   is built with, and its dependency `unicase`; a build that does not turn the
   feature on compiles neither.
+- **A wrapper answers with the type its success responses state, and a request
+  body can be a component.** The generator read the first status from `200` to
+  `299` of an operation, in document order, and typed its answer only when that
+  response was written on the operation with a JSON body. Any other success
+  response made the wrapper return `NoContent`, which accepts a body and drops
+  it: a response that is a `$ref` to `#/components/responses/`, the range `2XX`,
+  and a `200` listed after a `204`. `api.get_thing(5)?.send(&client)?` succeeded
+  and the caller never saw the answer. The generator reads every success response, which
+  is a status from `200` to `299` and the range `2XX`, and follows a `$ref` to
+  `#/components/responses/`, a chain of references included. `default` is not
+  read.
+  - A wrapper that returned `NoContent` for such a response returns its body
+    type: `Thing` for a response that is a `$ref` to a component whose schema is
+    `Thing`, `Vec<Thing>` for a `2XX` that states an array of them. A response
+    that states a JSON body and no schema returns `serde_json::Value`. Code that
+    names `NoContent` for such a call, as a return type or a pattern, no longer
+    compiles. Repair: run the bless step again, commit `ops.rs` and `types.rs`,
+    and name the type of the body.
+  - The responses that have a JSON body have to agree. Two that state different
+    schemas leave the wrapper with no one type, so the bless is refused with
+    `GenerateError::Operation` around `GenerateError::Unsupported`, naming the
+    operation, both statuses and what each states. The first status of the two
+    used to decide, silently. Repair: an Overlay that gives both one schema, or
+    that removes the response the wrapper should not read. Two responses that
+    state the same schema, named or inline, are one answer, as sevDesk's two
+    operations with a `200` and a `201` are.
+  - A success response that cannot be followed (a reference to a response that
+    the document does not hold, one that points inside a component, or a cycle)
+    is refused by name with the reference, where the wrapper returned
+    `NoContent`. Repair: an Overlay that corrects or removes the reference.
+  - `NoContent` stays the answer where no success response has a JSON body: a
+    `204`, a response with no `content`, and `content` under a media type that
+    is not JSON.
+  - A `requestBody` that is a `$ref` to `#/components/requestBodies/` is
+    followed, as the command line has always followed it, so the bless is not
+    refused with "requestBody $refs are not followed". The wrapper takes the
+    type of the component's schema, and its argument is optional where the
+    component is not `required`. The reduction and the generator read a
+    `requestBody` through one function, so a reference one follows is a reference
+    the other follows. A type that only such a body reaches stops requiring its
+    `readOnly` properties, as one that a body stated on the operation reaches
+    does. A schema that a component states inline is a type for each operation
+    that takes the component, named after the operation, and under a `title` it
+    is one type that all of them take. Two operations that state different
+    schemas under one `title` are refused as they were. Repair: none. Run the
+    bless step again and commit `ops.rs` and `types.rs`.
 
 ### Removed
 
