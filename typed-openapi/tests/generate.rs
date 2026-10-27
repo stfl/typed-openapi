@@ -4586,12 +4586,12 @@ fn json_bodies_that_state_different_schemas_are_refused_by_name() {
         let error = answering("answer-two", responses).expect_err(label);
         let reason = reason_of(&error, "getThing");
         // The body that came first in the document is named first.
-        let mut from = 0;
+        let mut rest = reason.as_str();
         for word in words {
-            let at = reason[from..]
-                .find(word)
-                .unwrap_or_else(|| panic!("{label}: no `{word}` after byte {from} in\n{reason}"));
-            from += at + word.len();
+            let (_, after) = rest.split_once(word).unwrap_or_else(|| {
+                panic!("{label}: no `{word}` after the ones before it in\n{reason}")
+            });
+            rest = after;
         }
         assert!(
             reason.contains("do not agree on one JSON body"),
