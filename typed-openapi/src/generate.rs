@@ -694,8 +694,9 @@ pub enum GenerateError {
     /// declares, or the request body or response that an operation states
     /// inline. The cause is the text of the panic, which is typify's.
     ///
-    /// The panic hook of the process runs first, as it does for every panic that
-    /// is caught, so the text of the cause is on standard error too.
+    /// The panic hook of the process runs for each panic that is caught, and the
+    /// search for the schema converts it again, so the text of the cause is on
+    /// standard error twice before the refusal is reported.
     #[error("typify panicked while it built the Rust type of {schema}")]
     Panicked {
         /// A sentence naming the schema: `the schema `Thing``, or the request

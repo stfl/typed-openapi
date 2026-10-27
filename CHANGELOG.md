@@ -1554,9 +1554,10 @@ the crate follows [Semantic Versioning][semver].
     `GenerateError::Panicked { schema, message }`: `schema` names the schema
     that was being converted (the one the document declares, or the request body
     or the response that an operation states inline), and `message` is what
-    typify said, which names the values. The process's panic hook runs first, as
-    it does for any caught panic. Repair: an Overlay that removes or renames one
-    of the values, or the shape that the message names.
+    typify said, which names the values. The process's panic hook prints that
+    text on standard error twice before the refusal, because the search for the
+    schema converts it again. Repair: an Overlay that removes or renames one of
+    the values, or the shape that the message names.
   - A type given to `Settings::replace` that is no Rust path (`not a path`,
     `cents::`, `&str`) made typify panic with a message about its own source. It
     is `GenerateError::Unsupported`: `` `cents::`, named for `format: money`,
