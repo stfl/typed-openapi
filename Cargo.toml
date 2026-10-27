@@ -51,6 +51,9 @@ openapiv3 = "2.2"
 postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 prettyplease = "0.3"
 proc-macro2 = "1"
+# The version rustdoc is built with, not the newest: 0.13 reads `- [ ]     x` as
+# text and rustdoc, on 0.11, runs it as code.
+pulldown-cmark = { version = "0.11", default-features = false }
 quote = "1"
 regress = "0.12"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots"] }

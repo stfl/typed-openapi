@@ -147,6 +147,7 @@ generate = [
     "dep:heck",
     "dep:prettyplease",
     "dep:proc-macro2",
+    "dep:pulldown-cmark",
     "dep:quote",
     "dep:schemars",
     "dep:syn",
@@ -176,6 +177,10 @@ postcard = { workspace = true }
 prettyplease = { workspace = true, optional = true }
 # The token streams the generator builds its code in.
 proc-macro2 = { workspace = true, optional = true }
+# Finds the code blocks in a vendor's description, in any Markdown container, so
+# that none is left for `cargo test --doc`. The version is the one rustdoc is
+# built with, because two versions read the same Markdown differently.
+pulldown-cmark = { workspace = true, optional = true }
 # Writes the generated wrappers as Rust syntax with the values spliced in.
 quote = { workspace = true, optional = true }
 # Runs a document's `pattern` on the engine typify puts in a generated newtype.

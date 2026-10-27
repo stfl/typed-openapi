@@ -124,6 +124,45 @@ commit, to review and to remember.
 
 [`Summary`]: https://docs.rs/typed-openapi/latest/typed_openapi/summary/struct.Summary.html
 
+### The vendor's descriptions
+
+A `summary` or a `description` in the vendor's document is a doc comment in
+`src/types.rs` or `src/ops.rs`, and `cargo test --doc` and `cargo doc` read it as
+Markdown. The generator keeps the words and changes the Markdown where it would
+run, stop your build or put the vendor's markup on your pages:
+
+| The vendor wrote | The doc comment holds |
+|---|---|
+| a code block that rustdoc reads as Rust: a fence with no language or with `rust`, `rust2018`, `ignore`, `{.json}` or `ignore-wasm32`, at the top or in a block quote or a list item | the same block, with the language `text` |
+| a fence that names a language rustdoc leaves alone, such as `json` | the fence as written |
+| an indented code block | the text, indented by three columns at most, which is no code block |
+| a `<` outside a code block and a code span, which includes an autolink `<https://…>` | `\<`, which the page shows as `<` |
+| a link or an image to a scheme other than `http`, `https` and `mailto`, or a reference to one: `[a](javascript:…)`, `![a](data:…)` | the same text with a backslash before the `[`, which the page shows as the characters it is written in |
+| a character that changes the direction of text (U+202A to U+202E, U+2066 to U+2069) | its code point, `\u{202e}`, because the compiler refuses the character in a comment |
+| a carriage return, alone or before a line feed | a line break |
+
+An indented sample in a block quote, a list item or a footnote is a paragraph
+on your page, as it is at the top of a description: its lines join and its first
+character is read as Markdown. A fence is the way to keep a sample as a sample.
+A link that stays a link is one to a page (`http:`, `https:`), to a mail
+(`mailto:`) or to a place the page already has (a relative path, `#fragment`),
+and a link to a script is repaired with an `https` link, in an Overlay.
+
+A doc comment of several lines is written as one `///` line for each line of it.
+That is a description of several lines, and the doc of each wrapper in `ops.rs`,
+which holds the generator's paragraphs after the summary even when the summary is
+one line. `rustfmt` leaves such a line as it stands under its stable options,
+`hard_tabs` and `tab_spaces` among them, so what rustdoc reads is the text the
+generator checked. `wrap_comments` and the other options that rewrite doc
+comments are nightly options, and the guarantee does not cover them. Under
+`wrap_comments` `rustfmt` can also refuse a generated file, and the bless stops
+there with `rustfmt rejected the generated …` (`GenerateError::RustfmtFailed`).
+A `rustfmt.toml` in the directory of the generated files that leaves the option
+out ends that, because `rustfmt` reads the nearest one.
+
+The command line's `--help` reads the model and not the doc comments, so it shows
+the document's text as written.
+
 ## `Settings`
 
 ```rust

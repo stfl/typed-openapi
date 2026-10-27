@@ -11,8 +11,10 @@
 # parameters named after Rust keywords, two names that spell one flag, a property
 # whose name has no letters in it, a description whose list markers Markdown
 # reads as code, a body that is an array, a body with no properties, five
-# parameters this crate cannot spell, and three spellings of `help`, which is
-# clap's before it is anyone's. The vocabulary is deliberately nothing
+# parameters this crate cannot spell, three spellings of `help`, which is
+# clap's before it is anyone's, and a description that hides a code block in
+# a Markdown container, or holds markup, a character that changes the
+# direction of text, or a carriage return. The vocabulary is deliberately nothing
 # this repository uses anywhere else, because half of what is being tested is
 # whether a name survives the trip from the document to a flag and to Rust.
 #
@@ -217,7 +219,18 @@ paths:
   /wadding/tallies:
     post:
       operationId: tallyWadding
-      summary: Post a tally of cones used
+      # A summary is where a wrapper's doc starts, so a code block in a Markdown
+      # container and a link to a script are as much the vendor's here as in a
+      # description.
+      summary: |
+        Post a tally of cones used
+
+        > Example request:
+        > ```
+        > curl https://kiln.example/wadding/tallies
+        > ```
+
+        The units are on [the tally sheet](javascript:alert(1)).
       # A body that is an array at the top level.
       requestBody:
         required: true
@@ -233,7 +246,12 @@ paths:
   /glaze-recipes:
     post:
       operationId: fileGlazeRecipe
-      summary: File a glaze recipe
+      summary: |
+        File a glaze recipe
+
+        - ```ignore-wasm32
+          {"cone": "04"}
+          ```
       # An object that declares no properties at all.
       requestBody:
         required: true
@@ -311,3 +329,67 @@ components:
         Anything longer than that is written out in full:
 
             soak=90m
+    # Five ways to put a code block where `cargo test --doc` finds it and runs
+    # it: a fence in a block quote, a fence opened on the line of a list marker,
+    # an indented block in a block quote, an info string that is only a class,
+    # and one that skips a target and runs on every other. Beside them, the
+    # shapes that stop the compiler, `rustfmt` or the page: markup, a link to a
+    # script, a character that changes the direction of text (written as an
+    # escape, so that this file holds none), and a carriage return alone. Two
+    # summaries above hold a block and a link too. Nothing refers to it.
+    Placard:
+      type: object
+      properties:
+        quoted:
+          type: string
+          description: |
+            Posted on the kiln door:
+
+            > Example request:
+            > ```
+            > curl https://kiln.example/firings
+            > ```
+        listed:
+          type: string
+          description: |
+            Before every firing:
+
+            - ```
+              check the spyhole
+              ```
+        quoted_indent:
+          type: string
+          description: |
+            Quoted and indented:
+
+            >     curl https://kiln.example/firings
+        classed:
+          type: string
+          description: |
+            A reading, with a class on its fence:
+
+            ```{.json}
+            {"cone": "06"}
+            ```
+        targeted:
+          type: string
+          description: |
+            A reading, ignored on one target:
+
+            ```ignore-wasm32
+            {"cone": "04"}
+            ```
+        markup:
+          type: string
+          description: "<blink>Do not open</blink> while the kiln is hot."
+        linked:
+          type: string
+          description: |
+            Read [the log](javascript:alert(1)), [the chart](JaVaScRiPt:alert(1)),
+            [the notes](&#106;avascript:alert(1)) and ![the photo](data:text/html,x),
+            or [the schedule][sched], and keep [the rules](https://kiln.example/rules)
+            and [the sheet](./sheet) by you.
+
+            [sched]: vbscript:msgbox(1)
+        directed: { type: string, description: "Marked \u202eRTL\u202c on the lid." }
+        returned: { type: string, description: "Two lines\rjoined by a lone carriage return." }

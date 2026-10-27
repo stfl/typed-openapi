@@ -31,6 +31,7 @@ const CORRECTIONS: &str = concat!(
 );
 const CLI: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cli.yaml");
 const OPTIONAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/optional.yaml");
+const HOSTILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hostile.yaml");
 
 /// A directory of this test's own, emptied first so that nothing it asserts
 /// about can be left over from a previous run.
@@ -1638,19 +1639,24 @@ fn every_string_newtype_prints_and_none_of_them_twice() {
 }
 
 /// Descriptions in every shape a vendor writes prose in, including the four
-/// that Markdown turns into code and rustdoc then compiles.
+/// that Markdown turns into code and rustdoc then compiles, and the five that a
+/// reading of the text line by line misses.
+///
+/// Three of the five are hidden by a Markdown container, which puts a block where
+/// no line starts with a fence or with four spaces: a fence inside a block quote,
+/// a fence opened on a list-marker line, and an indented block inside a block
+/// quote. The other two stand at the top and are missed by a reading that looks
+/// for a word after the fence: an info string that is only a class (`{.json}`),
+/// and one that names a target to skip (`ignore-wasm32`).
+///
+/// Each carries a word in capitals that appears nowhere else, so that a test
+/// finds the one doc comment it is about.
 ///
 /// The hanging list marker is carried three times because no one position
 /// stands for the others: under a paragraph line and under a blank line in a
 /// property's description, and under a paragraph line in an operation's
-/// summary. rustc strips a leading `*` out of some `/* */` comments and leaves
-/// it in others, so what the gap between marker and content has to survive is
-/// not the same in all three, and the one set off by a blank line is where the
-/// gap's cap and the rewritten bullet have to hold together.
-///
-/// The asterisk-bulleted list beside them is the plain case of the same rustc
-/// rule: a list whose every line carries a marker at one column is the shape it
-/// eats.
+/// summary. The asterisk-bulleted list beside them is a list in the other
+/// spelling of its marker, which a doc comment holds as the vendor wrote it.
 const PROSE: &str = r##"
 openapi: 3.0.3
 info: { title: Prose, version: "1.0" }
@@ -1664,6 +1670,10 @@ paths:
         *     A summary the vendor hung from a marker.
 
             A summary the vendor indented.
+
+        > ```
+        > SUMMARY-FENCE is not Rust
+        > ```
       responses:
         "200":
           description: OK
@@ -1754,26 +1764,82 @@ components:
           type: string
           description: |
             A description that mentions //! in passing.
+        ruled:
+          type: string
+          description: |
+            A paragraph, and a rule that is set three columns in:
+               ***
+        quoted:
+          type: string
+          description: |
+            A note in a block quote:
+
+            > Example request:
+            > ```
+            > QUOTED-FENCE is not Rust
+            > ```
+        listed:
+          type: string
+          description: |
+            Steps:
+
+            - ```
+              LISTED-FENCE is not Rust either
+              ```
+        quotedindent:
+          type: string
+          description: |
+            Quoted and indented:
+
+            >     QUOTED-INDENT is not Rust
+        classed:
+          type: string
+          description: |
+            An example with a class on its fence:
+
+            ```{.json}
+            {"CLASSED-FENCE": "1"}
+            ```
+        targeted:
+          type: string
+          description: |
+            An example ignored on one target:
+
+            ```ignore-wasm32
+            {"TARGETED-FENCE": "2"}
+            ```
 "##;
 
 /// Every doc comment in `source`, verbatim and in its own column, on items
 /// that depend on nothing.
 ///
-/// The column is the point. rustc reconstructs a `/* */` comment's value by
-/// stripping the indentation its lines share, so where the lines sit is half of
-/// what decides whether the vendor's second paragraph is prose or a code block.
 /// Copying the bytes and their positions is what makes this a fair question to
 /// put to the doctest runner; generating a crate it could compile directly
-/// would mean handing it serde as well, and the answer would be the same.
+/// would mean handing it serde as well, and the answer would be the same. A
+/// `/** */` comment is copied as well as a run of `///` lines, although the
+/// generator writes only the second: the column of a block comment's lines is
+/// half of what decides whether a paragraph in it is code, so a generator that
+/// wrote one would be judged as the comment would be run.
+///
+/// A `#[doc = "…"]` attribute is no comment, and a copy that left it out would
+/// hand the judges less than the file holds, so a file that has one fails here.
 fn doc_comments_alone(source: &str) -> String {
+    if let Some(attribute) = source
+        .lines()
+        .find(|line| line.trim_start().starts_with("#[doc"))
+    {
+        panic!(
+            "a doc attribute stands in the file, and the judges are given comments: {attribute}"
+        );
+    }
     let mut out = String::from("pub struct Docs {\n");
     let mut fields = 0;
     let mut block = false;
     let mut carrying = false;
     for line in source.lines() {
         let trimmed = line.trim_start();
-        let is_doc = block || trimmed.starts_with("/**") || trimmed.starts_with("///");
-        if is_doc {
+        let in_comment = block || trimmed.starts_with("/**") || trimmed.starts_with("///");
+        if in_comment {
             out.push_str(line);
             out.push('\n');
             block = (block || trimmed.starts_with("/**")) && !trimmed.ends_with("*/");
@@ -1794,9 +1860,9 @@ fn doc_comments_alone(source: &str) -> String {
 /// makes a code block out of two shapes of ordinary prose: a run of lines
 /// indented four spaces, and a fence naming no language. Both are things a
 /// vendor writes without meaning Rust, and neither is reachable by a lint
-/// allowance — a doctest is executed, not linted. So the comments are handed to
-/// the doctest runner, which is the only thing that answers the question
-/// properly.
+/// allowance — a doctest is executed, not linted. So the comments of `PROSE`
+/// are handed to the doctest runner, which is the only thing that answers the
+/// question properly.
 #[test]
 fn a_vendors_prose_carries_nothing_rustdoc_will_run() {
     let dir = out("prose");
@@ -1813,19 +1879,161 @@ fn a_vendors_prose_carries_nothing_rustdoc_will_run() {
             comments.contains("///") || comments.contains("/**"),
             "{file}: no vendor prose was extracted, so this proves nothing"
         );
-        let path = wrote(&dir, alone, &comments);
-        let ran = std::process::Command::new("rustdoc")
-            .args(["--test", "--edition", "2024"])
-            .arg(&path)
-            .output()
-            .expect("rustdoc is on PATH beside the rustfmt a bless step already needs");
-        let said = String::from_utf8_lossy(&ran.stdout);
-        let complained = String::from_utf8_lossy(&ran.stderr);
+        let said = rustdoc_tests(&dir, alone, &comments);
         assert!(
             said.contains("running 0 tests"),
-            "rustdoc found something to run in {file}:\n{said}{complained}\n{comments}"
+            "rustdoc found something to run in {file}:\n{said}\n{comments}"
         );
     }
+}
+
+/// What `rustdoc --test` says about `comments`, which is a file of doc comments
+/// on items that depend on nothing: the tests it found, and what it said about
+/// each.
+fn rustdoc_tests(dir: &Path, name: &str, comments: &str) -> String {
+    let path = wrote(dir, name, comments);
+    let ran = std::process::Command::new("rustdoc")
+        .args(["--test", "--edition", "2024"])
+        .arg(&path)
+        .output()
+        .expect("rustdoc is on PATH beside the rustfmt a bless step already needs");
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&ran.stdout),
+        String::from_utf8_lossy(&ran.stderr)
+    )
+}
+
+/// Whether `rustc` accepts `comments`, which is a file of doc comments on items
+/// that depend on nothing, and what it said when it did not.
+fn rustc_accepts(dir: &Path, name: &str, comments: &str) -> Result<(), String> {
+    let path = wrote(dir, name, comments);
+    let compiled = std::process::Command::new("rustc")
+        .args([
+            "--edition",
+            "2024",
+            "--crate-type",
+            "lib",
+            "--emit=metadata",
+        ])
+        .arg("--out-dir")
+        .arg(dir)
+        .arg(&path)
+        .output()
+        .expect("rustc is on PATH beside the rustfmt a bless step already needs");
+    if compiled.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&compiled.stderr).into_owned())
+    }
+}
+
+/// The page rustdoc renders for `Docs`, the one item of `comments`.
+fn rustdoc_page(dir: &Path, name: &str, comments: &str) -> String {
+    let path = wrote(dir, name, comments);
+    let site = dir.join("site");
+    let ran = std::process::Command::new("rustdoc")
+        .args(["--edition", "2024", "--crate-type", "lib", "--crate-name"])
+        .arg("docs")
+        .arg("-o")
+        .arg(&site)
+        .arg(&path)
+        .output()
+        .expect("rustdoc is on PATH beside the rustfmt a bless step already needs");
+    assert!(
+        ran.status.success(),
+        "rustdoc stopped on the comments:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    read(&site.join("docs/struct.Docs.html"))
+}
+
+/// Whether `line` is a `///` doc comment line, in whatever column.
+fn is_doc(line: &str) -> bool {
+    line.trim_start().starts_with("///")
+}
+
+/// The doc comment that holds `marker`, as rustdoc is handed it: the text of the
+/// run of `///` lines the marker is on, less the indentation that all of its
+/// lines share.
+///
+/// A doc comment is the unit these tests assert on. The same words in some
+/// other item's comment would pass a search of the whole file.
+fn doc_with(source: &str, marker: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| line.contains(marker))
+        .unwrap_or_else(|| panic!("no line holds `{marker}`:\n{source}"));
+    assert!(
+        is_doc(lines[at]),
+        "`{marker}` is in no `///` comment:\n{source}"
+    );
+    let from = lines[..at]
+        .iter()
+        .rposition(|line| !is_doc(line))
+        .map_or(0, |apart| apart + 1);
+    let to = at + lines[at..].iter().take_while(|line| is_doc(line)).count();
+    let text: Vec<&str> = lines[from..to]
+        .iter()
+        .map(|line| line.trim_start().strip_prefix("///").unwrap_or(line))
+        .collect();
+    let shared = text
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start_matches(' ').len())
+        .min()
+        .unwrap_or(0);
+    text.iter()
+        .map(|line| line.get(shared..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A document that carries each description in the three places a generated
+/// doc comment is written: a property `p0` on (a field, four columns in), a
+/// schema `S0` on (a type, none in) and an operation `o0` on (a method, four
+/// in). Only the first `kinds` of them are carried as types and as operations,
+/// because each is a good deal of generated code.
+fn described(descriptions: &[String], kinds: usize) -> String {
+    let properties: serde_json::Map<String, serde_json::Value> = descriptions
+        .iter()
+        .enumerate()
+        .map(|(at, text)| {
+            (
+                format!("p{at}"),
+                json!({ "type": "string", "description": text }),
+            )
+        })
+        .collect();
+    let mut schemas = serde_json::Map::new();
+    schemas.insert(
+        "Thing".to_owned(),
+        json!({ "type": "object", "properties": properties }),
+    );
+    let mut paths = serde_json::Map::new();
+    for (at, text) in descriptions.iter().take(kinds).enumerate() {
+        schemas.insert(
+            format!("S{at}"),
+            json!({ "type": "string", "description": text }),
+        );
+        paths.insert(
+            format!("/o{at}"),
+            json!({ "get": {
+                "operationId": format!("o{at}"),
+                "summary": text,
+                "responses": { "200": { "description": "OK" } }
+            } }),
+        );
+    }
+    json!({
+        "openapi": "3.0.3",
+        "info": { "title": "Described", "version": "1.0" },
+        "servers": [{ "url": "http://localhost:9999" }],
+        "paths": paths,
+        "components": { "schemas": schemas }
+    })
+    .to_string()
 }
 
 /// What capping the indentation costs, stated where it can be seen: a nested
@@ -1863,7 +2071,7 @@ fn prose_that_was_never_code_is_still_prose() {
         "a line mentioning a doc comment did not survive:\n{types}"
     );
     assert!(
-        types.contains("-    the content of that item."),
+        types.contains("*    the content of that item."),
         "a hanging list item lost its marker, or kept the gap that opens a code \
          block inside it:\n{types}"
     );
@@ -1872,23 +2080,1041 @@ fn prose_that_was_never_code_is_still_prose() {
         "an ordered marker is a list marker too:\n{types}"
     );
     assert!(
-        types.contains("- one item under an asterisk") && types.contains("- and a second one"),
-        "a list the vendor bulleted with asterisks is spelled with a bullet \
-         rustc leaves alone:\n{types}"
-    );
-    assert!(
-        !types.contains("* one item under an asterisk"),
-        "an asterisk bullet survives into the comment rustc eats it out of:\n{types}"
+        types.contains("* one item under an asterisk") && types.contains("* and a second one"),
+        "a list the vendor bulleted with asterisks is spelled as they spelled it:\n{types}"
     );
 
     // The same rule reaching a wrapper's doc, where the vendor's prose is a
-    // summary rather than a property's description. The two positions differ in
-    // what rustc does with them afterwards, so neither stands in for the other.
+    // summary rather than a property's description. A wrapper's doc has the
+    // generator's paragraphs after the summary, so neither place stands in for
+    // the other.
     let ops = read(&dir.join("src/ops.rs"));
     assert!(
-        ops.contains("-    A summary the vendor hung from a marker."),
+        ops.contains("*    A summary the vendor hung from a marker."),
         "a hanging list item in a summary was left as the vendor wrote it:\n{ops}"
     );
+}
+
+/// The five shapes that a reading of the text line by line does not see. Each
+/// fence comes out naming a language that rustdoc leaves alone, in the container
+/// it was written in, and the indented block in a quote, which has no word to
+/// change, comes out with its indentation capped, as a paragraph. In each the
+/// words are the vendor's.
+///
+/// The exact comment is asserted, one per shape, and not a search of the file:
+/// a fence rewritten in some other item's comment would satisfy a search.
+#[test]
+fn a_fence_inside_a_container_names_a_language_rustdoc_leaves_alone() {
+    let dir = out("prose-containers");
+    Settings::new(wrote(&dir, "document.yaml", PROSE))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert_eq!(
+        doc_with(&types, "QUOTED-FENCE"),
+        "A note in a block quote:\n\n> Example request:\n> ```text\n> QUOTED-FENCE is not Rust\n> ```",
+        "a fence in a block quote"
+    );
+    assert_eq!(
+        doc_with(&types, "LISTED-FENCE"),
+        "Steps:\n\n- ```text\n  LISTED-FENCE is not Rust either\n  ```",
+        "a fence opened on the line of a list marker"
+    );
+    assert_eq!(
+        doc_with(&types, "CLASSED-FENCE"),
+        "An example with a class on its fence:\n\n```text\n{\"CLASSED-FENCE\": \"1\"}\n```",
+        "an info string that is only a class"
+    );
+    assert_eq!(
+        doc_with(&types, "TARGETED-FENCE"),
+        "An example ignored on one target:\n\n```text\n{\"TARGETED-FENCE\": \"2\"}\n```",
+        "an info string that skips a target and runs on every other"
+    );
+    assert_eq!(
+        doc_with(&types, "QUOTED-INDENT"),
+        "Quoted and indented:\n\n>    QUOTED-INDENT is not Rust",
+        "an indented block in a block quote has no info string to change, so \
+         its indentation is capped as everywhere else"
+    );
+    assert!(
+        doc_with(&read(&dir.join("src/ops.rs")), "SUMMARY-FENCE")
+            .contains("> ```text\n> SUMMARY-FENCE is not Rust\n> ```"),
+        "a fence in a block quote in an operation's summary"
+    );
+}
+
+/// What the vendor indented is capped at three columns, wherever it stands, and
+/// what the vendor fenced is theirs: a sample is not capped. A tab at the start
+/// of a line is four columns, as Markdown counts it, so a sub-item that is
+/// indented by a tab is still a sub-item.
+#[test]
+fn what_is_indented_is_capped_and_what_is_fenced_is_kept() {
+    let descriptions = [
+        "A list:\n\n- TABBED\n\t- b\n".to_owned(),
+        format!("Quoted:\n\n>{}DEEP-QUOTE\n", " ".repeat(30)),
+        "Before:\n\n- ```text\n  * STAR-IN-ITEM is kept\n        DEEP-IN-ITEM is no code\n  ```\n"
+            .to_owned(),
+        "```json\n* STAR-AT-TOP\n      DEEP-AT-TOP\n```\n".to_owned(),
+    ];
+    let dir = out("prose-capped");
+    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 0)))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert_eq!(doc_with(&types, "TABBED"), "A list:\n\n- TABBED\n   - b");
+    assert_eq!(doc_with(&types, "DEEP-QUOTE"), "Quoted:\n\n>    DEEP-QUOTE");
+    assert_eq!(
+        doc_with(&types, "STAR-IN-ITEM"),
+        "Before:\n\n- ```text\n  * STAR-IN-ITEM is kept\n        DEEP-IN-ITEM is no code\n  ```"
+    );
+    assert_eq!(
+        doc_with(&types, "STAR-AT-TOP"),
+        "```json\n* STAR-AT-TOP\n      DEEP-AT-TOP\n```"
+    );
+}
+
+/// Hand the doc comments of the generated `src/types.rs` and `src/ops.rs` in `dir`
+/// to `rustdoc --test`, and fail naming the file in which it finds a test to run.
+///
+/// `name` keeps the files this writes apart from those of another call that
+/// shares `dir`.
+fn assert_nothing_runs(dir: &Path, name: &str) {
+    for file in ["types", "ops"] {
+        let comments = doc_comments_alone(&read(&dir.join(format!("src/{file}.rs"))));
+        let said = rustdoc_tests(dir, &format!("{name}_{file}.rs"), &comments);
+        assert!(
+            said.contains("running 0 tests"),
+            "rustdoc found something to run in src/{file}.rs:\n{}",
+            said.lines().take(40).collect::<Vec<_>>().join("\n")
+        );
+    }
+}
+
+/// Whether `source` holds no `/** */` comment: a description is written as `///`
+/// lines, which `rustfmt` and rustc leave as they stand.
+fn no_block_comment(source: &str) -> bool {
+    !source
+        .lines()
+        .any(|line| line.trim_start().starts_with("/**"))
+}
+
+/// A star in front of every line of a description is not taken out of it.
+///
+/// rustc rebuilds the text of a `/* */` comment by taking a column of stars out
+/// when every line it counts starts with one, and a thematic break `***`, a line
+/// that opens with `**bold**` and a paragraph that is bold from its first word are
+/// such lines. What is left of a line after that is another line: `**     code`
+/// is then `*     code`, a list item that holds an indented block, and a
+/// paragraph above a rule is left four columns in. A `///` line is read as
+/// written, so each description below comes out as its own lines, with nothing
+/// to run and nothing missing.
+#[test]
+fn a_star_in_front_of_every_line_of_a_description_is_left_where_it_is() {
+    let descriptions = [
+        "**Note** text NOTE-LINE\n**     let _ = 1;\n".to_owned(),
+        "Para RULED-ONE.\n   ***\n".to_owned(),
+        "Para RULED-TWO.\n   ***\n   ***\n".to_owned(),
+        "Para RULED-BOLD.\n  **bold** a\n  **bold** b\n".to_owned(),
+        "* STARRED-ALL\n* b\n".to_owned(),
+        "**First** PLAIN-FIRST\n   ***\n".to_owned(),
+    ];
+    let dir = out("prose-stars");
+    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    for file in ["types", "ops"] {
+        let source = read(&dir.join(format!("src/{file}.rs")));
+        assert!(no_block_comment(&source), "{file}.rs holds a block comment");
+    }
+    for (description, marker) in descriptions.iter().zip([
+        "NOTE-LINE",
+        "RULED-ONE",
+        "RULED-TWO",
+        "RULED-BOLD",
+        "STARRED-ALL",
+        "PLAIN-FIRST",
+    ]) {
+        assert_eq!(
+            doc_with(&types, marker),
+            description.trim_end(),
+            "{marker}: the lines the vendor wrote"
+        );
+    }
+    assert_nothing_runs(&dir, "stars");
+}
+
+/// A `"` that opens on one line and closes on a later one is not a reason for a
+/// line to move.
+///
+/// `rustfmt` takes the text between such quotes for a string, and lays out the
+/// body of a `/* */` comment by leaving a line inside a string at its own column
+/// and putting every other line at the column of the item: the paragraphs of a
+/// description come out four columns in and the lines inside the quotes at none,
+/// which makes the paragraphs code. A `///` line is left where it is, so the
+/// lines of each description below come out as they were written, as a type's
+/// doc, a field's and a wrapper's.
+#[test]
+fn a_quote_that_runs_over_a_line_break_leaves_every_line_where_it_is() {
+    let descriptions = [
+        "A \"quote that\nspans the lines\n\n   and closes\" later. OVER-LINES".to_owned(),
+        "First paragraph. STRAY\n\nA stray \" in the second.\nAnd a third line.\n\nAnd a fourth paragraph."
+            .to_owned(),
+        "Shown as `\"` in a span. IN-A-SPAN\n\nAnd then this paragraph.".to_owned(),
+    ];
+    let dir = out("prose-quotes");
+    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert!(no_block_comment(&types), "a description is a block comment");
+    for (description, marker) in descriptions
+        .iter()
+        .zip(["OVER-LINES", "STRAY", "IN-A-SPAN"])
+    {
+        assert_eq!(
+            doc_with(&types, marker),
+            description.trim_end(),
+            "{marker}: the lines the vendor wrote"
+        );
+    }
+    assert_nothing_runs(&dir, "quotes");
+}
+
+/// The settings an adopter formats with are not a way to move a line of a
+/// description.
+///
+/// `rustfmt` writes the indentation of an item as tabs under `hard_tabs`, and it
+/// would write the body of a `/* */` comment with it: each run of `tab_spaces`
+/// leading spaces would be a tab, rustdoc strips one tab and reads the next as
+/// four columns, so at a width of 2 or 3 a vendor's line indented by two or
+/// three spaces would be a code block. With `format_code_in_doc_comments` it
+/// puts a space after the slashes of every line in a fence that has none, so a
+/// sample would gain a column. A `///` line that starts with a space is a fixed
+/// point of both, and the indentation of its item is outside it.
+///
+/// The matrix, the corpus and a few lines of each kind are written under each
+/// setting, and each setting is judged by `rustdoc --test` over both files,
+/// which finds nothing to run, and by the exact text of a sample. No page is
+/// rendered. Every description is a field, and the first 400 are a type and a
+/// wrapper too, which keeps the four settings quick.
+///
+/// `rustfmt` reads `hard_tabs` on every toolchain, and the file holding a tab in
+/// front of `///` shows it did. It reads `format_code_in_doc_comments` on a
+/// nightly only, and a stable `rustfmt` ignores the option with a warning, so
+/// that setting is judged only where a probe shows the option changed the code in
+/// a doc comment (`formats_doc_code`).
+#[test]
+fn no_setting_of_rustfmt_moves_a_line_of_a_description() {
+    let mut descriptions = blocks();
+    descriptions.extend(random_descriptions(400));
+    descriptions.extend([
+        "Para.\n\n  Two in. TWO\n\n   Three in.\n\n    Four in.\n".to_owned(),
+        "A \"quote that\nspans the lines\n\n   and closes\" later.".to_owned(),
+        "Sample SAMPLE:\n\n```json\n{\"at\": \"the margin\"}\n\n  {\"in\": 2}\n```\n".to_owned(),
+    ]);
+    let document = described(&descriptions, 400);
+    for (name, config) in [
+        ("tabs-2", "hard_tabs = true\ntab_spaces = 2\n"),
+        ("tabs-3", "hard_tabs = true\ntab_spaces = 3\n"),
+        ("tabs-4", "hard_tabs = true\ntab_spaces = 4\n"),
+        (
+            "doc-code",
+            "unstable_features = true\nformat_code_in_doc_comments = true\n",
+        ),
+    ] {
+        let dir = out(&format!("prose-settings-{name}"));
+        wrote(&dir, "rustfmt.toml", config);
+        if config.contains("format_code_in_doc_comments") && !formats_doc_code(&dir) {
+            continue;
+        }
+        Settings::new(wrote(&dir, "document.json", &document))
+            .write_to(&dir)
+            .expect("the document generates");
+        let types = read(&dir.join("src/types.rs"));
+
+        assert!(
+            !config.contains("hard_tabs") || types.contains("\t///"),
+            "`rustfmt` did not read the settings `{name}`, so this proves nothing"
+        );
+        assert_eq!(
+            doc_with(&types, "SAMPLE"),
+            "Sample SAMPLE:\n\n```json\n{\"at\": \"the margin\"}\n\n  {\"in\": 2}\n```",
+            "{name}: a sample as the vendor wrote it"
+        );
+        assert_nothing_runs(&dir, name);
+    }
+}
+
+/// Whether the `rustfmt` on `PATH` formats the code in a doc comment under the
+/// settings in `dir`, which `format_code_in_doc_comments` asks for and a stable
+/// `rustfmt` ignores.
+fn formats_doc_code(dir: &Path) -> bool {
+    let path = wrote(
+        dir,
+        "probe.rs",
+        "/// ```\n/// let   x=1;\n/// ```\npub struct Probe;\n",
+    );
+    let ran = std::process::Command::new("rustfmt")
+        .args(["--edition", "2024"])
+        .arg(&path)
+        .output()
+        .expect("rustfmt is on PATH, as a bless step needs it");
+    ran.status.success() && read(&path).contains("let x = 1;")
+}
+
+/// A line that starts with a `/` is a line of its doc comment, and the comment
+/// holds nothing but `///` lines.
+///
+/// After the slashes of a `///` line it would make `////`, which is no doc
+/// comment, and `prettyplease` writes such a line as an attribute instead. That
+/// holds for a description of one line as for one of several, and the
+/// descriptions below are both. The judges are given every comment of both
+/// files, and `doc_comments_alone` fails on a doc attribute they would not be
+/// given.
+#[test]
+fn a_line_that_starts_with_a_slash_stays_a_line_of_its_doc_comment() {
+    let descriptions = [
+        "First line.\n/second line SLASHED\n//third line.\n".to_owned(),
+        "/one slash ALONE-ONE".to_owned(),
+        "//two slashes ALONE-TWO".to_owned(),
+        "/// three slashes ALONE-THREE".to_owned(),
+    ];
+    let dir = out("prose-slash");
+    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert_eq!(
+        doc_with(&types, "SLASHED"),
+        "First line.\n/second line SLASHED\n//third line."
+    );
+    for (description, marker) in
+        descriptions
+            .iter()
+            .skip(1)
+            .zip(["ALONE-ONE", "ALONE-TWO", "ALONE-THREE"])
+    {
+        assert_eq!(
+            doc_with(&types, marker),
+            *description,
+            "{marker}: a description of one line"
+        );
+        assert!(
+            doc_with(&read(&dir.join("src/ops.rs")), marker)
+                .starts_with(&format!("{description}\n")),
+            "{marker}: the summary opens the wrapper's doc"
+        );
+    }
+    for file in ["types", "ops"] {
+        assert!(
+            !read(&dir.join(format!("src/{file}.rs"))).contains("#[doc"),
+            "a line of a description is an attribute in {file}.rs, not a comment line"
+        );
+    }
+    assert_nothing_runs(&dir, "slash");
+}
+
+/// The Markdown containers a block can stand in, as the text before the first
+/// line of the block and the text before each line after it.
+const CONTAINERS: [(&str, &str); 17] = [
+    ("", ""),
+    ("> ", "> "),
+    (">", ">"),
+    ("   > ", "   > "),
+    ("> > ", "> > "),
+    ("- ", "  "),
+    ("* ", "  "),
+    ("+ ", "  "),
+    ("-   ", "    "),
+    ("1. ", "   "),
+    ("1) ", "   "),
+    ("- - ", "    "),
+    ("- > ", "  > "),
+    ("> - ", ">   "),
+    ("> 1. ", ">    "),
+    ("[^note]: ", "    "),
+    ("   ", "   "),
+];
+
+/// What can follow the fence of a block: the words rustdoc reads as Rust, the
+/// ones it reads as another language, the attributes it has a syntax for and
+/// the spellings that Markdown resolves before rustdoc sees them.
+const INFOS: [&str; 40] = [
+    "",
+    " ",
+    "rust",
+    "Rust",
+    "rust,ignore",
+    "rust edition2018",
+    "rust2015",
+    "rust2018",
+    "rust2021",
+    "rust2024",
+    "rust2027",
+    "rustc",
+    "rust_2018",
+    "ignore",
+    "ignore-wasm32",
+    "ignore-",
+    "should_panic",
+    "no_run",
+    "compile_fail",
+    "test_harness",
+    "standalone_crate",
+    "edition2021",
+    "E0308",
+    "custom",
+    "text",
+    "json",
+    "json,ignore",
+    "ignore,json",
+    "{.json}",
+    "{.rust}",
+    ".json",
+    "json {.x}",
+    "rust{.x}",
+    "key=value",
+    "class=\"rust\"",
+    "{",
+    "\"",
+    "r&#117;st",
+    "&#105;gnore",
+    "j\\son",
+];
+
+/// Every block of every container in `CONTAINERS`, in the descriptions a
+/// vendor could write them in.
+fn blocks() -> Vec<String> {
+    let mut texts = Vec::new();
+    for (first, rest) in CONTAINERS {
+        let apart = rest.trim_end();
+        for info in INFOS {
+            for mark in ["```", "~~~"] {
+                texts.push(format!("{first}{mark}{info}\n{rest}CODE\n{rest}{mark}\n"));
+                texts.push(format!(
+                    "Intro.\n\n{first}{mark}{info}\n{rest}CODE\n{rest}{mark}\n"
+                ));
+            }
+        }
+        texts.push(format!("{first}````rust\n{rest}CODE\n"));
+        texts.push(format!(
+            "{first}```rust\n{rest}CODE\n{rest}```\n{rest}MORE\n"
+        ));
+        for indent in ["    ", "        ", "\t", "\t\t", "  \t"] {
+            texts.push(format!("Intro.\n\n{first}{indent}CODE\n"));
+            texts.push(format!("{first}Intro.\n{apart}\n{rest}{indent}CODE\n"));
+            texts.push(format!(
+                "{first}Intro.\n{apart}\n{rest}{indent}CODE\n{apart}\n{rest}{indent}{indent}MORE\n"
+            ));
+        }
+    }
+    texts
+}
+
+/// No container and no info string gets a vendor's sentence run by `rustdoc`.
+///
+/// This is the oracle and not a copy of its rule. The comments of a document
+/// that holds every block of every container are handed to `rustdoc --test`,
+/// which is the program the adopter's `cargo test --doc` runs, so a spelling
+/// that rustdoc reads as Rust in a version this test was not written against
+/// fails here. A comment that is a test would be listed, and one that is
+/// `ignore`d is listed too. The blocks stand in a type, a field and a wrapper,
+/// which are three places of two files, and both files are judged.
+#[test]
+fn no_container_and_no_info_string_gets_a_vendors_sentence_run_by_rustdoc() {
+    let dir = out("prose-matrix");
+    let descriptions = blocks();
+    Settings::new(wrote(
+        &dir,
+        "document.json",
+        &described(&descriptions, descriptions.len()),
+    ))
+    .write_to(&dir)
+    .expect("the document generates");
+    let comments = doc_comments_alone(&read(&dir.join("src/types.rs")));
+    let wrappers = doc_comments_alone(&read(&dir.join("src/ops.rs")));
+    assert!(
+        comments.matches("pub f").count() >= 2 * descriptions.len(),
+        "a description did not reach a field and a type, so this proves less than it says"
+    );
+    assert!(
+        wrappers.matches("pub f").count() >= descriptions.len(),
+        "a description did not reach a wrapper, so this proves less than it says"
+    );
+
+    assert_nothing_runs(&dir, "matrix");
+
+    // The same file with a doctest of Rust's own added, so that "running 0
+    // tests" above is the absence of tests and not a rustdoc that cannot
+    // read the file.
+    let control = format!("{comments}\n/// ```\n/// let _ = 1;\n/// ```\npub struct Control;\n");
+    assert!(
+        rustdoc_tests(&dir, "control_docs.rs", &control).contains("running 1 test\n"),
+        "rustdoc does not find a plain doctest in the same file"
+    );
+}
+
+/// A small generator of numbers that is the same on every run, so that a
+/// description that fails is the same description when the test is run again.
+struct Dice(u64);
+
+impl Dice {
+    fn roll(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn pick<'a>(&mut self, of: &[&'a str]) -> &'a str {
+        let at = usize::try_from(self.roll() % of.len() as u64).expect("an index");
+        of[at]
+    }
+}
+
+/// What a line of a description can start with: nothing, indentation of every
+/// kind, white space that is no indentation, and the openers of each container
+/// Markdown has.
+const STARTS: &[&str] = &[
+    "",
+    "",
+    "",
+    " ",
+    "  ",
+    "   ",
+    "    ",
+    "      ",
+    "\t",
+    "  \t",
+    "    \t",
+    "\u{a0}",
+    "\u{a0}    ",
+    "\u{c}",
+    "\u{2003}  ",
+    "> ",
+    ">",
+    ">     ",
+    "   > ",
+    "> > ",
+    "- ",
+    "-     ",
+    "* ",
+    "+ ",
+    "1. ",
+    "1.    ",
+    "10. ",
+    "1) ",
+    "- [ ] ",
+    "[^a]: ",
+    "[a]: ",
+    "# ",
+    "  - ",
+    "-\t",
+    ">\t",
+    "|",
+    "<div>",
+    "\\",
+    "&#32;",
+    "/",
+];
+
+/// What a line of a description can say after its start: the fences of every
+/// kind, code, HTML in every position, the lines that Markdown reads as
+/// something else, and the characters that no comment may hold.
+const SAYINGS: &[&str] = &[
+    "```",
+    "```rust",
+    "``` ",
+    "```ignore-x",
+    "```{.json}",
+    "```json",
+    "```<vendorx>",
+    "``` ```",
+    "~~~",
+    "~~~ rust",
+    "~~~~",
+    "````",
+    "```text",
+    "CODE",
+    "more",
+    "",
+    "",
+    "<vendorx>",
+    "</vendorx>",
+    "<vendorx a=\"b\">x</vendorx>",
+    "<vendorx",
+    "<<vendorx>>",
+    "`<vendorx>`",
+    "`",
+    "``",
+    "\\<vendorx>",
+    "&lt;vendorx&gt;",
+    "&#60;vendorx>",
+    "[a](<vendorx>)",
+    "[a]: <vendorx>",
+    "![i](x \"<vendorx>\")",
+    "<!--VENDOR",
+    "-->",
+    "<https://example.com/a>",
+    "[a](javascript:vendorx)",
+    "[a](JaVaScRiPt:vendorx)",
+    "[a](&#106;avascript:vendorx)",
+    "![i](data:text/html,vendorx)",
+    "[a][r]",
+    "[r]: vbscript:vendorx",
+    "[a](https://example.com/a)",
+    "[a](./a) [b](#b) [c](mailto:a@example.com)",
+    "a \"quote",
+    "closes\" here",
+    "**",
+    "**     ```rust",
+    "*     CODE",
+    "a < b",
+    "---",
+    "-----",
+    "=====",
+    "***",
+    "* * *",
+    "[^a]",
+    "| a | b |",
+    "| - | - |",
+    "    CODE",
+    "\tCODE",
+    "    ```",
+    "<pre>",
+    "</pre>",
+    "<span>",
+    "\u{202e}x",
+    "a\rb",
+    "a\r\nb",
+];
+
+/// Descriptions of one to nine lines, each a few starts and a saying.
+fn random_descriptions(count: usize) -> Vec<String> {
+    let mut dice = Dice(0x9E37_79B9_7F4A_7C15);
+    (0..count)
+        .map(|_| {
+            let lines = 1 + dice.roll() % 9;
+            let mut text = (0..lines)
+                .map(|_| {
+                    let starts = dice.roll() % 3;
+                    let start: String = (0..=starts).map(|_| dice.pick(STARTS)).collect();
+                    format!("{start}{}", dice.pick(SAYINGS))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if dice.roll() % 2 == 0 {
+                text.push('\n');
+            }
+            text
+        })
+        .collect()
+}
+
+/// A description that a generator of the shapes above wrote is neither run by
+/// rustdoc nor shown as the markup it holds, nor a way to a script.
+///
+/// The matrix above names the shapes. This is every other way to put them
+/// together, a few thousand of them from a generator that does not change, and
+/// the same judges: `rustdoc --test` says whether anything runs, and the page
+/// that rustdoc renders says whether an element of the vendor's is on it and
+/// where each link on it leads. `vendorx` is an element that no page of
+/// rustdoc's has, and `VENDOR` opens a comment that no page has either.
+#[test]
+fn a_few_thousand_descriptions_put_together_at_random_are_neither_run_nor_shown_as_markup() {
+    let dir = out("prose-random");
+    let descriptions = random_descriptions(3000);
+    Settings::new(wrote(
+        &dir,
+        "document.json",
+        &described(&descriptions, descriptions.len()),
+    ))
+    .write_to(&dir)
+    .expect("the document generates");
+
+    assert_nothing_runs(&dir, "random");
+    for file in ["types", "ops"] {
+        let comments = doc_comments_alone(&read(&dir.join(format!("src/{file}.rs"))));
+        let page = rustdoc_page(&dir, &format!("random_{file}_page.rs"), &comments);
+        assert!(
+            !page.contains("<vendorx") && !page.contains("<!--VENDOR"),
+            "an element or a comment of the vendor's is on the page of {file}.rs"
+        );
+        assert!(
+            page.contains("&lt;vendorx"),
+            "the page of {file}.rs shows nothing of the vendor's markup, so this proves less than it says"
+        );
+        assert_eq!(
+            unknown_scheme(&page),
+            None,
+            "a link or an image on the page of {file}.rs leads to a scheme that is not known to be safe"
+        );
+        assert!(
+            page.contains("href=\"https://example.com/a\""),
+            "the page of {file}.rs holds none of the vendor's links, so this proves less than it says"
+        );
+    }
+}
+
+/// The first `href` or `src` on `page` that names a scheme other than `http`,
+/// `https` and `mailto`, if there is one.
+///
+/// A value with a `:` before any `/`, `?` or `#` names a scheme. The page is the
+/// evidence, and what it holds beside the vendor's links is rustdoc's own, which
+/// are relative or `https`.
+fn unknown_scheme(page: &str) -> Option<String> {
+    ["href=\"", "src=\""]
+        .iter()
+        .flat_map(|attribute| page.split(attribute).skip(1))
+        .filter_map(|after| after.split('"').next())
+        .find(|value| {
+            let before = value.split(['/', '?', '#']).next().unwrap_or_default();
+            let known = ["http:", "https:", "mailto:"].iter().any(|scheme| {
+                value
+                    .get(..scheme.len())
+                    .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+            });
+            before.contains(':') && !known
+        })
+        .map(str::to_owned)
+}
+
+/// The page that `rustdoc` renders for the comments of `src/{file}.rs` in `dir`,
+/// after `rustc` has accepted the comments and the page has been found to lead to
+/// no scheme that is unknown to be safe.
+fn judged_page(dir: &Path, file: &str) -> String {
+    let comments = doc_comments_alone(&read(&dir.join(format!("src/{file}.rs"))));
+    let refused = rustc_accepts(dir, "hostile_docs.rs", &comments);
+    assert!(refused.is_ok(), "rustc refuses {file}.rs:\n{refused:?}");
+    let page = rustdoc_page(dir, &format!("hostile_{file}_page.rs"), &comments);
+    assert_eq!(
+        unknown_scheme(&page),
+        None,
+        "a link on the page of {file}.rs leads to a script"
+    );
+    page
+}
+
+/// The control document, which a vendor could have written by accident, holds
+/// the five shapes that hide a code block, markup, a link to a script, a
+/// character that changes the direction of text and a carriage return alone, in
+/// descriptions and in two operation summaries. The judges are put to both
+/// files as they are to the matrix: `rustdoc --test` finds nothing to run,
+/// `rustc` accepts the comments, and the page of each file leads to no script.
+/// The element of the vendor's is on the page of `types.rs` as text, and the
+/// link in the summary of an operation is on the page of `ops.rs` as text.
+#[test]
+fn the_control_document_hands_rustdoc_nothing_to_run_and_the_compiler_nothing_to_refuse() {
+    let dir = out("prose-hostile");
+    Settings::new(HOSTILE)
+        .write_to(&dir)
+        .expect("the control document blesses");
+
+    assert_nothing_runs(&dir, "hostile");
+    let types_page = judged_page(&dir, "types");
+    let ops_page = judged_page(&dir, "ops");
+    assert!(
+        !types_page.contains("<blink>"),
+        "the vendor's element is on the page"
+    );
+    assert!(types_page.contains("&lt;blink&gt;"));
+    assert!(
+        types_page.contains("href=\"https://kiln.example/rules\""),
+        "a link to a page is a link"
+    );
+    assert!(
+        ops_page.contains("[the tally sheet](javascript:alert(1))"),
+        "the link to a script in a summary is shown as the text it is written in"
+    );
+    let ops = read(&dir.join("src/ops.rs"));
+    assert!(
+        doc_with(&ops, "tally sheet")
+            .contains("> ```text\n> curl https://kiln.example/wadding/tallies"),
+        "a fence in the summary of an operation is inert"
+    );
+}
+
+/// The nine characters that rustc refuses in a comment, with the lint
+/// `text_direction_codepoint_in_comment`: the embeddings, the overrides, the
+/// isolates and the two that end them.
+const BIDI: [char; 9] = [
+    '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}',
+    '\u{2069}',
+];
+
+/// A bidirectional control in a description is a comment line that rustc
+/// refuses to compile, and a `#![allow]` in the module cannot reach it because
+/// the lint is raised by the lexer. The comments of the document are handed to
+/// `rustc` itself, which is what answers whether the crate compiles.
+#[test]
+fn a_bidi_control_in_a_description_is_written_escaped_and_the_comments_compile() {
+    let marks: String = BIDI.iter().flat_map(|mark| ['x', *mark]).collect();
+    let descriptions = [
+        "The label, e.g. \u{202b}abc\u{202c} as shown.".to_owned(),
+        format!("Every one: {marks}end"),
+        "Fenced:\n\n```json\n{\"k\": \"\u{202e}FENCED\"}\n```\n".to_owned(),
+        "Spanned `\u{2066}SPANNED` here.".to_owned(),
+    ];
+    let dir = out("prose-bidi");
+    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert!(
+        !types.contains(BIDI),
+        "a generated file holds a character that changes the direction of text"
+    );
+    assert_eq!(
+        doc_with(&types, "e.g."),
+        "The label, e.g. \\u{202b}abc\\u{202c} as shown.",
+        "the character is written as its code point, in Rust's own spelling"
+    );
+    assert_eq!(
+        doc_with(&types, "FENCED"),
+        "Fenced:\n\n```json\n{\"k\": \"\\u{202e}FENCED\"}\n```",
+        "a sample is escaped too, because the compiler reads its line"
+    );
+    assert_eq!(
+        doc_with(&types, "SPANNED"),
+        "Spanned `\\u{2066}SPANNED` here."
+    );
+
+    let refused = rustc_accepts(&dir, "bidi_docs.rs", &doc_comments_alone(&types));
+    assert!(
+        refused.is_ok(),
+        "rustc refuses the doc comments:\n{refused:?}"
+    );
+}
+
+/// A carriage return that no line feed follows ends a line, as Markdown reads it,
+/// and a pair of them ends one line and not two. The compiler refuses a bare one
+/// in a doc comment, and `rustfmt` refuses the file that holds one, so the
+/// description is written with line feeds alone.
+#[test]
+fn a_lone_carriage_return_in_a_description_is_a_line_break() {
+    let descriptions = [
+        "A carriage\rreturn alone.".to_owned(),
+        "First line.\r\nSecond line.".to_owned(),
+        "Fenced:\r```\rCODE\r```\r".to_owned(),
+    ];
+    let dir = out("prose-cr");
+    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
+        .write_to(&dir)
+        .expect("a carriage return is no reason to refuse a bless");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert!(!types.contains('\r'), "a carriage return reached the file");
+    assert_eq!(
+        doc_with(&types, "return alone"),
+        "A carriage\nreturn alone."
+    );
+    assert_eq!(doc_with(&types, "Second line"), "First line.\nSecond line.");
+    assert_eq!(doc_with(&types, "CODE"), "Fenced:\n```text\nCODE\n```");
+}
+
+/// What a vendor writes as HTML is shown as the characters it is written in.
+/// The rendered page is the evidence, since `cargo doc` accepts the markup
+/// without a warning once `rustdoc::all` is allowed, and the page then carries
+/// the vendor's element as an element.
+#[test]
+fn vendor_html_is_shown_as_text_on_the_rendered_page() {
+    let descriptions = [
+        "<script>alert(1)</script> and a < b, an autolink <https://example.com/a>, \
+         a code span `<b>x</b>`, an escaped \\<i>, an escaped backslash \\\\<u> \
+         and a sample:\n\n\
+         ```html\n<div>SAMPLE</div>\n```\n"
+            .to_owned(),
+        "<div>\nan escaped \\<i> inside BLOCKED\n</div>\n".to_owned(),
+    ];
+    let dir = out("prose-html");
+    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    assert_eq!(
+        doc_with(&types, "SAMPLE"),
+        "\\<script>alert(1)\\</script> and a \\< b, an autolink \\<https://example.com/a>, \
+         a code span `<b>x</b>`, an escaped \\<i>, an escaped backslash \\\\\\<u> \
+         and a sample:\n\n\
+         ```html\n<div>SAMPLE</div>\n```"
+    );
+
+    assert_eq!(
+        doc_with(&types, "BLOCKED"),
+        "\\<div>\nan escaped \\<i> inside BLOCKED\n\\</div>",
+        "a block of HTML is escaped by its first `<` on each line, and a `<` \
+         that is escaped already is left"
+    );
+
+    let page = rustdoc_page(&dir, "page_docs.rs", &doc_comments_alone(&types));
+    assert!(
+        !page.contains("<script>alert(1)</script>"),
+        "the vendor's element is on the page"
+    );
+    assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    assert!(
+        !page.contains("href=\"https://example.com/a\""),
+        "an autolink is a link to the vendor's choice of address"
+    );
+    assert!(page.contains("&lt;b&gt;x&lt;/b&gt;"), "a code span is text");
+}
+
+/// Links and images that lead to a scheme that is not known to be safe, with the
+/// text that the generated doc holds of each: the `[` that opens it is escaped.
+///
+/// The destination is asked about as the parser hands it over, so a spelling that
+/// a browser reads as `javascript:` is no way round the rule: a capital, an
+/// entity, a tab in the name, a reference whose definition holds the scheme, a
+/// link inside the text of another.
+const SHOWN_LINKS: [(&str, &str); 9] = [
+    (
+        "[a](javascript:alert(1)) LINK-JS",
+        "\\[a](javascript:alert(1)) LINK-JS",
+    ),
+    (
+        "[a](JaVaScRiPt:alert(1)) LINK-CASE",
+        "\\[a](JaVaScRiPt:alert(1)) LINK-CASE",
+    ),
+    (
+        "[a](&#106;avascript:alert(1)) LINK-ENTITY",
+        "\\[a](&#106;avascript:alert(1)) LINK-ENTITY",
+    ),
+    (
+        "[a](<java\tscript:alert(1)>) LINK-TAB",
+        "\\[a](\\<java\tscript:alert(1)>) LINK-TAB",
+    ),
+    (
+        "[a](data:text/html,x) LINK-DATA",
+        "\\[a](data:text/html,x) LINK-DATA",
+    ),
+    (
+        "![a](javascript:x) LINK-IMAGE",
+        "!\\[a](javascript:x) LINK-IMAGE",
+    ),
+    (
+        "![a](data:image/svg+xml,x) LINK-IMAGE-DATA",
+        "!\\[a](data:image/svg+xml,x) LINK-IMAGE-DATA",
+    ),
+    (
+        "[a][r] and [s] LINK-REFERENCE\n\n[r]: javascript:alert(1)\n[s]: vbscript:x",
+        "\\[a]\\[r] and \\[s] LINK-REFERENCE\n\n[r]: javascript:alert(1)\n[s]: vbscript:x",
+    ),
+    (
+        "[[a](javascript:x)](javascript:y) LINK-NESTED",
+        "\\[\\[a](javascript:x)](javascript:y) LINK-NESTED",
+    ),
+];
+
+/// Links and images that lead to a page, a mail, a place on this page or a path,
+/// which stay as the vendor wrote them.
+const KEPT_LINKS: [&str; 10] = [
+    "[a](https://example.com/a) KEEP-HTTPS",
+    "[a](HTTP://example.com/b) KEEP-CASE",
+    "[a](mailto:a@example.com) KEEP-MAIL",
+    "[a](./a) KEEP-RELATIVE",
+    "[a](a/b:c) KEEP-COLON-AFTER-SLASH",
+    "[a](#fragment) KEEP-FRAGMENT",
+    "[a](/absolute?x=a:b) KEEP-ABSOLUTE",
+    "![a](https://example.com/a.png) KEEP-IMAGE",
+    "[a]() KEEP-EMPTY",
+    "[a][r] KEEP-REFERENCE\n\n[r]: https://example.com/r",
+];
+
+/// The word of `text` that starts with `prefix`, which names its description.
+fn marked<'a>(text: &'a str, prefix: &str) -> &'a str {
+    text.split_whitespace()
+        .find(|word| word.starts_with(prefix))
+        .unwrap_or(text)
+}
+
+/// A link or an image is followed only to a scheme that is known to be safe, and
+/// is shown as the characters it is written in everywhere else. The rendered page
+/// is the evidence for both.
+#[test]
+fn a_link_is_followed_only_to_a_scheme_that_is_known_to_be_safe() {
+    let descriptions: Vec<String> = SHOWN_LINKS
+        .iter()
+        .map(|(text, _)| (*text).to_owned())
+        .chain(KEPT_LINKS.iter().map(|text| (*text).to_owned()))
+        .collect();
+    let dir = out("prose-links");
+    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    for (text, shown) in SHOWN_LINKS {
+        assert_eq!(doc_with(&types, marked(text, "LINK-")), shown);
+    }
+    for text in KEPT_LINKS {
+        assert_eq!(doc_with(&types, marked(text, "KEEP-")), text);
+    }
+
+    let page = rustdoc_page(&dir, "links_page.rs", &doc_comments_alone(&types));
+    assert_eq!(
+        unknown_scheme(&page),
+        None,
+        "a link or an image leads to a script"
+    );
+    for followed in [
+        "href=\"https://example.com/a\"",
+        "href=\"mailto:a@example.com\"",
+        "href=\"#fragment\"",
+        "href=\"https://example.com/r\"",
+        "src=\"https://example.com/a.png\"",
+    ] {
+        assert!(page.contains(followed), "the page holds no `{followed}`");
+    }
+    assert!(
+        page.contains("[a](javascript:alert(1))"),
+        "a link to a script is shown as the text it is written in"
+    );
+}
+
+/// A fence that names an edition of Rust is Rust to rustdoc, so it is renamed as
+/// `rust` is, and a language that rustdoc leaves alone keeps its name.
+///
+/// `rust2018` and `rust2021` are words of rustdoc's own, which a list of the
+/// words kept would have to know, so every word that starts with `rust` is
+/// renamed. The fences hold a statement that a doctest would run, and rustdoc is
+/// the judge of whether one does.
+#[test]
+fn a_fence_that_names_an_edition_of_rust_is_renamed() {
+    let words = [
+        "rust2015", "rust2018", "rust2021", "rust2024", "rustc", "rust",
+    ];
+    let mut descriptions: Vec<String> = words
+        .iter()
+        .map(|word| format!("```{word}\nlet _ = 1; // FENCE[{word}]\n```\n"))
+        .collect();
+    descriptions.push("```json\nlet _ = 1; // FENCE[json]\n```\n".to_owned());
+    let dir = out("prose-editions");
+    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
+        .write_to(&dir)
+        .expect("the document generates");
+    let types = read(&dir.join("src/types.rs"));
+
+    for word in words {
+        assert_eq!(
+            doc_with(&types, &format!("FENCE[{word}]")),
+            format!("```text\nlet _ = 1; // FENCE[{word}]\n```"),
+            "`{word}` names Rust to rustdoc or starts like a word that does"
+        );
+    }
+    assert_eq!(
+        doc_with(&types, "FENCE[json]"),
+        "```json\nlet _ = 1; // FENCE[json]\n```",
+        "the name of a language rustdoc leaves alone is the vendor's"
+    );
+    assert_nothing_runs(&dir, "editions");
 }
 
 /// A type the adopter owns, reached from a wrapper by both routes: a parameter
@@ -2392,8 +3618,8 @@ fn wrapper(ops: &str, name: &str) -> String {
         .unwrap_or_else(|| panic!("`{name}` is not in:\n{ops}"));
     let from = lines[..head]
         .iter()
-        .rposition(|line| *line == "    /**")
-        .unwrap_or(head);
+        .rposition(|line| !is_doc(line))
+        .map_or(0, |apart| apart + 1);
     let to = lines[head..]
         .iter()
         .position(|line| *line == "    }")

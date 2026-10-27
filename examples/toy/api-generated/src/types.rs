@@ -235,17 +235,14 @@ impl<'de> ::serde::Deserialize<'de> for LedgerAccount {
             })
     }
 }
-/**
-A note the sender keeps against the voucher.
-
-The server stores it verbatim and never reads it. Senders paste a
-reference in, under a heading of their own:
-
-   PO-1234, approved by finance
-
-and it comes back exactly as it was sent.
-
-*/
+/// A note the sender keeps against the voucher.
+///
+/// The server stores it verbatim and never reads it. Senders paste a
+/// reference in, under a heading of their own:
+///
+///    PO-1234, approved by finance
+///
+/// and it comes back exactly as it was sent.
 #[derive(
     ::serde::Deserialize, ::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd,
 )]
@@ -389,9 +386,9 @@ impl ::std::convert::TryFrom<::std::string::String> for VoucherStatus {
         value.parse()
     }
 }
-/// Error types.
+///Error types.
 pub mod error {
-    /// Error from a `TryFrom` or `FromStr` implementation.
+    ///Error from a `TryFrom` or `FromStr` implementation.
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {

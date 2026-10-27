@@ -1247,3 +1247,65 @@ Rewriting the emitted file instead would mean knowing which generated field came
 from which property, and that is typify's naming rule copied. A schema that
 reduces to the placeholder's own Rust name is a `GenerateError::Reserved`
 naming it.
+
+**A vendor's prose is inert in a generated doc comment, and the real rustdoc
+judges it.** `written` in `src/generate/prose.rs` is the only place a `summary`
+or a `description` becomes a doc comment. It finds code blocks with
+`pulldown-cmark`, with the options rustdoc passes (`DIALECT`), so the container
+a block stands in cannot hide it. A fence that rustdoc reads as Rust names the
+language `text`; `names_a_language` keeps the info string of a plain language
+such as `json` and renames anything else: an attribute, `ignore-wasm32`,
+`{.json}`, an entity that spells `rust`, or any word that starts with `rust`,
+`rust2018` among them. An indented block has no word to change, so its
+indentation is capped, and a sample indented in a container is a paragraph. A
+`<` outside code is `\<`, a bidirectional control is its code point, and a
+carriage return is a line break. A link or an image is followed only to `http:`,
+`https:`, `mailto:` or a relative destination, the parser's reading of it with
+its entities and escapes taken, and any other shows as text: `javascript:`
+written any way a browser reads it is no link. The crate depends on the version
+of `pulldown-cmark` that rustdoc is built with and on no newer one, because two
+versions read one text as different blocks (`- [ ]     x` is code to 0.11 and
+text to 0.13), and a parser that disagrees with rustdoc is a guarantee about the
+wrong program. A move waits for rustdoc's.
+
+**A doc comment of several lines is one `///` line for each of its lines,
+because nothing between the generator and rustdoc may move a line.** The body of
+a `/* */` comment is laid out by `rustfmt` and read by rustc, and each of them
+moves some lines and not others: `rustfmt` writes the indentation of a line as
+tabs under `hard_tabs`, leaves a line inside a `"` that runs over a line break
+at its own column and puts every other line at the column of the item, and rustc
+takes a column of stars out of the comment. A block that was prose is code once
+the lines above it have moved, and a model of what `rustfmt` does to the body is
+a guarantee about the wrong program, so no model is kept. A `///` line is left
+as it stands, and the parser is asked about the text rustdoc asks it about:
+`flush` takes the indentation that all lines share, as rustdoc does, and
+`margins` writes tabs as spaces. Each line with text in it of a doc comment of
+several lines has one space in front of it, and a doc comment of one line has
+one only when it starts with a `/`. The space is the fixed point of
+`format_code_in_doc_comments`, which would otherwise put a space after the
+slashes of every line in a fence and widen a sample, and it keeps a line that
+starts with a `/` a doc comment. rustdoc takes the space off with the
+indentation that all lines share, and that holds because one doc attribute
+stands on an item: typify writes one for a type, a field and a variant, and
+`paragraphs` in `src/generate/ops.rs` joins a wrapper's summary and the
+generator's own paragraphs into one. A second fragment with no space would leave
+it on the first. The guarantee is for the options of `rustfmt` that are stable.
+`wrap_comments` rewraps a doc comment, and the generator does not predict where
+it breaks a line.
+
+So the judges are the programs, and an edit to `prose.rs` is finished when they
+pass. `tests/generate.rs` hands the comments of both generated files to
+`rustdoc --test`: for a matrix of containers and info strings, for a seeded
+random corpus, for a column of stars, a `"` that runs over a line break, an
+edition named on a fence and a line that starts with a `/`, and under the
+settings of `rustfmt` that write indentation as tabs or format the code in doc
+comments (the second only where `rustfmt` reads it, which a stable one does
+not). `rustdoc` renders the page of both files for the corpus and for the
+control document, and the tests read every `href` and `src` on it. `rustc`
+compiles the comments of the control document and of the bidirectional controls.
+`doc_comments_alone` fails on a doc attribute in a generated file, because the
+judges are given comments. A list of shapes passes while a shape that nobody
+listed runs: the corpus is there to go past the list. `settled` reads the text
+again after every change, because one change can make the next necessary:
+escaping the `<` that opens an HTML block leaves lines for the parser, and one
+of them may open a fence. Its doc says why the loop ends.
