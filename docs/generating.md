@@ -148,11 +148,17 @@ A link that stays a link is one to a page (`http:`, `https:`), to a mail
 (`mailto:`) or to a place the page already has (a relative path, `#fragment`),
 and a link to a script is repaired with an `https` link, in an Overlay.
 
-A description of several lines is written as one `///` line for each line of it.
-`rustfmt` leaves such a line as it stands under its stable options, `hard_tabs`
-and `tab_spaces` among them, so what rustdoc reads is the text the generator
-checked. `wrap_comments` and the other options that rewrite doc comments are
-nightly options, and the guarantee does not cover them.
+A doc comment of several lines is written as one `///` line for each line of it.
+That is a description of several lines, and the doc of each wrapper in `ops.rs`,
+which holds the generator's paragraphs after the summary even when the summary is
+one line. `rustfmt` leaves such a line as it stands under its stable options,
+`hard_tabs` and `tab_spaces` among them, so what rustdoc reads is the text the
+generator checked. `wrap_comments` and the other options that rewrite doc
+comments are nightly options, and the guarantee does not cover them. Under
+`wrap_comments` `rustfmt` can also refuse a generated file, and the bless stops
+there with `rustfmt rejected the generated …` (`GenerateError::RustfmtFailed`).
+A `rustfmt.toml` in the directory of the generated files that leaves the option
+out ends that, because `rustfmt` reads the nearest one.
 
 The command line's `--help` reads the model and not the doc comments, so it shows
 the document's text as written.

@@ -1820,15 +1820,26 @@ components:
 /// generator writes only the second: the column of a block comment's lines is
 /// half of what decides whether a paragraph in it is code, so a generator that
 /// wrote one would be judged as the comment would be run.
+///
+/// A `#[doc = "…"]` attribute is no comment, and a copy that left it out would
+/// hand the judges less than the file holds, so a file that has one fails here.
 fn doc_comments_alone(source: &str) -> String {
+    if let Some(attribute) = source
+        .lines()
+        .find(|line| line.trim_start().starts_with("#[doc"))
+    {
+        panic!(
+            "a doc attribute stands in the file, and the judges are given comments: {attribute}"
+        );
+    }
     let mut out = String::from("pub struct Docs {\n");
     let mut fields = 0;
     let mut block = false;
     let mut carrying = false;
     for line in source.lines() {
         let trimmed = line.trim_start();
-        let is_doc = block || trimmed.starts_with("/**") || trimmed.starts_with("///");
-        if is_doc {
+        let in_comment = block || trimmed.starts_with("/**") || trimmed.starts_with("///");
+        if in_comment {
             out.push_str(line);
             out.push('\n');
             block = (block || trimmed.starts_with("/**")) && !trimmed.ends_with("*/");
@@ -2074,8 +2085,9 @@ fn prose_that_was_never_code_is_still_prose() {
     );
 
     // The same rule reaching a wrapper's doc, where the vendor's prose is a
-    // summary rather than a property's description. The two positions differ in
-    // what rustc does with them afterwards, so neither stands in for the other.
+    // summary rather than a property's description. A wrapper's doc has the
+    // generator's paragraphs after the summary, so neither place stands in for
+    // the other.
     let ops = read(&dir.join("src/ops.rs"));
     assert!(
         ops.contains("*    A summary the vendor hung from a marker."),
@@ -2133,9 +2145,9 @@ fn a_fence_inside_a_container_names_a_language_rustdoc_leaves_alone() {
 }
 
 /// What the vendor indented is capped at three columns, wherever it stands, and
-/// what the vendor fenced is theirs: a sample is not capped. A tab is four
-/// columns, as Markdown counts it, so a sub-item that is indented by a tab is
-/// still a sub-item.
+/// what the vendor fenced is theirs: a sample is not capped. A tab at the start
+/// of a line is four columns, as Markdown counts it, so a sub-item that is
+/// indented by a tab is still a sub-item.
 #[test]
 fn what_is_indented_is_capped_and_what_is_fenced_is_kept() {
     let descriptions = [
@@ -2276,15 +2288,26 @@ fn a_quote_that_runs_over_a_line_break_leaves_every_line_where_it_is() {
 /// The settings an adopter formats with are not a way to move a line of a
 /// description.
 ///
-/// `rustfmt` writes the indentation of an item as tabs under `hard_tabs`, and
-/// the body of a `/* */` comment with it: each run of `tab_spaces` leading spaces
-/// is a tab, rustdoc strips one tab and reads the next as four columns, so at a
-/// width of 2 or 3 a vendor's line indented by two or three spaces is a code
-/// block. With `format_code_in_doc_comments` it puts a space after the slashes of
-/// every line in a fence that has none, so a sample gains a column. A `///` line
-/// that starts with a space is a fixed point of both, and the indentation of its
-/// item is outside it. The matrix, the corpus and a few lines of each kind are
-/// written under each setting and judged as they are without one.
+/// `rustfmt` writes the indentation of an item as tabs under `hard_tabs`, and it
+/// would write the body of a `/* */` comment with it: each run of `tab_spaces`
+/// leading spaces would be a tab, rustdoc strips one tab and reads the next as
+/// four columns, so at a width of 2 or 3 a vendor's line indented by two or
+/// three spaces would be a code block. With `format_code_in_doc_comments` it
+/// puts a space after the slashes of every line in a fence that has none, so a
+/// sample would gain a column. A `///` line that starts with a space is a fixed
+/// point of both, and the indentation of its item is outside it.
+///
+/// The matrix, the corpus and a few lines of each kind are written under each
+/// setting, and each setting is judged by `rustdoc --test` over both files,
+/// which finds nothing to run, and by the exact text of a sample. No page is
+/// rendered. Every description is a field, and the first 400 are a type and a
+/// wrapper too, which keeps the four settings quick.
+///
+/// `rustfmt` reads `hard_tabs` on every toolchain, and the file holding a tab in
+/// front of `///` shows it did. It reads `format_code_in_doc_comments` on a
+/// nightly only, and a stable `rustfmt` ignores the option with a warning, so
+/// that setting is judged only where a probe shows the option changed the code in
+/// a doc comment (`formats_doc_code`).
 #[test]
 fn no_setting_of_rustfmt_moves_a_line_of_a_description() {
     let mut descriptions = blocks();
@@ -2306,6 +2329,9 @@ fn no_setting_of_rustfmt_moves_a_line_of_a_description() {
     ] {
         let dir = out(&format!("prose-settings-{name}"));
         wrote(&dir, "rustfmt.toml", config);
+        if config.contains("format_code_in_doc_comments") && !formats_doc_code(&dir) {
+            continue;
+        }
         Settings::new(wrote(&dir, "document.json", &document))
             .write_to(&dir)
             .expect("the document generates");
@@ -2324,14 +2350,40 @@ fn no_setting_of_rustfmt_moves_a_line_of_a_description() {
     }
 }
 
+/// Whether the `rustfmt` on `PATH` formats the code in a doc comment under the
+/// settings in `dir`, which `format_code_in_doc_comments` asks for and a stable
+/// `rustfmt` ignores.
+fn formats_doc_code(dir: &Path) -> bool {
+    let path = wrote(
+        dir,
+        "probe.rs",
+        "/// ```\n/// let   x=1;\n/// ```\npub struct Probe;\n",
+    );
+    let ran = std::process::Command::new("rustfmt")
+        .args(["--edition", "2024"])
+        .arg(&path)
+        .output()
+        .expect("rustfmt is on PATH, as a bless step needs it");
+    ran.status.success() && read(&path).contains("let x = 1;")
+}
+
 /// A line that starts with a `/` is a line of its doc comment, and the comment
 /// holds nothing but `///` lines.
 ///
 /// After the slashes of a `///` line it would make `////`, which is no doc
-/// comment, and `prettyplease` writes such a line as an attribute instead.
+/// comment, and `prettyplease` writes such a line as an attribute instead. That
+/// holds for a description of one line as for one of several, and the
+/// descriptions below are both. The judges are given every comment of both
+/// files, and `doc_comments_alone` fails on a doc attribute they would not be
+/// given.
 #[test]
 fn a_line_that_starts_with_a_slash_stays_a_line_of_its_doc_comment() {
-    let descriptions = ["First line.\n/second line SLASHED\n//third line.\n".to_owned()];
+    let descriptions = [
+        "First line.\n/second line SLASHED\n//third line.\n".to_owned(),
+        "/one slash ALONE-ONE".to_owned(),
+        "//two slashes ALONE-TWO".to_owned(),
+        "/// three slashes ALONE-THREE".to_owned(),
+    ];
     let dir = out("prose-slash");
     Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
         .write_to(&dir)
@@ -2342,10 +2394,29 @@ fn a_line_that_starts_with_a_slash_stays_a_line_of_its_doc_comment() {
         doc_with(&types, "SLASHED"),
         "First line.\n/second line SLASHED\n//third line."
     );
-    assert!(
-        !types.contains("#[doc = \"/"),
-        "a line of the description is an attribute, not a comment line"
-    );
+    for (description, marker) in
+        descriptions
+            .iter()
+            .skip(1)
+            .zip(["ALONE-ONE", "ALONE-TWO", "ALONE-THREE"])
+    {
+        assert_eq!(
+            doc_with(&types, marker),
+            *description,
+            "{marker}: a description of one line"
+        );
+        assert!(
+            doc_with(&read(&dir.join("src/ops.rs")), marker)
+                .starts_with(&format!("{description}\n")),
+            "{marker}: the summary opens the wrapper's doc"
+        );
+    }
+    for file in ["types", "ops"] {
+        assert!(
+            !read(&dir.join(format!("src/{file}.rs"))).contains("#[doc"),
+            "a line of a description is an attribute in {file}.rs, not a comment line"
+        );
+    }
     assert_nothing_runs(&dir, "slash");
 }
 
@@ -2459,13 +2530,22 @@ fn blocks() -> Vec<String> {
 fn no_container_and_no_info_string_gets_a_vendors_sentence_run_by_rustdoc() {
     let dir = out("prose-matrix");
     let descriptions = blocks();
-    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
-        .write_to(&dir)
-        .expect("the document generates");
+    Settings::new(wrote(
+        &dir,
+        "document.json",
+        &described(&descriptions, descriptions.len()),
+    ))
+    .write_to(&dir)
+    .expect("the document generates");
     let comments = doc_comments_alone(&read(&dir.join("src/types.rs")));
+    let wrappers = doc_comments_alone(&read(&dir.join("src/ops.rs")));
     assert!(
-        comments.matches("pub f").count() >= descriptions.len(),
-        "a description did not reach a doc comment, so this proves less than it says"
+        comments.matches("pub f").count() >= 2 * descriptions.len(),
+        "a description did not reach a field and a type, so this proves less than it says"
+    );
+    assert!(
+        wrappers.matches("pub f").count() >= descriptions.len(),
+        "a description did not reach a wrapper, so this proves less than it says"
     );
 
     assert_nothing_runs(&dir, "matrix");
@@ -2541,6 +2621,7 @@ const STARTS: &[&str] = &[
     "<div>",
     "\\",
     "&#32;",
+    "/",
 ];
 
 /// What a line of a description can say after its start: the fences of every
@@ -2649,9 +2730,13 @@ fn random_descriptions(count: usize) -> Vec<String> {
 fn a_few_thousand_descriptions_put_together_at_random_are_neither_run_nor_shown_as_markup() {
     let dir = out("prose-random");
     let descriptions = random_descriptions(3000);
-    Settings::new(wrote(&dir, "document.json", &described(&descriptions, 400)))
-        .write_to(&dir)
-        .expect("the document generates");
+    Settings::new(wrote(
+        &dir,
+        "document.json",
+        &described(&descriptions, descriptions.len()),
+    ))
+    .write_to(&dir)
+    .expect("the document generates");
 
     assert_nothing_runs(&dir, "random");
     for file in ["types", "ops"] {
@@ -2700,12 +2785,30 @@ fn unknown_scheme(page: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The page that `rustdoc` renders for the comments of `src/{file}.rs` in `dir`,
+/// after `rustc` has accepted the comments and the page has been found to lead to
+/// no scheme that is unknown to be safe.
+fn judged_page(dir: &Path, file: &str) -> String {
+    let comments = doc_comments_alone(&read(&dir.join(format!("src/{file}.rs"))));
+    let refused = rustc_accepts(dir, "hostile_docs.rs", &comments);
+    assert!(refused.is_ok(), "rustc refuses {file}.rs:\n{refused:?}");
+    let page = rustdoc_page(dir, &format!("hostile_{file}_page.rs"), &comments);
+    assert_eq!(
+        unknown_scheme(&page),
+        None,
+        "a link on the page of {file}.rs leads to a script"
+    );
+    page
+}
+
 /// The control document, which a vendor could have written by accident, holds
 /// the five shapes that hide a code block, markup, a link to a script, a
 /// character that changes the direction of text and a carriage return alone, in
-/// descriptions and in two operation summaries. The judges are put to it as they
-/// are to the matrix: `rustdoc --test` finds nothing to run, `rustc` accepts the
-/// comments, and the page shows none of the markup and leads to no script.
+/// descriptions and in two operation summaries. The judges are put to both
+/// files as they are to the matrix: `rustdoc --test` finds nothing to run,
+/// `rustc` accepts the comments, and the page of each file leads to no script.
+/// The element of the vendor's is on the page of `types.rs` as text, and the
+/// link in the summary of an operation is on the page of `ops.rs` as text.
 #[test]
 fn the_control_document_hands_rustdoc_nothing_to_run_and_the_compiler_nothing_to_refuse() {
     let dir = out("prose-hostile");
@@ -2714,26 +2817,20 @@ fn the_control_document_hands_rustdoc_nothing_to_run_and_the_compiler_nothing_to
         .expect("the control document blesses");
 
     assert_nothing_runs(&dir, "hostile");
-    for file in ["src/types.rs", "src/ops.rs"] {
-        let comments = doc_comments_alone(&read(&dir.join(file)));
-        let refused = rustc_accepts(&dir, "hostile_docs.rs", &comments);
-        assert!(refused.is_ok(), "rustc refuses {file}:\n{refused:?}");
-    }
-    let types = read(&dir.join("src/types.rs"));
-    let page = rustdoc_page(&dir, "hostile_page.rs", &doc_comments_alone(&types));
+    let types_page = judged_page(&dir, "types");
+    let ops_page = judged_page(&dir, "ops");
     assert!(
-        !page.contains("<blink>"),
+        !types_page.contains("<blink>"),
         "the vendor's element is on the page"
     );
-    assert!(page.contains("&lt;blink&gt;"));
-    assert_eq!(
-        unknown_scheme(&page),
-        None,
-        "a link on the page leads to a script"
+    assert!(types_page.contains("&lt;blink&gt;"));
+    assert!(
+        types_page.contains("href=\"https://kiln.example/rules\""),
+        "a link to a page is a link"
     );
     assert!(
-        page.contains("href=\"https://kiln.example/rules\""),
-        "a link to a page is a link"
+        ops_page.contains("[the tally sheet](javascript:alert(1))"),
+        "the link to a script in a summary is shown as the text it is written in"
     );
     let ops = read(&dir.join("src/ops.rs"));
     assert!(

@@ -1328,11 +1328,12 @@ the crate follows [Semantic Versioning][semver].
   - a backslash before the `[` of a link or an image whose destination is not
     relative and is not `http:`, `https:` or `mailto:`, so that the page shows
     the text, the brackets and the destination. `[a](javascript:alert(1))` was a
-    link that ran the vendor's script on your page, as were the spellings a
-    browser reads the same way (`JaVaScRiPt:`, `&#106;avascript:`, a tab inside
-    the word), a reference link whose definition holds one, and an image of a
-    `data:` URI. A description in Markdown is still Markdown: its emphasis, its
-    lists and its links to a page render. Repair: an `https` link, in an Overlay.
+    link that ran the vendor's script on your page, in the spellings
+    `JaVaScRiPt:` and `&#106;avascript:` too, and so was a reference link whose
+    definition holds one. Any other scheme (`data:`, `file:`) shows as text as
+    well, because the rule lists what is followed and not what is refused. A
+    description in Markdown is still Markdown: its emphasis, its lists and its
+    links to a page render. Repair: an `https` link, in an Overlay.
   - the code point, `\u{202e}`, for a bidirectional control (U+202A to U+202E
     and U+2066 to U+2069). rustc refuses the character in a comment with a lint
     that no `allow` reaches, so a description that held one stopped the build of
@@ -1343,14 +1344,17 @@ the crate follows [Semantic Versioning][semver].
   - the indentation that all the lines of a description share taken off, as
     rustdoc takes it off. The doc lines that typify writes itself, such as
     `/// Error types.`, lose their leading space.
-  - one `///` line for each line of a description of several lines, where it was
-    a `/** */` comment. `rustfmt` lays out the body of a block comment by rules
-    of its own, which differ with the settings you format with (`hard_tabs` with
-    a `tab_spaces` of 2 or 3 wrote a vendor's indented line as a code block) and
-    with a `"` that runs over a line break, and rustc takes a column of stars out
-    of one (`**bold**` was shown as `*bold**`). A `///` line is left as it
-    stands. Each of them has one space after the slashes. A list the vendor
-    bulleted with `*` keeps its `*`.
+  - one `///` line for each line of every doc comment of several lines, where it
+    was a `/** */` comment: a description of several lines, and the doc of each
+    wrapper in `ops.rs`, which holds the generator's paragraphs after the
+    summary even when the summary is one line. `rustfmt` lays out the body of a
+    block comment by rules of its own, which differ with the settings you format
+    with (`hard_tabs` with a `tab_spaces` of 2 or 3 wrote a vendor's indented
+    line as a code block) and with a `"` that runs over a line break, and rustc
+    takes a column of stars out of one (`**bold**` was shown as `*bold**`). A
+    `///` line is left as it stands. Each line with text in it has one space
+    after the slashes, and so has a description of one line that starts with a
+    `/`. A list the vendor bulleted with `*` keeps its `*`.
 
   Repair: run the bless step again and commit `types.rs` and `ops.rs`. The
   `generate` feature gains `pulldown-cmark` 0.11, which is the version rustdoc
@@ -1382,6 +1386,9 @@ the crate follows [Semantic Versioning][semver].
   that holds the generated `types.rs` and `ops.rs`: code from the document, on
   the machine of whoever ran the tests and in CI. A link to `javascript:` was a
   link on your rendered docs. *Changed* says what the generator writes. The
-  guarantee is for the stable options of `rustfmt`; `wrap_comments`, which
-  rewraps a doc comment, is a nightly option and outside it. Repair: run the
-  bless step again and commit what it writes.
+  guarantee is for the stable options of `rustfmt`. `wrap_comments` rewraps a
+  doc comment, is a nightly option and is outside it: under it `rustfmt` can
+  refuse a generated file, and the bless stops there with `rustfmt rejected the
+  generated …`. Repair: run the bless step again and commit what it writes; if
+  you set `wrap_comments`, leave it out of the `rustfmt.toml` beside the
+  generated files.

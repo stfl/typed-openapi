@@ -487,8 +487,8 @@ fn two_names_that_spell_one_flag_are_two_flags_and_the_second_says_so() {
 fn a_hanging_list_marker_keeps_its_item_at_a_gap_of_four_columns() {
     let types = read(&blessed("hostile-prose").join("src/types.rs"));
 
-    // A line of a description of several lines is a `///` line with one space
-    // after the slashes, which rustdoc takes off again.
+    // A line with text in it of a description of several lines is a `///` line
+    // with one space after the slashes, which rustdoc takes off again.
     let doc_lines: Vec<&str> = types
         .lines()
         .filter_map(|line| line.trim_start().strip_prefix("/// "))
