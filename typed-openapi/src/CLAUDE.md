@@ -399,7 +399,11 @@ start from, and a caller replaces it where the host is theirs to choose, so a
 document that lists none has no default to give. A relative first server such as
 `/` loads for the same reason, as a default the caller replaces. `NoOperationId`
 names the method and the path of an operation with no `operationId`, because
-every later refusal and every generated wrapper calls the operation by it. A
+every later refusal and every generated wrapper calls the operation by it, and
+`DuplicateOperationId` names the method and the path of two that share one,
+because with two of a name it names neither. `unique_ids` in
+`src/model/reduce.rs` asks it before any operation is read, so no later refusal
+names an operation by an id that is two. A
 server URL with variables takes the `default` of each, which OpenAPI requires for
 every variable; a variable that `variables` does not declare stays in the URL,
 which is then no URL (`ServerUrl`, which prints the URL as the document spells it
@@ -815,7 +819,8 @@ list, of the JSON body that is sent and of a multipart body, and as a property o
 a flat body. It refuses none in a body sent as bytes or under a key that is not
 sent, none below the property of a request body, and none in a response: typify
 reads such a reference by its last segment, so it types the component of that
-name, and panics where the document has none. A response is no part of a request, so the reduction reads
+name, and panics where the document has none, which `GenerateError::Panicked`
+catches and names. A response is no part of a request, so the reduction reads
 none, and `resolve_response` is the generator's alone: the bless is where a
 response that cannot be followed, or whose schema leads out of
 `#/components/schemas/` at its top, is refused, by the reference.
@@ -856,7 +861,107 @@ property, and they are refused. A schema that a component states is a `Site` of
 each operation that takes it, and `Home` says which component, so a refusal
 names the component and the operation and the repair is made there. The
 response site of an operation stands where its first JSON body does, and the
-refusal names that place alone.
+refusal names that place alone. A type that typify derived for a schema nested in
+another is claimed too, under the name it is written with (`nested`): typify names
+it after the schema that holds it and the property (`Foo.bar` is `FooBar`), and a
+document is free to declare a schema of that name. Each belongs to the first root
+that reaches it, found through `held_by`, and a root that another root refers to is
+read at its own turn, so a derived type is nested in the schema that holds it.
+
+**A name that the generated file would define twice is refused by the two items
+that have it.** typify and `syn` accept a file that defines one name twice, so
+each namespace is asked once the types and the wrappers are decided and before
+`Artefacts::write`. `fields` in `src/generate/names.rs` reads the names of the
+fields of every struct and every struct variant, which typify hands back as Rust
+spells them and not as the document does, so `DuplicateField` names the type and
+the field and cannot name the properties. `src/generate/identifiers.rs` asks the
+three namespaces of `ops.rs`: the methods of the handle (the wrapper and the
+`_builder` method of each operation, and `call` and `document`, which the handle
+in `docs/generating.md` has), the variants of `OperationId`, and the methods of
+one operation's builder, which `bon` derives (a setter for each argument,
+`maybe_<x>` for each argument that is an `Option`, and `call`, which ends the
+builder). `signature_of` runs once for an operation and the wrapper, the builder
+and the check read that one `Signature`, and its `Member` is what `bon` sees of an
+argument: a list is a `Vec` and is required, and a body or a parameter that the
+document leaves optional is an `Option`. A method of the adopter's handle beyond
+those two is the adopter's to find. A duplicate `operationId` is asked earlier, by
+the reduction, and a blob is not checked for one, because no binary is stopped by
+it: the command line mounts operations by `<group> <command>`, which `check`
+holds apart, `Document::get` answers with the first, and a generated inventory
+that does not list the same ids fails `Api::new`.
+
+**typify is asked, and its panics are refusals; its stack overflow is found in
+the document.** `src/generate/guard.rs` runs the conversions that can panic under
+`catch_unwind`, `add_ref_types` for the schemas of the document and
+`add_type_with_name` for each one an operation states inline, and a panic is
+`GenerateError::Panicked` with the text typify panicked with. typify converts the
+whole set in one call, so a panic does not say which schema it was converting:
+`culprit` converts the schemas again, each with only what it refers to, the one
+that refers to the fewest first, and names the first that panics. The rule that
+typify applies to enum values (`sanitize`) is private to it, and a copy of it here
+would be the second spelling of a rule that `names.rs` exists to keep this crate
+from owning, so the generator asks typify: enum values that become one variant
+name and a `$ref` that leads nowhere are found the same way as any other panic. A
+type given to `Settings::replace` is read as the `syn::Path` that typify reads it
+as (`rust_paths`, before any schema), because typify panics on one that is none
+with a message about its own source.
+
+A cycle of `allOf` is a stack overflow in typify, which no `catch_unwind` sees:
+`merge::try_merge_schema` follows each `$ref` of an `allOf` to the schema it names
+and merges, and its own `TODO` says it has no mitigation for a cycle. So
+`src/generate/cycles.rs` reads the cycle off the schemas before typify runs. A
+`$ref` in the composition of a schema (its `allOf`, `anyOf` and `oneOf`, at any
+depth) is an edge, and it is a merge where an `allOf` that is not a bare wrapper
+of one member stands above it; a cycle with a merge in it is refused, named by its
+schemas. Each row of `CYCLES` in `tests/generate.rs` is a shape that overflowed
+typify 0.8 run on its schemas alone, and `a_loop_that_is_no_merge_generates` holds
+the ones that converted. A property or the items of a list whose own `allOf`
+adds keywords and names the schema that holds it also overflows, because the merged
+type holds the same property again, and nothing finds it. An `allOf` of the schema
+and `{description: …}` in a property converts, so a property is no edge, and
+reading one would refuse a document that typify serves.
+
+**The generated code names every standard item by its full path.** A schema may be
+called `Ok`, `Err`, `Some`, `None`, `String` or `Default`. A newtype `Ok` is a
+tuple struct, which is a function of its own name, so a bare `Ok(…)` in a file
+that defines it builds the newtype, and a bare `String` is the schema. typify
+writes `Ok(…)`, `Err(…)`, `Default::default()` and `impl TryFrom<String>` bare in
+its templates, so `StandardItems` in `src/generate/types.rs` rewrites them in the
+tree: the four prelude variants and `Default::default` where they stand in an
+expression or in the path of a pattern, and the `String` of an `impl
+TryFrom<String>`, which is found by its shape and leaves the type that the impl is
+for alone, because that type may be called `String`. A bare word in a type position
+elsewhere is a schema of the document, and the rewrite leaves it. A release of
+typify that writes another bare word fails the compile test of `tests/hostile.rs`
+under the schema that has its name, and the fixture has all ten. `ops.rs` is this
+crate's own and spells `::std::result::Result`, `::std::option::Option` and
+`::std::vec::Vec` in its templates; `the_generated_code_names_every_standard_item_by_its_full_path`
+holds it to the text, because no schema can be called what `ops.rs` names, so no
+compile would fail.
+
+**`tests/hostile.rs` compiles the generated code, and a bless that succeeds is
+compiled.** `compiles` makes the bless output a crate (a manifest, the smallest
+root of `docs/generating.md`, the owned type and the lockfile) and runs `cargo
+check` without `builder` and with it, then `cargo test --doc`, offline, in one
+target directory under `<target>/tmp` that every test of the file shares. The
+lockfile is the workspace's, beside the manifest in a checkout, and the package's
+own in the tarball that `just package` unpacks, which carries it. The manifest
+sets `warnings = "deny"` over `missing_docs` and `unused_qualifications`, so the
+`#![allow(warnings)]` of the generated files is what keeps them clean. It covers
+the lints that are at `warn` and not one that the crate sets to `deny` by name,
+which is the adopter's to relax. `COLLISIONS` is the table of F-12: a bless that
+succeeds over a document of it is compiled, and the test fails with the compiler's
+words, so a refusal that is removed shows as the error it prevented.
+
+**A parameter whose name starts with a digit has an `x` in front of it.** The
+name is the parameter's wire key, so an Overlay could only remove it, and the
+command line gives it a flag. `spelled_with_a_digit` in `src/generate/ops.rs`
+prefixes the argument with `x`, as typify does a property that starts with a digit,
+and `Signature::argument` says which wire key it sends. The prefix is not `_`:
+`bon` takes a leading `_` off a member name and panics on a name that then starts
+with a digit, `#[builder(name = …)]` included (measured in `bon-macros` 3.10.1),
+so no `_3ds` is an argument of a wrapper that has a builder. An `operationId` that
+starts with a digit is refused.
 
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command
@@ -1279,10 +1384,12 @@ the line (a word with a leading `-` makes a debug build panic), and so has a
 argument that requires itself). The other two breaks of a `requires`, a name the
 operation does not declare and one that has no flag, cost the run only, because
 `companion_flags` in `src/tree.rs` leaves them out of the command. No break of
-the document's own confirmation word is inside the line. A slice that adds a
-refusal at load asks whether a value in the blob can break it, reads what a
-binary does with the blob that does, and adds the check when the answer is
-inside the line.
+the document's own confirmation word is inside the line, and neither is a
+duplicate `operationId`: a blob that holds two is read by `Document::get` as the
+first of them and fails `Api::new` against an inventory that lists them once. A
+slice that adds a refusal at load asks whether a value in the blob can break it,
+reads what a binary does with the blob that does, and adds the check when the
+answer is inside the line.
 
 Postcard drops the message of a `serde` error, so a check inside a `try_from`
 could say only that the blob is damaged, and a rule that compares two flags or two

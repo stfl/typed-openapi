@@ -156,7 +156,7 @@ fn an_overridden_parameter_is_one_argument_typed_by_the_operations_entry() {
     let ops = read(&dir.join("src/ops.rs"));
 
     assert!(
-        ops.contains("pub fn get_thing(&self, id: i64, key: Option<&str>)"),
+        dense(&ops).contains("pubfnget_thing(&self,id:i64,key:::std::option::Option<&str>)"),
         "the wrapper does not take the operation's `id` and the path item's `key`:\n{ops}"
     );
     assert!(
@@ -217,7 +217,7 @@ fn an_integer_format_types_a_body_property_and_leaves_a_parameter_an_i64() {
         "a body property with `minimum: 0` is not a `u64`:\n{types}"
     );
     assert!(
-        ops.contains("limit: Option<i64>"),
+        ops.contains("limit: ::std::option::Option<i64>"),
         "a parameter of `format: int32` is not an `i64` argument:\n{ops}"
     );
 }
@@ -302,35 +302,35 @@ fn optional_bodies() -> [OptionalBody; 5] {
         OptionalBody {
             what: "a flat body with a required property",
             wrapper: "create_reminder",
-            argument: "body:Option<&crate::types::CreateReminderBody>",
+            argument: "body:::std::option::Option<&crate::types::CreateReminderBody>",
             builder: json("createReminder"),
             note,
         },
         OptionalBody {
             what: "a flat body with no required property",
             wrapper: "create_note",
-            argument: "body:Option<&crate::types::CreateNoteBody>",
+            argument: "body:::std::option::Option<&crate::types::CreateNoteBody>",
             builder: json("createNote"),
             note,
         },
         OptionalBody {
             what: "a body that goes whole",
             wrapper: "create_export",
-            argument: "body:Option<&crate::types::CreateExportBody>",
+            argument: "body:::std::option::Option<&crate::types::CreateExportBody>",
             builder: json("createExport"),
             note,
         },
         OptionalBody {
             what: "a body sent verbatim",
             wrapper: "upload_attachment",
-            argument: "body:Option<Vec<u8>>",
+            argument: "body:::std::option::Option<::std::vec::Vec<u8>>",
             builder: ".body(body.map(typed_openapi::Payload::Raw))".to_owned(),
             note,
         },
         OptionalBody {
             what: "a multipart body",
             wrapper: "upload_scan",
-            argument: "parts:Option<Vec<Part>>",
+            argument: "parts:::std::option::Option<::std::vec::Vec<Part>>",
             builder: ".body(parts.map(typed_openapi::Payload::Multipart))".to_owned(),
             note: "`parts` is optional: with `None` the request carries no body.",
         },
@@ -395,14 +395,14 @@ fn a_required_body_is_a_plain_argument() {
             "a body sent verbatim",
             &toy,
             "upload_document",
-            "body:Vec<u8>",
+            "body:::std::vec::Vec<u8>",
             ".raw(body)",
         ),
         (
             "a multipart body",
             &toy,
             "upload_document_multipart",
-            "parts:Vec<Part>",
+            "parts:::std::vec::Vec<Part>",
             ".multipart(parts)",
         ),
         (
@@ -906,10 +906,10 @@ fn a_scalar_read_through_a_wrapper_or_an_any_schema_is_an_argument_of_its_type()
     let ops = read(&dir.join("src/ops.rs"));
 
     for argument in [
-        "floor: Option<i64>",
-        "code: Option<crate::types::Code>",
-        "days: Vec<&str>",
-        "codes: Vec<crate::types::Code>",
+        "floor: ::std::option::Option<i64>",
+        "code: ::std::option::Option<crate::types::Code>",
+        "days: ::std::vec::Vec<&str>",
+        "codes: ::std::vec::Vec<crate::types::Code>",
         "ratio: f64",
     ] {
         assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
@@ -959,10 +959,10 @@ fn a_list_parameter_whose_array_is_named_is_a_vec_argument() {
     let ops = read(&dir.join("src/ops.rs"));
 
     for argument in [
-        "days: Vec<&str>",
-        "weeks: Vec<&str>",
-        "codes: Vec<crate::types::Code>",
-        "kinds: Vec<crate::types::Code>",
+        "days: ::std::vec::Vec<&str>",
+        "weeks: ::std::vec::Vec<&str>",
+        "codes: ::std::vec::Vec<crate::types::Code>",
+        "kinds: ::std::vec::Vec<crate::types::Code>",
     ] {
         assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
     }
@@ -979,7 +979,10 @@ fn a_list_that_openapiv3_holds_as_any_is_a_vec_argument() {
         .expect("the document generates");
     let ops = read(&dir.join("src/ops.rs"));
 
-    for argument in ["days: Vec<&str>", "codes: Vec<crate::types::Code>"] {
+    for argument in [
+        "days: ::std::vec::Vec<&str>",
+        "codes: ::std::vec::Vec<crate::types::Code>",
+    ] {
         assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
     }
 }
@@ -1018,7 +1021,7 @@ fn a_list_parameter_is_a_vec_argument_and_one_with_no_flag_is_no_argument() {
     let ops = read(&dir.join("src/ops.rs"));
 
     assert!(
-        ops.contains("tag: Vec<&str>"),
+        ops.contains("tag: ::std::vec::Vec<&str>"),
         "the list is not a Vec:\n{ops}"
     );
     assert!(
@@ -1516,7 +1519,8 @@ fn a_parameter_named_after_a_keyword_is_a_raw_identifier_and_keeps_its_wire_name
 
     let ops = read(&dir.join("src/ops.rs"));
     assert!(
-        ops.contains("r#type: Option<&str>") && ops.contains("r#ref: Option<&str>"),
+        ops.contains("r#type: ::std::option::Option<&str>")
+            && ops.contains("r#ref: ::std::option::Option<&str>"),
         "a keyword parameter is not a raw identifier:\n{ops}"
     );
     assert!(
@@ -1556,29 +1560,215 @@ fn an_operation_that_cannot_be_spelled_names_itself() {
     );
 }
 
-/// The same naming, for a parameter: what the adopter needs is the operation
-/// and the parameter, not a position in a token stream.
+/// An optional parameter whose name starts with a digit (`3ds`, a vendor's
+/// three-domain-secure flag) has a flag on the command line, and a Rust
+/// identifier does not start with a digit. The parameter's name is its wire key,
+/// so an Overlay cannot rename it and could only remove it: the generator puts
+/// `_` in front of the word instead, and the wrapper says which wire key the
+/// argument sends.
 #[test]
-fn a_parameter_that_cannot_be_spelled_names_itself_and_its_operation() {
-    let dir = out("unspellable-param");
-    let document = KEYWORDED.replace("- name: type", "- name: \"2\"");
-    let failure = Settings::new(wrote(&dir, "document.yaml", &document))
+fn a_parameter_whose_name_starts_with_a_digit_gets_a_prefixed_identifier_and_keeps_its_wire_key() {
+    let dir = out("digit-param");
+    let document = KEYWORDED
+        .replace("- name: type", "- name: 3ds")
+        .replace("- name: ref", "- name: \"2\"");
+    Settings::new(wrote(&dir, "document.yaml", &document))
         .write_to(&dir)
-        .expect_err("`2` has no spelling as a Rust identifier");
+        .expect("a name that starts with a digit is a spelling problem and not a refusal");
+
+    let ops = read(&dir.join("src/ops.rs"));
     assert!(
-        matches!(&failure, GenerateError::Operation { op, .. } if op == "listVouchers"),
-        "{failure:?}"
+        ops.contains("x3ds: ::std::option::Option<&str>")
+            && ops.contains("x2: ::std::option::Option<&str>"),
+        "a digit is not the start of an identifier:\n{ops}"
     );
-    assert_eq!(
-        failure.to_string(),
-        "the wrapper for listVouchers cannot be generated"
+    assert!(
+        ops.contains(r#".maybe("3ds", x3ds)"#) && ops.contains(r#".maybe("2", x2)"#),
+        "the wire key has to survive the spelling:\n{ops}"
     );
-    assert_eq!(
-        failure
-            .source()
-            .expect("the operation's failure has a cause")
-            .to_string(),
-        "parameter `2` has no spelling as a Rust identifier",
+    for said in [
+        "`x3ds` sends the document's `3ds`, under a name of its own: a Rust identifier does not \
+         start with a digit, so `x` stands in front of the word.",
+        "`x2` sends the document's `2`, under a name of its own: a Rust identifier does not \
+         start with a digit, so `x` stands in front of the word.",
+    ] {
+        assert!(
+            ops.contains(said),
+            "the wrapper does not say which wire key the argument sends:\n{ops}"
+        );
+    }
+}
+
+/// The prefix is one more spelling of the plain word, so it moves aside for an
+/// argument declared before it as any other does, and the wrapper gives both
+/// reasons for the name it ends with.
+#[test]
+fn a_prefixed_identifier_that_is_spent_moves_aside_and_says_both_reasons() {
+    let dir = out("digit-param-spent");
+    let document = KEYWORDED
+        .replace("- name: type", "- name: x3ds")
+        .replace("- name: ref", "- name: 3ds");
+    Settings::new(wrote(&dir, "document.yaml", &document))
+        .write_to(&dir)
+        .expect("two spellings of one word are one more argument");
+
+    let ops = read(&dir.join("src/ops.rs"));
+    assert!(
+        ops.contains(r#".maybe("x3ds", x3ds)"#) && ops.contains(r#".maybe("3ds", x3ds_2)"#),
+        "the later parameter keeps its wire key under the next name:\n{ops}"
+    );
+    assert!(
+        ops.contains(
+            "`x3ds_2` sends the document's `3ds`, under a name of its own: a Rust identifier \
+             does not start with a digit, so `x` stands in front of the word, and an argument \
+             declared before it had already spent that spelling."
+        ),
+        "the wrapper gives one reason for a name that has two:\n{ops}"
+    );
+}
+
+/// An adopter's lint set can be as strict as they like (`clippy::nursery`,
+/// `missing_docs`, `unused_qualifications`, then `-D warnings`), and none of it
+/// is aimed at a file they did not write. The exemption is the same block in both
+/// files, it names `warnings` beside the groups it has always named, and its
+/// reason says that the crate holding the file does not grade it.
+#[test]
+fn both_generated_files_allow_every_warning_and_say_why() {
+    let dir = out("allowed");
+    layered().write_to(&dir).expect("the fixtures generate");
+
+    for file in ["src/types.rs", "src/ops.rs"] {
+        let source = read(&dir.join(file));
+        let (_, after) = source
+            .split_once("#![allow(")
+            .unwrap_or_else(|| panic!("{file} carries no `#![allow(`"));
+        let (allowed, _) = after
+            .split_once(")]")
+            .unwrap_or_else(|| panic!("{file} does not close its `#![allow(`"));
+        let items: Vec<&str> = allowed
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.ends_with(','))
+            .collect();
+        assert!(
+            items.contains(&"warnings,"),
+            "{file} does not allow `warnings`: {items:?}"
+        );
+        // The reason is one string that the file spells over two lines.
+        assert!(
+            dense(&allowed.replace('\\', "")).contains(&dense(
+                "reason = \"generated source is not graded on style or on any lint that the crate \
+                 holding it turns on; the allow covers this module and nothing else\""
+            )),
+            "{file} gives no reason that covers `warnings`:\n{allowed}"
+        );
+    }
+}
+
+/// The standard items that generated code names, and that a schema can be called.
+const STANDARD: [&str; 10] = [
+    "Ok", "Err", "Some", "None", "String", "Vec", "Option", "Result", "Box", "Default",
+];
+
+/// Every place in `source` where a standard item is named by one bare word: a
+/// path of one segment in an expression or a pattern, and in a type for a type
+/// that a file holds none of. `Default::default` is the standard item's own path
+/// of two, and counts too.
+fn bare_standard_items(source: &str, types_too: bool) -> Vec<String> {
+    use syn::visit_mut::VisitMut;
+
+    struct Bare {
+        found: Vec<String>,
+        types_too: bool,
+    }
+    impl Bare {
+        fn note(&mut self, path: &syn::Path) {
+            let words: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+            let bare = path.leading_colon.is_none()
+                && match words.as_slice() {
+                    [one] => STANDARD.contains(&one.as_str()),
+                    [first, second] => first == "Default" && second == "default",
+                    _ => false,
+                };
+            if bare {
+                self.found.push(words.join("::"));
+            }
+        }
+    }
+    impl VisitMut for Bare {
+        fn visit_expr_path_mut(&mut self, expr: &mut syn::ExprPath) {
+            self.note(&expr.path);
+            syn::visit_mut::visit_expr_path_mut(self, expr);
+        }
+        fn visit_pat_tuple_struct_mut(&mut self, pat: &mut syn::PatTupleStruct) {
+            self.note(&pat.path);
+            syn::visit_mut::visit_pat_tuple_struct_mut(self, pat);
+        }
+        fn visit_pat_ident_mut(&mut self, pat: &mut syn::PatIdent) {
+            if STANDARD.contains(&pat.ident.to_string().as_str()) {
+                self.found.push(pat.ident.to_string());
+            }
+        }
+        fn visit_type_path_mut(&mut self, ty: &mut syn::TypePath) {
+            if self.types_too {
+                self.note(&ty.path);
+            }
+            syn::visit_mut::visit_type_path_mut(self, ty);
+        }
+    }
+
+    let mut file: syn::File = syn::parse_file(source).expect("a generated file is Rust");
+    let mut bare = Bare {
+        found: Vec::new(),
+        types_too,
+    };
+    bare.visit_file_mut(&mut file);
+    bare.found
+}
+
+/// A schema is free to be called `Ok`, `Err`, `Some`, `None`, `String`, `Vec`,
+/// `Option`, `Result`, `Box` or `Default`, so the generated code names each of
+/// those items by its full path, and nothing it writes means whatever a schema is
+/// called. `types.rs` is typify's, and the items that it writes by one word are
+/// the ones of its own templates (`Ok(…)`, `Err(…)`, `Default::default()`), found
+/// in expressions and patterns, where a bare word is never a schema; the types of
+/// a file are the schemas'. `ops.rs` is this crate's own, and not one word of it
+/// is bare, a type included, because it names a schema only by the path of the
+/// module that holds it.
+///
+/// The compile test of `tests/hostile.rs` holds both files to the meaning. This
+/// holds `ops.rs` to the text, because no schema can be called what `ops.rs`
+/// names, so no compile would fail.
+#[test]
+fn the_generated_code_names_every_standard_item_by_its_full_path() {
+    let toy = out("standard-paths");
+    layered().write_to(&toy).expect("the fixtures generate");
+    let hostile = out("standard-paths-hostile");
+    Settings::new(HOSTILE)
+        .replace("cone-number", "crate::pyrometry::Cone")
+        .write_to(&hostile)
+        .expect("the control document generates");
+
+    for (label, root) in [("toy", toy), ("hostile", hostile.clone())] {
+        let types = bare_standard_items(&read(&root.join("src/types.rs")), false);
+        assert!(types.is_empty(), "{label}: types.rs names {types:?} bare");
+        let ops = bare_standard_items(&read(&root.join("src/ops.rs")), true);
+        assert!(ops.is_empty(), "{label}: ops.rs names {ops:?} bare");
+    }
+
+    // The one type position that is the standard item's: the `String` of the
+    // `TryFrom` that wraps a type the adopter owns. A schema called `String` is a
+    // newtype that derefs to the standard one, so the impl for the bare word still
+    // compiles, and it converts from the schema where it says it converts from a
+    // string. No compile can tell, so the text does.
+    let types = read(&hostile.join("src/types.rs"));
+    assert!(
+        !types.contains("TryFrom<String>"),
+        "a `TryFrom` of the generated types converts from the schema called `String`"
+    );
+    assert!(
+        types.contains("impl ::std::convert::TryFrom<::std::string::String> for Cone"),
+        "the newtype over the type the adopter owns does not convert from a string:\n{types}"
     );
 }
 
@@ -3175,7 +3365,7 @@ fn a_schema_the_adopter_owns_is_named_by_the_adopters_own_path() {
         "the wrapper does not answer with the type the adopter owns:\n{ops}"
     );
     assert!(
-        ops.contains("over:Option<crate::types::Cents>"),
+        ops.contains("over:::std::option::Option<crate::types::Cents>"),
         "the wrapper does not take the type the named schema became:\n{ops}"
     );
     assert!(
@@ -3782,11 +3972,15 @@ fn a_response_stated_inline_is_a_type_too() {
         "the response the operation states inline generated no type:\n{types}"
     );
     assert!(
-        ops.contains("Result<Call<'_,crate::types::CreateLedgerEntryResponse>,Error>"),
+        ops.contains(
+            "::std::result::Result<Call<'_,crate::types::CreateLedgerEntryResponse>,Error>"
+        ),
         "the wrapper does not deserialise into it"
     );
     assert!(
-        ops.contains("Result<Call<'_,::std::vec::Vec<crate::types::Voucher>>,Error>"),
+        ops.contains(
+            "::std::result::Result<Call<'_,::std::vec::Vec<crate::types::Voucher>>,Error>"
+        ),
         "a list stated inline lost the type of what is in it"
     );
 }
@@ -3834,7 +4028,7 @@ fn the_item_of_a_list_stated_inline_is_a_type() {
 
     assert!(
         ops.contains(
-            "Result<Call<'_,::std::vec::Vec<crate::types::ListPositionsResponseItem>>,Error>"
+            "::std::result::Result<Call<'_,::std::vec::Vec<crate::types::ListPositionsResponseItem>>,Error>"
         ),
         "the item of the list is not a type:\n{ops}"
     );
@@ -4342,7 +4536,9 @@ fn answering(name: &str, responses: &str) -> Result<String, GenerateError> {
 /// Whether the wrapper of `getThing` answers with `ty`, spelled as a generated
 /// file spells it.
 fn answers_with(ops: &str, ty: &str) -> bool {
-    ops.contains(&format!("-> Result<Call<'_, {ty}>, Error>"))
+    dense(ops).contains(&dense(&format!(
+        "-> ::std::result::Result<Call<'_, {ty}>, Error>"
+    )))
 }
 
 /// The probe's `getThing`: a success response that is a `$ref` to
@@ -4826,7 +5022,10 @@ fn an_optional_body_behind_a_reference_is_an_option_argument() {
         "body-optional",
         r##"{ content: { application/json: { schema: { $ref: "#/components/schemas/Thing" } } } }"##,
     );
-    assert!(ops.contains("body: Option<&crate::types::Thing>"), "{ops}");
+    assert!(
+        ops.contains("body: ::std::option::Option<&crate::types::Thing>"),
+        "{ops}"
+    );
 }
 
 /// A schema the component states inline is a type of its own, named after the
@@ -4924,7 +5123,7 @@ fn an_inline_schema_in_a_component_that_two_operations_share_is_a_type_for_each_
         "{ops}"
     );
     assert_eq!(
-        ops.matches("-> Result<Call<'_, crate::types::Made>, Error>")
+        ops.matches("-> ::std::result::Result<Call<'_, crate::types::Made>, Error>")
             .count(),
         4,
         "{ops}"
@@ -5261,7 +5460,7 @@ fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
             writing(&format!(
                 "{{ application/octet-stream: {{ schema: {{ {out_of_the_schemas} }} }} }}"
             )),
-            "body: Option<Vec<u8>>",
+            "body: ::std::option::Option<::std::vec::Vec<u8>>",
         ),
         (
             "a body under a key that is not sent",
@@ -5269,7 +5468,7 @@ fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
                 "{{ application/json: {{ schema: {{ type: object, properties: {{ a: {{ type: \
                  string }} }} }} }}, application/xml: {{ schema: {{ {out_of_the_schemas} }} }} }}"
             )),
-            "body: Option<&crate::types::MakeABody>",
+            "body: ::std::option::Option<&crate::types::MakeABody>",
         ),
     ] {
         let (ops, _) = outside("outside-blessed", &paths).expect(label);
@@ -5780,4 +5979,370 @@ fn a_named_nullable_schema_and_a_nullable_answer_are_options() {
         ops.contains("Call<'_, ::std::option::Option<crate::types::PutHolderResponse>>"),
         "{ops}"
     );
+}
+
+// -------------------------------------- what typify cannot build is refused by name
+
+/// A document with one operation that touches no schema, and whatever schemas the
+/// case puts under `components`, each on a line of its own indented by four
+/// spaces.
+fn with_schemas(schemas: &str) -> String {
+    format!(
+        "openapi: 3.0.3\ninfo: {{ title: Schemas, version: \"1.0\" }}\nservers: [{{ url: \
+         \"http://localhost:9999\" }}]\npaths:\n  /things:\n    get:\n      operationId: \
+         listThings\n      responses:\n        \"200\": {{ description: OK }}\ncomponents:\n  \
+         schemas:\n{schemas}"
+    )
+}
+
+/// What a refused bless leaves in the tree: nothing, because every step that can
+/// refuse comes before the first file is written.
+fn assert_nothing_written(dir: &Path, what: &str) {
+    assert!(
+        !dir.join("src").exists() && !dir.join("spec").exists(),
+        "{what}: a refused bless wrote into the tree"
+    );
+}
+
+/// typify reads the type of `Settings::replace` as a path and panics inside its
+/// conversion when it is not one, with a message about its own source and none
+/// about the adopter's call. The generator reads the same text as a path first, so
+/// the refusal names the format and the type the adopter wrote, and comes before
+/// any schema is converted.
+#[test]
+fn a_replacement_that_is_no_rust_path_is_refused_by_name_before_typify_runs() {
+    for (label, rust) in [
+        ("words", "not a path"),
+        ("symbols", "cents::Cents!!"),
+        ("trailing", "cents::"),
+        ("reference", "&str"),
+        ("empty", ""),
+    ] {
+        let dir = out(&format!("replace-bad-{label}"));
+        let failure = Settings::new(wrote(&dir, "document.yaml", OWNED))
+            .replace("money", rust)
+            .write_to(&dir)
+            .expect_err("the text is no Rust path");
+        assert!(
+            matches!(&failure, GenerateError::Unsupported(text)
+            if text.starts_with(&format!(
+                "`{rust}`, named for `format: money`, is not a Rust path"
+            ))),
+            "{label}: {failure:?}"
+        );
+        assert_nothing_written(&dir, label);
+    }
+}
+
+/// A path that typify takes generates, whatever its shape: a name, a rooted name, a
+/// name under `crate` and a name with arguments.
+#[test]
+fn a_replacement_that_is_a_rust_path_generates() {
+    for (label, rust) in [
+        ("plain", "cents::Cents"),
+        ("rooted", "::cents::Cents"),
+        ("crate", "crate::cents::Cents"),
+        ("arguments", "std::vec::Vec<u8>"),
+    ] {
+        let dir = out(&format!("replace-good-{label}"));
+        Settings::new(wrote(&dir, "document.yaml", OWNED))
+            .replace("money", rust)
+            .write_to(&dir)
+            .unwrap_or_else(|error| panic!("{label}: `{rust}` is a path: {error:?}"));
+    }
+}
+
+/// Enum values that differ only in case or in a separator, and two that are
+/// symbols with no letter in them. typify turns each value into a variant name and
+/// panics when two of them are one, after the reduction has accepted the document.
+const ENUMS_THAT_COLLIDE: [(&str, &str, &str); 3] = [
+    ("case", "[active, ACTIVE]", "ACTIVE"),
+    ("separator", "[a-b, a_b]", "a_b"),
+    ("symbols", "['+', '-']", "-"),
+];
+
+/// typify's panic is not a refusal, and it names no schema: the process ends with
+/// exit 101 and a line of typify's own source. The generator catches it and says
+/// which schema was being converted, whether the enum is the schema, a property of
+/// it, or stated inline by an operation, and the cause is what typify said.
+#[test]
+fn enum_values_that_become_one_rust_name_are_refused_naming_the_schema() {
+    for (label, values, second) in ENUMS_THAT_COLLIDE {
+        for (place, schemas, said) in [
+            (
+                "named",
+                format!("    Thing: {{ type: string, enum: {values} }}\n"),
+                "the schema `Thing`",
+            ),
+            (
+                "property",
+                format!(
+                    "    Thing: {{ type: object, properties: {{ status: {{ type: string, enum: \
+                     {values} }} }} }}\n"
+                ),
+                "the schema `Thing`",
+            ),
+        ] {
+            let dir = out(&format!("enum-{label}-{place}"));
+            let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(&schemas)))
+                .write_to(&dir)
+                .expect_err("two values are one variant");
+            assert!(
+                matches!(&failure, GenerateError::Panicked { schema, .. } if schema == said),
+                "{label}, {place}: {failure:?}"
+            );
+            assert_eq!(
+                failure.to_string(),
+                format!("typify panicked while it built the Rust type of {said}"),
+                "{label}, {place}"
+            );
+            assert!(
+                reported(&failure).contains(second),
+                "{label}, {place}: the cause does not say which values:\n{}",
+                reported(&failure)
+            );
+            assert_nothing_written(&dir, &format!("{label}, {place}"));
+        }
+    }
+}
+
+/// An enum that an operation states inline is converted after the named schemas,
+/// and the refusal names the operation's body and not a schema of the document.
+#[test]
+fn an_enum_stated_inline_that_typify_cannot_name_is_refused_naming_the_body() {
+    const STATED: &str = r#"openapi: 3.0.3
+info: { title: Stated, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    post:
+      operationId: createThing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [active, ACTIVE] }
+      responses:
+        "201": { description: Created }
+"#;
+    let dir = out("enum-inline");
+    let failure = Settings::new(wrote(&dir, "document.yaml", STATED))
+        .write_to(&dir)
+        .expect_err("two values are one variant");
+
+    assert!(
+        matches!(&failure, GenerateError::Panicked { schema, .. }
+            if schema == "the request body stated inline by `createThing`"),
+        "{failure:?}"
+    );
+    assert_nothing_written(&dir, "inline");
+}
+
+/// A `$ref` that leads nowhere, in a property and in an `allOf`, panics inside
+/// typify too, at two different places of its source. A schema that no operation
+/// reaches is where the reduction never meets it, so the bless is where it is
+/// refused, and the refusal names the schema that holds the reference.
+#[test]
+fn any_other_panic_of_typify_is_a_refusal_naming_the_schema_too() {
+    for (label, schema) in [
+        (
+            "property",
+            "    Lonely: { type: object, properties: { x: { $ref: '#/components/schemas/Missing' } } }\n",
+        ),
+        (
+            "allOf",
+            "    Lonely: { allOf: [ { $ref: '#/components/schemas/Missing' }, { type: object, \
+             properties: { y: { type: string } } } ] }\n",
+        ),
+    ] {
+        let dir = out(&format!("panic-{label}"));
+        let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(schema)))
+            .write_to(&dir)
+            .expect_err("a reference to nowhere");
+        assert!(
+            matches!(&failure, GenerateError::Panicked { schema, .. }
+                if schema == "the schema `Lonely`"),
+            "{label}: {failure:?}"
+        );
+        assert_nothing_written(&dir, label);
+    }
+}
+
+/// typify converts the whole set in one call, so a panic does not say which schema
+/// it was converting. The generator converts again, each schema with what it
+/// refers to, the one that refers to the fewest first, so that the schema that
+/// holds the cause is named and not one that refers to it, wherever the document
+/// puts them.
+#[test]
+fn the_schema_that_holds_the_cause_is_named_and_not_the_one_that_refers_to_it() {
+    // `Outer` stands first and holds a reference to `Inner`, whose enum is the
+    // cause: the conversion of `Outer` panics too, because it takes `Inner` in.
+    const OUTER_FIRST: &str = "    Outer: { type: object, properties: { inner: { $ref: \
+        '#/components/schemas/Inner' } } }\n    Inner: { type: string, enum: [active, ACTIVE] }\n";
+    let dir = out("panic-leaf");
+    let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(OUTER_FIRST)))
+        .write_to(&dir)
+        .expect_err("two values are one variant");
+
+    assert!(
+        matches!(&failure, GenerateError::Panicked { schema, .. } if schema == "the schema `Inner`"),
+        "{failure:?}"
+    );
+}
+
+/// Every refusal of the cycle test names the schemas that make the cycle, in the
+/// order `allOf` leads from one to the next, starting with the one that comes
+/// first in the document. `Tail` leads into a cycle and is not part of it.
+const CYCLES: [(&str, &str, &[&str]); 8] = [
+    (
+        "the pair of SEV-282's review",
+        "    Left:  { allOf: [{ $ref: '#/components/schemas/Right' }, { properties: { id: { type: \
+         integer, readOnly: true } } }] }\n    Right: { allOf: [{ $ref: '#/components/schemas/Left' \
+         }, { properties: { name: { type: string } } }] }\n",
+        &["Left", "Right"],
+    ),
+    (
+        "a schema that lists itself beside another",
+        "    Mirror: { allOf: [{ $ref: '#/components/schemas/Mirror' }, { properties: { a: { type: \
+         string } } }] }\n",
+        &["Mirror"],
+    ),
+    (
+        "three schemas",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: string } } \
+         }] }\n    B: { allOf: [{ $ref: '#/components/schemas/C' }, { properties: { y: { type: \
+         string } } }] }\n    C: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { z: \
+         { type: string } } }] }\n",
+        &["A", "B", "C"],
+    ),
+    (
+        "a schema that leads into a cycle",
+        "    Tail: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: string } \
+         } }] }\n    B: { allOf: [{ $ref: '#/components/schemas/C' }, { properties: { y: { type: \
+         string } } }] }\n    C: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { z: \
+         { type: string } } }] }\n",
+        &["B", "C"],
+    ),
+    (
+        "a reference inside a nested allOf",
+        "    A: { allOf: [{ allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: \
+         string } } }] }, { properties: { y: { type: string } } }] }\n    B: { allOf: [{ $ref: \
+         '#/components/schemas/A' }, { properties: { z: { type: string } } }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "a reference inside a oneOf of an allOf",
+        "    A: { allOf: [{ oneOf: [{ $ref: '#/components/schemas/B' }, { properties: { q: { type: \
+         string } } }] }, { properties: { y: { type: string } } }] }\n    B: { allOf: [{ $ref: \
+         '#/components/schemas/A' }, { properties: { z: { type: string } } }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "a wrapper of one element on one side",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }] }\n    B: { allOf: [{ $ref: \
+         '#/components/schemas/A' }, { properties: { z: { type: string } } }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "a oneOf that leads back to an allOf",
+        "    A: { oneOf: [{ $ref: '#/components/schemas/B' }, { properties: { q: { type: string } } \
+         }] }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { z: { type: \
+         string } } }] }\n",
+        &["A", "B"],
+    ),
+];
+
+/// typify merges the members of an `allOf` by following each `$ref` to the schema
+/// it names, and a cycle of references has no end: its source says so in a `TODO`
+/// at the arm that follows one (`merge::try_merge_schema`), and the process dies
+/// of a stack overflow, which no `catch_unwind` sees. So the cycle is found in the
+/// document, before typify runs, and refused naming the schemas that make it.
+#[test]
+fn a_cycle_of_allof_among_named_schemas_is_refused_naming_the_schemas() {
+    for (at, (label, schemas, cycle)) in CYCLES.iter().enumerate() {
+        let dir = out(&format!("cycle-{at}"));
+        let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
+            .write_to(&dir)
+            .expect_err("a cycle of allOf has no finite type");
+        assert!(
+            matches!(&failure, GenerateError::CyclicAllOf { schemas } if schemas == cycle),
+            "{label}: {failure:?}"
+        );
+        assert_nothing_written(&dir, label);
+    }
+}
+
+/// The words of the refusal for one schema and for several, and the repair.
+#[test]
+fn the_refusal_of_a_cycle_of_allof_says_what_leads_to_what() {
+    let refused = |name: &str, at: usize| {
+        let schemas = CYCLES[at].1;
+        let dir = out(name);
+        Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
+            .write_to(&dir)
+            .expect_err("a cycle")
+            .to_string()
+    };
+    assert_eq!(
+        refused("cycle-words-pair", 0),
+        "the schemas `Left` and `Right` are made of each other through `allOf`; break the cycle \
+         in an Overlay"
+    );
+    assert_eq!(
+        refused("cycle-words-one", 1),
+        "the schema `Mirror` is made of itself through `allOf`; break the cycle in an Overlay"
+    );
+    assert_eq!(
+        refused("cycle-words-three", 2),
+        "the schemas `A`, `B` and `C` are made of each other through `allOf`; break the cycle in \
+         an Overlay"
+    );
+}
+
+/// A reference that closes a loop is a recursive type where the loop does not run
+/// through a merge, and typify writes it: a property that points back, a `oneOf`
+/// that does, an array of the schema, and the idiom that puts a sentence beside a
+/// reference (an `allOf` of the schema and a description). Wrappers of one element
+/// that name each other are no merge either.
+#[test]
+fn a_loop_that_is_no_merge_generates() {
+    for (label, schemas) in [
+        (
+            "a property that points back",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: \
+             string } } }] }\n    B: { type: object, properties: { y: { $ref: \
+             '#/components/schemas/A' } } }\n",
+        ),
+        (
+            "a oneOf that points back",
+            "    A: { oneOf: [{ $ref: '#/components/schemas/B' }, { type: string }] }\n    B: { \
+             oneOf: [{ $ref: '#/components/schemas/A' }, { type: integer }] }\n",
+        ),
+        (
+            "a list of the schema",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { type: object, properties: { x: \
+             { type: string } } }] }\n    B: { type: array, items: { allOf: [{ $ref: \
+             '#/components/schemas/A' }, { type: object, properties: { z: { type: string } } \
+             }] } }\n",
+        ),
+        (
+            "a sentence beside the reference",
+            "    Node: { type: object, properties: { parent: { allOf: [{ $ref: \
+             '#/components/schemas/Node' }, { description: the parent }] }, name: { type: string \
+             } } }\n",
+        ),
+        (
+            "wrappers of one element",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }] }\n    B: { allOf: [{ $ref: \
+             '#/components/schemas/A' }] }\n",
+        ),
+    ] {
+        let dir = out(&format!("loop-{}", label.replace(' ', "-")));
+        Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
+            .write_to(&dir)
+            .unwrap_or_else(|error| panic!("{label}: typify converts it: {error:?}"));
+    }
 }

@@ -63,6 +63,9 @@
 //! do, and this is where it is heard. The failure names the layer it is in.
 
 mod artefacts;
+mod cycles;
+mod guard;
+mod identifiers;
 mod names;
 mod ops;
 mod prose;
@@ -94,8 +97,16 @@ const DEFAULT_COMMAND: &str = "cargo run -p xtask -- bless";
 /// It is an inner attribute rather than a wrapping module so that the exemption
 /// travels with the file it exempts, and it is the same block in every
 /// generated file so that an adopter can grep for it.
+///
+/// `warnings` is what keeps the file quiet under a lint set that this list does
+/// not name, such as `clippy::nursery`, `missing_docs` and
+/// `unused_qualifications`, and under `-D warnings` on top of it: a lint at the
+/// level `warn` is a lint that the adopter chose, and none of it is aimed at a
+/// file that they did not write. A lint they set to `deny` by name is theirs
+/// to repair in their own configuration, and the allow does not reach it.
 const ALLOW: &str = "\
 #![allow(
+    warnings,
     clippy::all,
     clippy::pedantic,
     clippy::restriction,
@@ -103,8 +114,8 @@ const ALLOW: &str = "\
     unreachable_pub,
     unused,
     rustdoc::all,
-    reason = \"generated source is not graded on style; the allow covers this \\
-              module and nothing else\"
+    reason = \"generated source is not graded on style or on any lint that the crate \\
+              holding it turns on; the allow covers this module and nothing else\"
 )]
 ";
 
@@ -449,6 +460,18 @@ fn repair(inline: bool) -> &'static str {
     }
 }
 
+/// What [`GenerateError::CyclicAllOf`] says of the schemas that make a cycle.
+fn made_of(schemas: &[String]) -> String {
+    let named: Vec<String> = schemas.iter().map(|schema| format!("`{schema}`")).collect();
+    match named.as_slice() {
+        [only] => format!("the schema {only} is made of itself through `allOf`"),
+        _ => format!(
+            "the schemas {} are made of each other through `allOf`",
+            listed(&named)
+        ),
+    }
+}
+
 /// A list as prose: `a`, then `a and b`, then `a, b and c`.
 fn listed(items: &[String]) -> String {
     match items.split_last() {
@@ -663,6 +686,84 @@ pub enum GenerateError {
     /// is part of this crate's API.
     #[error("typify cannot build Rust types from the document's schemas")]
     Typify(#[source] Box<dyn Error + Send + Sync>),
+    /// typify panicked while it converted a schema, which it does for a shape
+    /// that it has no type for: enum values that become one variant name, such
+    /// as `active` and `ACTIVE`, and a `$ref` that leads nowhere, among others.
+    /// A panic is not a refusal and names no schema, so the generator catches it
+    /// and says which schema was being converted: the one that a document
+    /// declares, or the request body or response that an operation states
+    /// inline. The cause is the text of the panic, which is typify's.
+    ///
+    /// The panic hook of the process runs for each panic that is caught, and the
+    /// search for the schema converts it again, so the text of the cause is on
+    /// standard error twice before the refusal is reported.
+    #[error("typify panicked while it built the Rust type of {schema}")]
+    Panicked {
+        /// A sentence naming the schema: `the schema `Thing``, or the request
+        /// body or response that an operation states inline.
+        schema: String,
+        /// What typify said when it panicked.
+        #[source]
+        message: Box<dyn Error + Send + Sync>,
+    },
+    /// Schemas that are made of each other through `allOf`. typify merges the
+    /// members of an `allOf` by following each `$ref` to the schema it names, and
+    /// a cycle of references has no end: the process dies of a stack overflow,
+    /// which nothing can catch. So the cycle is found in the document, before
+    /// typify runs. A loop that does not run through a merge is a recursive type,
+    /// and it is not refused: a property that points back, a `oneOf` that does, a
+    /// list of the schema, a sentence beside a reference, and `allOf` wrappers of
+    /// one element that name each other.
+    #[error("{}; break the cycle in an Overlay", made_of(.schemas))]
+    CyclicAllOf {
+        /// The schemas that make the cycle, in the order that `allOf` leads from
+        /// one to the next, starting with the one that comes first in the
+        /// document. A schema that leads into the cycle and is no part of it is
+        /// not named.
+        schemas: Vec<String>,
+    },
+    /// Two items of the generated `ops.rs` that one name would define twice, which
+    /// is a compile error in the file the bless writes. The items are the wrappers,
+    /// the `_builder` methods, the variants of `OperationId`, the two methods that
+    /// the handle of the adopter's crate has (`call` and `document`), and for each
+    /// operation the methods that `bon` derives for its builder: a setter for each
+    /// argument, a second one named `maybe_…` for each argument that is optional,
+    /// and `call`, which ends the builder. Renaming one of them here would be a
+    /// generator choosing a public name nobody asked for, so the document is
+    /// refused. An Overlay changes the `operationId`. A parameter's name is its
+    /// wire key, so an Overlay can only remove one.
+    #[error(
+        "`{name}` would be defined twice in the generated ops.rs, as {first} and as {second}; \
+         correct one of them in an Overlay"
+    )]
+    DuplicateIdentifier {
+        /// The name that is defined twice, as it is written in Rust.
+        name: String,
+        /// A phrase naming the item that has the name first: the wrapper of an
+        /// operation, a method of the handle, a setter of a builder.
+        first: String,
+        /// A phrase naming the item that has it second.
+        second: String,
+    },
+    /// Two properties of one generated type that are one field. typify writes a
+    /// field for each property and does not make two of one name unique, so the
+    /// type declares the field twice, which is a compile error in the file the
+    /// bless writes. The properties are the document's, and typify's naming is what
+    /// makes them one, so the message names the struct and the field and not the
+    /// properties, which typify does not hand back. An Overlay removes or renames
+    /// one of them.
+    #[error(
+        "the type `{ty}` would declare the field `{field}` twice, because two of its properties are \
+         one name in Rust; correct one of them in an Overlay"
+    )]
+    DuplicateField {
+        /// The name of the type in Rust, as typify spells it: a struct, or an enum
+        /// that has a variant of named fields. A type that a property of a schema
+        /// makes has a name that typify derived.
+        ty: String,
+        /// The name of the field in Rust.
+        field: String,
+    },
     /// A wrapper would have to name the type of a schema the document's
     /// `components.schemas` never declared. Emitting an identifier for it
     /// anyway is how an adopter ends up bisecting a generated file, so the

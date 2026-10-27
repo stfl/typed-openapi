@@ -19,6 +19,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::GenerateError;
+use super::identifiers::{self, Member};
 use super::names::{Answer, Home, JsonBody, Names, Reading, Site, Statement, Unanswerable};
 use crate::model::{Body, Shape, declared, entry_of_flag};
 use crate::schema::{array_of, stated, typed};
@@ -44,6 +45,10 @@ struct Emitted {
     /// it. It delegates rather than repeating the body, so the two cannot
     /// describe different requests.
     builder_method: TokenStream,
+    /// The name of the wrapper, and of the method that starts its builder.
+    names: (Ident, Ident),
+    /// The arguments of the wrapper, which `bon` makes setters of.
+    members: Vec<Member>,
 }
 
 /// A document element this generator has no Rust spelling for.
@@ -58,6 +63,7 @@ pub(super) fn emit(
     names: &Names,
 ) -> Result<String, GenerateError> {
     let ops = gather(api, model, names)?;
+    check_identifiers(&ops)?;
     let operation_id = operation_id(&ops);
     let inventory = inventory(&ops);
     let methods = ops.iter().map(|op| &op.method);
@@ -111,6 +117,11 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                 let declared = declared(path_item, operation, components).map_err(|source| {
                     unsupported(format!("a parameter cannot be followed: {source}"))
                 })?;
+                // One signature for the wrapper and for the builder beside it: they
+                // are one call, and the identifiers it binds are asked once.
+                let signature = signature_of(op, &declared, components, operation, names)?;
+                let response = response_type(op, operation, components, names)?;
+                let plain = operation_ident(&op.id().to_snake_case())?;
                 Ok(Emitted {
                     row: quote! { (#id, #method, #path) },
                     variant: variant_of(op)?,
@@ -118,8 +129,10 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                     group: op.group().as_str().to_owned(),
                     command: op.command().as_str().to_owned(),
                     body: json_body_type(op, operation, components, names)?,
-                    method: wrapper(op, &declared, components, operation, names)?,
-                    builder_method: builder_wrapper(op, &declared, components, operation, names)?,
+                    method: wrapper(op, &plain, &signature, &response)?,
+                    builder_method: builder_wrapper(&plain, &signature, &response)?,
+                    names: (plain.clone(), format_ident!("{plain}_builder")),
+                    members: signature.members,
                 })
             };
             emitted().map_err(|source| GenerateError::Operation {
@@ -141,7 +154,7 @@ fn operation_id(ops: &[Emitted]) -> TokenStream {
     let idents = ops.iter().map(|op| &op.variant);
     let from_command = ops.iter().map(|op| {
         let (group, command, variant) = (&op.group, &op.command, &op.variant);
-        quote! { (#group, #command) => Some(Self::#variant) }
+        quote! { (#group, #command) => ::std::option::Option::Some(Self::#variant) }
     });
     let check_body = check_body(ops);
 
@@ -169,10 +182,10 @@ fn operation_id(ops: &[Emitted]) -> TokenStream {
             #[doc = "This is the one place a name off the command line becomes"]
             #[doc = "a typed operation; everything past it is exhaustive."]
             #[must_use]
-            pub fn from_command(group: &str, command: &str) -> Option<Self> {
+            pub fn from_command(group: &str, command: &str) -> ::std::option::Option<Self> {
                 match (group, command) {
                     #(#from_command,)*
-                    _ => None,
+                    _ => ::std::option::Option::None,
                 }
             }
 
@@ -196,7 +209,8 @@ fn check_body(ops: &[Emitted]) -> TokenStream {
         .filter(|op| op.body.is_none())
         .map(|op| &op.variant)
         .collect();
-    let untyped = (!untyped.is_empty()).then(|| quote! { #(Self::#untyped)|* => Ok(()) });
+    let untyped = (!untyped.is_empty())
+        .then(|| quote! { #(Self::#untyped)|* => ::std::result::Result::Ok(()) });
     quote! {
         #[doc = "Does `body` fit the type this operation's wrapper takes?"]
         #[doc = ""]
@@ -208,7 +222,7 @@ fn check_body(ops: &[Emitted]) -> TokenStream {
         pub fn check_body(
             self,
             body: &serde_json::Value,
-        ) -> Result<(), typed_openapi::client::BodyError> {
+        ) -> ::std::result::Result<(), typed_openapi::client::BodyError> {
             match self {
                 #(#typed,)*
                 #untyped
@@ -296,6 +310,9 @@ fn operation_ident(word: &str) -> Result<Ident, GenerateError> {
 /// answers that, and it is not the arm below it: `accept_as_ident` asks whether
 /// a word may stand unquoted, so it says yes to `3rd_firing` and to the empty
 /// string, and only `syn` refuses a word that is no identifier in any spelling.
+/// The word of a parameter has an `x` in front of a digit first
+/// ([`spelled_with_a_digit`]), so for a parameter only an emptied word reaches
+/// `None`; an `operationId` that starts with a digit does.
 fn ident(word: &str) -> Option<Ident> {
     if typify::accept_as_ident(word) {
         return syn::parse_str(word).ok();
@@ -326,38 +343,58 @@ fn json_body_type(
 
 fn wrapper(
     op: &Operation,
-    declared: &[&Parameter],
-    components: &Components,
-    operation: &openapiv3::Operation,
-    names: &Names,
+    name: &Ident,
+    signature: &Signature,
+    response: &TokenStream,
 ) -> Result<TokenStream, GenerateError> {
-    let name = operation_ident(&op.id().to_snake_case())?;
     let summary = op.summary().unwrap_or(op.id());
-    let signature = format!("{} {}", op.method(), op.path());
+    let request = format!("{} {}", op.method(), op.path());
     let gate = gate_note(op);
 
+    // The delegate beside this one forwards the argument names; a positional call
+    // has no use for them.
     let Signature {
         args,
         builder,
         notes,
-        // The delegate beside this one forwards the argument names; a
-        // positional call has no use for them.
-        names: _,
-    } = signature_of(op, declared, components, operation, names)?;
-    let response = response_type(op, operation, components, names)?;
+        ..
+    } = signature;
     let variant = variant_of(op)?;
     let doc = paragraphs(
-        [summary, &signature, &gate]
+        [summary, &request, &gate]
             .into_iter()
             .map(str::to_owned)
-            .chain(notes),
+            .chain(notes.iter().cloned()),
     );
     parses(quote! {
         #[doc = #doc]
-        pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
+        pub fn #name(&self, #(#args),*) -> ::std::result::Result<Call<'_, #response>, Error> {
             self.call(OperationId::#variant, Values::new() #(#builder)*)
         }
     })
+}
+
+/// `ident` without the `r#` of a raw identifier: the word the document wrote.
+fn unraw(ident: &Ident) -> String {
+    let spelled = ident.to_string();
+    spelled
+        .strip_prefix("r#")
+        .map_or_else(|| spelled.clone(), str::to_owned)
+}
+
+/// Refuses the first name that two items of the file would define.
+fn check_identifiers(ops: &[Emitted]) -> Result<(), GenerateError> {
+    let operations: Vec<identifiers::Operation<'_>> = ops
+        .iter()
+        .map(|op| identifiers::Operation {
+            id: &op.id,
+            variant: op.variant.to_string(),
+            wrapper: op.names.0.to_string(),
+            builder: op.names.1.to_string(),
+            members: op.members.clone(),
+        })
+        .collect();
+    identifiers::check(&operations)
 }
 
 /// One doc comment out of the paragraphs it is made of.
@@ -431,20 +468,16 @@ fn gate_note(op: &Operation) -> String {
 /// It delegates to the plain wrapper rather than repeating its body, so the two
 /// cannot come to describe different requests.
 fn builder_wrapper(
-    op: &Operation,
-    declared: &[&Parameter],
-    components: &Components,
-    operation: &openapiv3::Operation,
-    names: &Names,
+    plain: &Ident,
+    signature: &Signature,
+    response: &TokenStream,
 ) -> Result<TokenStream, GenerateError> {
-    let plain = operation_ident(&op.id().to_snake_case())?;
     let name = format_ident!("{plain}_builder");
     let Signature {
         args,
         names: arguments,
         ..
-    } = signature_of(op, declared, components, operation, names)?;
-    let response = response_type(op, operation, components, names)?;
+    } = signature;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
          required argument is a compile error."
@@ -452,7 +485,7 @@ fn builder_wrapper(
     parses(quote! {
         #[doc = #doc]
         #[builder]
-        pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
+        pub fn #name(&self, #(#args),*) -> ::std::result::Result<Call<'_, #response>, Error> {
             self.#plain(#(#arguments),*)
         }
     })
@@ -470,6 +503,8 @@ struct Signature {
     names: Vec<Ident>,
     builder: Vec<TokenStream>,
     notes: Vec<String>,
+    /// The arguments as `bon` sees them, for the names its setters would share.
+    members: Vec<Member>,
 }
 
 impl Signature {
@@ -531,17 +566,32 @@ impl Signature {
     ///
     /// `carries` says what the argument is in the document's own terms, because
     /// that is the half the reader is missing: the identifier is in front of
-    /// them and the thing it stands for is not.
+    /// them and the thing it stands for is not. `led_by_digit` says the word got
+    /// its `_` because the document's own started with a digit, which is the other
+    /// reason an argument is spelled in a way nobody wrote.
     ///
     /// Every argument comes through here rather than through [`Signature::bind`],
     /// so an argument added later cannot be given a name without being
     /// accounted for under it.
-    fn argument(&mut self, plain: &Ident, word: &str, carries: &str) -> Ident {
+    fn argument(&mut self, plain: &Ident, word: &str, carries: &str, led_by_digit: bool) -> Ident {
         let bound = self.bind(plain.clone(), word);
+        let mut reasons = Vec::new();
+        if led_by_digit {
+            reasons.push(
+                "a Rust identifier does not start with a digit, so `x` stands in front of the word",
+            );
+        }
         if bound != *plain {
+            reasons.push(if led_by_digit {
+                "an argument declared before it had already spent that spelling"
+            } else {
+                "an argument declared before it had already spent the plain spelling"
+            });
+        }
+        if !reasons.is_empty() {
             self.notes.push(format!(
-                "`{bound}` {carries}, under a name of its own: an argument \
-                 declared before it had already spent the plain spelling."
+                "`{bound}` {carries}, under a name of its own: {}.",
+                reasons.join(", and ")
             ));
         }
         bound
@@ -560,6 +610,7 @@ fn signature_of(
         names: Vec::new(),
         builder: Vec::new(),
         notes: Vec::new(),
+        members: Vec::new(),
     };
     for param in op.params() {
         add_param(&mut out, param, declared, components, names)?;
@@ -596,59 +647,77 @@ fn add_body(
             ..
         } => {
             let ty = body_type(op, media_type, operation, components, names)?;
-            let name = out.argument(&format_ident!("body"), "body", "is the request body");
-            // The operation is named so that an argument that does not serialise
-            // says whose body it was, as `fits` does in `check_body`.
-            let id = op.id();
-            let argument = BodyArgument {
-                ty: quote! { &#ty },
-                call: quote! { .json(crate::to_json(#id, #name)?) },
-                payload: quote! {
-                    #name
-                        .map(|body| crate::to_json(#id, body))
-                        .transpose()?
-                        .map(typed_openapi::Payload::Json)
-                },
-                name,
-            };
-            (*required, argument)
+            (*required, json_argument(out, op, &ty))
         }
         Body::Opaque {
             media_type,
             required,
-        } => {
-            let name = out.argument(&format_ident!("body"), "body", "is the request body");
-            out.notes.push(format!(
-                "`{name}` is sent verbatim under the document's own `{media_type}`, \
-                 which this crate does not assemble."
-            ));
-            let argument = BodyArgument {
-                ty: quote! { Vec<u8> },
-                call: quote! { .raw(#name) },
-                payload: quote! { #name.map(typed_openapi::Payload::Raw) },
-                name,
-            };
-            (*required, argument)
-        }
-        Body::Multipart { names, required } => {
-            let name = out.argument(&format_ident!("parts"), "parts", "carries the body's parts");
-            out.notes.push(multipart_note(&name, names));
-            let argument = BodyArgument {
-                ty: quote! { Vec<Part> },
-                call: quote! { .multipart(#name) },
-                payload: quote! { #name.map(typed_openapi::Payload::Multipart) },
-                name,
-            };
-            (*required, argument)
-        }
+        } => (*required, verbatim_argument(out, media_type)),
+        Body::Multipart { names, required } => (*required, parts_argument(out, names)),
     };
     argument.add_to(out, required);
     Ok(())
 }
 
+/// The argument of a JSON body of type `ty`.
+fn json_argument(out: &mut Signature, op: &Operation, ty: &TokenStream) -> BodyArgument {
+    let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
+    // The operation is named so that an argument that does not serialise says
+    // whose body it was, as `fits` does in `check_body`.
+    let id = op.id();
+    BodyArgument {
+        carries: "the request body",
+        ty: quote! { &#ty },
+        call: quote! { .json(crate::to_json(#id, #name)?) },
+        payload: quote! {
+            #name
+                .map(|body| crate::to_json(#id, body))
+                .transpose()?
+                .map(typed_openapi::Payload::Json)
+        },
+        name,
+    }
+}
+
+/// The argument of a body that is sent verbatim under `media_type`.
+fn verbatim_argument(out: &mut Signature, media_type: &str) -> BodyArgument {
+    let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
+    out.notes.push(format!(
+        "`{name}` is sent verbatim under the document's own `{media_type}`, \
+         which this crate does not assemble."
+    ));
+    BodyArgument {
+        carries: "the request body",
+        ty: quote! { ::std::vec::Vec<u8> },
+        call: quote! { .raw(#name) },
+        payload: quote! { #name.map(typed_openapi::Payload::Raw) },
+        name,
+    }
+}
+
+/// The argument of a multipart body whose declared parts are `names`.
+fn parts_argument(out: &mut Signature, names: &[String]) -> BodyArgument {
+    let name = out.argument(
+        &format_ident!("parts"),
+        "parts",
+        "carries the body's parts",
+        false,
+    );
+    out.notes.push(multipart_note(&name, names));
+    BodyArgument {
+        carries: "the parts of the request body",
+        ty: quote! { ::std::vec::Vec<Part> },
+        call: quote! { .multipart(#name) },
+        payload: quote! { #name.map(typed_openapi::Payload::Multipart) },
+        name,
+    }
+}
+
 /// The argument of a body, before the document says whether it is required.
 struct BodyArgument {
     name: Ident,
+    /// What the argument carries, for the setter that names it.
+    carries: &'static str,
     /// The type of the argument when the body is required.
     ty: TokenStream,
     /// The `Values` call that a required body is passed to.
@@ -661,15 +730,21 @@ impl BodyArgument {
     fn add_to(self, out: &mut Signature, required: bool) {
         let Self {
             name,
+            carries,
             ty,
             call,
             payload,
         } = self;
+        out.members.push(Member {
+            name: unraw(&name),
+            optional: !required,
+            carries: carries.to_owned(),
+        });
         if required {
             out.args.push(quote! { #name: #ty });
             out.builder.push(call);
         } else {
-            out.args.push(quote! { #name: Option<#ty> });
+            out.args.push(quote! { #name: ::std::option::Option<#ty> });
             out.builder.push(quote! { .body(#payload) });
             out.notes.push(optional_note(&name));
         }
@@ -705,7 +780,7 @@ fn add_param(
             return Ok(());
         }
     };
-    let word = param.name().to_snake_case();
+    let (word, led_by_digit) = spelled_with_a_digit(param.name().to_snake_case());
     let plain = ident(&word).ok_or_else(|| {
         unsupported(format!(
             "parameter `{}` has no spelling as a Rust identifier",
@@ -716,14 +791,21 @@ fn add_param(
         &plain,
         &word,
         &format!("sends the document's `{}`", param.name()),
+        led_by_digit,
     );
     let schema = param_schema(declared, param.name())?;
     let wire = param.name();
+    out.members.push(Member {
+        name: unraw(&ident),
+        // A list is a `Vec`, which `bon` does not make optional.
+        optional: list.is_none() && !param.required(),
+        carries: format!("the parameter `{wire}`"),
+    });
     if list.is_some() {
         // A list parameter is the wire name given once per value, which is the
         // repetition a repeated flag reaches the request builder with.
         let ty = list_type(param.name(), schema, components, names)?;
-        out.args.push(quote! { #ident: Vec<#ty> });
+        out.args.push(quote! { #ident: ::std::vec::Vec<#ty> });
         out.builder.push(quote! { .each(#wire, #ident) });
     } else if param.required() {
         let ty = scalar_type(schema, names)?;
@@ -731,10 +813,32 @@ fn add_param(
         out.builder.push(quote! { .param(#wire, #ident) });
     } else {
         let ty = scalar_type(schema, names)?;
-        out.args.push(quote! { #ident: Option<#ty> });
+        out.args.push(quote! { #ident: ::std::option::Option<#ty> });
         out.builder.push(quote! { .maybe(#wire, #ident) });
     }
     Ok(())
+}
+
+/// `word` with an `x` in front of it where it starts with a digit, and whether it
+/// did.
+///
+/// A parameter's name is its wire key, so an Overlay cannot spell it another way
+/// and a name the identifier rules refuse would refuse the whole bless for a
+/// parameter the command line serves. The wrapper says which wire key the
+/// argument sends.
+///
+/// The letter is `x` because that is what typify puts in front of a name that
+/// starts with a digit, so the property `3ds` of a body and the parameter `3ds`
+/// are `x3ds` alike. It is not `_`: `bon` takes a leading `_` off a member name
+/// ("the builder API should not expose that knowledge") and panics on a name that
+/// then starts with a digit, with `#[builder(name = …)]` too, so `_3ds` is no
+/// argument of a wrapper that has a builder.
+fn spelled_with_a_digit(word: String) -> (String, bool) {
+    if word.starts_with(|first: char| first.is_ascii_digit()) {
+        (format!("x{word}"), true)
+    } else {
+        (word, false)
+    }
 }
 
 fn multipart_note(parts: &Ident, names: &[String]) -> String {
@@ -1016,6 +1120,7 @@ mod tests {
             names: Vec::new(),
             builder: Vec::new(),
             notes: Vec::new(),
+            members: Vec::new(),
         };
         let bound = |signature: &mut Signature, word: &str| {
             signature

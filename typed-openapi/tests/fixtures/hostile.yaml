@@ -14,7 +14,9 @@
 # parameters this crate cannot spell, three spellings of `help`, which is
 # clap's before it is anyone's, and a description that hides a code block in
 # a Markdown container, or holds markup, a character that changes the
-# direction of text, or a carriage return. The vocabulary is deliberately nothing
+# direction of text, or a carriage return, a parameter whose name starts with a
+# digit, and schemas named `Ok`, `Err`, `Some`, `None`, `String`, `Option`,
+# `Result`, `Vec`, `Box` and `Default`. The vocabulary is deliberately nothing
 # this repository uses anywhere else, because half of what is being tested is
 # whether a name survives the trip from the document to a flag and to Rust.
 #
@@ -267,6 +269,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/glaze_recipe'
+  # An optional parameter whose name starts with a digit, which has a flag and no
+  # spelling as a Rust identifier until a `_` stands in front of it, and two
+  # parameters that name schemas that are called after standard items.
+  /payments:
+    get:
+      operationId: listPayments
+      summary: List payments
+      parameters:
+        - name: 3ds
+          in: query
+          schema: { type: boolean }
+        - name: verdict
+          in: query
+          schema: { $ref: '#/components/schemas/Ok' }
+        - name: tag
+          in: query
+          schema: { $ref: '#/components/schemas/String' }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Standard' }
   # A path whose first segment is clap's own subcommand. Left alone it names the
   # group `help` and the document is refused; the marker is the repair, the line
   # an Overlay writes, and it stands here so that the tree mounts.
@@ -393,3 +418,37 @@ components:
             [sched]: vbscript:msgbox(1)
         directed: { type: string, description: "Marked \u202eRTL\u202c on the lid." }
         returned: { type: string, description: "Two lines\rjoined by a lone carriage return." }
+    # Ten schemas named after what the generated code means by the same words:
+    # the two results, the two options, a string, a list, a box, a result and an
+    # option, and the default of a type. The generated code names every one of them
+    # by its full path, so a schema that is called one of them is a schema and
+    # nothing else, and a newtype over a string (`Ok`, `Some`, `Box`, `String`),
+    # over a number (`None`), an enumeration (`Err`), an object with a field of
+    # each kind and a list are each one more type.
+    Ok: { type: string }
+    Err: { type: string, enum: [open, shut] }
+    Some: { type: string }
+    None: { type: integer }
+    String: { type: string, pattern: '^[a-z]+$' }
+    Option: { type: object, properties: { some: { type: string } } }
+    Result: { type: object, properties: { ok: { type: boolean } } }
+    Vec: { type: array, items: { type: string } }
+    Box: { type: string }
+    Default: { type: object, properties: { d: { type: string } } }
+    # One struct that holds each of them, one by one, and a default that spells
+    # another.
+    Standard:
+      type: object
+      properties:
+        ok: { $ref: '#/components/schemas/Ok' }
+        err: { $ref: '#/components/schemas/Err' }
+        some: { $ref: '#/components/schemas/Some' }
+        none: { $ref: '#/components/schemas/None' }
+        string: { $ref: '#/components/schemas/String' }
+        option: { $ref: '#/components/schemas/Option' }
+        result: { $ref: '#/components/schemas/Result' }
+        vec: { $ref: '#/components/schemas/Vec' }
+        box: { $ref: '#/components/schemas/Box' }
+        fallback:
+          allOf: [{ $ref: '#/components/schemas/Default' }]
+          default: { d: spare }

@@ -1510,6 +1510,101 @@ the crate follows [Semantic Versioning][semver].
     a power loss between two of them leaves some files new and the rest old.
     Repair: run the bless again.
 
+- **A duplicate `operationId` is refused by the load.** OpenAPI says it MUST be
+  unique, and `Document::get`, every later refusal and every generated wrapper
+  call an operation by it. The load refused none, `Document::get` answered with
+  the first of two, and a bless wrote two `pub fn` of one name. It is
+  `LoadError::DuplicateOperationId { id, first_method, first_path,
+  second_method, second_path }`, and it comes before any operation is read, so
+  no refusal that names an operation by its id names the wrong one. The message
+  names both operations: `` `listThings` is the operationId of both `get
+  /things` and `get /v2/things`; an Overlay gives one of them another ``.
+  Repair: an Overlay that updates the `operationId` of one of them. A blob that
+  holds two is not refused by `from_blob`: no binary is stopped by it, and a
+  generated inventory that does not list the same ids fails `Api::new`.
+- **Two items of the generated code that share a name refuse the bless by
+  name.** Each of these blessed with exit 0 and was a compile error in the
+  generated file, which the adopter met in their own compiler, in a file of
+  thousands of lines. Each is now a `GenerateError`, and a bless that is refused
+  writes nothing. Repair: an Overlay that corrects one of the two; a parameter's
+  name is its wire key, so for a parameter the repair removes one of them.
+  - `GenerateError::DuplicateIdentifier { name, first, second }`: two operations
+    whose `operationId`s are one wrapper (`listThings` and `list_things`) or one
+    variant of `OperationId` (`a1` and `a_1`); an operation called `<x>Builder`
+    beside `<x>`, because the second is the name of the `_builder` method of the
+    first; an operation called `call` or `document`, the two methods that the
+    handle of your crate has; and, for the `builder` feature, a parameter called
+    `call` (the method that ends a `bon` builder) and a parameter that is
+    `maybe_<x>` beside an optional parameter `<x>`, because `bon` gives the
+    second a setter by that name.
+  - `GenerateError::DuplicateField { ty, field }`: two properties of one object
+    that are one field in Rust, such as `fooBar` and `foo_bar`. typify does not
+    make them two, and `ty` is the type that holds them, which can be an enum
+    whose variant is an object.
+  - `GenerateError::OneType`, which refused two schemas of one Rust name, also
+    refuses a schema that is the name typify derives for a schema nested in
+    another (`Foo.bar` is `FooBar`, which a schema `FooBar` already is). The
+    message names the schema nested in `Foo`, and `title` on the nested schema
+    names its type.
+- **A panic of typify, a replaced type that is no path, and a cycle of `allOf`
+  are refused by name.** Each ended the bless step without a refusal.
+  - Enum values that become one variant name, such as `active` and `ACTIVE`,
+    `a-b` and `a_b`, or `+` and `-`, made typify panic, and the bless exited with
+    101 and a line of typify's source. Any panic of typify is
+    `GenerateError::Panicked { schema, message }`: `schema` names the schema
+    that was being converted (the one the document declares, or the request body
+    or the response that an operation states inline), and `message` is what
+    typify said, which names the values. The process's panic hook prints that
+    text on standard error twice before the refusal, because the search for the
+    schema converts it again. Repair: an Overlay that removes or renames one of
+    the values, or the shape that the message names.
+  - A type given to `Settings::replace` that is no Rust path (`not a path`,
+    `cents::`, `&str`) made typify panic with a message about its own source. It
+    is `GenerateError::Unsupported`: `` `cents::`, named for `format: money`,
+    is not a Rust path ``. Every type is read whether or not the document states
+    its format. Repair: a path, such as `cents::Cents`, `::cents::Cents` or
+    `crate::cents::Cents`.
+  - Schemas that are made of each other through `allOf` (`Left` is `allOf` of
+    `Right` and a property, and `Right` of `Left` and another) made the process
+    die of a stack overflow in typify, on a document that the load accepts. It is
+    `GenerateError::CyclicAllOf { schemas }`, which names the schemas of the cycle
+    in the order that `allOf` leads from one to the next. A cycle is refused where
+    a reference stands in an `allOf` that is not a bare wrapper of one member, at
+    any depth of `allOf`, `anyOf` and `oneOf`. Loops that are no merge are not
+    refused: a property that points back, a `oneOf` that does, a list of the
+    schema, a sentence beside a reference (`allOf` of the schema and
+    `{description: …}`), and `allOf` wrappers of one member that name each other.
+    A property or the items of a list whose own `allOf` adds keywords and names
+    the schema that holds it still overflows in typify, and is not found
+    (`typed-openapi/src/CLAUDE.md`). Repair: an Overlay that breaks the cycle.
+- **Generated code names every standard item by its full path, and allows every
+  warning.** A schema called `Ok`, `Err`, `Some`, `None`, `String`, `Vec`,
+  `Option`, `Result`, `Box` or `Default` made the generated file mean something
+  else, or not compile: `Ok(Self(value))` built the newtype `Ok`, and `impl
+  TryFrom<String>` took the `String` of the document. `types.rs` writes
+  `::std::result::Result::Ok(…)`, `::std::result::Result::Err(…)`,
+  `::std::default::Default::default()` and `TryFrom<::std::string::String>`
+  where typify writes the bare word, and `ops.rs` writes `::std::result::Result`,
+  `::std::option::Option`, `::std::option::Option::Some`, `::std::vec::Vec` and
+  the rest. The same items are named, so no call site changes. The `#![allow]` at
+  the top of both files adds `warnings`, with its reason, so a crate that sets
+  `clippy::nursery`, `missing_docs` and `unused_qualifications` and then `-D
+  warnings` is no longer failed by files it did not write. Repair: run the bless
+  step again and commit `types.rs` and `ops.rs`. In sevdesk-cli every wrapper's
+  signature changes in spelling and in nothing else.
+- **A parameter whose name starts with a digit is an argument.** `3ds` was
+  refused as `` parameter `3ds` has no spelling as a Rust identifier ``, and a
+  parameter's name is its wire key, so no Overlay could mend it short of
+  removing the parameter. The wrapper's argument is `x3ds`, which is how typify
+  spells a property that starts with a digit, and the wrapper's documentation
+  says which wire key it sends: `` `x3ds` sends the document's `3ds`, under a name
+  of its own: a Rust identifier does not start with a digit, so `x` stands in
+  front of the word. `` The `builder` feature has the setter `.x3ds(…)`. The
+  prefix is not `_`, because `bon` takes a leading `_` off a member and panics on
+  a name that then starts with a digit. An `operationId` that starts with a digit
+  is refused as before. Repair: none; a call site that needs the argument names
+  `x3ds`.
+
 ### Removed
 
 - **Items that no caller outside the crate used are private to it.** No

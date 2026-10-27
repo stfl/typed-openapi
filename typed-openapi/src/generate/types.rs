@@ -126,7 +126,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use openapiv3::{OpenAPI, ReferenceOr};
-use proc_macro2::Span;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use schemars::schema::{InstanceType, Schema, SchemaObject, SingleOrVec, SubschemaValidation};
 use schemars::visit::Visitor;
@@ -176,6 +176,9 @@ pub(super) fn emit(
     header: &str,
     replacements: &[(String, String)],
 ) -> Result<(String, Names), GenerateError> {
+    // Before any schema is read, because typify panics on one that is no path,
+    // with a message about its own source and none about the adopter's call.
+    let paths = rust_paths(replacements)?;
     let mut definitions = definitions(api)?;
     let mut stated = stated(api, model)?;
 
@@ -204,13 +207,14 @@ pub(super) fn emit(
 
     let mut definitions = schemas(definitions)?;
     let mut stated = inline(stated)?;
+    // Before typify reads a schema, because a cycle of `allOf` is a stack
+    // overflow in it, and nothing catches that.
+    super::cycles::check(&definitions)?;
     set_by_the_api(api, model, &mut definitions, &mut stated);
     admit_null(&mut definitions, &mut stated);
 
     let mut space = TypeSpace::new(&settings);
-    space
-        .add_ref_types(definitions)
-        .map_err(|error| GenerateError::Typify(Box::new(error)))?;
+    super::guard::add_ref_types(&settings, &mut space, definitions)?;
     let names = Names::read(&mut space, declared.iter().map(String::as_str), stated)?;
 
     // A description is the vendor's prose, and a type's doc, a field's and a
@@ -223,9 +227,10 @@ pub(super) fn emit(
             }
         })?;
     ThroughThisCrate.visit_file_mut(&mut file);
+    StandardItems.visit_file_mut(&mut file);
     let mut displays = display_impls(&file)?;
     file.items.append(&mut displays);
-    for promise in promises(&file, replacements)?.into_iter().rev() {
+    for promise in promises(&file, &paths)?.into_iter().rev() {
         file.items.insert(0, promise);
     }
     Ok((format!("{header}{}", prettyplease::unparse(&file)), names))
@@ -256,19 +261,16 @@ pub(super) fn emit(
 /// the reason.
 ///
 /// [`Settings::replace`]: super::Settings::replace
-fn promises(
-    file: &syn::File,
-    replacements: &[(String, String)],
-) -> Result<Vec<syn::Item>, GenerateError> {
+fn promises(file: &syn::File, paths: &[RustPath]) -> Result<Vec<syn::Item>, GenerateError> {
     let wrapped: BTreeSet<String> = file.items.iter().filter_map(wraps).collect();
     let mut asked = BTreeSet::new();
     let mut promises = Vec::new();
-    for (format, rust) in replacements {
-        let ty: syn::Type = syn::parse_str(rust).map_err(|source| {
-            GenerateError::Unsupported(format!(
-                "`{rust}`, named for `format: {format}`, is not a Rust type: {source}"
-            ))
-        })?;
+    for RustPath { format, rust, path } in paths {
+        let ty = syn::Type::Path(syn::TypePath {
+            attrs: Vec::new(),
+            qself: None,
+            path: path.clone(),
+        });
         let spelling = quote!(#ty).to_string();
         if !wrapped.contains(&spelling) || !asked.insert(spelling) {
             continue;
@@ -297,6 +299,46 @@ fn promises(
         );
     }
     Ok(promises)
+}
+
+/// One type that [`Settings::replace`] named for a format, read as the path that
+/// typify takes it for.
+///
+/// [`Settings::replace`]: super::Settings::replace
+struct RustPath {
+    /// The `format` keyword, in the document's own spelling.
+    format: String,
+    /// The text the adopter wrote.
+    rust: String,
+    /// That text as a path.
+    path: syn::Path,
+}
+
+/// Every type that [`Settings::replace`] named, read as a path, and the refusal of
+/// the first that is none.
+///
+/// typify takes the text as a path (`syn::Path`) and panics inside its conversion
+/// when it is not one. So each is read here first, which also names the format and
+/// the text that the adopter wrote, and every one is read whether or not the
+/// document states its format, because typify is given each of them.
+///
+/// [`Settings::replace`]: super::Settings::replace
+fn rust_paths(replacements: &[(String, String)]) -> Result<Vec<RustPath>, GenerateError> {
+    replacements
+        .iter()
+        .map(|(format, rust)| {
+            let path = syn::parse_str(rust).map_err(|source| {
+                GenerateError::Unsupported(format!(
+                    "`{rust}`, named for `format: {format}`, is not a Rust path: {source}"
+                ))
+            })?;
+            Ok(RustPath {
+                format: format.clone(),
+                rust: rust.clone(),
+                path,
+            })
+        })
+        .collect()
 }
 
 /// The type this item is a newtype over, if that is what it is.
@@ -408,6 +450,131 @@ impl VisitMut for ThroughThisCrate {
     }
 }
 
+/// Every standard item that typify writes by its bare name, written by its full
+/// path.
+///
+/// typify's own code says `Ok(Self(value))`, `Err("invalid value".into())`,
+/// `Default::default()` and `impl TryFrom<String> for Thing`, and a schema is free
+/// to be called `Ok`, `Err`, `Some`, `None`, `Default` or `String`. A newtype
+/// `Ok` is a tuple struct, which is a function of its own name, so every `Ok(…)` of
+/// the file would build it, and a schema called `String` is the `String` of every
+/// impl that names one. The file compiles in none of these, or worse, compiles
+/// with another meaning: `Settings::replace`'s newtype would answer `TryFrom` of
+/// the generated `String`. The full path means the standard item whatever the
+/// schemas are called, and it is the same item where nothing is called by its
+/// name.
+///
+/// Only the places where typify writes the standard item are rewritten. A bare
+/// name in a type position is a schema of the document where a field or a variant
+/// holds it, so the one type position that is the standard item's, the `String` of
+/// the `TryFrom` impl that wraps a type the adopter owns, is found by the shape of
+/// the impl that typify writes it in, and its `Self` type is left alone. A release
+/// of typify that writes another one fails the compile test of `tests/hostile.rs`
+/// under the schema that has its name.
+struct StandardItems;
+
+/// The standard items typify names bare, and where each one is.
+const STANDARD_ITEMS: [(&[&str], &[&str]); 5] = [
+    (&["Ok"], &["std", "result", "Result", "Ok"]),
+    (&["Err"], &["std", "result", "Result", "Err"]),
+    (&["Some"], &["std", "option", "Option", "Some"]),
+    (&["None"], &["std", "option", "Option", "None"]),
+    (
+        &["Default", "default"],
+        &["std", "default", "Default", "default"],
+    ),
+];
+
+impl StandardItems {
+    /// `path` by its full path, if it is one of the standard items that typify
+    /// names bare.
+    fn qualify(path: &mut syn::Path) {
+        if path.leading_colon.is_some()
+            || path
+                .segments
+                .iter()
+                .any(|segment| !segment.arguments.is_empty())
+        {
+            return;
+        }
+        let spelled: Vec<String> = path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect();
+        let Some((_, full)) = STANDARD_ITEMS.iter().find(|(bare, _)| {
+            bare.len() == spelled.len()
+                && bare.iter().zip(&spelled).all(|(one, other)| one == other)
+        }) else {
+            return;
+        };
+        path.leading_colon = Some(syn::token::PathSep::default());
+        path.segments = full
+            .iter()
+            .map(|word| syn::PathSegment::from(syn::Ident::new(word, Span::call_site())))
+            .collect();
+    }
+}
+
+impl VisitMut for StandardItems {
+    fn visit_expr_path_mut(&mut self, expr: &mut syn::ExprPath) {
+        syn::visit_mut::visit_expr_path_mut(self, expr);
+        if expr.qself.is_none() {
+            Self::qualify(&mut expr.path);
+        }
+    }
+
+    fn visit_pat_tuple_struct_mut(&mut self, pat: &mut syn::PatTupleStruct) {
+        syn::visit_mut::visit_pat_tuple_struct_mut(self, pat);
+        Self::qualify(&mut pat.path);
+    }
+
+    fn visit_item_impl_mut(&mut self, item: &mut syn::ItemImpl) {
+        if try_from_a_string(item) {
+            // The type the impl is for is a schema of the document, and may be
+            // called `String`: it stays as it is, and every other `String` of the
+            // impl is the standard one.
+            let self_ty =
+                std::mem::replace(&mut *item.self_ty, syn::Type::Verbatim(TokenStream::new()));
+            StandardString.visit_item_impl_mut(item);
+            *item.self_ty = self_ty;
+        }
+        syn::visit_mut::visit_item_impl_mut(self, item);
+    }
+}
+
+/// Whether `item` is `impl ::std::convert::TryFrom<String> for …`, the impl that
+/// typify writes for a type that it wraps around one the adopter owns.
+fn try_from_a_string(item: &syn::ItemImpl) -> bool {
+    let Some((path, _)) = &item.trait_ else {
+        return false;
+    };
+    let Some(segment) = path.segments.last() else {
+        return false;
+    };
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    segment.ident == "TryFrom"
+        && matches!(
+            arguments.args.first(),
+            Some(syn::GenericArgument::Type(syn::Type::Path(argument)))
+                if argument.qself.is_none() && argument.path.is_ident("String")
+        )
+}
+
+/// Writes every bare `String` of the item it is run over by its full path.
+struct StandardString;
+
+impl VisitMut for StandardString {
+    fn visit_type_path_mut(&mut self, ty: &mut syn::TypePath) {
+        syn::visit_mut::visit_type_path_mut(self, ty);
+        if ty.qself.is_none() && ty.path.is_ident("String") {
+            ty.path = syn::parse_quote!(::std::string::String);
+        }
+    }
+}
+
 /// Every named schema the document declares, in document order.
 ///
 /// A document that names none is a document with no `components` block, or one
@@ -457,7 +624,7 @@ fn typify_schema(value: Value) -> Result<Schema, serde_json::Error> {
 
 /// Where the named schemas are in the document, and in typify's dialect.
 const COMPONENTS: &str = "#/components/schemas/";
-const DEFINITIONS: &str = "#/definitions/";
+pub(super) const DEFINITIONS: &str = "#/definitions/";
 
 /// Takes the property the API sets off the `required` of every type that a
 /// request body reaches.
@@ -559,7 +726,7 @@ fn reached(
 }
 
 /// The names of the schemas that `schema` refers to, at any depth.
-fn refers_to(schema: &Schema) -> BTreeSet<String> {
+pub(super) fn refers_to(schema: &Schema) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     Refers(&mut names).visit_schema(&mut schema.clone());
     names

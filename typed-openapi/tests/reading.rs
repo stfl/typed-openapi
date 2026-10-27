@@ -611,6 +611,75 @@ fn an_operation_with_no_operation_id_is_refused_and_an_overlay_that_adds_one_men
     assert!(mended.get("listVouchers").is_some());
 }
 
+// ------------------------------------------------------------------ F-12
+
+/// Two operations of one `operationId`: `listThings` on `get /things` and on
+/// `get /v2/things`, which is the document of `probes/A3a` that blessed and
+/// wrote two `pub fn same(&self)`.
+const TWINS: &str = "paths:\n  /things:\n    get: { operationId: listThings, responses: { '200': { \
+     description: OK } } }\n  /v2/things:\n    get: { operationId: listThings, responses: { \
+     '200': { description: OK } } }\n";
+
+/// An `operationId` is what every refusal and every generated wrapper calls an
+/// operation by, and OpenAPI says it MUST be unique. A document with two of one
+/// name would reach `Document::get` as its first and a generated file as two
+/// wrappers, so the load refuses it, naming the method and the path of both.
+#[test]
+fn two_operations_with_one_operation_id_are_refused_naming_both_and_an_overlay_mends_it() {
+    const RENAMES_ONE: &str = "overlay: 1.1.0\ninfo: { title: t, version: \"1\" }\nactions:\n  - \
+         target: $.paths['/v2/things'].get\n    description: its own name\n    update:\n      \
+         operationId: listThingsV2\n";
+
+    let error = refused(TWINS);
+
+    assert!(
+        matches!(&error, LoadError::DuplicateOperationId {
+                id, first_method, first_path, second_method, second_path
+            } if id == "listThings"
+                && (first_method.as_str(), first_path.as_str()) == ("get", "/things")
+                && (second_method.as_str(), second_path.as_str()) == ("get", "/v2/things")),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "`listThings` is the operationId of both `get /things` and `get /v2/things`; an \
+         Overlay gives one of them another"
+    );
+    let mended = Document::load(&at("3.0.3", TWINS), &[RENAMES_ONE]).expect("the Overlay renames");
+    assert!(mended.get("listThings").is_some() && mended.get("listThingsV2").is_some());
+}
+
+/// The refusal comes before every refusal that names an operation by its id,
+/// because with two operations of one id the id names neither of them. A path
+/// item that holds two operations of one id is the same document.
+#[test]
+fn a_duplicate_operation_id_is_refused_before_the_operations_are_read_and_in_one_path_item() {
+    const IN_ONE_ITEM: &str = "paths:\n  /things:\n    get: { operationId: things, responses: { \
+         '200': { description: OK } } }\n    delete: { operationId: things, responses: { '200': \
+         { description: OK } } }\n";
+    // The second operation breaks a rule of its own (a required path parameter
+    // with no variable in the path), and the id is refused first.
+    const BROKEN_TWIN: &str = "paths:\n  /things:\n    get: { operationId: things, responses: { \
+         '200': { description: OK } } }\n  /other:\n    get:\n      operationId: things\n      \
+         parameters:\n        - { name: ghost, in: path, required: true, schema: { type: string } \
+         }\n      responses: { '200': { description: OK } }\n";
+
+    let error = refused(IN_ONE_ITEM);
+    assert!(
+        matches!(&error, LoadError::DuplicateOperationId {
+                id, first_method, first_path, second_method, second_path
+            } if id == "things" && first_method == "get" && second_method == "delete"
+                && first_path == "/things" && second_path == "/things"),
+        "{error:?}"
+    );
+
+    let error = refused(BROKEN_TWIN);
+    assert!(
+        matches!(&error, LoadError::DuplicateOperationId { id, .. } if id == "things"),
+        "{error:?}"
+    );
+}
+
 // ------------------------------------------------------------------ F-40
 
 const CONTACTS: &str = "paths:\n  /kontakte/änderungen:\n    get:\n      operationId: \

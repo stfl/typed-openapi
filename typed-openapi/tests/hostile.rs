@@ -33,6 +33,7 @@
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use typed_openapi::generate::{GenerateError, Settings};
 use typed_openapi::model::Body;
@@ -58,10 +59,10 @@ const HOSTILE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/
 
 /// The Rust type an adopter of this document already owns for its cone numbers.
 ///
-/// A path that names no crate anywhere in this workspace, on purpose: the
-/// generated file is read as text and never compiled, and a path that resolved
-/// would invite somebody to compile it and then to keep it compiling.
-const OWNED: (&str, &str) = ("cone-number", "pyrometry::Cone");
+/// A path of the crate that the generated files are compiled in
+/// ([`PYROMETRY`]), so the same bless serves the tests that read the text and the
+/// one that builds it.
+const OWNED: (&str, &str) = ("cone-number", "crate::pyrometry::Cone");
 
 fn document() -> Document {
     Document::load(HOSTILE, &[]).expect("the control document reduces")
@@ -164,7 +165,7 @@ fn arguments(ops: &str, wrapper: &str) -> Vec<String> {
         .split_once(&opened)
         .unwrap_or_else(|| panic!("the generated file declares `{wrapper}`"));
     let (signature, _) = after
-        .split_once(") -> Result")
+        .split_once(") -> ::std::result::Result")
         .expect("every wrapper answers with a Result");
     signature
         .split(',')
@@ -347,9 +348,9 @@ fn no_generated_wrapper_binds_one_identifier_twice() {
     let named = wrappers(&ops);
     assert_eq!(
         named.len(),
-        16,
+        18,
         "two wrappers per operation — the plain one and the builder that \
-         delegates to it — over eight operations: {named:?}"
+         delegates to it — over nine operations: {named:?}"
     );
     for wrapper in named {
         let bound = arguments(&ops, &wrapper);
@@ -381,6 +382,9 @@ fn a_wrapper_argument_that_moved_aside_says_what_it_sends() {
     for said in [
         "`self_2` sends the document's `Self`, under a name of its own",
         "`ref_2` sends the document's `Ref`, under a name of its own",
+        // Not moved aside: the document's word starts with a digit, so an `x` stands
+        // in front of it, which is a spelling nobody wrote either.
+        "`x3ds` sends the document's `3ds`, under a name of its own",
     ] {
         assert!(
             ops.contains(said),
@@ -389,8 +393,8 @@ fn a_wrapper_argument_that_moved_aside_says_what_it_sends() {
     }
     assert_eq!(
         ops.matches("under a name of its own").count(),
-        2,
-        "two arguments move in this document, and nothing else is remarked on"
+        3,
+        "two arguments move and one is spelled with an `x`, and nothing else is remarked on"
     );
 }
 
@@ -750,15 +754,15 @@ paths:
 fn a_replaced_format_wraps_whatever_the_schema_holding_it_is_called() {
     let types = read(&blessed("hostile-replaced").join("src/types.rs"));
     assert!(
-        types.contains("pub struct Cone(pub pyrometry::Cone);"),
+        types.contains("pub struct Cone(pub crate::pyrometry::Cone);"),
         "the schema whose name the path ends in still wraps:\n{types}"
     );
     assert!(
-        types.contains("pub struct PyroCone(pub pyrometry::Cone);"),
+        types.contains("pub struct PyroCone(pub crate::pyrometry::Cone);"),
         "and so does the one whose name it does not:\n{types}"
     );
     assert!(
-        types.contains("pub bare_cone: ::std::option::Option<pyrometry::Cone>"),
+        types.contains("pub bare_cone: ::std::option::Option<crate::pyrometry::Cone>"),
         "a property stating the format without a name of its own is the type itself:\n{types}"
     );
 }
@@ -1388,24 +1392,30 @@ fn the_control_document_mounts_as_a_command_tree_clap_accepts() {
 /// Every count an adopter would be tempted to write down, taken off the model.
 ///
 /// The numbers are here so that a shape added to the fixture has to be
-/// accounted for rather than absorbed: a ninth operation or a sixth
+/// accounted for rather than absorbed: a tenth operation or a sixth
 /// unspellable parameter fails this test before it reaches whichever test was
 /// meant to cover it.
 #[test]
 fn the_reduction_of_the_control_document_counts_what_is_in_it() {
     let summary = document().summary();
-    assert_eq!(summary.operations(), 8);
+    assert_eq!(summary.operations(), 9);
     assert_eq!(
         summary
             .groups()
             .iter()
             .map(CommandName::as_str)
             .collect::<Vec<_>>(),
-        ["firings", "wadding", "glaze-recipes", "kiln-help"]
+        [
+            "firings",
+            "wadding",
+            "glaze-recipes",
+            "payments",
+            "kiln-help"
+        ]
     );
-    assert_eq!(summary.reads(), 2);
+    assert_eq!(summary.reads(), 3);
     assert_eq!(summary.writes(), 6);
-    assert_eq!(summary.bodiless(), 3);
+    assert_eq!(summary.bodiless(), 4);
     // Four rather than the three bodies that are `JsonWhole`: a flat body of no
     // properties offers a command line `--json-body` and nothing else, which is
     // what the count is about.
@@ -1455,4 +1465,384 @@ fn every_awkward_name_comes_back_off_the_blob_as_it_went_in() {
         operation(&shipped, "fileGlazeRecipe").group().as_str(),
         "glaze-recipes"
     );
+}
+
+// ------------------------------------------------ the generated code compiles
+
+/// The crate root that the generated files are compiled under: the smallest one
+/// that `docs/generating.md` gives, with a sentence on every public item, because
+/// the crate is built under the strictest lint set an adopter can configure and
+/// its own lines are no exception.
+const ROOT: &str = r#"//! The crate that holds the generated files of the hostile document.
+
+pub mod ops;
+pub mod pyrometry;
+pub mod types;
+
+use typed_openapi::client::Client;
+pub use typed_openapi::client::{Call, Error, NoContent, to_json};
+use typed_openapi::{Document, Values};
+
+use crate::ops::{OPERATIONS, OperationId};
+
+const MODEL: &[u8] = include_bytes!("model.postcard");
+
+/// The handle that every generated wrapper is a method of.
+pub struct Api(Client);
+
+impl Api {
+    /// Pairs the blob with the generated inventory.
+    pub fn new() -> Result<Self, Error> {
+        let client = Client::over(Document::from_blob(MODEL)?);
+        client.document().matches(OPERATIONS)?;
+        Ok(Self(client))
+    }
+
+    /// The document that the handle was made over.
+    pub fn document(&self) -> &Document {
+        self.0.document()
+    }
+
+    /// Names an operation and the values for it.
+    pub fn call<T>(&self, op: OperationId, values: Values) -> Result<Call<'_, T>, Error> {
+        let operation = &self.0.document().operations()[op as usize];
+        self.0.call(operation, values)
+    }
+}
+"#;
+
+/// The Rust type that [`OWNED`] names, in the crate root's module of that name.
+const PYROMETRY: &str = r"//! The type an adopter of the hostile document owns for its cone numbers.
+
+use std::fmt;
+use std::str::FromStr;
+
+/// A pyrometric cone number.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
+pub struct Cone(String);
+
+impl fmt::Display for Cone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for Cone {
+    type Err = std::convert::Infallible;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Ok(Self(text.to_owned()))
+    }
+}
+";
+
+/// Where cargo builds every crate of this file, so that a dependency is built once
+/// for all of them. A test is a process of its own under nextest and cargo locks
+/// the directory, so the crates are built one after another.
+fn blessed_target() -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join("blessed-target")
+}
+
+/// The lockfile that the crate below is resolved against, with no network: the
+/// workspace's, beside the manifest of a checkout, and the package's own in the
+/// tarball that `just package` unpacks, which carries it.
+fn lockfile() -> PathBuf {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    [manifest.join("Cargo.lock"), manifest.join("../Cargo.lock")]
+        .into_iter()
+        .find(|path| path.is_file())
+        .expect("a Cargo.lock beside the manifest, or in the workspace above it")
+}
+
+/// The bless output in `dir` as a crate that cargo builds: a manifest that holds
+/// the strictest lint set an adopter can set (`-D warnings` over `missing_docs`
+/// and `unused_qualifications`, which the generated files' own `#![allow]` has to
+/// cover), the root, the owned type and the lockfile.
+fn made_a_crate(dir: &Path) {
+    let manifest = format!(
+        "[package]\nname = \"blessed\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = \
+         false\n\n[workspace]\n\n[features]\nbuilder = [\"typed-openapi/builder\"]\n\n\
+         [dependencies]\ntyped-openapi = {{ path = {path:?}, default-features = false }}\nserde = \
+         {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\n\n[lints.rust]\n\
+         warnings = \"deny\"\nmissing_docs = \"warn\"\nunused_qualifications = \"warn\"\n",
+        path = env!("CARGO_MANIFEST_DIR"),
+    );
+    for (name, contents) in [
+        ("Cargo.toml", manifest.as_str()),
+        ("src/lib.rs", ROOT),
+        ("src/pyrometry.rs", PYROMETRY),
+    ] {
+        std::fs::write(dir.join(name), contents).expect("a file of the crate");
+    }
+    std::fs::copy(lockfile(), dir.join("Cargo.lock")).expect("the lockfile");
+}
+
+/// One run of cargo over the crate in `dir`, with no network, and what it said on
+/// standard error where it failed.
+fn cargo(dir: &Path, args: &[&str]) -> Result<(), String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args(args)
+        .args(["--offline", "--color", "never", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(blessed_target())
+        .output()
+        .expect("cargo is on PATH beside the rustfmt a bless step already needs");
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "`cargo {}` failed:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
+/// Whether the bless output in `dir` is a crate that compiles: without the
+/// `builder` feature, with it, and whether its doctests run.
+///
+/// The doctests are the ones that a vendor's prose would add (spec F-2) and the
+/// generator's own. They are run with the feature on, which holds every doc
+/// comment that the generator writes.
+fn compiles(dir: &Path) -> Result<(), String> {
+    made_a_crate(dir);
+    cargo(dir, &["check"])?;
+    cargo(dir, &["check", "--features", "builder"])?;
+    cargo(dir, &["test", "--doc", "--features", "builder"])
+}
+
+/// The control document, blessed with the adopter's type, is a crate that
+/// compiles with and without `builder`, under `-D warnings` over the lints that
+/// an adopter would add, and whose doctests run. Nothing in the suite compiled
+/// generated code for any document but the toy before this (F-69), so a compile
+/// failure here is the failure of every shape the fixture holds: a description
+/// that hides a code block (F-2), a schema named after a standard item (F-12), a
+/// parameter whose name starts with a digit (F-48) and the lints (F-49).
+#[test]
+fn the_generated_code_of_the_control_document_compiles_with_and_without_the_builder() {
+    let dir = blessed("hostile-compiles");
+    if let Err(compiler) = compiles(&dir) {
+        panic!("the bless of the control document is not a crate that compiles:\n{compiler}");
+    }
+}
+
+// ------------------------------------------- a name that two items of the code share
+
+/// A document made of `paths` and, where there are any, `schemas`, each on lines
+/// of their own indented by two and four spaces.
+fn collision(paths: &str, schemas: &str) -> String {
+    let components = if schemas.is_empty() {
+        String::new()
+    } else {
+        format!("components:\n  schemas:\n{schemas}")
+    };
+    format!(
+        "openapi: 3.0.3\ninfo: {{ title: Collision, version: \"1.0\" }}\nservers: [{{ url: \
+         \"http://localhost:9411\" }}]\npaths:\n{paths}{components}"
+    )
+}
+
+/// One document in which two items of the generated code would have one name.
+struct Collision {
+    /// What is shared.
+    label: &'static str,
+    /// The paths of the document, and its schemas.
+    document: (&'static str, &'static str),
+    /// Whether the refusal is the variant that names it.
+    variant: fn(&GenerateError) -> bool,
+    /// The refusal's own words, which name the two items.
+    says: &'static str,
+}
+
+/// Two operations of one `operationId`, and the three pairs that one Rust name
+/// reaches from the other side: a wrapper beside a wrapper, a wrapper beside the
+/// `_builder` method of another operation, and a wrapper beside a method of the
+/// handle.
+const COLLISIONS: [Collision; 11] = [
+    Collision {
+        label: "two operations of one operationId (probes/A3a, `same`)",
+        document: (
+            "  /things: { get: { operationId: same, responses: { '200': { description: OK } } } }\n  \
+             /v2/things: { get: { operationId: same, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| {
+            matches!(error, GenerateError::Unusable(LoadError::DuplicateOperationId { id, .. })
+                if id == "same")
+        },
+        says: "`same` is the operationId of both `get /things` and `get /v2/things`; an Overlay \
+               gives one of them another",
+    },
+    Collision {
+        label: "`listThings` beside `list_things` (probes/A7, `ids`)",
+        document: (
+            "  /things: { get: { operationId: listThings, responses: { '200': { description: OK } } } }\n  \
+             /other: { get: { operationId: list_things, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "list_things"),
+        says: "`list_things` would be defined twice in the generated ops.rs, as the wrapper of \
+               `listThings` and as the wrapper of `list_things`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "an operation called `<x>Builder` beside `<x>` (probes/A4, `opbuilder`)",
+        document: (
+            "  /reports: { get: { operationId: getReport, responses: { '200': { description: OK } } } }\n  \
+             /reports/builder: { get: { operationId: getReportBuilder, responses: { '200': { \
+             description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| {
+            matches!(error, GenerateError::DuplicateIdentifier { name, .. }
+                if name == "get_report_builder")
+        },
+        says: "`get_report_builder` would be defined twice in the generated ops.rs, as the \
+               `_builder` method of `getReport` and as the wrapper of `getReportBuilder`; correct \
+               one of them in an Overlay",
+    },
+    Collision {
+        label: "an operation called `call`, the handle's own method (probes/A7, `apimethod`)",
+        document: (
+            "  /calls: { post: { operationId: call, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "call"),
+        says: "`call` would be defined twice in the generated ops.rs, as the handle's own `call` \
+               and as the wrapper of `call`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "an operation called `document`, the handle's own method (probes/A7, `apimethod`)",
+        document: (
+            "  /documents: { get: { operationId: document, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "document"),
+        says: "`document` would be defined twice in the generated ops.rs, as the handle's own \
+               `document` and as the wrapper of `document`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "two operationIds that are one variant of `OperationId`",
+        document: (
+            "  /a: { get: { operationId: a1, responses: { '200': { description: OK } } } }\n  \
+             /b: { get: { operationId: a_1, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "A1"),
+        says: "`A1` would be defined twice in the generated ops.rs, as the variant of `a1` and as \
+               the variant of `a_1`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "a parameter called `call`, which is the method that ends a builder (probes/A4, `bon`)",
+        document: (
+            "  /calls:\n    get:\n      operationId: listCalls\n      parameters:\n        - { name: call, in: query, schema: { type: string } }\n      \
+             responses: { '200': { description: OK } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "call"),
+        says: "`call` would be defined twice in the generated ops.rs, as the method that finishes \
+               the builder of `listCalls` and as the setter `call` of the parameter `call`; \
+               correct one of them in an Overlay",
+    },
+    Collision {
+        label: "`limit` beside `maybe_limit`, which bon derives for the first (probes/A4, `bon`)",
+        document: (
+            "  /calls:\n    get:\n      operationId: listCalls\n      parameters:\n        - { name: limit, in: query, schema: { type: integer } }\n        \
+             - { name: maybe_limit, in: query, schema: { type: integer } }\n      responses: { '200': { description: OK } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "maybe_limit"),
+        says: "`maybe_limit` would be defined twice in the generated ops.rs, as the setter \
+               `maybe_limit` of the parameter `limit` and as the setter `maybe_limit` of the \
+               parameter `maybe_limit`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "a schema that is the type typify derives for a nested object (probes/A4, `nested2`)",
+        document: (
+            "  /foos: { get: { operationId: listFoos, responses: { '200': { description: OK, \
+             content: { application/json: { schema: { $ref: '#/components/schemas/Foo' } } } } } } }\n",
+            "    Foo: { type: object, properties: { bar: { type: object, properties: { x: { type: string } } } } }\n    \
+             FooBar: { type: object, properties: { y: { type: integer } } }\n",
+        ),
+        variant: |error| matches!(error, GenerateError::OneType { inline: true, rust, .. } if rust == "FooBar"),
+        says: "the schema `FooBar` and a schema nested in `Foo` are both `FooBar` in Rust; give an \
+               inline schema a `title` in an Overlay",
+    },
+    Collision {
+        label: "two properties that are one field (probes/A4, `propcase`)",
+        document: (
+            "  /things: { get: { operationId: listThings, responses: { '200': { description: OK, \
+             content: { application/json: { schema: { $ref: '#/components/schemas/Thing' } } } } } } }\n",
+            "    Thing: { type: object, properties: { fooBar: { type: string }, foo_bar: { type: string } } }\n",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateField { ty, field } if ty == "Thing" && field == "foo_bar"),
+        says: "the type `Thing` would declare the field `foo_bar` twice, because two of its \
+               properties are one name in Rust; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "two properties that are one field of an object that a oneOf holds",
+        document: (
+            "  /things: { get: { operationId: listThings, responses: { '200': { description: OK, \
+             content: { application/json: { schema: { $ref: '#/components/schemas/Either' } } } } } } }\n",
+            "    Either:\n      oneOf:\n        - { type: object, title: Left, required: [fooBar, foo_bar], properties: { fooBar: { type: string }, \
+             foo_bar: { type: string } } }\n        - { type: integer }\n",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateField { ty, field } if ty == "Either" && field == "foo_bar"),
+        says: "the type `Either` would declare the field `foo_bar` twice, because two of its \
+               properties are one name in Rust; correct one of them in an Overlay",
+    },
+];
+
+/// What blessing a document refuses with. A bless that succeeds has to have written
+/// a crate that compiles, and where it did not, the test fails with what the
+/// compiler said: that is a collision the generator let through, the defect that
+/// this table exists to find, and the one a removed refusal turns back into.
+fn refused_by_name(name: &str, document: &str) -> GenerateError {
+    let dir = out(name);
+    let blessed = Settings::new(wrote(&dir, "document.yaml", document))
+        .replace(OWNED.0, OWNED.1)
+        .write_to(&dir);
+    match blessed {
+        Err(error) => error,
+        Ok(_) => match compiles(&dir) {
+            Err(compiler) => panic!(
+                "{name}: the bless succeeded over a crate that does not compile:\n{compiler}"
+            ),
+            Ok(()) => {
+                panic!("{name}: the bless succeeded, and the crate compiles: it holds no collision")
+            }
+        },
+    }
+}
+
+/// The bless never succeeds over a crate that does not compile (F-12): each of the
+/// documents above is refused, by the variant that names it and in words that name
+/// both items. Each is a document that blesses with exit 0 where the generator does
+/// not ask, and is a compile error in the generated file, so a refusal that is
+/// removed turns its row into the compiler's output.
+#[test]
+fn two_items_of_the_generated_code_that_share_a_name_refuse_the_bless_by_name() {
+    for (at, collision) in COLLISIONS.iter().enumerate() {
+        let (paths, schemas) = collision.document;
+        let name = format!("hostile-collision-{at}");
+        let refused = refused_by_name(&name, &self::collision(paths, schemas));
+        assert!(
+            (collision.variant)(&refused),
+            "{}: {refused:?}",
+            collision.label
+        );
+        let said = if let GenerateError::Unusable(cause) = &refused {
+            cause.to_string()
+        } else {
+            refused.to_string()
+        };
+        assert_eq!(said, collision.says, "{}", collision.label);
+        let written = out(&name).join("src");
+        assert!(
+            !written.exists(),
+            "{}: a refused bless wrote into the tree",
+            collision.label
+        );
+    }
 }
