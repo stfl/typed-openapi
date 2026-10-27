@@ -65,6 +65,7 @@
 mod artefacts;
 mod cycles;
 mod guard;
+mod identifiers;
 mod names;
 mod ops;
 mod prose;
@@ -719,6 +720,48 @@ pub enum GenerateError {
         /// document. A schema that leads into the cycle and is no part of it is
         /// not named.
         schemas: Vec<String>,
+    },
+    /// Two items of the generated `ops.rs` that one name would define twice, which
+    /// is a compile error in the file the bless writes. The items are the wrappers,
+    /// the `_builder` methods, the variants of `OperationId`, the two methods that
+    /// the handle of the adopter's crate has (`call` and `document`), and for each
+    /// operation the methods that `bon` derives for its builder: a setter for each
+    /// argument, a second one named `maybe_…` for each argument that is optional,
+    /// and `call`, which ends the builder. Renaming one of them here would be a
+    /// generator choosing a public name nobody asked for, so the document is
+    /// refused. An Overlay changes the `operationId`. A parameter's name is its
+    /// wire key, so an Overlay can only remove one.
+    #[error(
+        "`{name}` would be defined twice in the generated ops.rs, as {first} and as {second}; \
+         correct one of them in an Overlay"
+    )]
+    DuplicateIdentifier {
+        /// The name that is defined twice, as it is written in Rust.
+        name: String,
+        /// A phrase naming the item that has the name first: the wrapper of an
+        /// operation, a method of the handle, a setter of a builder.
+        first: String,
+        /// A phrase naming the item that has it second.
+        second: String,
+    },
+    /// Two properties of one generated type that are one field. typify writes a
+    /// field for each property and does not make two of one name unique, so the
+    /// type declares the field twice, which is a compile error in the file the
+    /// bless writes. The properties are the document's, and typify's naming is what
+    /// makes them one, so the message names the struct and the field and not the
+    /// properties, which typify does not hand back. An Overlay removes or renames
+    /// one of them.
+    #[error(
+        "the type `{ty}` would declare the field `{field}` twice, because two of its properties are \
+         one name in Rust; correct one of them in an Overlay"
+    )]
+    DuplicateField {
+        /// The name of the type in Rust, as typify spells it: a struct, or an enum
+        /// that has a variant of named fields. A type that a property of a schema
+        /// makes has a name that typify derived.
+        ty: String,
+        /// The name of the field in Rust.
+        field: String,
     },
     /// A wrapper would have to name the type of a schema the document's
     /// `components.schemas` never declared. Emitting an identifier for it

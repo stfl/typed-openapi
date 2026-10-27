@@ -1627,3 +1627,221 @@ fn the_generated_code_of_the_control_document_compiles_with_and_without_the_buil
         panic!("the bless of the control document is not a crate that compiles:\n{compiler}");
     }
 }
+
+// ------------------------------------------- a name that two items of the code share
+
+/// A document made of `paths` and, where there are any, `schemas`, each on lines
+/// of their own indented by two and four spaces.
+fn collision(paths: &str, schemas: &str) -> String {
+    let components = if schemas.is_empty() {
+        String::new()
+    } else {
+        format!("components:\n  schemas:\n{schemas}")
+    };
+    format!(
+        "openapi: 3.0.3\ninfo: {{ title: Collision, version: \"1.0\" }}\nservers: [{{ url: \
+         \"http://localhost:9411\" }}]\npaths:\n{paths}{components}"
+    )
+}
+
+/// One document in which two items of the generated code would have one name.
+struct Collision {
+    /// What is shared.
+    label: &'static str,
+    /// The paths of the document, and its schemas.
+    document: (&'static str, &'static str),
+    /// Whether the refusal is the variant that names it.
+    variant: fn(&GenerateError) -> bool,
+    /// The refusal's own words, which name the two items.
+    says: &'static str,
+}
+
+/// Two operations of one `operationId`, and the three pairs that one Rust name
+/// reaches from the other side: a wrapper beside a wrapper, a wrapper beside the
+/// `_builder` method of another operation, and a wrapper beside a method of the
+/// handle.
+const COLLISIONS: [Collision; 11] = [
+    Collision {
+        label: "two operations of one operationId (probes/A3a, `same`)",
+        document: (
+            "  /things: { get: { operationId: same, responses: { '200': { description: OK } } } }\n  \
+             /v2/things: { get: { operationId: same, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| {
+            matches!(error, GenerateError::Unusable(LoadError::DuplicateOperationId { id, .. })
+                if id == "same")
+        },
+        says: "`same` is the operationId of both `get /things` and `get /v2/things`; an Overlay \
+               gives one of them another",
+    },
+    Collision {
+        label: "`listThings` beside `list_things` (probes/A7, `ids`)",
+        document: (
+            "  /things: { get: { operationId: listThings, responses: { '200': { description: OK } } } }\n  \
+             /other: { get: { operationId: list_things, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "list_things"),
+        says: "`list_things` would be defined twice in the generated ops.rs, as the wrapper of \
+               `listThings` and as the wrapper of `list_things`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "an operation called `<x>Builder` beside `<x>` (probes/A4, `opbuilder`)",
+        document: (
+            "  /reports: { get: { operationId: getReport, responses: { '200': { description: OK } } } }\n  \
+             /reports/builder: { get: { operationId: getReportBuilder, responses: { '200': { \
+             description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| {
+            matches!(error, GenerateError::DuplicateIdentifier { name, .. }
+                if name == "get_report_builder")
+        },
+        says: "`get_report_builder` would be defined twice in the generated ops.rs, as the \
+               `_builder` method of `getReport` and as the wrapper of `getReportBuilder`; correct \
+               one of them in an Overlay",
+    },
+    Collision {
+        label: "an operation called `call`, the handle's own method (probes/A7, `apimethod`)",
+        document: (
+            "  /calls: { post: { operationId: call, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "call"),
+        says: "`call` would be defined twice in the generated ops.rs, as the handle's own `call` \
+               and as the wrapper of `call`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "an operation called `document`, the handle's own method (probes/A7, `apimethod`)",
+        document: (
+            "  /documents: { get: { operationId: document, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "document"),
+        says: "`document` would be defined twice in the generated ops.rs, as the handle's own \
+               `document` and as the wrapper of `document`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "two operationIds that are one variant of `OperationId`",
+        document: (
+            "  /a: { get: { operationId: a1, responses: { '200': { description: OK } } } }\n  \
+             /b: { get: { operationId: a_1, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "A1"),
+        says: "`A1` would be defined twice in the generated ops.rs, as the variant of `a1` and as \
+               the variant of `a_1`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "a parameter called `call`, which is the method that ends a builder (probes/A4, `bon`)",
+        document: (
+            "  /calls:\n    get:\n      operationId: listCalls\n      parameters:\n        - { name: call, in: query, schema: { type: string } }\n      \
+             responses: { '200': { description: OK } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "call"),
+        says: "`call` would be defined twice in the generated ops.rs, as the method that finishes \
+               the builder of `listCalls` and as the setter `call` of the parameter `call`; \
+               correct one of them in an Overlay",
+    },
+    Collision {
+        label: "`limit` beside `maybe_limit`, which bon derives for the first (probes/A4, `bon`)",
+        document: (
+            "  /calls:\n    get:\n      operationId: listCalls\n      parameters:\n        - { name: limit, in: query, schema: { type: integer } }\n        \
+             - { name: maybe_limit, in: query, schema: { type: integer } }\n      responses: { '200': { description: OK } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "maybe_limit"),
+        says: "`maybe_limit` would be defined twice in the generated ops.rs, as the setter \
+               `maybe_limit` of the parameter `limit` and as the setter `maybe_limit` of the \
+               parameter `maybe_limit`; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "a schema that is the type typify derives for a nested object (probes/A4, `nested2`)",
+        document: (
+            "  /foos: { get: { operationId: listFoos, responses: { '200': { description: OK, \
+             content: { application/json: { schema: { $ref: '#/components/schemas/Foo' } } } } } } }\n",
+            "    Foo: { type: object, properties: { bar: { type: object, properties: { x: { type: string } } } } }\n    \
+             FooBar: { type: object, properties: { y: { type: integer } } }\n",
+        ),
+        variant: |error| matches!(error, GenerateError::OneType { inline: true, rust, .. } if rust == "FooBar"),
+        says: "the schema `FooBar` and a schema nested in `Foo` are both `FooBar` in Rust; give an \
+               inline schema a `title` in an Overlay",
+    },
+    Collision {
+        label: "two properties that are one field (probes/A4, `propcase`)",
+        document: (
+            "  /things: { get: { operationId: listThings, responses: { '200': { description: OK, \
+             content: { application/json: { schema: { $ref: '#/components/schemas/Thing' } } } } } } }\n",
+            "    Thing: { type: object, properties: { fooBar: { type: string }, foo_bar: { type: string } } }\n",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateField { ty, field } if ty == "Thing" && field == "foo_bar"),
+        says: "the type `Thing` would declare the field `foo_bar` twice, because two of its \
+               properties are one name in Rust; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "two properties that are one field of an object that a oneOf holds",
+        document: (
+            "  /things: { get: { operationId: listThings, responses: { '200': { description: OK, \
+             content: { application/json: { schema: { $ref: '#/components/schemas/Either' } } } } } } }\n",
+            "    Either:\n      oneOf:\n        - { type: object, title: Left, required: [fooBar, foo_bar], properties: { fooBar: { type: string }, \
+             foo_bar: { type: string } } }\n        - { type: integer }\n",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateField { ty, field } if ty == "Either" && field == "foo_bar"),
+        says: "the type `Either` would declare the field `foo_bar` twice, because two of its \
+               properties are one name in Rust; correct one of them in an Overlay",
+    },
+];
+
+/// What blessing a document refuses with. A bless that succeeds has to have written
+/// a crate that compiles, and where it did not, the test fails with what the
+/// compiler said: that is a collision the generator let through, the defect that
+/// this table exists to find, and the one a removed refusal turns back into.
+fn refused_by_name(name: &str, document: &str) -> GenerateError {
+    let dir = out(name);
+    let blessed = Settings::new(wrote(&dir, "document.yaml", document))
+        .replace(OWNED.0, OWNED.1)
+        .write_to(&dir);
+    match blessed {
+        Err(error) => error,
+        Ok(_) => match compiles(&dir) {
+            Err(compiler) => panic!(
+                "{name}: the bless succeeded over a crate that does not compile:\n{compiler}"
+            ),
+            Ok(()) => {
+                panic!("{name}: the bless succeeded, and the crate compiles: it holds no collision")
+            }
+        },
+    }
+}
+
+/// The bless never succeeds over a crate that does not compile (F-12): each of the
+/// documents above is refused, by the variant that names it and in words that name
+/// both items. Each one blessed with exit 0 at `74b77b9` and was a compile error in
+/// the generated file, so a refusal that is removed turns its row into the
+/// compiler's output.
+#[test]
+fn two_items_of_the_generated_code_that_share_a_name_refuse_the_bless_by_name() {
+    for (at, collision) in COLLISIONS.iter().enumerate() {
+        let (paths, schemas) = collision.document;
+        let name = format!("hostile-collision-{at}");
+        let refused = refused_by_name(&name, &self::collision(paths, schemas));
+        assert!(
+            (collision.variant)(&refused),
+            "{}: {refused:?}",
+            collision.label
+        );
+        let said = match &refused {
+            GenerateError::Unusable(cause) => cause.to_string(),
+            other => other.to_string(),
+        };
+        assert_eq!(said, collision.says, "{}", collision.label);
+        let written = out(&name).join("src");
+        assert!(
+            !written.exists(),
+            "{}: a refused bless wrote into the tree",
+            collision.label
+        );
+    }
+}

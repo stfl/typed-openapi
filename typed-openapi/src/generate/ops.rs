@@ -19,6 +19,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::GenerateError;
+use super::identifiers::{self, Member};
 use super::names::{Answer, Home, JsonBody, Names, Reading, Site, Statement, Unanswerable};
 use crate::model::{Body, Shape, declared, entry_of_flag};
 use crate::schema::{array_of, stated, typed};
@@ -44,6 +45,10 @@ struct Emitted {
     /// it. It delegates rather than repeating the body, so the two cannot
     /// describe different requests.
     builder_method: TokenStream,
+    /// The name of the wrapper, and of the method that starts its builder.
+    names: (Ident, Ident),
+    /// The arguments of the wrapper, which `bon` makes setters of.
+    members: Vec<Member>,
 }
 
 /// A document element this generator has no Rust spelling for.
@@ -58,6 +63,7 @@ pub(super) fn emit(
     names: &Names,
 ) -> Result<String, GenerateError> {
     let ops = gather(api, model, names)?;
+    check_identifiers(&ops)?;
     let operation_id = operation_id(&ops);
     let inventory = inventory(&ops);
     let methods = ops.iter().map(|op| &op.method);
@@ -111,6 +117,10 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                 let declared = declared(path_item, operation, components).map_err(|source| {
                     unsupported(format!("a parameter cannot be followed: {source}"))
                 })?;
+                // One signature for the wrapper and for the builder beside it: they
+                // are one call, and the identifiers it binds are asked once.
+                let signature = signature_of(op, &declared, components, operation, names)?;
+                let plain = operation_ident(&op.id().to_snake_case())?;
                 Ok(Emitted {
                     row: quote! { (#id, #method, #path) },
                     variant: variant_of(op)?,
@@ -118,8 +128,12 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                     group: op.group().as_str().to_owned(),
                     command: op.command().as_str().to_owned(),
                     body: json_body_type(op, operation, components, names)?,
-                    method: wrapper(op, &declared, components, operation, names)?,
-                    builder_method: builder_wrapper(op, &declared, components, operation, names)?,
+                    method: wrapper(op, &plain, &signature, components, operation, names)?,
+                    builder_method: builder_wrapper(
+                        op, &plain, &signature, components, operation, names,
+                    )?,
+                    names: (plain.clone(), format_ident!("{plain}_builder")),
+                    members: signature.members,
                 })
             };
             emitted().map_err(|source| GenerateError::Operation {
@@ -327,31 +341,31 @@ fn json_body_type(
 
 fn wrapper(
     op: &Operation,
-    declared: &[&Parameter],
+    name: &Ident,
+    signature: &Signature,
     components: &Components,
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let name = operation_ident(&op.id().to_snake_case())?;
     let summary = op.summary().unwrap_or(op.id());
-    let signature = format!("{} {}", op.method(), op.path());
+    let request = format!("{} {}", op.method(), op.path());
     let gate = gate_note(op);
 
+    // The delegate beside this one forwards the argument names; a positional call
+    // has no use for them.
     let Signature {
         args,
         builder,
         notes,
-        // The delegate beside this one forwards the argument names; a
-        // positional call has no use for them.
-        names: _,
-    } = signature_of(op, declared, components, operation, names)?;
+        ..
+    } = signature;
     let response = response_type(op, operation, components, names)?;
     let variant = variant_of(op)?;
     let doc = paragraphs(
-        [summary, &signature, &gate]
+        [summary, &request, &gate]
             .into_iter()
             .map(str::to_owned)
-            .chain(notes),
+            .chain(notes.iter().cloned()),
     );
     parses(quote! {
         #[doc = #doc]
@@ -359,6 +373,29 @@ fn wrapper(
             self.call(OperationId::#variant, Values::new() #(#builder)*)
         }
     })
+}
+
+/// `ident` without the `r#` of a raw identifier: the word the document wrote.
+fn unraw(ident: &Ident) -> String {
+    let spelled = ident.to_string();
+    spelled
+        .strip_prefix("r#")
+        .map_or_else(|| spelled.clone(), str::to_owned)
+}
+
+/// Refuses the first name that two items of the file would define.
+fn check_identifiers(ops: &[Emitted]) -> Result<(), GenerateError> {
+    let operations: Vec<identifiers::Operation<'_>> = ops
+        .iter()
+        .map(|op| identifiers::Operation {
+            id: &op.id,
+            variant: op.variant.to_string(),
+            wrapper: op.names.0.to_string(),
+            builder: op.names.1.to_string(),
+            members: op.members.clone(),
+        })
+        .collect();
+    identifiers::check(&operations)
 }
 
 /// One doc comment out of the paragraphs it is made of.
@@ -433,18 +470,18 @@ fn gate_note(op: &Operation) -> String {
 /// cannot come to describe different requests.
 fn builder_wrapper(
     op: &Operation,
-    declared: &[&Parameter],
+    plain: &Ident,
+    signature: &Signature,
     components: &Components,
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let plain = operation_ident(&op.id().to_snake_case())?;
     let name = format_ident!("{plain}_builder");
     let Signature {
         args,
         names: arguments,
         ..
-    } = signature_of(op, declared, components, operation, names)?;
+    } = signature;
     let response = response_type(op, operation, components, names)?;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
@@ -471,6 +508,8 @@ struct Signature {
     names: Vec<Ident>,
     builder: Vec<TokenStream>,
     notes: Vec<String>,
+    /// The arguments as `bon` sees them, for the names its setters would share.
+    members: Vec<Member>,
 }
 
 impl Signature {
@@ -576,6 +615,7 @@ fn signature_of(
         names: Vec::new(),
         builder: Vec::new(),
         notes: Vec::new(),
+        members: Vec::new(),
     };
     for param in op.params() {
         add_param(&mut out, param, declared, components, names)?;
@@ -617,6 +657,7 @@ fn add_body(
             // says whose body it was, as `fits` does in `check_body`.
             let id = op.id();
             let argument = BodyArgument {
+                carries: "the request body",
                 ty: quote! { &#ty },
                 call: quote! { .json(crate::to_json(#id, #name)?) },
                 payload: quote! {
@@ -639,6 +680,7 @@ fn add_body(
                  which this crate does not assemble."
             ));
             let argument = BodyArgument {
+                carries: "the request body",
                 ty: quote! { ::std::vec::Vec<u8> },
                 call: quote! { .raw(#name) },
                 payload: quote! { #name.map(typed_openapi::Payload::Raw) },
@@ -655,6 +697,7 @@ fn add_body(
             );
             out.notes.push(multipart_note(&name, names));
             let argument = BodyArgument {
+                carries: "the parts of the request body",
                 ty: quote! { ::std::vec::Vec<Part> },
                 call: quote! { .multipart(#name) },
                 payload: quote! { #name.map(typed_openapi::Payload::Multipart) },
@@ -670,6 +713,8 @@ fn add_body(
 /// The argument of a body, before the document says whether it is required.
 struct BodyArgument {
     name: Ident,
+    /// What the argument carries, for the setter that names it.
+    carries: &'static str,
     /// The type of the argument when the body is required.
     ty: TokenStream,
     /// The `Values` call that a required body is passed to.
@@ -682,10 +727,16 @@ impl BodyArgument {
     fn add_to(self, out: &mut Signature, required: bool) {
         let Self {
             name,
+            carries,
             ty,
             call,
             payload,
         } = self;
+        out.members.push(Member {
+            name: unraw(&name),
+            optional: !required,
+            carries: carries.to_owned(),
+        });
         if required {
             out.args.push(quote! { #name: #ty });
             out.builder.push(call);
@@ -741,6 +792,12 @@ fn add_param(
     );
     let schema = param_schema(declared, param.name())?;
     let wire = param.name();
+    out.members.push(Member {
+        name: unraw(&ident),
+        // A list is a `Vec`, which `bon` does not make optional.
+        optional: list.is_none() && !param.required(),
+        carries: format!("the parameter `{wire}`"),
+    });
     if list.is_some() {
         // A list parameter is the wire name given once per value, which is the
         // repetition a repeated flag reaches the request builder with.
@@ -1060,6 +1117,7 @@ mod tests {
             names: Vec::new(),
             builder: Vec::new(),
             notes: Vec::new(),
+            members: Vec::new(),
         };
         let bound = |signature: &mut Signature, word: &str| {
             signature

@@ -85,7 +85,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use schemars::schema::{Schema as JsonSchema, SchemaObject};
 use syn::visit_mut::VisitMut;
-use typify::{Type, TypeDetails, TypeId, TypeSpace};
+use typify::{Type, TypeDetails, TypeEnumVariant, TypeId, TypeSpace};
 
 use super::GenerateError;
 use crate::model::Body;
@@ -239,6 +239,10 @@ enum Origin {
     Named(String),
     /// A schema that a request body or a response states where it is used.
     Inline(Box<Inline<JsonSchema>>),
+    /// A schema stated inside one of the two above, which typify gave a type of its
+    /// own and a name that it derived: `within` is the phrase for the schema that
+    /// holds it.
+    Nested { within: String },
 }
 
 impl Origin {
@@ -246,14 +250,25 @@ impl Origin {
         match self {
             Origin::Named(schema) => format!("the schema `{schema}`"),
             Origin::Inline(inline) => inline.described(),
+            Origin::Nested { within } => format!("a schema nested in {within}"),
         }
     }
 
     /// The schema, where an operation states it.
     fn stated(&self) -> Option<&JsonSchema> {
         match self {
-            Origin::Named(_) => None,
+            Origin::Named(_) | Origin::Nested { .. } => None,
             Origin::Inline(inline) => Some(&inline.schema),
+        }
+    }
+
+    /// How a schema nested in this one names it: the phrase for a schema that
+    /// holds a derived type.
+    fn within(&self) -> String {
+        match self {
+            Origin::Named(schema) => format!("`{schema}`"),
+            Origin::Inline(inline) => inline.described(),
+            Origin::Nested { within } => within.clone(),
         }
     }
 }
@@ -283,9 +298,11 @@ impl Claims {
             // typify's own spelling of the name, rather than the token stream's,
             // because this is a sentence an adopter reads.
             rust,
-            // The declared schemas are resolved before the inline ones, so the
-            // later claimant is inline whenever either is.
-            inline: matches!(origin, Origin::Inline(..)),
+            // The declared schemas are resolved before the inline ones and both
+            // before the types that typify derived for what is nested in them, so
+            // the later claimant is inline or nested whenever either is, and both
+            // are mended by a `title` on the schema that is not declared.
+            inline: matches!(origin, Origin::Inline(..) | Origin::Nested { .. }),
         })
     }
 }
@@ -356,6 +373,10 @@ impl Names {
         }
 
         let defined = defined_in(space);
+        let roots: Vec<(String, TypeId)> = resolved
+            .iter()
+            .map(|(origin, id)| (origin.within(), id.clone()))
+            .collect();
         let mut claimed = Claims::default();
         let mut names = Self {
             named: BTreeMap::new(),
@@ -379,9 +400,13 @@ impl Names {
             match origin {
                 Origin::Named(schema) => names.named.insert(schema, path),
                 Origin::Inline(inline) => names.inline.insert(inline.site, path),
+                // A type that typify derived has no name of the document's to be
+                // looked up by, and is claimed below, from the types it is in.
+                Origin::Nested { .. } => None,
             };
         }
-        Ok(names)
+        nested(space, &roots, &mut claimed)?;
+        fields(space).map(|()| names)
     }
 
     /// The type `schema` became, as a wrapper spells it.
@@ -440,6 +465,121 @@ pub(super) fn sites<'a>(api: &'a OpenAPI, model: &Document) -> Vec<Inline<&'a Sc
         }
     }
     found
+}
+
+/// The types that typify derived for the schemas nested in the ones above, each
+/// claimed under the name it is written with.
+///
+/// typify names a schema that a property states by the schema that holds it and
+/// the property (`Foo.bar` is `FooBar`), and a document is free to declare a schema
+/// of that name. typify writes both and does not make either unique, so the file
+/// defines the same type twice. The types are found from the ones that were asked
+/// for, through whatever they hold, and each belongs to the first schema that
+/// reaches it: one that another schema is a root of is read when its own turn
+/// comes, so that what it holds is nested in it and not in the schema that refers
+/// to it.
+fn nested(
+    space: &TypeSpace,
+    roots: &[(String, TypeId)],
+    claimed: &mut Claims,
+) -> Result<(), GenerateError> {
+    let asked: BTreeSet<&TypeId> = roots.iter().map(|(_, id)| id).collect();
+    let mut seen: BTreeSet<TypeId> = BTreeSet::new();
+    for (within, root) in roots {
+        let mut pending = vec![root.clone()];
+        while let Some(id) = pending.pop() {
+            if (asked.contains(&id) && id != *root) || !seen.insert(id.clone()) {
+                continue;
+            }
+            let ty = space
+                .get_type(&id)
+                .map_err(|error| GenerateError::Typify(Box::new(error)))?;
+            if defined_by_typify(&ty) && id != *root {
+                let origin = Origin::Nested {
+                    within: within.clone(),
+                };
+                claimed.record(ty.name(), id, &origin)?;
+            }
+            pending.extend(held_by(&ty));
+        }
+    }
+    Ok(())
+}
+
+/// The types that `ty` holds: the fields of a struct, the variants of an enum, what
+/// a newtype wraps and what a container is a container of.
+fn held_by(ty: &Type<'_>) -> Vec<TypeId> {
+    match ty.details() {
+        TypeDetails::Struct(held) => held.properties().map(|(_, id)| id).collect(),
+        TypeDetails::Enum(held) => held
+            .variants()
+            .flat_map(|(_, variant)| match variant {
+                TypeEnumVariant::Simple => Vec::new(),
+                TypeEnumVariant::Tuple(ids) => ids,
+                TypeEnumVariant::Struct(properties) => {
+                    properties.into_iter().map(|(_, id)| id).collect()
+                }
+            })
+            .collect(),
+        TypeDetails::Newtype(held) => vec![held.inner()],
+        TypeDetails::Option(id)
+        | TypeDetails::Vec(id)
+        | TypeDetails::Set(id)
+        | TypeDetails::Box(id)
+        | TypeDetails::Array(id, _) => vec![id],
+        TypeDetails::Map(key, value) => vec![key, value],
+        TypeDetails::Tuple(items) => items.collect(),
+        TypeDetails::Builtin(_) | TypeDetails::Unit | TypeDetails::String => Vec::new(),
+    }
+}
+
+/// Refuses a struct that declares one field twice.
+///
+/// typify writes a field for each property of a schema and spells it in Rust, so
+/// two properties that differ only in case or in a separator (`fooBar` and
+/// `foo_bar`) are one field, and typify does not make them two. It hands back the
+/// names as Rust spells them and not the properties, so the refusal names the
+/// type and the field. A struct that a `oneOf` holds is asked too, because each of
+/// its variants that is an object is a struct of its own.
+fn fields(space: &TypeSpace) -> Result<(), GenerateError> {
+    for ty in space.iter_types() {
+        match ty.details() {
+            TypeDetails::Struct(held) => once(&ty, held.properties().map(|(name, _)| name))?,
+            TypeDetails::Enum(held) => {
+                for (_, variant) in held.variants() {
+                    if let TypeEnumVariant::Struct(properties) = variant {
+                        once(&ty, properties.iter().map(|(name, _)| *name))?;
+                    }
+                }
+            }
+            TypeDetails::Newtype(_)
+            | TypeDetails::Option(_)
+            | TypeDetails::Vec(_)
+            | TypeDetails::Map(..)
+            | TypeDetails::Set(_)
+            | TypeDetails::Box(_)
+            | TypeDetails::Tuple(_)
+            | TypeDetails::Array(..)
+            | TypeDetails::Builtin(_)
+            | TypeDetails::Unit
+            | TypeDetails::String => {}
+        }
+    }
+    Ok(())
+}
+
+/// Refuses the first name that `fields` holds twice, for the type `ty`.
+fn once<'a>(ty: &Type<'_>, fields: impl Iterator<Item = &'a str>) -> Result<(), GenerateError> {
+    let mut seen = BTreeSet::new();
+    for field in fields {
+        if !seen.insert(field) {
+            return Err(GenerateError::DuplicateField {
+                ty: ty.name(),
+                field: field.to_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The `components` of the document, or none where it holds none: a `$ref` then
