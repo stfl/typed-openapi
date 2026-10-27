@@ -77,7 +77,7 @@ pub(super) fn check(definitions: &[(String, Schema)]) -> Result<(), GenerateErro
         for merge in leaving.iter().filter(|edge| edge.merged) {
             if let Some(path) = path_back(&edges, merge.to, name) {
                 return Err(GenerateError::CyclicAllOf {
-                    schemas: in_document_order(&names, name, path),
+                    schemas: in_document_order(&names, name, &path),
                 });
             }
         }
@@ -121,7 +121,7 @@ fn path_back<'d>(
 /// `start` is the schema whose merge closed the cycle and `path` leads from the
 /// schema that merge names back to it, so the cycle is `start` and then `path`
 /// without its last schema, which is `start` again.
-fn in_document_order(names: &[&str], start: &str, path: Vec<&str>) -> Vec<String> {
+fn in_document_order(names: &[&str], start: &str, path: &[&str]) -> Vec<String> {
     let mut cycle: Vec<&str> = vec![start];
     cycle.extend(path.iter().copied().take(path.len().saturating_sub(1)));
     let first = cycle

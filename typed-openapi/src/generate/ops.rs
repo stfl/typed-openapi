@@ -120,6 +120,7 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                 // One signature for the wrapper and for the builder beside it: they
                 // are one call, and the identifiers it binds are asked once.
                 let signature = signature_of(op, &declared, components, operation, names)?;
+                let response = response_type(op, operation, components, names)?;
                 let plain = operation_ident(&op.id().to_snake_case())?;
                 Ok(Emitted {
                     row: quote! { (#id, #method, #path) },
@@ -128,10 +129,8 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                     group: op.group().as_str().to_owned(),
                     command: op.command().as_str().to_owned(),
                     body: json_body_type(op, operation, components, names)?,
-                    method: wrapper(op, &plain, &signature, components, operation, names)?,
-                    builder_method: builder_wrapper(
-                        op, &plain, &signature, components, operation, names,
-                    )?,
+                    method: wrapper(op, &plain, &signature, &response)?,
+                    builder_method: builder_wrapper(&plain, &signature, &response)?,
                     names: (plain.clone(), format_ident!("{plain}_builder")),
                     members: signature.members,
                 })
@@ -343,9 +342,7 @@ fn wrapper(
     op: &Operation,
     name: &Ident,
     signature: &Signature,
-    components: &Components,
-    operation: &openapiv3::Operation,
-    names: &Names,
+    response: &TokenStream,
 ) -> Result<TokenStream, GenerateError> {
     let summary = op.summary().unwrap_or(op.id());
     let request = format!("{} {}", op.method(), op.path());
@@ -359,7 +356,6 @@ fn wrapper(
         notes,
         ..
     } = signature;
-    let response = response_type(op, operation, components, names)?;
     let variant = variant_of(op)?;
     let doc = paragraphs(
         [summary, &request, &gate]
@@ -469,12 +465,9 @@ fn gate_note(op: &Operation) -> String {
 /// It delegates to the plain wrapper rather than repeating its body, so the two
 /// cannot come to describe different requests.
 fn builder_wrapper(
-    op: &Operation,
     plain: &Ident,
     signature: &Signature,
-    components: &Components,
-    operation: &openapiv3::Operation,
-    names: &Names,
+    response: &TokenStream,
 ) -> Result<TokenStream, GenerateError> {
     let name = format_ident!("{plain}_builder");
     let Signature {
@@ -482,7 +475,6 @@ fn builder_wrapper(
         names: arguments,
         ..
     } = signature;
-    let response = response_type(op, operation, components, names)?;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
          required argument is a compile error."
@@ -652,62 +644,70 @@ fn add_body(
             ..
         } => {
             let ty = body_type(op, media_type, operation, components, names)?;
-            let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
-            // The operation is named so that an argument that does not serialise
-            // says whose body it was, as `fits` does in `check_body`.
-            let id = op.id();
-            let argument = BodyArgument {
-                carries: "the request body",
-                ty: quote! { &#ty },
-                call: quote! { .json(crate::to_json(#id, #name)?) },
-                payload: quote! {
-                    #name
-                        .map(|body| crate::to_json(#id, body))
-                        .transpose()?
-                        .map(typed_openapi::Payload::Json)
-                },
-                name,
-            };
-            (*required, argument)
+            (*required, json_argument(out, op, &ty))
         }
         Body::Opaque {
             media_type,
             required,
-        } => {
-            let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
-            out.notes.push(format!(
-                "`{name}` is sent verbatim under the document's own `{media_type}`, \
-                 which this crate does not assemble."
-            ));
-            let argument = BodyArgument {
-                carries: "the request body",
-                ty: quote! { ::std::vec::Vec<u8> },
-                call: quote! { .raw(#name) },
-                payload: quote! { #name.map(typed_openapi::Payload::Raw) },
-                name,
-            };
-            (*required, argument)
-        }
-        Body::Multipart { names, required } => {
-            let name = out.argument(
-                &format_ident!("parts"),
-                "parts",
-                "carries the body's parts",
-                false,
-            );
-            out.notes.push(multipart_note(&name, names));
-            let argument = BodyArgument {
-                carries: "the parts of the request body",
-                ty: quote! { ::std::vec::Vec<Part> },
-                call: quote! { .multipart(#name) },
-                payload: quote! { #name.map(typed_openapi::Payload::Multipart) },
-                name,
-            };
-            (*required, argument)
-        }
+        } => (*required, verbatim_argument(out, media_type)),
+        Body::Multipart { names, required } => (*required, parts_argument(out, names)),
     };
     argument.add_to(out, required);
     Ok(())
+}
+
+/// The argument of a JSON body of type `ty`.
+fn json_argument(out: &mut Signature, op: &Operation, ty: &TokenStream) -> BodyArgument {
+    let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
+    // The operation is named so that an argument that does not serialise says
+    // whose body it was, as `fits` does in `check_body`.
+    let id = op.id();
+    BodyArgument {
+        carries: "the request body",
+        ty: quote! { &#ty },
+        call: quote! { .json(crate::to_json(#id, #name)?) },
+        payload: quote! {
+            #name
+                .map(|body| crate::to_json(#id, body))
+                .transpose()?
+                .map(typed_openapi::Payload::Json)
+        },
+        name,
+    }
+}
+
+/// The argument of a body that is sent verbatim under `media_type`.
+fn verbatim_argument(out: &mut Signature, media_type: &str) -> BodyArgument {
+    let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
+    out.notes.push(format!(
+        "`{name}` is sent verbatim under the document's own `{media_type}`, \
+         which this crate does not assemble."
+    ));
+    BodyArgument {
+        carries: "the request body",
+        ty: quote! { ::std::vec::Vec<u8> },
+        call: quote! { .raw(#name) },
+        payload: quote! { #name.map(typed_openapi::Payload::Raw) },
+        name,
+    }
+}
+
+/// The argument of a multipart body whose declared parts are `names`.
+fn parts_argument(out: &mut Signature, names: &[String]) -> BodyArgument {
+    let name = out.argument(
+        &format_ident!("parts"),
+        "parts",
+        "carries the body's parts",
+        false,
+    );
+    out.notes.push(multipart_note(&name, names));
+    BodyArgument {
+        carries: "the parts of the request body",
+        ty: quote! { ::std::vec::Vec<Part> },
+        call: quote! { .multipart(#name) },
+        payload: quote! { #name.map(typed_openapi::Payload::Multipart) },
+        name,
+    }
 }
 
 /// The argument of a body, before the document says whether it is required.

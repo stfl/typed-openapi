@@ -1512,7 +1512,7 @@ impl Api {
 "#;
 
 /// The Rust type that [`OWNED`] names, in the crate root's module of that name.
-const PYROMETRY: &str = r#"//! The type an adopter of the hostile document owns for its cone numbers.
+const PYROMETRY: &str = r"//! The type an adopter of the hostile document owns for its cone numbers.
 
 use std::fmt;
 use std::str::FromStr;
@@ -1535,7 +1535,7 @@ impl FromStr for Cone {
         Ok(Self(text.to_owned()))
     }
 }
-"#;
+";
 
 /// Where cargo builds every crate of this file, so that a dependency is built once
 /// for all of them. A test is a process of its own under nextest and cargo locks
@@ -1832,9 +1832,10 @@ fn two_items_of_the_generated_code_that_share_a_name_refuse_the_bless_by_name() 
             "{}: {refused:?}",
             collision.label
         );
-        let said = match &refused {
-            GenerateError::Unusable(cause) => cause.to_string(),
-            other => other.to_string(),
+        let said = if let GenerateError::Unusable(cause) = &refused {
+            cause.to_string()
+        } else {
+            refused.to_string()
         };
         assert_eq!(said, collision.says, "{}", collision.label);
         let written = out(&name).join("src");

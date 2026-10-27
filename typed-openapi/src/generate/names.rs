@@ -543,43 +543,53 @@ fn held_by(ty: &Type<'_>) -> Vec<TypeId> {
 /// its variants that is an object is a struct of its own.
 fn fields(space: &TypeSpace) -> Result<(), GenerateError> {
     for ty in space.iter_types() {
-        match ty.details() {
-            TypeDetails::Struct(held) => once(&ty, held.properties().map(|(name, _)| name))?,
-            TypeDetails::Enum(held) => {
-                for (_, variant) in held.variants() {
-                    if let TypeEnumVariant::Struct(properties) = variant {
-                        once(&ty, properties.iter().map(|(name, _)| *name))?;
-                    }
-                }
-            }
-            TypeDetails::Newtype(_)
-            | TypeDetails::Option(_)
-            | TypeDetails::Vec(_)
-            | TypeDetails::Map(..)
-            | TypeDetails::Set(_)
-            | TypeDetails::Box(_)
-            | TypeDetails::Tuple(_)
-            | TypeDetails::Array(..)
-            | TypeDetails::Builtin(_)
-            | TypeDetails::Unit
-            | TypeDetails::String => {}
+        for declared in field_lists(&ty) {
+            once(&ty, &declared)?;
         }
     }
     Ok(())
 }
 
-/// Refuses the first name that `fields` holds twice, for the type `ty`.
-fn once<'a>(ty: &Type<'_>, fields: impl Iterator<Item = &'a str>) -> Result<(), GenerateError> {
-    let mut seen = BTreeSet::new();
-    for field in fields {
-        if !seen.insert(field) {
-            return Err(GenerateError::DuplicateField {
-                ty: ty.name(),
-                field: field.to_owned(),
-            });
-        }
+/// The names of the fields that `ty` declares, one list for each struct that it
+/// is: a struct has one, and an enum has one for each variant that has named
+/// fields.
+fn field_lists(ty: &Type<'_>) -> Vec<Vec<String>> {
+    let named = |fields: Vec<&str>| fields.into_iter().map(str::to_owned).collect();
+    match ty.details() {
+        TypeDetails::Struct(held) => vec![named(held.properties().map(|(name, _)| name).collect())],
+        TypeDetails::Enum(held) => held
+            .variants()
+            .filter_map(|(_, variant)| match variant {
+                TypeEnumVariant::Struct(properties) => {
+                    Some(named(properties.iter().map(|(name, _)| *name).collect()))
+                }
+                TypeEnumVariant::Simple | TypeEnumVariant::Tuple(_) => None,
+            })
+            .collect(),
+        TypeDetails::Newtype(_)
+        | TypeDetails::Option(_)
+        | TypeDetails::Vec(_)
+        | TypeDetails::Map(..)
+        | TypeDetails::Set(_)
+        | TypeDetails::Box(_)
+        | TypeDetails::Tuple(_)
+        | TypeDetails::Array(..)
+        | TypeDetails::Builtin(_)
+        | TypeDetails::Unit
+        | TypeDetails::String => Vec::new(),
     }
-    Ok(())
+}
+
+/// Refuses the first name that `fields` holds twice, for the type `ty`.
+fn once(ty: &Type<'_>, fields: &[String]) -> Result<(), GenerateError> {
+    let mut seen = BTreeSet::new();
+    match fields.iter().find(|field| !seen.insert(field.as_str())) {
+        Some(field) => Err(GenerateError::DuplicateField {
+            ty: ty.name(),
+            field: field.clone(),
+        }),
+        None => Ok(()),
+    }
 }
 
 /// The `components` of the document, or none where it holds none: a `$ref` then
