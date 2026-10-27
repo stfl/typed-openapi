@@ -389,9 +389,9 @@ impl ::std::convert::TryFrom<::std::string::String> for VoucherStatus {
         value.parse()
     }
 }
-/// Error types.
+///Error types.
 pub mod error {
-    /// Error from a `TryFrom` or `FromStr` implementation.
+    ///Error from a `TryFrom` or `FromStr` implementation.
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
