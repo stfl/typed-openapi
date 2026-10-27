@@ -5859,3 +5859,347 @@ fn a_named_nullable_schema_and_a_nullable_answer_are_options() {
         "{ops}"
     );
 }
+
+// -------------------------------------- what typify cannot build is refused by name
+
+/// A document with one operation that touches no schema, and whatever schemas the
+/// case puts under `components`, each on a line of its own indented by four
+/// spaces.
+fn with_schemas(schemas: &str) -> String {
+    format!(
+        "openapi: 3.0.3\ninfo: {{ title: Schemas, version: \"1.0\" }}\nservers: [{{ url: \
+         \"http://localhost:9999\" }}]\npaths:\n  /things:\n    get:\n      operationId: \
+         listThings\n      responses:\n        \"200\": {{ description: OK }}\ncomponents:\n  \
+         schemas:\n{schemas}"
+    )
+}
+
+/// What a refused bless leaves in the tree: nothing, because every step that can
+/// refuse comes before the first file is written.
+fn assert_nothing_written(dir: &Path, what: &str) {
+    assert!(
+        !dir.join("src").exists() && !dir.join("spec").exists(),
+        "{what}: a refused bless wrote into the tree"
+    );
+}
+
+/// typify reads the type of `Settings::replace` as a path and panics inside its
+/// conversion when it is not one, with a message about its own source and none
+/// about the adopter's call. The generator reads the same text as a path first, so
+/// the refusal names the format and the type the adopter wrote, and comes before
+/// any schema is converted.
+#[test]
+fn a_replacement_that_is_no_rust_path_is_refused_by_name_before_typify_runs() {
+    for (label, rust) in [
+        ("words", "not a path"),
+        ("symbols", "cents::Cents!!"),
+        ("trailing", "cents::"),
+        ("reference", "&str"),
+        ("empty", ""),
+    ] {
+        let dir = out(&format!("replace-bad-{label}"));
+        let failure = Settings::new(wrote(&dir, "document.yaml", OWNED))
+            .replace("money", rust)
+            .write_to(&dir)
+            .expect_err("the text is no Rust path");
+        assert!(
+            matches!(&failure, GenerateError::Unsupported(text)
+            if text.starts_with(&format!(
+                "`{rust}`, named for `format: money`, is not a Rust path"
+            ))),
+            "{label}: {failure:?}"
+        );
+        assert_nothing_written(&dir, label);
+    }
+}
+
+/// A path that typify takes is still taken, whatever its shape: a name, a rooted
+/// name, a name under `crate` and a name with arguments.
+#[test]
+fn a_replacement_that_is_a_rust_path_generates() {
+    for (label, rust) in [
+        ("plain", "cents::Cents"),
+        ("rooted", "::cents::Cents"),
+        ("crate", "crate::cents::Cents"),
+        ("arguments", "std::vec::Vec<u8>"),
+    ] {
+        let dir = out(&format!("replace-good-{label}"));
+        Settings::new(wrote(&dir, "document.yaml", OWNED))
+            .replace("money", rust)
+            .write_to(&dir)
+            .unwrap_or_else(|error| panic!("{label}: `{rust}` is a path: {error:?}"));
+    }
+}
+
+/// Enum values that differ only in case or in a separator, and two that are
+/// symbols with no letter in them. typify turns each value into a variant name and
+/// panics when two of them are one, after the reduction has accepted the document.
+const ENUMS_THAT_COLLIDE: [(&str, &str, &str); 3] = [
+    ("case", "[active, ACTIVE]", "ACTIVE"),
+    ("separator", "[a-b, a_b]", "a_b"),
+    ("symbols", "['+', '-']", "-"),
+];
+
+/// typify's panic is not a refusal, and it names no schema: the process ends with
+/// exit 101 and a line of typify's own source. The generator catches it and says
+/// which schema was being converted, whether the enum is the schema, a property of
+/// it, or stated inline by an operation, and the cause is what typify said.
+#[test]
+fn enum_values_that_become_one_rust_name_are_refused_naming_the_schema() {
+    for (label, values, second) in ENUMS_THAT_COLLIDE {
+        for (place, schemas, said) in [
+            (
+                "named",
+                format!("    Thing: {{ type: string, enum: {values} }}\n"),
+                "the schema `Thing`",
+            ),
+            (
+                "property",
+                format!(
+                    "    Thing: {{ type: object, properties: {{ status: {{ type: string, enum: \
+                     {values} }} }} }}\n"
+                ),
+                "the schema `Thing`",
+            ),
+        ] {
+            let dir = out(&format!("enum-{label}-{place}"));
+            let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(&schemas)))
+                .write_to(&dir)
+                .expect_err("two values are one variant");
+            assert!(
+                matches!(&failure, GenerateError::Panicked { schema, .. } if schema == said),
+                "{label}, {place}: {failure:?}"
+            );
+            assert_eq!(
+                failure.to_string(),
+                format!("typify panicked while it built the Rust type of {said}"),
+                "{label}, {place}"
+            );
+            assert!(
+                reported(&failure).contains(second),
+                "{label}, {place}: the cause does not say which values:\n{}",
+                reported(&failure)
+            );
+            assert_nothing_written(&dir, &format!("{label}, {place}"));
+        }
+    }
+}
+
+/// An enum that an operation states inline is converted after the named schemas,
+/// and the refusal names the operation's body and not a schema of the document.
+#[test]
+fn an_enum_stated_inline_that_typify_cannot_name_is_refused_naming_the_body() {
+    const STATED: &str = r#"openapi: 3.0.3
+info: { title: Stated, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    post:
+      operationId: createThing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [active, ACTIVE] }
+      responses:
+        "201": { description: Created }
+"#;
+    let dir = out("enum-inline");
+    let failure = Settings::new(wrote(&dir, "document.yaml", STATED))
+        .write_to(&dir)
+        .expect_err("two values are one variant");
+
+    assert!(
+        matches!(&failure, GenerateError::Panicked { schema, .. }
+            if schema == "the request body stated inline by `createThing`"),
+        "{failure:?}"
+    );
+    assert_nothing_written(&dir, "inline");
+}
+
+/// A `$ref` that leads nowhere, in a property and in an `allOf`, panics inside
+/// typify too, at two different places of its source. A schema that no operation
+/// reaches is where the reduction never meets it, so the bless is where it is
+/// refused, and the refusal names the schema that holds the reference.
+#[test]
+fn any_other_panic_of_typify_is_a_refusal_naming_the_schema_too() {
+    for (label, schema) in [
+        (
+            "property",
+            "    Lonely: { type: object, properties: { x: { $ref: '#/components/schemas/Missing' } } }\n",
+        ),
+        (
+            "allOf",
+            "    Lonely: { allOf: [ { $ref: '#/components/schemas/Missing' }, { type: object, \
+             properties: { y: { type: string } } } ] }\n",
+        ),
+    ] {
+        let dir = out(&format!("panic-{label}"));
+        let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(schema)))
+            .write_to(&dir)
+            .expect_err("a reference to nowhere");
+        assert!(
+            matches!(&failure, GenerateError::Panicked { schema, .. }
+                if schema == "the schema `Lonely`"),
+            "{label}: {failure:?}"
+        );
+        assert_nothing_written(&dir, label);
+    }
+}
+
+/// Every refusal of the cycle test names the schemas that make the cycle, in the
+/// order `allOf` leads from one to the next, starting with the one that comes
+/// first in the document. `Tail` leads into a cycle and is not part of it.
+const CYCLES: [(&str, &str, &[&str]); 8] = [
+    (
+        "the pair of SEV-282's review",
+        "    Left:  { allOf: [{ $ref: '#/components/schemas/Right' }, { properties: { id: { type: \
+         integer, readOnly: true } } }] }\n    Right: { allOf: [{ $ref: '#/components/schemas/Left' \
+         }, { properties: { name: { type: string } } }] }\n",
+        &["Left", "Right"],
+    ),
+    (
+        "a schema that lists itself beside another",
+        "    Mirror: { allOf: [{ $ref: '#/components/schemas/Mirror' }, { properties: { a: { type: \
+         string } } }] }\n",
+        &["Mirror"],
+    ),
+    (
+        "three schemas",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: string } } \
+         }] }\n    B: { allOf: [{ $ref: '#/components/schemas/C' }, { properties: { y: { type: \
+         string } } }] }\n    C: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { z: \
+         { type: string } } }] }\n",
+        &["A", "B", "C"],
+    ),
+    (
+        "a schema that leads into a cycle",
+        "    Tail: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: string } \
+         } }] }\n    B: { allOf: [{ $ref: '#/components/schemas/C' }, { properties: { y: { type: \
+         string } } }] }\n    C: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { z: \
+         { type: string } } }] }\n",
+        &["B", "C"],
+    ),
+    (
+        "a reference inside a nested allOf",
+        "    A: { allOf: [{ allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: \
+         string } } }] }, { properties: { y: { type: string } } }] }\n    B: { allOf: [{ $ref: \
+         '#/components/schemas/A' }, { properties: { z: { type: string } } }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "a reference inside a oneOf of an allOf",
+        "    A: { allOf: [{ oneOf: [{ $ref: '#/components/schemas/B' }, { properties: { q: { type: \
+         string } } }] }, { properties: { y: { type: string } } }] }\n    B: { allOf: [{ $ref: \
+         '#/components/schemas/A' }, { properties: { z: { type: string } } }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "a wrapper of one element on one side",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }] }\n    B: { allOf: [{ $ref: \
+         '#/components/schemas/A' }, { properties: { z: { type: string } } }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "a oneOf that leads back to an allOf",
+        "    A: { oneOf: [{ $ref: '#/components/schemas/B' }, { properties: { q: { type: string } } \
+         }] }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { z: { type: \
+         string } } }] }\n",
+        &["A", "B"],
+    ),
+];
+
+/// typify merges the members of an `allOf` by following each `$ref` to the schema
+/// it names, and a cycle of references has no end: its source says so in a `TODO`
+/// at the arm that follows one (`merge::try_merge_schema`), and the process dies
+/// of a stack overflow, which no `catch_unwind` sees. So the cycle is found in the
+/// document, before typify runs, and refused naming the schemas that make it.
+#[test]
+fn a_cycle_of_allof_among_named_schemas_is_refused_naming_the_schemas() {
+    for (at, (label, schemas, cycle)) in CYCLES.iter().enumerate() {
+        let dir = out(&format!("cycle-{at}"));
+        let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
+            .write_to(&dir)
+            .expect_err("a cycle of allOf has no finite type");
+        assert!(
+            matches!(&failure, GenerateError::CyclicAllOf { schemas } if schemas == cycle),
+            "{label}: {failure:?}"
+        );
+        assert_nothing_written(&dir, label);
+    }
+}
+
+/// The words of the refusal for one schema and for several, and the repair.
+#[test]
+fn the_refusal_of_a_cycle_of_allof_says_what_leads_to_what() {
+    let refused = |name: &str, at: usize| {
+        let schemas = CYCLES[at].1;
+        let dir = out(name);
+        Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
+            .write_to(&dir)
+            .expect_err("a cycle")
+            .to_string()
+    };
+    assert_eq!(
+        refused("cycle-words-pair", 0),
+        "the schemas `Left` and `Right` are made of each other through `allOf`; break the cycle \
+         in an Overlay"
+    );
+    assert_eq!(
+        refused("cycle-words-one", 1),
+        "the schema `Mirror` is made of itself through `allOf`; break the cycle in an Overlay"
+    );
+    assert_eq!(
+        refused("cycle-words-three", 2),
+        "the schemas `A`, `B` and `C` are made of each other through `allOf`; break the cycle in \
+         an Overlay"
+    );
+}
+
+/// A reference that closes a loop is a recursive type where the loop does not run
+/// through a merge, and typify writes it: a property that points back, a `oneOf`
+/// that does, an array of the schema, and the idiom that puts a sentence beside a
+/// reference (an `allOf` of the schema and a description). Wrappers of one element
+/// that name each other are no merge either.
+#[test]
+fn a_loop_that_is_no_merge_still_generates() {
+    for (label, schemas) in [
+        (
+            "a property that points back",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: \
+             string } } }] }\n    B: { type: object, properties: { y: { $ref: \
+             '#/components/schemas/A' } } }\n",
+        ),
+        (
+            "a oneOf that points back",
+            "    A: { oneOf: [{ $ref: '#/components/schemas/B' }, { type: string }] }\n    B: { \
+             oneOf: [{ $ref: '#/components/schemas/A' }, { type: integer }] }\n",
+        ),
+        (
+            "a list of the schema",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { type: object, properties: { x: \
+             { type: string } } }] }\n    B: { type: array, items: { allOf: [{ $ref: \
+             '#/components/schemas/A' }, { type: object, properties: { z: { type: string } } \
+             }] } }\n",
+        ),
+        (
+            "a sentence beside the reference",
+            "    Node: { type: object, properties: { parent: { allOf: [{ $ref: \
+             '#/components/schemas/Node' }, { description: the parent }] }, name: { type: string \
+             } } }\n",
+        ),
+        (
+            "wrappers of one element",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }] }\n    B: { allOf: [{ $ref: \
+             '#/components/schemas/A' }] }\n",
+        ),
+    ] {
+        let dir = out(&format!("loop-{}", label.replace(' ', "-")));
+        Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
+            .write_to(&dir)
+            .unwrap_or_else(|error| panic!("{label}: typify converts it: {error:?}"));
+    }
+}

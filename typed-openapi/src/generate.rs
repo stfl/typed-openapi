@@ -63,6 +63,8 @@
 //! do, and this is where it is heard. The failure names the layer it is in.
 
 mod artefacts;
+mod cycles;
+mod guard;
 mod names;
 mod ops;
 mod prose;
@@ -457,6 +459,18 @@ fn repair(inline: bool) -> &'static str {
     }
 }
 
+/// What [`GenerateError::CyclicAllOf`] says of the schemas that make a cycle.
+fn made_of(schemas: &[String]) -> String {
+    let named: Vec<String> = schemas.iter().map(|schema| format!("`{schema}`")).collect();
+    match named.as_slice() {
+        [only] => format!("the schema {only} is made of itself through `allOf`"),
+        _ => format!(
+            "the schemas {} are made of each other through `allOf`",
+            listed(&named)
+        ),
+    }
+}
+
 /// A list as prose: `a`, then `a and b`, then `a, b and c`.
 fn listed(items: &[String]) -> String {
     match items.split_last() {
@@ -671,6 +685,41 @@ pub enum GenerateError {
     /// is part of this crate's API.
     #[error("typify cannot build Rust types from the document's schemas")]
     Typify(#[source] Box<dyn Error + Send + Sync>),
+    /// typify panicked while it converted a schema, which it does for a shape
+    /// that it has no type for: enum values that become one variant name, such
+    /// as `active` and `ACTIVE`, and a `$ref` that leads nowhere, among others.
+    /// A panic is not a refusal and names no schema, so the generator catches it
+    /// and says which schema was being converted: the one that a document
+    /// declares, or the request body or response that an operation states
+    /// inline. The cause is the text of the panic, which is typify's.
+    ///
+    /// The panic hook of the process runs first, as it does for every panic that
+    /// is caught, so the text of the cause is on standard error too.
+    #[error("typify panicked while it built the Rust type of {schema}")]
+    Panicked {
+        /// A sentence naming the schema: `the schema `Thing``, or the request
+        /// body or response that an operation states inline.
+        schema: String,
+        /// What typify said when it panicked.
+        #[source]
+        message: Box<dyn Error + Send + Sync>,
+    },
+    /// Schemas that are made of each other through `allOf`. typify merges the
+    /// members of an `allOf` by following each `$ref` to the schema it names, and
+    /// a cycle of references has no end: the process dies of a stack overflow,
+    /// which nothing can catch. So the cycle is found in the document, before
+    /// typify runs. A loop that does not run through a merge is a recursive type,
+    /// and it is not refused: a property that points back, a `oneOf` that does, a
+    /// list of the schema, a sentence beside a reference, and `allOf` wrappers of
+    /// one element that name each other.
+    #[error("{}; break the cycle in an Overlay", made_of(.schemas))]
+    CyclicAllOf {
+        /// The schemas that make the cycle, in the order that `allOf` leads from
+        /// one to the next, starting with the one that comes first in the
+        /// document. A schema that leads into the cycle and is no part of it is
+        /// not named.
+        schemas: Vec<String>,
+    },
     /// A wrapper would have to name the type of a schema the document's
     /// `components.schemas` never declared. Emitting an identifier for it
     /// anyway is how an adopter ends up bisecting a generated file, so the

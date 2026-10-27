@@ -346,9 +346,12 @@ impl Names {
             resolved.push((Origin::Named(schema.to_owned()), id));
         }
         for inline in inline {
-            let id = space
-                .add_type_with_name(&inline.schema, Some(inline.site.suggested()))
-                .map_err(|error| GenerateError::Typify(Box::new(error)))?;
+            // A schema stated inline is converted here and not with the named
+            // ones, so a panic of typify is the schema's own, and names it.
+            let id = super::guard::converted(
+                || inline.described(),
+                || space.add_type_with_name(&inline.schema, Some(inline.site.suggested())),
+            )?;
             resolved.push((Origin::Inline(Box::new(inline)), id));
         }
 
