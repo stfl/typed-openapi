@@ -1440,6 +1440,63 @@ the crate follows [Semantic Versioning][semver].
     over a schema that a component states names the component and the operation
     that takes it. Repair: none. Run the bless step again and commit `ops.rs`
     and `types.rs`.
+- **A nullable schema admits `null`, so its field is an `Option`.**
+  `nullable: true` is how an OpenAPI 3.0 document says "or `null`", and the
+  generator left it to typify, which reads it as a keyword it does not know. A
+  required, nullable property was a plain type, and the vendor's own `null`
+  failed to decode. Every shape that states the keyword is an `Option` of what
+  the schema describes: a scalar, an enum, an object stated inline, an array and
+  its items, a composition, a format you own through `Settings::replace`
+  (`Option<money::Money>`) and the schema of a response. A property that is
+  required and nullable is an `Option` whose key still has to be there. A schema
+  that holds anything admits `null` already and stays `serde_json::Value`.
+  Repair: run the bless step again, commit `types.rs` and `ops.rs`, and handle
+  `None` where the code reads such a field. What changes in sevdesk-cli:
+  - A required, nullable property is an `Option`:
+    `ModelCheckAccountTransaction.payee_payer_name`,
+    `ModelContactAddress.category` and `ModelCreditNote.address_country` were
+    `String` and two structs. The fourth of its four, `entryDate` of
+    `Model_CheckAccountTransactionResponse`, states `nullable` beside a `$ref`,
+    which is not read (below), so it is `SevEntryDate` as it was.
+  - An optional, nullable property that was an array, a map or an integer with
+    a default is an `Option` too: it was a `Vec`, a `Map` or an `i64` that took
+    its default where the key was missing and refused a `null`. These are ten
+    fields such as `GetChangesFromModelResponse.objects` and
+    `ModelContact.status`.
+  - A component that is nullable is a newtype over an `Option`, because every
+    use of it takes `null`: `SevCompareHash(String)` is
+    `SevCompareHash(Option<SevCompareHashInner>)`, and the `pattern` and its
+    `FromStr` are on `SevCompareHashInner`. Its three uses are optional fields
+    and read `Option<SevCompareHash>`.
+  - `nullable` beside a `$ref` is not read. OpenAPI 3.0.3 says that properties
+    added to a Reference Object "SHALL be ignored", and the object model does
+    not hold them, so `{ $ref: X, nullable: true }` is `X` in the type as it
+    was. Repair: an Overlay that writes `allOf` of the one reference with
+    `nullable: true` beside it.
+  - A field of a nullable schema carries the schema's `description` as its own
+    doc comment, where it carried it on the type alone.
+- **A bless that is refused writes nothing.** `Settings::write_to` wrote the
+  corrected document and `types.rs` before it emitted `ops.rs` and the blob, so
+  a vendor revision that the generator refused left the new types beside the old
+  wrappers and the old blob, a tree that compiled and described two APIs. It
+  builds every artefact in memory first, `rustfmt` formatting the Rust there,
+  and writes none of them until the document, both emitters, the blob's round
+  trip and `rustfmt` have all said yes. A refused bless leaves the committed
+  artefacts as they were, byte for byte. Each file is then written beside its
+  destination as `<name>.bless-tmp` and renamed over it once every file is
+  written, so a disk that fills part-way stops the bless before any file is
+  replaced and the files beside are removed. Repair: none. What an adopter can
+  see besides:
+  - A file at a destination is replaced and not written through: a symlink
+    there becomes a file, and the new file takes the permissions that the
+    process creates a file with, where the old one kept its own.
+  - `rustfmt` reads standard input, in the nearest directory above the file
+    that exists, and so reads the same `rustfmt.toml` it read for the file.
+    `GenerateError::RustfmtSpawn` also says that the input or the output of
+    `rustfmt` failed.
+  - `GenerateError::Write` also names a destination that is a directory, which
+    is refused before any file is placed, and one that a file written beside it
+    could not be renamed to.
 
 ### Removed
 

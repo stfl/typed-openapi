@@ -76,6 +76,33 @@
 //! refusal of an undeclared property is what that check is for, and `false`
 //! stays what typify closes with `deny_unknown_fields`.
 //!
+//! # A nullable schema admits `null`
+//!
+//! `nullable: true` is how an OpenAPI 3.0 document says "or `null`", and typify
+//! reads it as a keyword it does not know. A property that is required and
+//! nullable would be a `String`, and the vendor's own `null` would fail to
+//! decode. [`AdmitsNull`] says it in a spelling typify turns into an `Option`,
+//! and a required property stays required: typify writes the `Option` so that
+//! the key must be there and may hold `null`.
+//!
+//! A schema of one type says it in place (`type: [T, null]`), which typify reads
+//! as an `Option` of what the rest of the schema describes, and names the type
+//! as it names it without the word. Any other schema (a reference, a composition, one with no
+//! `type`) is one member of an `anyOf` beside `{type: null}`, and what it says
+//! about itself stays outside it, where typify and [`NotRequired`] read a title,
+//! a description, a default and `readOnly`. A schema that admits `null` already
+//! is left as it is, so no type is an `Option` of an `Option`.
+//!
+//! The rewrite reads the typed schema and not the JSON, as [`OpenWithAMap`] does,
+//! because the JSON also holds `default` and `example` data, and a property that
+//! is called `nullable` is a property. A format the adopter owns keeps the word
+//! across [`reference_to`]: the type the adopter owns is not the one that says
+//! whether the vendor may send `null`. A named schema that is nullable is a
+//! newtype over an `Option`, which is how typify writes a named type that is not
+//! a struct. `nullable` beside a `$ref` is not read, because OpenAPI 3.0.3 says
+//! the properties added to a Reference Object "SHALL be ignored", and the object
+//! model does not hold them; `allOf` of the one reference carries it.
+//!
 //! # A property the API sets is not required of a request
 //!
 //! OpenAPI 3.0.3 says of a `readOnly` property that "the required will take
@@ -95,7 +122,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use openapiv3::{OpenAPI, ReferenceOr};
 use proc_macro2::Span;
 use quote::quote;
-use schemars::schema::{Schema, SchemaObject};
+use schemars::schema::{InstanceType, Schema, SchemaObject, SingleOrVec, SubschemaValidation};
 use schemars::visit::Visitor;
 use serde_json::Value;
 use syn::visit_mut::VisitMut;
@@ -418,6 +445,7 @@ fn schemas(definitions: Vec<Definition>) -> Result<Vec<(String, Schema)>, Genera
 fn typify_schema(value: Value) -> Result<Schema, serde_json::Error> {
     let mut schema: Schema = serde_json::from_value(value)?;
     OpenWithAMap.visit_schema(&mut schema);
+    AdmitsNull.visit_schema(&mut schema);
     Ok(schema)
 }
 
@@ -686,6 +714,65 @@ impl Visitor for OpenWithAMap {
     }
 }
 
+/// Says `nullable: true` as a schema that admits `null`, at every depth.
+struct AdmitsNull;
+
+impl Visitor for AdmitsNull {
+    fn visit_schema_object(&mut self, schema: &mut SchemaObject) {
+        schemars::visit::visit_schema_object(self, schema);
+        if schema.extensions.remove(NULLABLE) == Some(Value::Bool(true)) && !admits_null(schema) {
+            *schema = admitting_null(std::mem::take(schema));
+        }
+    }
+}
+
+/// OpenAPI's keyword for a schema that admits `null` beside what it describes.
+const NULLABLE: &str = "nullable";
+
+/// Whether `schema` already admits `null`, so that saying it again would add a
+/// second layer of `Option` to a type that has the first.
+fn admits_null(schema: &SchemaObject) -> bool {
+    match &schema.instance_type {
+        Some(SingleOrVec::Single(only)) => **only == InstanceType::Null,
+        Some(SingleOrVec::Vec(types)) => types.contains(&InstanceType::Null),
+        None => {
+            *schema
+                == SchemaObject {
+                    metadata: schema.metadata.clone(),
+                    extensions: schema.extensions.clone(),
+                    ..SchemaObject::default()
+                }
+        }
+    }
+}
+
+/// `schema`, or `null`.
+///
+/// A schema of one type says it in place (`type: [T, null]`), because typify
+/// reads that spelling as an `Option` of what the rest of the schema describes
+/// and keeps the name it would have given the type. Any other schema (a
+/// reference, a composition, an `enum`) is one member of an `anyOf` beside
+/// `null`, and what the schema said about itself stays outside it.
+fn admitting_null(mut schema: SchemaObject) -> SchemaObject {
+    if let Some(SingleOrVec::Single(only)) = schema.instance_type.as_mut() {
+        let only = **only;
+        schema.instance_type = Some(SingleOrVec::Vec(vec![only, InstanceType::Null]));
+        return schema;
+    }
+    let null = SchemaObject {
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Null))),
+        ..SchemaObject::default()
+    };
+    SchemaObject {
+        metadata: schema.metadata.take(),
+        subschemas: Some(Box::new(SubschemaValidation {
+            any_of: Some(vec![Schema::Object(schema), Schema::Object(null)]),
+            ..SubschemaValidation::default()
+        })),
+        ..SchemaObject::default()
+    }
+}
+
 /// Every schema that the request body or the response of an operation states
 /// inline, in the model's order.
 ///
@@ -797,7 +884,9 @@ fn behind_a_reference(value: &mut Value, owned: &[Owned]) -> Result<(), Generate
 /// different type and not the one the adopter owns. So the shape goes and the
 /// metadata stays — the title and description a generated doc comment is
 /// written from describe the field or the schema rather than the shape, and
-/// losing them would cost the generated type the vendor's own prose.
+/// losing them would cost the generated type the vendor's own prose. So does
+/// `nullable`, which is about the value and not about its shape: the type the
+/// adopter owns is not the one that says whether the vendor may send `null`.
 ///
 /// Which keys those are is schemars' answer rather than a list here, because
 /// schemars is what typify reads the schema with.
@@ -813,6 +902,11 @@ fn reference_to(owned: &Owned, schema: Value) -> Result<Value, GenerateError> {
     serde_json::to_value(schemars::schema::SchemaObject {
         metadata: stated.metadata,
         reference: Some(format!("#/definitions/{}", owned.placeholder)),
+        extensions: stated
+            .extensions
+            .into_iter()
+            .filter(|(key, _)| key == NULLABLE)
+            .collect(),
         ..schemars::schema::SchemaObject::default()
     })
     .map_err(unreadable)
@@ -848,7 +942,7 @@ mod tests {
     use schemars::schema::Schema;
     use serde_json::json;
 
-    use super::{NotRequired, PLACEHOLDER, owned};
+    use super::{NotRequired, PLACEHOLDER, owned, typify_schema};
 
     /// Named schemas as typify reads them, from the JSON of each.
     fn named(schemas: Vec<(&str, serde_json::Value)>) -> BTreeMap<String, Schema> {
@@ -952,5 +1046,100 @@ mod tests {
                 )
             ]
         );
+    }
+
+    /// What typify is given for `schema`, as JSON.
+    fn given(schema: serde_json::Value) -> serde_json::Value {
+        let schema = typify_schema(schema).unwrap_or_else(|error| panic!("a schema: {error}"));
+        serde_json::to_value(schema).unwrap_or_else(|error| panic!("JSON: {error}"))
+    }
+
+    /// `nullable: true` is said as a schema that admits `null`, in the spelling
+    /// typify turns into an `Option`.
+    ///
+    /// The schemas a document gives as a hand-built value are the ones no
+    /// document test reaches: `openapiv3` reads one `type`, so a list of types
+    /// that holds `null` already, or two types and no `null`, is a schema that
+    /// only this table builds.
+    #[test]
+    fn nullable_is_said_as_a_schema_that_admits_null() {
+        let reference = json!({ "$ref": "#/definitions/Thing" });
+        for (label, schema, said) in [
+            (
+                "one type is widened in place, with what the schema says about itself",
+                json!({ "type": "string", "nullable": true, "description": "d", "maxLength": 3 }),
+                json!({ "type": ["string", "null"], "description": "d", "maxLength": 3 }),
+            ),
+            (
+                "an enum keeps its values",
+                json!({ "type": "string", "enum": ["a", "b"], "nullable": true }),
+                json!({ "type": ["string", "null"], "enum": ["a", "b"] }),
+            ),
+            (
+                "a composition is one member beside null, and its metadata stays outside",
+                json!({ "allOf": [reference], "nullable": true, "description": "d",
+                        "readOnly": true }),
+                json!({ "description": "d", "readOnly": true,
+                        "anyOf": [{ "allOf": [reference] }, { "type": "null" }] }),
+            ),
+            (
+                "two types and no null are one member beside null",
+                json!({ "type": ["string", "integer"], "nullable": true }),
+                json!({ "anyOf": [{ "type": ["string", "integer"] }, { "type": "null" }] }),
+            ),
+            (
+                "false admits no more than the type does",
+                json!({ "type": "string", "nullable": false }),
+                json!({ "type": "string" }),
+            ),
+        ] {
+            assert_eq!(given(schema), said, "{label}");
+        }
+    }
+
+    /// A schema that admits `null` already is left as it is, so that no type is
+    /// an `Option` of an `Option`.
+    #[test]
+    fn a_schema_that_admits_null_already_is_not_said_twice() {
+        for (label, schema, said) in [
+            (
+                "a schema that holds anything",
+                json!({ "nullable": true, "description": "d" }),
+                json!({ "description": "d" }),
+            ),
+            (
+                "the type null",
+                json!({ "type": "null", "nullable": true }),
+                json!({ "type": "null" }),
+            ),
+            (
+                "a list of types that holds null",
+                json!({ "type": ["string", "null"], "nullable": true }),
+                json!({ "type": ["string", "null"] }),
+            ),
+        ] {
+            assert_eq!(given(schema), said, "{label}");
+        }
+    }
+
+    /// The word is read where a schema stands, at every depth, and nowhere else:
+    /// a property that is called `nullable` is a property.
+    #[test]
+    fn nullable_is_read_where_a_schema_stands() {
+        assert_eq!(
+            given(json!({ "type": "object",
+                "properties": { "a": { "type": "string", "nullable": true },
+                                "b": { "type": "array",
+                                       "items": { "type": "integer", "nullable": true } } },
+                "additionalProperties": { "type": "boolean", "nullable": true } })),
+            json!({ "type": "object",
+                "properties": { "a": { "type": ["string", "null"] },
+                                "b": { "type": "array",
+                                       "items": { "type": ["integer", "null"] } } },
+                "additionalProperties": { "type": ["boolean", "null"] } })
+        );
+        let property = json!({ "type": "object",
+            "properties": { "nullable": { "type": "boolean" } } });
+        assert_eq!(given(property.clone()), property);
     }
 }
