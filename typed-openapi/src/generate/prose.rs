@@ -8,10 +8,12 @@
 
 use std::ops::Range;
 
+use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
-use syn::visit_mut::VisitMut;
+use quote::quote;
 
-/// A vendor's description, kept where rustdoc will not run it.
+/// `stream` with the text of every outer doc attribute written as a vendor's
+/// description is, one `///` line for each line of it.
 ///
 /// Every description in the document becomes a doc comment, and rustdoc
 /// compiles and executes the code blocks in a doc comment. Markdown makes a
@@ -43,6 +45,28 @@ use syn::visit_mut::VisitMut;
 /// to change, because it is indented, has its indentation capped like every
 /// other line's.
 ///
+/// # How a description is written
+///
+/// As one `///` line for each of its lines, because a `///` line reaches
+/// rustdoc as it stands and the parser can then be asked about the text that
+/// rustdoc asks it about. The body of a `/* */` comment does not: `rustfmt`
+/// lays it out by rules of its own, which differ with the settings the adopter
+/// formats with and with what it takes for a string that runs over a line
+/// break, and rustc takes a column of stars out of it. Each of those moves some
+/// lines of a description and not others, and a block that was prose is code
+/// once the lines above it have moved.
+///
+/// Every line of a description of several lines starts with one space, as a
+/// doc comment is conventionally written, and rustdoc takes it off again with
+/// the indentation that all the lines share. The space is what keeps the text
+/// the same under the options that `rustfmt` has for doc comments: with
+/// `format_code_in_doc_comments`, it puts a space after the slashes of every
+/// line inside a fence that has none, and a sample would gain one column. It
+/// also keeps a line that starts with a `/` a doc comment: after `///` it would
+/// be `////`, which is none, and `prettyplease` would write that line as an
+/// attribute, where rustdoc measures indentation by another rule. A description
+/// of one line has neither and is written as it stands.
+///
 /// # What the page may show
 ///
 /// **A description is text on the page.** Markup in it is the vendor's, and
@@ -50,44 +74,90 @@ use syn::visit_mut::VisitMut;
 /// `<` outside a code block or a code span is written `\<` and the page shows
 /// the character. A code block and a code span are escaped by rustdoc already.
 ///
+/// A link or an image is followed only to a scheme that is known to be safe
+/// ([`SCHEMES`]), because a `javascript:` destination is the vendor's script on
+/// the adopter's page. Any other is written as the characters it is made of:
+/// the brackets and the destination show, and nothing leads anywhere.
+///
 /// # What may be edited, and what may not
 ///
 /// **The generated page has to render what the vendor wrote.** Every edit here
 /// is chosen against that: it changes bytes the vendor has no stake in, so that
 /// the rendering is the one they meant. Capping an indentation keeps a nested
-/// list nested instead of letting it become a code block; pulling a hanging
-/// item's content back keeps it an item; writing a bullet as `-` keeps the
-/// bullet, which rustc would otherwise eat. What none of them may do is change
+/// list nested where it would become a code block; pulling a hanging item's
+/// content back keeps it an item. What none of them may do is change
 /// what the page says — the inside of a fence is the vendor's sample and is
-/// passed through untouched, and a fence's language is renamed only where
-/// rustdoc would read it as Rust, because the word is what a reader's
+/// passed through untouched, and a fence's info string is kept wherever it is
+/// the name of a language and nothing else, because the word is what a reader's
 /// highlighting goes by.
 ///
 /// The edits that do change a byte of the sentence are the ones the compiler
 /// and `rustfmt` leave no choice about. A bidirectional control is written as
 /// its code point, in a sample too, because the compiler refuses it in a
 /// comment and the lint that does so is raised by the lexer, where no `allow`
-/// reaches. A carriage return is a line break, because `rustfmt` refuses a bare
-/// one and Markdown reads one as a break.
-pub(super) struct Prose;
-
-impl VisitMut for Prose {
-    fn visit_attribute_mut(&mut self, attr: &mut syn::Attribute) {
-        let syn::Meta::NameValue(pair) = &mut attr.meta else {
-            return;
-        };
-        if !pair.path.is_ident("doc") {
-            return;
+/// reaches. A carriage return is a line break, because the compiler refuses a
+/// bare one in a doc comment and Markdown reads one as a break.
+pub(super) fn written(stream: TokenStream) -> TokenStream {
+    let mut out = TokenStream::new();
+    let mut trees = stream.into_iter().peekable();
+    while let Some(tree) = trees.next() {
+        match tree {
+            TokenTree::Punct(hash) if hash.as_char() == '#' => {
+                let doc = match trees.peek() {
+                    Some(TokenTree::Group(group)) => doc_text(group),
+                    _ => None,
+                };
+                if let Some(text) = doc {
+                    trees.next();
+                    out.extend(attributes(&text));
+                } else {
+                    out.extend([TokenTree::Punct(hash)]);
+                }
+            }
+            TokenTree::Group(group) => {
+                let mut inside = Group::new(group.delimiter(), written(group.stream()));
+                inside.set_span(group.span());
+                out.extend([TokenTree::Group(inside)]);
+            }
+            leaf @ (TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_)) => {
+                out.extend([leaf]);
+            }
         }
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(text),
-            ..
-        }) = &mut pair.value
-        else {
-            return;
-        };
-        *text = syn::LitStr::new(&unrunnable(&text.value()), text.span());
     }
+    out
+}
+
+/// The text of the doc attribute that `group` is the brackets of, `[doc =
+/// "text"]`, if it is one.
+fn doc_text(group: &Group) -> Option<String> {
+    if group.delimiter() != Delimiter::Bracket {
+        return None;
+    }
+    let mut tokens = group.stream().into_iter();
+    let (
+        Some(TokenTree::Ident(name)),
+        Some(TokenTree::Punct(equals)),
+        Some(TokenTree::Literal(text)),
+        None,
+    ) = (tokens.next(), tokens.next(), tokens.next(), tokens.next())
+    else {
+        return None;
+    };
+    if name != "doc" || equals.as_char() != '=' {
+        return None;
+    }
+    let syn::Lit::Str(text) = syn::Lit::new(text) else {
+        return None;
+    };
+    Some(text.value())
+}
+
+/// The doc attributes that carry `prose`, one for each of its lines.
+fn attributes(prose: &str) -> TokenStream {
+    unrunnable(prose)
+        .iter()
+        .map(|line| quote! { #[doc = #line] })
+        .collect()
 }
 
 /// The Markdown dialect rustdoc reads a doc comment in.
@@ -133,16 +203,7 @@ const KEEP: usize = 3;
 /// than from the start of the line, so this is one wider than [`KEEP`]: five
 /// columns after a marker open a code block inside the item, four do not.
 /// Measured on `-`, `+`, `*` and an ordered marker alike.
-///
-/// Four is safe only where the marker survives to hold the gap off the margin,
-/// which is [`dashed`]'s doing; [`unhung`] says what happens where it does
-/// not.
 const HANG: usize = 4;
-
-/// The bullet a list marker is written with.
-///
-/// `-` rather than `*`, and [`dashed`] says why.
-const BULLET: char = '-';
 
 /// The most digits Markdown reads as one ordered list marker.
 const ORDERED: usize = 9;
@@ -153,108 +214,60 @@ const ORDERED: usize = 9;
 const INERT: &str = "text";
 
 /// The words rustdoc gives a meaning to in the info string of a fence, bar the
-/// two families that [`names_a_language`] reads by their start.
+/// families that [`FAMILIES`] names by their start.
 ///
 /// A fence carrying one of them — or carrying nothing — is a block rustdoc may
 /// compile and run, so a vendor who wrote `rust` over a line of pseudocode has
 /// written a doctest without meaning to. `custom` does not make one, and is
 /// here because the word is rustdoc's to give a meaning to.
-const RUSTDOC: [&str; 8] = [
+const RUSTDOC: [&str; 7] = [
     "compile_fail",
     "custom",
     "ignore",
     "no_run",
-    "rust",
     "should_panic",
     "standalone_crate",
     "test_harness",
 ];
 
-/// `prose` with nothing in it that rustdoc would compile, that stops the
-/// compiler or `rustfmt`, or that the rendered page would show as markup.
+/// The starts of the words that rustdoc gives a meaning to by what follows them:
+/// `ignore-wasm32` skips a target, `edition2021` names an edition, `rust2018`
+/// is Rust of that edition, and `rust` is Rust.
+///
+/// Every word that starts with one is renamed, so a word that rustdoc takes in
+/// a later version, or reads in a form that was not looked for, is no way round
+/// the rename.
+const FAMILIES: [&str; 3] = ["edition", "ignore-", "rust"];
+
+/// The lines of `prose` with nothing in them that rustdoc would compile, that
+/// stops the compiler or `rustfmt`, or that the rendered page would show as
+/// markup.
 ///
 /// The order of the steps is the design. The characters come first, because
 /// every later step reads lines. The margins come next, and then the shared
-/// indentation, because `rustfmt` and rustdoc change the text on its way to the
-/// parser and the parser has to be asked about the text that rustdoc asks it
-/// about. The line steps follow, because they turn what the vendor indented into
-/// what the vendor meant. The parser comes last, and it is asked again after
-/// each change it asks for ([`settled`]).
-fn unrunnable(prose: &str) -> String {
+/// indentation, because rustdoc changes the text on its way to the parser and
+/// the parser has to be asked about the text that rustdoc asks it about. The
+/// line steps follow, because they turn what the vendor indented into what the
+/// vendor meant. The parser comes last, and it is asked again after each change
+/// it asks for ([`settled`]).
+///
+/// The lines at either end that have nothing in them are left out, since
+/// Markdown reads none.
+fn unrunnable(prose: &str) -> Vec<String> {
     let settled = settled(tamed(&flush(&margins(&plain(prose)))));
-    if !settled.contains('\n') {
-        // One line is one `///`, where nothing is indented and there is
-        // nothing to strip.
-        return settled;
+    let text = settled.trim_matches('\n');
+    if !text.contains('\n') {
+        return vec![text.to_owned()];
     }
-    // More than one line is a `/* */` comment, and `rustfmt` indents its body
-    // to the item it sits on — every line but the first, which stays flush
-    // against the opening `/*`. rustc strips the indentation a comment's lines
-    // share, and a flush first line holds that strip down to almost nothing, so
-    // the rest of the body arrives still carrying the column the item sits at:
-    // a paragraph the vendor indented three spaces lands six in, which is a
-    // code block. Opening on a blank line puts the first line inside the
-    // indented body with the others, where the strip reaches it, and that same
-    // paragraph lands back on its three.
-    let opening = if starred(&settled) { "\n\n" } else { "\n" };
-    format!("{opening}{settled}\n")
-}
-
-/// Does rustc take a column of stars out of `text`, written as a `/* */`
-/// comment, along with the white space in front of it?
-///
-/// It does when every line after the first, but for the empty ones at either
-/// end, starts with white space and then a star in one column. The first line
-/// is left out of the count unless a star starts it. A thematic break written
-/// `***`, or a line that opens with `**bold**`, is such a line when it is the
-/// only one after the first.
-///
-/// The white space that goes is the column of the item and the column the star
-/// stands in, and the first line has only the first of them to lose, so rustc
-/// leaves it standing at the column of its item: four columns in, for a field,
-/// which is a code block. A comment opened on a second blank line counts its
-/// first line with the rest, and that line either has a star in the same
-/// column or ends the question.
-///
-/// This is `get_horizontal_trim` of rustc, asked of the lines as they stand in
-/// the comment. The column of the item is in front of each of them, so it takes
-/// no part in the answer.
-fn starred(text: &str) -> bool {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let skipped = usize::from(
-        !lines
-            .first()
-            .is_some_and(|line| line.trim_start().starts_with('*')),
-    );
-    let counted = lines.get(skipped..).unwrap_or_default();
-    let (Some(first), Some(last)) = (
-        counted.iter().position(|line| !line.trim().is_empty()),
-        counted.iter().rposition(|line| !line.trim().is_empty()),
-    ) else {
-        return false;
-    };
-    let mut column = None;
-    for line in counted.get(first..=last).unwrap_or_default() {
-        column = star(line, column);
-        if column.is_none() {
-            return false;
-        }
-    }
-    true
-}
-
-/// The column of the star that `line` starts with, after white space or other
-/// stars, when it stands in `column` or when no column is known yet.
-fn star(line: &str, column: Option<usize>) -> Option<usize> {
-    for (at, c) in line.chars().enumerate() {
-        if column.is_some_and(|star| at > star) || !matches!(c, '*' | ' ' | '\t') {
-            return None;
-        }
-        if c == '*' {
-            return column.is_none_or(|star| star == at).then_some(at);
-        }
-    }
-    None
+    text.split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                format!(" {line}")
+            }
+        })
+        .collect()
 }
 
 /// `prose` with every line break a line feed and every bidirectional control
@@ -279,34 +292,28 @@ fn plain(prose: &str) -> String {
     out
 }
 
-/// `prose` with the white space at the ends of each line as `rustfmt` leaves it.
+/// `prose` with the indentation of each line written as spaces, and nothing but
+/// its text beside them.
 ///
-/// `rustfmt` indents the body of a `/* */` comment to its item and, line by
-/// line, keeps the spaces a line starts with, writes each tab among them as four
-/// spaces, deletes any other white space where the line starts, such as a
-/// no-break space, and deletes the white space at its end.
-/// What rustdoc reads is that text. A line that starts with a tab, or with a
-/// no-break space and four spaces, is not a code block to the parser here and is
-/// one to rustdoc, so the text is written as `rustfmt` writes it before the
-/// parser reads it, and `rustfmt` has nothing left to change.
+/// Markdown reads a tab as four columns, and rustdoc, taking off the
+/// indentation that the lines share, counts it as one character, so the two
+/// agree only once every tab is spaces. White space that is no indentation to
+/// Markdown, such as a no-break space, is deleted where a line starts, because
+/// the steps below measure a line by what `trim_start` takes off it and would
+/// count that space as a column. White space at the end of a line is deleted
+/// too: `prettyplease` and `rustfmt` write a line without it, so the parser is
+/// asked about the line as it will stand.
 ///
 /// A line with nothing but white space in it is empty.
 fn margins(prose: &str) -> String {
     prose
         .split('\n')
         .map(|line| {
-            let content = line.trim_start_matches([' ', '\t']);
-            let indent = line.len() - content.len();
-            let columns: usize = line
-                .bytes()
-                .take(indent)
-                .map(|byte| if byte == b'\t' { TAB } else { 1 })
-                .sum();
-            let text = content.trim();
+            let text = line.trim_start_matches([' ', '\t']).trim();
             if text.is_empty() {
                 String::new()
             } else {
-                format!("{}{text}", " ".repeat(columns))
+                format!("{}{text}", " ".repeat(columns(line)))
             }
         })
         .collect::<Vec<_>>()
@@ -316,11 +323,10 @@ fn margins(prose: &str) -> String {
 /// `prose` without the indentation that all of its lines share.
 ///
 /// rustdoc takes it off: the fewest spaces that a line with a word in it starts
-/// with, taken from every such line, and `rustfmt` has indented each of them by
-/// the column of the item, which is the same for all. The parser is asked about
-/// the text without the indentation, because that is the text rustdoc asks it
-/// about, and a block can be code to the one and not to the other: a line that
-/// is six columns in beside one that is two is code at four.
+/// with, taken from every such line. The parser is asked about the text without
+/// the indentation, because that is the text rustdoc asks it about, and a block
+/// can be code to the one and not to the other: a line that is six columns in
+/// beside one that is two is code at four.
 ///
 /// It reads the text [`margins`] returns, whose lines start with spaces only
 /// and whose empty lines have none.
@@ -338,17 +344,15 @@ fn flush(prose: &str) -> String {
         .join("\n")
 }
 
-/// `prose` with no line indented deeply enough to open a code block, no list
-/// item hanging its content far enough to open one, and no bullet rustc will
-/// eat.
+/// `prose` with no line indented deeply enough to open a code block, and no list
+/// item hanging its content far enough to open one.
 ///
-/// A line is capped, then unhung, then dashed, and the first step's place in
-/// that order is the rule: Markdown reads a fence at three columns or fewer, so
-/// an indented one is not a fence at all but the start of an indented code
-/// block — capping it first is what turns it into the fence the vendor meant,
-/// rather than leaving a block whose first line happens to be three backticks.
-/// The two list steps cannot disturb that, because a run of backticks is not a
-/// list marker.
+/// A line is capped, then unhung, and the first step's place in that order is
+/// the rule: Markdown reads a fence at three columns or fewer, so an indented
+/// one is not a fence at all but the start of an indented code block — capping
+/// it first is what turns it into the fence the vendor meant, rather than
+/// leaving a block whose first line happens to be three backticks. The list step
+/// cannot disturb that, because a run of backticks is not a list marker.
 ///
 /// A line inside a fence is left alone. The parser says which those are, in
 /// the text as the vendor wrote it: a fence that is already a fence, in
@@ -365,7 +369,7 @@ fn tamed(prose: &str) -> String {
             if fenced.binary_search(&at).is_ok() {
                 line.to_owned()
             } else {
-                dashed(&unhung(&capped(line)))
+                unhung(&capped(line))
             }
         })
         .collect::<Vec<_>>()
@@ -405,13 +409,17 @@ struct Edit {
 /// reads the text again after every round, and the text is finished when a
 /// reading finds nothing to change.
 ///
-/// It finishes, because a round lowers one of three counts, and the counts are
-/// ranked: the `<` that no backslash escapes, the white space in the text, and
-/// the fences that rustdoc reads as Rust. A change never raises a count that is
-/// ranked above its own, and it may raise one below, since taking code apart
-/// can show a `<` or a fence. Escaping lowers the first and writes no white
-/// space, taking white space away lowers the second and writes no `<`, and
-/// naming a language lowers the third and writes neither.
+/// It finishes, because a round lowers one of four counts, and the counts are
+/// ranked: the `<` that no backslash escapes, the white space in the text, the
+/// fences that rustdoc reads as Rust, and the `[` that opens a link to a place
+/// this module does not allow. A change never raises a count that is ranked
+/// above its own, and it may raise one below, since taking code apart can show a
+/// `<` or a fence. Escaping a `<` lowers the first and writes no white space,
+/// taking white space away lowers the second and writes no `<`, naming a
+/// language lowers the third and writes neither, and escaping a `[` lowers the
+/// fourth and writes none of them. No change writes a `[`, so the last count
+/// only falls; a link that hid another one, as a link cannot hold a link, is
+/// found in the round after it.
 ///
 /// The argument is about this module's changes and a parser that reads text the
 /// way this module expects. A parser that does not is not a reason to hang a
@@ -494,6 +502,14 @@ fn found(text: &str) -> Found {
                 found.edits.extend(opening(text, range.clone()));
                 found.kept.push(range);
             }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                found.edits.extend(unlinked(text, &dest_url, range.start));
+            }
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                found
+                    .edits
+                    .extend(unlinked(text, &dest_url, range.start + 1));
+            }
             Event::Start(_)
             | Event::End(_)
             | Event::Text(_)
@@ -558,8 +574,7 @@ fn language(word: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '#'))
         && !RUSTDOC.contains(&word)
-        && !word.starts_with("ignore-")
-        && !word.starts_with("edition")
+        && !FAMILIES.iter().any(|start| word.starts_with(start))
         && !word
             .strip_prefix('E')
             .is_some_and(|code| code.len() == 4 && code.parse::<u32>().is_ok())
@@ -604,6 +619,52 @@ fn dedented(text: &str, line: Range<usize>) -> Option<Edit> {
         at: before..line.start + extra,
         with: "",
     })
+}
+
+/// The schemes a link may name: the ones a reader follows to a page or to a mail.
+const SCHEMES: [&str; 3] = ["http:", "https:", "mailto:"];
+
+/// The change that shows the link or the image whose `[` is at `bracket` as the
+/// characters it is written in, when it leads anywhere but where [`followable`]
+/// says.
+///
+/// A link is a place the vendor sends the adopter's reader to, and a
+/// `javascript:` destination is the vendor's script in the adopter's page, which
+/// is the harm that markup does. The `[` is written `\[`, so the page shows the
+/// text, the brackets and the destination, and nothing is followed. An autolink
+/// is no concern here: it starts with a `<`, which [`angles`] has written
+/// already, so nothing is changed where the text at `bracket` is no `[`.
+fn unlinked(text: &str, dest: &str, bracket: usize) -> Option<Edit> {
+    if followable(dest) {
+        return None;
+    }
+    text.get(bracket..)?
+        .starts_with('[')
+        .then(|| backslash(bracket))
+}
+
+/// Does `dest` lead somewhere a reader may follow?
+///
+/// `dest` is what the parser hands over, with its entities and escapes read, so
+/// the spelling the vendor chose is not the one asked about: `&#106;avascript:`
+/// is `javascript:` here. A browser also ignores a tab or a line break inside
+/// the name of a scheme, which is why the question is not whether the text
+/// *is* `javascript:` but whether it is something that is known to be safe: a
+/// destination that has a `:` before any `/`, `?` or `#` names a scheme, and
+/// only [`SCHEMES`] are followed, in any case. Every other destination is a
+/// relative one, and goes where the page does.
+fn followable(dest: &str) -> bool {
+    let Some(colon) = dest.find(':') else {
+        return true;
+    };
+    let relative = dest
+        .get(..colon)
+        .is_some_and(|before| before.contains(['/', '?', '#']));
+    relative
+        || SCHEMES.iter().any(|scheme| {
+            dest.get(..scheme.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+        })
 }
 
 /// The change that writes the first `<` of a line of an HTML block as `\<`,
@@ -660,13 +721,14 @@ fn capped(line: &str) -> String {
     format!("{}{content}", " ".repeat(KEEP))
 }
 
-/// How many columns the whitespace at the start of `text` is worth.
+/// How many columns the spaces and tabs at the start of `text` are worth.
 ///
 /// Markdown counts a tab as [`TAB`], and both caps are stated in columns, so
-/// this is the one place that reading is made.
+/// this is the one place that reading is made. White space of any other kind is
+/// no indentation to Markdown, so it is no column here.
 fn columns(text: &str) -> usize {
     text.chars()
-        .take_while(|c| c.is_whitespace())
+        .take_while(|c| matches!(c, ' ' | '\t'))
         .map(|c| if c == '\t' { TAB } else { 1 })
         .sum()
 }
@@ -679,13 +741,6 @@ fn columns(text: &str) -> usize {
 /// one, and Markdown reads content that far from a marker as an indented code
 /// block *inside* the item — while the line's own indentation, which is all
 /// [`capped`] measures, is nothing at all.
-///
-/// The cap holds at four only because [`dashed`] has taken `*` off the front of
-/// every bullet. Where a `*` survives, rustc eats it out of a `/* */` comment
-/// and leaves the gap standing alone as ordinary indentation, and four columns
-/// of that under a blank line opens a block of its own. The two rules are one
-/// rule, and `PROSE`'s list set off by a blank line is what holds them
-/// together.
 ///
 /// The line is left alone when the marker carries no content: a marker on its
 /// own opens nothing, and there is no gap to measure.
@@ -701,27 +756,6 @@ fn unhung(line: &str) -> String {
         return line.to_owned();
     }
     format!("{indent}{marker}{}{text}", " ".repeat(HANG))
-}
-
-/// `line` with a `*` bullet written as [`BULLET`].
-///
-/// rustc rebuilds a `/* */` comment by stripping a leading `*` off every line
-/// whenever all of the lines it weighs carry one at the same column, which is
-/// the shape a vendor's bullet list takes exactly. What reaches the reader is
-/// then a run of sentences where the vendor wrote a list, and nothing on the
-/// page says a marker went missing.
-///
-/// Markdown draws the same bullet for `-` and `*`, so this is one character the
-/// vendor has no stake in and the rendering is the one they wrote. `+` and the
-/// ordered markers are left alone: rustc eats none of them.
-fn dashed(line: &str) -> String {
-    let content = line.trim_start();
-    if !content.starts_with('*') || list_marker(content).is_none() {
-        return line.to_owned();
-    }
-    let (indent, rest) = line.split_at(line.len() - content.len());
-    let (_, after) = rest.split_at(1);
-    format!("{indent}{BULLET}{after}")
 }
 
 /// How wide the list marker at the start of `content` is, if it is one.
@@ -825,6 +859,98 @@ mod tests {
             "a `>` is not white space"
         );
         assert!(dedented("code", 0..4).is_none(), "nothing stands in front");
+    }
+
+    #[test]
+    fn a_destination_is_followed_when_it_is_relative_or_a_scheme_known_to_be_safe() {
+        for dest in [
+            "https://a.example/b",
+            "HTTP://a.example",
+            "mailto:a@b.example",
+            "MailTo:a@b.example",
+            "./a",
+            "a",
+            "a/b:c",
+            "#fragment",
+            "/a?b=c:d",
+            "?q=a:b",
+            "//host/path",
+            "",
+        ] {
+            assert!(
+                followable(dest),
+                "{dest:?} leads somewhere known to be safe"
+            );
+        }
+        for dest in [
+            "javascript:x",
+            "JaVaScRiPt:x",
+            "data:text/html,x",
+            "vbscript:x",
+            "file:///etc/passwd",
+            "ftp://a.example",
+            "java\tscript:x",
+            "\tjavascript:x",
+            " http://a.example",
+            "https-x:y",
+            "<javascript:x>",
+            ":x",
+            "x:",
+        ] {
+            assert!(
+                !followable(dest),
+                "{dest:?} names a scheme not known to be safe"
+            );
+        }
+    }
+
+    #[test]
+    fn a_link_is_shown_as_text_by_a_backslash_before_the_bracket_that_opens_it() {
+        let edit =
+            unlinked("[a](javascript:x)", "javascript:x", 0).expect("a script is not followed");
+        assert_eq!((edit.at, edit.with), (0..0, "\\"));
+        let edit = unlinked("![a](data:x)", "data:x", 1).expect("a data URI is not shown");
+        assert_eq!(edit.at, 1..1, "the bracket of an image follows its `!`");
+        let followed = unlinked("[a](https://a.example)", "https://a.example", 0);
+        assert!(followed.is_none(), "a page is followed");
+        let autolink = unlinked("<javascript:x>", "javascript:x", 0);
+        assert!(
+            autolink.is_none(),
+            "an autolink is the `<` that `angles` escapes"
+        );
+    }
+
+    #[test]
+    fn indentation_is_spaces_and_nothing_else_stands_beside_the_text() {
+        let lines = [
+            ("\tindented", "    indented"),
+            ("  \tmixed", "      mixed"),
+            ("\u{a0}  after a no-break space", "after a no-break space"),
+            ("\u{c}  after a form feed", "after a form feed"),
+            ("  trailing \t \u{a0}", "  trailing"),
+            ("  \t \u{a0}", ""),
+        ];
+        for (line, margin) in lines {
+            assert_eq!(margins(line), margin, "{line:?}");
+        }
+        assert_eq!(margins("a  \n  b\t\n"), "a\n  b\n", "line by line");
+    }
+
+    #[test]
+    fn a_gap_after_a_marker_is_four_columns_at_most() {
+        let lines = [
+            ("*     five", "*    five"),
+            ("1.     five", "1.    five"),
+            ("  - \t\tdeep", "  -    deep"),
+            ("*    four", "*    four"),
+            ("-   three", "-   three"),
+            ("*", "*"),
+            ("*     ", "*     "),
+            ("**     bold", "**     bold"),
+        ];
+        for (line, hung) in lines {
+            assert_eq!(unhung(line), hung, "{line:?}");
+        }
     }
 
     #[test]

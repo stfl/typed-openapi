@@ -184,13 +184,11 @@ pub const fn documented(id: &str, method: &str, path: &str) -> bool {
     false
 }
 impl Api {
-    /**
-    List vouchers
-
-    GET /vouchers
-
-    A read.
-    */
+    /// List vouchers
+    ///
+    /// GET /vouchers
+    ///
+    /// A read.
     pub fn list_vouchers(
         &self,
         status: Option<crate::types::VoucherStatus>,
@@ -205,13 +203,11 @@ impl Api {
                 .maybe("type", r#type),
         )
     }
-    /**
-    Create a voucher
-
-    POST /vouchers
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    */
+    /// Create a voucher
+    ///
+    /// POST /vouchers
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     pub fn create_voucher(
         &self,
         body: &crate::types::Voucher,
@@ -221,23 +217,19 @@ impl Api {
             Values::new().json(crate::to_json("createVoucher", body)?),
         )
     }
-    /**
-    Fetch one voucher
-
-    GET /vouchers/{id}
-
-    A read.
-    */
+    /// Fetch one voucher
+    ///
+    /// GET /vouchers/{id}
+    ///
+    /// A read.
     pub fn get_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::GetVoucher, Values::new().param("id", id))
     }
-    /**
-    Replace a voucher
-
-    PUT /vouchers/{id}
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    */
+    /// Replace a voucher
+    ///
+    /// PUT /vouchers/{id}
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     pub fn update_voucher(
         &self,
         id: i64,
@@ -250,33 +242,27 @@ impl Api {
                 .json(crate::to_json("updateVoucher", body)?),
         )
     }
-    /**
-    Finalize a voucher (irreversible)
-
-    POST /vouchers/{id}/enshrine
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit` and `--enshrine`.
-    */
+    /// Finalize a voucher (irreversible)
+    ///
+    /// POST /vouchers/{id}/enshrine
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit` and `--enshrine`.
     pub fn enshrine_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::EnshrineVoucher, Values::new().param("id", id))
     }
-    /**
-    Render the voucher to PDF and store it on the server (this GET writes)
-
-    GET /vouchers/{id}/render
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    */
+    /// Render the voucher to PDF and store it on the server (this GET writes)
+    ///
+    /// GET /vouchers/{id}/render
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     pub fn render_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::RenderVoucher, Values::new().param("id", id))
     }
-    /**
-    Email the voucher to a recipient
-
-    POST /vouchers/{id}/send-by-email
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit` and `--email`.
-    */
+    /// Email the voucher to a recipient
+    ///
+    /// POST /vouchers/{id}/send-by-email
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit` and `--email`.
     pub fn send_voucher_by_email(
         &self,
         id: i64,
@@ -289,13 +275,11 @@ impl Api {
                 .json(crate::to_json("sendVoucherByEmail", body)?),
         )
     }
-    /**
-    Create a contact
-
-    POST /contacts
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    */
+    /// Create a contact
+    ///
+    /// POST /contacts
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     pub fn create_contact(
         &self,
         body: &crate::types::Contact,
@@ -305,13 +289,11 @@ impl Api {
             Values::new().json(crate::to_json("createContact", body)?),
         )
     }
-    /**
-    Replace the labels of a contact
-
-    PUT /contacts/{id}/labels
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    */
+    /// Replace the labels of a contact
+    ///
+    /// PUT /contacts/{id}/labels
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     pub fn set_contact_labels(
         &self,
         id: i64,
@@ -324,27 +306,23 @@ impl Api {
                 .json(crate::to_json("setContactLabels", body)?),
         )
     }
-    /**
-    Upload a document as a PDF
-
-    POST /documents
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-
-    `body` is sent verbatim under the document's own `application/pdf`, which this crate does not assemble.
-    */
+    /// Upload a document as a PDF
+    ///
+    /// POST /documents
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    ///
+    /// `body` is sent verbatim under the document's own `application/pdf`, which this crate does not assemble.
     pub fn upload_document(&self, body: Vec<u8>) -> Result<Call<'_, NoContent>, Error> {
         self.call(OperationId::UploadDocument, Values::new().raw(body))
     }
-    /**
-    Upload a document as multipart parts
-
-    POST /documents-multipart
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-
-    `parts` are assembled into a `multipart/form-data` body. The document declares: file.
-    */
+    /// Upload a document as multipart parts
+    ///
+    /// POST /documents-multipart
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    ///
+    /// `parts` are assembled into a `multipart/form-data` body. The document declares: file.
     pub fn upload_document_multipart(
         &self,
         parts: Vec<Part>,
@@ -354,13 +332,11 @@ impl Api {
             Values::new().multipart(parts),
         )
     }
-    /**
-    Post an amount to a ledger account
-
-    POST /ledger/entries
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    */
+    /// Post an amount to a ledger account
+    ///
+    /// POST /ledger/entries
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     pub fn create_ledger_entry(
         &self,
         body: &crate::types::CreateLedgerEntryBody,
@@ -370,13 +346,11 @@ impl Api {
             Values::new().json(crate::to_json("createLedgerEntry", body)?),
         )
     }
-    /**
-    Archive a voucher (undocumented; vendor ships it)
-
-    POST /vouchers/{id}/archive
-
-    This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
-    */
+    /// Archive a voucher (undocumented; vendor ships it)
+    ///
+    /// POST /vouchers/{id}/archive
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
     pub fn archive_voucher(&self, id: i64) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(OperationId::ArchiveVoucher, Values::new().param("id", id))
     }

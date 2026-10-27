@@ -177,13 +177,16 @@ pub(super) fn emit(
         .map_err(|error| GenerateError::Typify(Box::new(error)))?;
     let names = Names::read(&mut space, declared.iter().map(String::as_str), stated)?;
 
+    // A description is the vendor's prose, and a type's doc, a field's and a
+    // variant's are where it lands.
     let mut file: syn::File =
-        syn::parse2(space.to_stream()).map_err(|source| GenerateError::NotRust {
-            file: "types.rs",
-            source,
+        syn::parse2(super::prose::written(space.to_stream())).map_err(|source| {
+            GenerateError::NotRust {
+                file: "types.rs",
+                source,
+            }
         })?;
     ThroughThisCrate.visit_file_mut(&mut file);
-    super::prose::Prose.visit_file_mut(&mut file);
     let mut displays = display_impls(&file)?;
     file.items.append(&mut displays);
     for promise in promises(&file, replacements)?.into_iter().rev() {

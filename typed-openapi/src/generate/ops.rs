@@ -17,7 +17,6 @@ use heck::{ToPascalCase, ToSnakeCase};
 use openapiv3::{Components, OpenAPI, Parameter, ReferenceOr, Schema, SchemaKind, Type};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::visit_mut::VisitMut as _;
 
 use super::GenerateError;
 use super::names::{JsonBody, Names, Site};
@@ -63,7 +62,9 @@ pub(super) fn emit(
     let inventory = inventory(&ops);
     let methods = ops.iter().map(|op| &op.method);
     let builder_methods = ops.iter().map(|op| &op.builder_method);
-    let mut file: syn::File = syn::parse2(quote! {
+    // A summary and a description are the vendor's prose, and a wrapper's doc
+    // is where they land.
+    let file: syn::File = syn::parse2(super::prose::written(quote! {
         use typed_openapi::{Part, Values};
 
         use crate::{Api, Call, Error, NoContent};
@@ -80,14 +81,11 @@ pub(super) fn emit(
         impl Api {
             #(#builder_methods)*
         }
-    })
+    }))
     .map_err(|source| GenerateError::NotRust {
         file: "ops.rs",
         source,
     })?;
-    // A summary and a description are the vendor's prose, and a wrapper's doc
-    // is where they land.
-    super::prose::Prose.visit_file_mut(&mut file);
     Ok(format!("{header}{}", prettyplease::unparse(&file)))
 }
 
@@ -364,18 +362,14 @@ fn wrapper(
 
 /// One doc comment out of the paragraphs it is made of.
 ///
-/// One rather than several, and this is the reason: rustc rebuilds a doc
-/// comment's text by stripping the indentation *all* of an item's doc
-/// fragments share, and a `/* */` fragment carries the indentation the item
-/// sits at while a `///` fragment carries none. Mixing them leaves nothing to
-/// strip, and a vendor's summary arrives four spaces in — a code block, which
-/// rustdoc then compiles. A single fragment cannot be mixed with anything.
-///
-/// A summary that is itself several paragraphs is what makes this reachable,
-/// and one attribute per paragraph is what would reach it: the multi-line
-/// summary becomes the `/* */` fragment and the generated paragraphs beside it
-/// the `///` ones. `PROSE` carries such a summary, so the doctest runner is
-/// what holds this rather than the argument above it.
+/// One string rather than one attribute for each paragraph, and this is the
+/// reason: rustdoc reads the doc of an item as one text, and a block can run
+/// from one paragraph into the next, as an open fence or a list does.
+/// `prose::written` reads the string as that text, and writes it as the lines of
+/// one comment. A summary that is itself several paragraphs is what makes this
+/// reachable, and one attribute per paragraph is what would reach it: each would
+/// be read alone, and a block that the summary leaves open would take in the
+/// paragraphs the generator adds beside it where the parser does not see it.
 fn paragraphs(parts: impl IntoIterator<Item = String>) -> String {
     parts
         .into_iter()

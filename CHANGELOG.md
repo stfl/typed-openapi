@@ -1298,31 +1298,41 @@ the crate follows [Semantic Versioning][semver].
   written `\|`, which a Markdown reader shows as `|`, in a code span too. A page
   that names no such value is unchanged. Repair: run the bless step again, where
   the adoption commits the page (`Settings::summary_page`).
-- **A vendor's description is written so that rustdoc runs none of it and your
-  pages show none of its markup.** A `summary` or a `description` is a doc
-  comment, and rustdoc compiles and runs the code blocks in a doc comment. The
-  generator found a block by reading the text a line at a time, so a block
-  inside a Markdown container was left for rustdoc, and so was a fence whose
-  info string rustdoc reads as Rust without being a word it lists.
+- **A vendor's description is written so that rustdoc runs none of it, and its
+  HTML and its links to a script are text on your pages.** A `summary` or a
+  `description` is a doc comment, and rustdoc compiles and runs the code blocks
+  in a doc comment. The generator found a block by reading the text a line at a
+  time, so a block inside a Markdown container was left for rustdoc, and so was a
+  fence whose info string rustdoc reads as Rust without being a word it lists.
   `cargo test --doc` in the crate that holds the generated file ran the vendor's
   sentence. The generator reads each description with `pulldown-cmark`, the
   parser rustdoc is built on, with the options rustdoc passes, and writes:
   - the language `text` on every fence that rustdoc reads as Rust, wherever the
     block stands: at the top, in a block quote, in a list item (also when the
     fence opens on the line of the marker) or in a footnote, and whatever the
-    info string is: none, `rust,ignore`, `{.json}`, `ignore-wasm32`. A fence
-    that names a language rustdoc leaves alone, such as `json`, is as it was
-    written.
+    info string is: none, `rust,ignore`, `rust2018`, `{.json}`, `ignore-wasm32`.
+    A fence that names a language rustdoc leaves alone, such as `json`, is as it
+    was written.
   - an indented code block in a block quote or a list item indented by three
-    columns at most, as the generator did for one at the top, so that it is a
-    paragraph.
+    columns at most, as the generator did for one at the top, so that it is no
+    code block.
   - `\<` for a `<` outside a code block and a code span, which the page shows as
     `<`. A `<script>` in a description was an element of your rendered docs, and
     `cargo doc` with warnings denied accepted it, because the generated module
     allows `rustdoc::all`. A description that is written in HTML, such as
     sevDesk's `<ul>`, `<li>`, `<br>` and `<a href=...>`, shows its tags as text
-    where it showed a list, a break and a link; there is no setting to turn that
-    back on, and a description in Markdown is the repair, in an Overlay.
+    where it showed a list, a break and a link, and an autolink such as
+    `<https://example.com>` shows as text too. There is no setting to turn that
+    back on, and a description in Markdown is the repair, in an Overlay:
+    `[text](https://example.com)` is a link.
+  - a backslash before the `[` of a link or an image whose destination is not
+    relative and is not `http:`, `https:` or `mailto:`, so that the page shows
+    the text, the brackets and the destination. `[a](javascript:alert(1))` was a
+    link that ran the vendor's script on your page, as were the spellings a
+    browser reads the same way (`JaVaScRiPt:`, `&#106;avascript:`, a tab inside
+    the word), a reference link whose definition holds one, and an image of a
+    `data:` URI. A description in Markdown is still Markdown: its emphasis, its
+    lists and its links to a page render. Repair: an `https` link, in an Overlay.
   - the code point, `\u{202e}`, for a bidirectional control (U+202A to U+202E
     and U+2066 to U+2069). rustc refuses the character in a comment with a lint
     that no `allow` reaches, so a description that held one stopped the build of
@@ -1333,12 +1343,15 @@ the crate follows [Semantic Versioning][semver].
   - the indentation that all the lines of a description share taken off, as
     rustdoc takes it off. The doc lines that typify writes itself, such as
     `/// Error types.`, lose their leading space.
-  - a second blank line at the start of a comment of several lines when every
-    line after the first starts with a star, such as `***` or `**bold**`. rustc
-    takes one star and the indentation in front of the stars off each of those
-    lines. `**bold**` was shown as `*bold**`, and a first line that is less
-    indented than the stars was left at the column of its item, which is a code
-    block.
+  - one `///` line for each line of a description of several lines, where it was
+    a `/** */` comment. `rustfmt` lays out the body of a block comment by rules
+    of its own, which differ with the settings you format with (`hard_tabs` with
+    a `tab_spaces` of 2 or 3 wrote a vendor's indented line as a code block) and
+    with a `"` that runs over a line break, and rustc takes a column of stars out
+    of one (`**bold**` was shown as `*bold**`). A `///` line is left as it
+    stands. Each of them has one space after the slashes. A list the vendor
+    bulleted with `*` keeps its `*`.
+
   Repair: run the bless step again and commit `types.rs` and `ops.rs`. The
   `generate` feature gains `pulldown-cmark` 0.11, which is the version rustdoc
   is built with, and its dependency `unicase`; a build that does not turn the
@@ -1363,9 +1376,12 @@ the crate follows [Semantic Versioning][semver].
 - **The dependency tree holds no RUSTSEC advisory.** `unsafe-libyaml`
   (RUSTSEC-2024-0449, unmaintained) leaves it with `serde_yaml_ng`.
 - **A description in the vendor's document cannot run code in
-  `cargo test --doc`.** A code block in a block quote or a list item, or behind
-  an info string such as `{.json}` or `ignore-wasm32`, was compiled and run by
-  rustdoc in the crate that holds the generated `types.rs` and `ops.rs`: code
-  from the document, on the machine of whoever ran the tests and in CI.
-  *Changed* says what the generator writes. Repair: run the bless step again and
-  commit what it writes.
+  `cargo test --doc`, and cannot put a script on your pages.** A code block in a
+  block quote or a list item, or behind an info string such as `{.json}`,
+  `ignore-wasm32` or `rust2018`, was compiled and run by rustdoc in the crate
+  that holds the generated `types.rs` and `ops.rs`: code from the document, on
+  the machine of whoever ran the tests and in CI. A link to `javascript:` was a
+  link on your rendered docs. *Changed* says what the generator writes. The
+  guarantee is for the stable options of `rustfmt`; `wrap_comments`, which
+  rewraps a doc comment, is a nightly option and outside it. Repair: run the
+  bless step again and commit what it writes.

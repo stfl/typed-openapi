@@ -487,24 +487,32 @@ fn two_names_that_spell_one_flag_are_two_flags_and_the_second_says_so() {
 fn a_hanging_list_marker_keeps_its_item_at_a_gap_of_four_columns() {
     let types = read(&blessed("hostile-prose").join("src/types.rs"));
 
+    // A line of a description of several lines is a `///` line with one space
+    // after the slashes, which rustdoc takes off again.
+    let doc_lines: Vec<&str> = types
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("/// "))
+        .collect();
     assert!(
-        types.contains("-    bisque, twenty minutes"),
+        doc_lines.contains(&"*    bisque, twenty minutes"),
         "the item lost its marker or its gap:\n{types}"
     );
     assert!(
-        !types.contains("-   bisque"),
+        !doc_lines.iter().any(|line| line.starts_with("*   bisque")),
         "the gap is four columns, not three"
     );
     assert!(
-        !types.contains("*     bisque"),
-        "a `*` bullet is eaten out of a block comment, so it is written as `-`"
+        !doc_lines
+            .iter()
+            .any(|line| line.starts_with("*     bisque")),
+        "five columns after a marker open a code block inside the item"
     );
     assert!(
-        types.contains("\n   soak=90m\n"),
+        doc_lines.contains(&"   soak=90m"),
         "the vendor's four-space block has to land on three:\n{types}"
     );
     assert!(
-        !types.contains("\n    soak=90m\n"),
+        !doc_lines.contains(&"    soak=90m"),
         "four columns of indentation open a code block rustdoc compiles"
     );
 }
