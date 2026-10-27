@@ -126,7 +126,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use openapiv3::{OpenAPI, ReferenceOr};
-use proc_macro2::Span;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use schemars::schema::{InstanceType, Schema, SchemaObject, SingleOrVec, SubschemaValidation};
 use schemars::visit::Visitor;
@@ -227,6 +227,7 @@ pub(super) fn emit(
             }
         })?;
     ThroughThisCrate.visit_file_mut(&mut file);
+    StandardItems.visit_file_mut(&mut file);
     let mut displays = display_impls(&file)?;
     file.items.append(&mut displays);
     for promise in promises(&file, &paths)?.into_iter().rev() {
@@ -445,6 +446,131 @@ impl VisitMut for ThroughThisCrate {
                 0,
                 syn::Ident::new("typed_openapi", Span::call_site()).into(),
             );
+        }
+    }
+}
+
+/// Every standard item that typify writes by its bare name, written by its full
+/// path.
+///
+/// typify's own code says `Ok(Self(value))`, `Err("invalid value".into())`,
+/// `Default::default()` and `impl TryFrom<String> for Thing`, and a schema is free
+/// to be called `Ok`, `Err`, `Some`, `None`, `Default` or `String`. A newtype
+/// `Ok` is a tuple struct, which is a function of its own name, so every `Ok(…)` of
+/// the file would build it, and a schema called `String` is the `String` of every
+/// impl that names one. The file compiles in none of these, or worse, compiles
+/// with another meaning: `Settings::replace`'s newtype would answer `TryFrom` of
+/// the generated `String`. The full path means the standard item whatever the
+/// schemas are called, and it is the same item where nothing is called by its
+/// name.
+///
+/// Only the places where typify writes the standard item are rewritten. A bare
+/// name in a type position is a schema of the document where a field or a variant
+/// holds it, so the one type position that is the standard item's, the `String` of
+/// the `TryFrom` impl that wraps a type the adopter owns, is found by the shape of
+/// the impl that typify writes it in, and its `Self` type is left alone. A release
+/// of typify that writes another one fails the compile test of `tests/hostile.rs`
+/// under the schema that has its name.
+struct StandardItems;
+
+/// The standard items typify names bare, and where each one is.
+const STANDARD_ITEMS: [(&[&str], &[&str]); 5] = [
+    (&["Ok"], &["std", "result", "Result", "Ok"]),
+    (&["Err"], &["std", "result", "Result", "Err"]),
+    (&["Some"], &["std", "option", "Option", "Some"]),
+    (&["None"], &["std", "option", "Option", "None"]),
+    (
+        &["Default", "default"],
+        &["std", "default", "Default", "default"],
+    ),
+];
+
+impl StandardItems {
+    /// `path` by its full path, if it is one of the standard items that typify
+    /// names bare.
+    fn qualify(path: &mut syn::Path) {
+        if path.leading_colon.is_some()
+            || path
+                .segments
+                .iter()
+                .any(|segment| !segment.arguments.is_empty())
+        {
+            return;
+        }
+        let spelled: Vec<String> = path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect();
+        let Some((_, full)) = STANDARD_ITEMS.iter().find(|(bare, _)| {
+            bare.len() == spelled.len()
+                && bare.iter().zip(&spelled).all(|(one, other)| one == other)
+        }) else {
+            return;
+        };
+        path.leading_colon = Some(syn::token::PathSep::default());
+        path.segments = full
+            .iter()
+            .map(|word| syn::PathSegment::from(syn::Ident::new(word, Span::call_site())))
+            .collect();
+    }
+}
+
+impl VisitMut for StandardItems {
+    fn visit_expr_path_mut(&mut self, expr: &mut syn::ExprPath) {
+        syn::visit_mut::visit_expr_path_mut(self, expr);
+        if expr.qself.is_none() {
+            Self::qualify(&mut expr.path);
+        }
+    }
+
+    fn visit_pat_tuple_struct_mut(&mut self, pat: &mut syn::PatTupleStruct) {
+        syn::visit_mut::visit_pat_tuple_struct_mut(self, pat);
+        Self::qualify(&mut pat.path);
+    }
+
+    fn visit_item_impl_mut(&mut self, item: &mut syn::ItemImpl) {
+        if try_from_a_string(item) {
+            // The type the impl is for is a schema of the document, and may be
+            // called `String`: it stays as it is, and every other `String` of the
+            // impl is the standard one.
+            let self_ty =
+                std::mem::replace(&mut *item.self_ty, syn::Type::Verbatim(TokenStream::new()));
+            StandardString.visit_item_impl_mut(item);
+            *item.self_ty = self_ty;
+        }
+        syn::visit_mut::visit_item_impl_mut(self, item);
+    }
+}
+
+/// Whether `item` is `impl ::std::convert::TryFrom<String> for …`, the impl that
+/// typify writes for a type that it wraps around one the adopter owns.
+fn try_from_a_string(item: &syn::ItemImpl) -> bool {
+    let Some((path, _)) = &item.trait_ else {
+        return false;
+    };
+    let Some(segment) = path.segments.last() else {
+        return false;
+    };
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    segment.ident == "TryFrom"
+        && matches!(
+            arguments.args.first(),
+            Some(syn::GenericArgument::Type(syn::Type::Path(argument)))
+                if argument.qself.is_none() && argument.path.is_ident("String")
+        )
+}
+
+/// Writes every bare `String` of the item it is run over by its full path.
+struct StandardString;
+
+impl VisitMut for StandardString {
+    fn visit_type_path_mut(&mut self, ty: &mut syn::TypePath) {
+        syn::visit_mut::visit_type_path_mut(self, ty);
+        if ty.qself.is_none() && ty.path.is_ident("String") {
+            ty.path = syn::parse_quote!(::std::string::String);
         }
     }
 }

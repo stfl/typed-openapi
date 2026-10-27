@@ -33,6 +33,7 @@
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use typed_openapi::generate::{GenerateError, Settings};
 use typed_openapi::model::Body;
@@ -58,10 +59,10 @@ const HOSTILE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/
 
 /// The Rust type an adopter of this document already owns for its cone numbers.
 ///
-/// A path that names no crate anywhere in this workspace, on purpose: the
-/// generated file is read as text and never compiled, and a path that resolved
-/// would invite somebody to compile it and then to keep it compiling.
-const OWNED: (&str, &str) = ("cone-number", "pyrometry::Cone");
+/// A path of the crate that the generated files are compiled in
+/// ([`PYROMETRY`]), so the same bless serves the tests that read the text and the
+/// one that builds it.
+const OWNED: (&str, &str) = ("cone-number", "crate::pyrometry::Cone");
 
 fn document() -> Document {
     Document::load(HOSTILE, &[]).expect("the control document reduces")
@@ -347,9 +348,9 @@ fn no_generated_wrapper_binds_one_identifier_twice() {
     let named = wrappers(&ops);
     assert_eq!(
         named.len(),
-        16,
+        18,
         "two wrappers per operation — the plain one and the builder that \
-         delegates to it — over eight operations: {named:?}"
+         delegates to it — over nine operations: {named:?}"
     );
     for wrapper in named {
         let bound = arguments(&ops, &wrapper);
@@ -381,6 +382,9 @@ fn a_wrapper_argument_that_moved_aside_says_what_it_sends() {
     for said in [
         "`self_2` sends the document's `Self`, under a name of its own",
         "`ref_2` sends the document's `Ref`, under a name of its own",
+        // Not moved aside: the document's word starts with a digit, so an `x` stands
+        // in front of it, which is a spelling nobody wrote either.
+        "`x3ds` sends the document's `3ds`, under a name of its own",
     ] {
         assert!(
             ops.contains(said),
@@ -389,8 +393,8 @@ fn a_wrapper_argument_that_moved_aside_says_what_it_sends() {
     }
     assert_eq!(
         ops.matches("under a name of its own").count(),
-        2,
-        "two arguments move in this document, and nothing else is remarked on"
+        3,
+        "two arguments move and one is spelled with an `x`, and nothing else is remarked on"
     );
 }
 
@@ -750,15 +754,15 @@ paths:
 fn a_replaced_format_wraps_whatever_the_schema_holding_it_is_called() {
     let types = read(&blessed("hostile-replaced").join("src/types.rs"));
     assert!(
-        types.contains("pub struct Cone(pub pyrometry::Cone);"),
+        types.contains("pub struct Cone(pub crate::pyrometry::Cone);"),
         "the schema whose name the path ends in still wraps:\n{types}"
     );
     assert!(
-        types.contains("pub struct PyroCone(pub pyrometry::Cone);"),
+        types.contains("pub struct PyroCone(pub crate::pyrometry::Cone);"),
         "and so does the one whose name it does not:\n{types}"
     );
     assert!(
-        types.contains("pub bare_cone: ::std::option::Option<pyrometry::Cone>"),
+        types.contains("pub bare_cone: ::std::option::Option<crate::pyrometry::Cone>"),
         "a property stating the format without a name of its own is the type itself:\n{types}"
     );
 }
@@ -1388,24 +1392,30 @@ fn the_control_document_mounts_as_a_command_tree_clap_accepts() {
 /// Every count an adopter would be tempted to write down, taken off the model.
 ///
 /// The numbers are here so that a shape added to the fixture has to be
-/// accounted for rather than absorbed: a ninth operation or a sixth
+/// accounted for rather than absorbed: a tenth operation or a sixth
 /// unspellable parameter fails this test before it reaches whichever test was
 /// meant to cover it.
 #[test]
 fn the_reduction_of_the_control_document_counts_what_is_in_it() {
     let summary = document().summary();
-    assert_eq!(summary.operations(), 8);
+    assert_eq!(summary.operations(), 9);
     assert_eq!(
         summary
             .groups()
             .iter()
             .map(CommandName::as_str)
             .collect::<Vec<_>>(),
-        ["firings", "wadding", "glaze-recipes", "kiln-help"]
+        [
+            "firings",
+            "wadding",
+            "glaze-recipes",
+            "payments",
+            "kiln-help"
+        ]
     );
-    assert_eq!(summary.reads(), 2);
+    assert_eq!(summary.reads(), 3);
     assert_eq!(summary.writes(), 6);
-    assert_eq!(summary.bodiless(), 3);
+    assert_eq!(summary.bodiless(), 4);
     // Four rather than the three bodies that are `JsonWhole`: a flat body of no
     // properties offers a command line `--json-body` and nothing else, which is
     // what the count is about.
@@ -1455,4 +1465,165 @@ fn every_awkward_name_comes_back_off_the_blob_as_it_went_in() {
         operation(&shipped, "fileGlazeRecipe").group().as_str(),
         "glaze-recipes"
     );
+}
+
+// ------------------------------------------------ the generated code compiles
+
+/// The crate root that the generated files are compiled under: the smallest one
+/// that `docs/generating.md` gives, with a sentence on every public item, because
+/// the crate is built under the strictest lint set an adopter can configure and
+/// its own lines are no exception.
+const ROOT: &str = r#"//! The crate that holds the generated files of the hostile document.
+
+pub mod ops;
+pub mod pyrometry;
+pub mod types;
+
+use typed_openapi::client::Client;
+pub use typed_openapi::client::{Call, Error, NoContent, to_json};
+use typed_openapi::{Document, Values};
+
+use crate::ops::{OPERATIONS, OperationId};
+
+const MODEL: &[u8] = include_bytes!("model.postcard");
+
+/// The handle that every generated wrapper is a method of.
+pub struct Api(Client);
+
+impl Api {
+    /// Pairs the blob with the generated inventory.
+    pub fn new() -> Result<Self, Error> {
+        let client = Client::over(Document::from_blob(MODEL)?);
+        client.document().matches(OPERATIONS)?;
+        Ok(Self(client))
+    }
+
+    /// The document that the handle was made over.
+    pub fn document(&self) -> &Document {
+        self.0.document()
+    }
+
+    /// Names an operation and the values for it.
+    pub fn call<T>(&self, op: OperationId, values: Values) -> Result<Call<'_, T>, Error> {
+        let operation = &self.0.document().operations()[op as usize];
+        self.0.call(operation, values)
+    }
+}
+"#;
+
+/// The Rust type that [`OWNED`] names, in the crate root's module of that name.
+const PYROMETRY: &str = r#"//! The type an adopter of the hostile document owns for its cone numbers.
+
+use std::fmt;
+use std::str::FromStr;
+
+/// A pyrometric cone number.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
+pub struct Cone(String);
+
+impl fmt::Display for Cone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for Cone {
+    type Err = std::convert::Infallible;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Ok(Self(text.to_owned()))
+    }
+}
+"#;
+
+/// Where cargo builds every crate of this file, so that a dependency is built once
+/// for all of them. A test is a process of its own under nextest and cargo locks
+/// the directory, so the crates are built one after another.
+fn blessed_target() -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join("blessed-target")
+}
+
+/// The lockfile that the crate below is resolved against, with no network: the
+/// workspace's, beside the manifest of a checkout, and the package's own in the
+/// tarball that `just package` unpacks, which carries it.
+fn lockfile() -> PathBuf {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    [manifest.join("Cargo.lock"), manifest.join("../Cargo.lock")]
+        .into_iter()
+        .find(|path| path.is_file())
+        .expect("a Cargo.lock beside the manifest, or in the workspace above it")
+}
+
+/// The bless output in `dir` as a crate that cargo builds: a manifest that holds
+/// the strictest lint set an adopter can set (`-D warnings` over `missing_docs`
+/// and `unused_qualifications`, which the generated files' own `#![allow]` has to
+/// cover), the root, the owned type and the lockfile.
+fn made_a_crate(dir: &Path) {
+    let manifest = format!(
+        "[package]\nname = \"blessed\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = \
+         false\n\n[workspace]\n\n[features]\nbuilder = [\"typed-openapi/builder\"]\n\n\
+         [dependencies]\ntyped-openapi = {{ path = {path:?}, default-features = false }}\nserde = \
+         {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\n\n[lints.rust]\n\
+         warnings = \"deny\"\nmissing_docs = \"warn\"\nunused_qualifications = \"warn\"\n",
+        path = env!("CARGO_MANIFEST_DIR"),
+    );
+    for (name, contents) in [
+        ("Cargo.toml", manifest.as_str()),
+        ("src/lib.rs", ROOT),
+        ("src/pyrometry.rs", PYROMETRY),
+    ] {
+        std::fs::write(dir.join(name), contents).expect("a file of the crate");
+    }
+    std::fs::copy(lockfile(), dir.join("Cargo.lock")).expect("the lockfile");
+}
+
+/// One run of cargo over the crate in `dir`, with no network, and what it said on
+/// standard error where it failed.
+fn cargo(dir: &Path, args: &[&str]) -> Result<(), String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args(args)
+        .args(["--offline", "--color", "never", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(blessed_target())
+        .output()
+        .expect("cargo is on PATH beside the rustfmt a bless step already needs");
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "`cargo {}` failed:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
+/// Whether the bless output in `dir` is a crate that compiles: without the
+/// `builder` feature, with it, and whether its doctests run.
+///
+/// The doctests are the ones that a vendor's prose would add (spec F-2) and the
+/// generator's own. They are run with the feature on, which holds every doc
+/// comment that the generator writes.
+fn compiles(dir: &Path) -> Result<(), String> {
+    made_a_crate(dir);
+    cargo(dir, &["check"])?;
+    cargo(dir, &["check", "--features", "builder"])?;
+    cargo(dir, &["test", "--doc", "--features", "builder"])
+}
+
+/// The control document, blessed with the adopter's type, is a crate that
+/// compiles with and without `builder`, under `-D warnings` over the lints that
+/// an adopter would add, and whose doctests run. Nothing in the suite compiled
+/// generated code for any document but the toy before this (F-69), so a compile
+/// failure here is the failure of every shape the fixture holds: a description
+/// that hides a code block (F-2), a schema named after a standard item (F-12), a
+/// parameter whose name starts with a digit (F-48) and the lints (F-49).
+#[test]
+fn the_generated_code_of_the_control_document_compiles_with_and_without_the_builder() {
+    let dir = blessed("hostile-compiles");
+    if let Err(compiler) = compiles(&dir) {
+        panic!("the bless of the control document is not a crate that compiles:\n{compiler}");
+    }
 }

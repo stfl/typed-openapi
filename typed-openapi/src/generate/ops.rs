@@ -543,7 +543,7 @@ impl Signature {
         let mut reasons = Vec::new();
         if led_by_digit {
             reasons.push(
-                "a Rust identifier does not start with a digit, so `_` stands in front of the word",
+                "a Rust identifier does not start with a digit, so `x` stands in front of the word",
             );
         }
         if bound != *plain {
@@ -758,17 +758,23 @@ fn add_param(
     Ok(())
 }
 
-/// `word` with a `_` in front of it where it starts with a digit, and whether it
+/// `word` with an `x` in front of it where it starts with a digit, and whether it
 /// did.
 ///
 /// A parameter's name is its wire key, so an Overlay cannot spell it another way
 /// and a name the identifier rules refuse would refuse the whole bless for a
-/// parameter the command line serves. `_` is the one character that makes a word
-/// that starts with a digit an identifier and changes nothing else about it, and
-/// the wrapper says which wire key the argument sends.
+/// parameter the command line serves. The wrapper says which wire key the
+/// argument sends.
+///
+/// The letter is `x` because that is what typify puts in front of a name that
+/// starts with a digit, so the property `3ds` of a body and the parameter `3ds`
+/// are `x3ds` alike. It is not `_`: `bon` takes a leading `_` off a member name
+/// ("the builder API should not expose that knowledge") and panics on a name that
+/// then starts with a digit, with `#[builder(name = …)]` too, so `_3ds` is no
+/// argument of a wrapper that has a builder.
 fn spelled_with_a_digit(word: String) -> (String, bool) {
     if word.starts_with(|first: char| first.is_ascii_digit()) {
-        (format!("_{word}"), true)
+        (format!("x{word}"), true)
     } else {
         (word, false)
     }

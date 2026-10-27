@@ -1574,18 +1574,18 @@ fn a_parameter_whose_name_starts_with_a_digit_gets_a_prefixed_identifier_and_kee
 
     let ops = read(&dir.join("src/ops.rs"));
     assert!(
-        ops.contains("_3ds: Option<&str>") && ops.contains("_2: Option<&str>"),
+        ops.contains("x3ds: Option<&str>") && ops.contains("x2: Option<&str>"),
         "a digit is not the start of an identifier:\n{ops}"
     );
     assert!(
-        ops.contains(r#".maybe("3ds", _3ds)"#) && ops.contains(r#".maybe("2", _2)"#),
+        ops.contains(r#".maybe("3ds", x3ds)"#) && ops.contains(r#".maybe("2", x2)"#),
         "the wire key has to survive the spelling:\n{ops}"
     );
     for said in [
-        "`_3ds` sends the document's `3ds`, under a name of its own: a Rust identifier does not \
-         start with a digit, so `_` stands in front of the word.",
-        "`_2` sends the document's `2`, under a name of its own: a Rust identifier does not \
-         start with a digit, so `_` stands in front of the word.",
+        "`x3ds` sends the document's `3ds`, under a name of its own: a Rust identifier does not \
+         start with a digit, so `x` stands in front of the word.",
+        "`x2` sends the document's `2`, under a name of its own: a Rust identifier does not \
+         start with a digit, so `x` stands in front of the word.",
     ] {
         assert!(
             ops.contains(said),
@@ -1601,7 +1601,7 @@ fn a_parameter_whose_name_starts_with_a_digit_gets_a_prefixed_identifier_and_kee
 fn a_prefixed_identifier_that_is_spent_moves_aside_and_says_both_reasons() {
     let dir = out("digit-param-spent");
     let document = KEYWORDED
-        .replace("- name: type", "- name: _3ds")
+        .replace("- name: type", "- name: x3ds")
         .replace("- name: ref", "- name: 3ds");
     Settings::new(wrote(&dir, "document.yaml", &document))
         .write_to(&dir)
@@ -1609,13 +1609,13 @@ fn a_prefixed_identifier_that_is_spent_moves_aside_and_says_both_reasons() {
 
     let ops = read(&dir.join("src/ops.rs"));
     assert!(
-        ops.contains(r#".maybe("_3ds", _3ds)"#) && ops.contains(r#".maybe("3ds", _3ds_2)"#),
+        ops.contains(r#".maybe("x3ds", x3ds)"#) && ops.contains(r#".maybe("3ds", x3ds_2)"#),
         "the later parameter keeps its wire key under the next name:\n{ops}"
     );
     assert!(
         ops.contains(
-            "`_3ds_2` sends the document's `3ds`, under a name of its own: a Rust identifier \
-             does not start with a digit, so `_` stands in front of the word, and an argument \
+            "`x3ds_2` sends the document's `3ds`, under a name of its own: a Rust identifier \
+             does not start with a digit, so `x` stands in front of the word, and an argument \
              declared before it had already spent that spelling."
         ),
         "the wrapper gives one reason for a name that has two:\n{ops}"
