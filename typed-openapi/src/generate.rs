@@ -623,7 +623,7 @@ pub enum GenerateError {
     #[error("schema `{name}` is not representable as JSON")]
     Schema {
         /// The schema's name in `components.schemas`, or for an inline schema a
-        /// sentence naming the body or response that states it.
+        /// sentence naming the request body or response that states it.
         name: String,
         /// `serde_json`'s reason.
         #[source]
@@ -645,15 +645,20 @@ pub enum GenerateError {
         /// The name the reference ends in, as the document spells it.
         schema: String,
     },
-    /// Two of the document's shapes reduce to one Rust type. typify writes a
-    /// definition per shape and uniquifies nothing, so emitting them is a file
-    /// that defines the same type twice; renaming one here would be a generator
-    /// choosing a public name nobody asked for.
+    /// Two of the document's shapes reduce to one Rust name. For two schemas the
+    /// document declares, typify writes a definition each and uniquifies
+    /// nothing, so emitting them is a file that defines the same type twice. For
+    /// a schema stated inline under a name typify already holds, it answers with
+    /// the type it holds, so the second wrapper would take a type of the first
+    /// one's shape. Renaming one here would be a generator choosing a public name
+    /// nobody asked for. Two inline schemas that are equal are one shape, and are
+    /// not refused.
     ///
     /// `first` and `second` are sentences naming where each shape stands — a
-    /// schema the document declares, or a body or response an operation states
-    /// inline — because the two are refused together and a reader needs to know
-    /// which is which.
+    /// schema the document declares, or a request body or response that states
+    /// one inline, on the operation or in the component the operation takes —
+    /// because the two are refused together and a reader needs to know which is
+    /// which.
     ///
     /// The cheap repair is a `title` on an inline schema, which typify names the
     /// type after, so the message names it where one of the two is inline and
@@ -669,8 +674,8 @@ pub enum GenerateError {
         second: String,
         /// The Rust name both reduce to, in typify's spelling.
         rust: String,
-        /// Whether either of the two is stated inline by an operation, and not
-        /// declared under `components.schemas`.
+        /// Whether either of the two is stated inline by a request body or a
+        /// response, and not declared under `components.schemas`.
         inline: bool,
     },
     /// A schema whose Rust name is one this crate declares a replaced type

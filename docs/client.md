@@ -77,8 +77,9 @@ depended on — they are in the example precisely so that they are not a
 dependency of the published crate.
 
 **An adapter must not turn a status code into an error.** The body that came
-with a 4xx is what a caller needs, and a `Call` answers with `Outcome::Sent`
-carrying the response, status and all. ureq turns a 4xx into an error and
+with a 4xx is what a caller needs: `Call::send` turns that response into
+`Error::Status`, which carries the status and the body, and an adapter that
+failed first would leave it nothing to carry. ureq turns a 4xx into an error and
 discards the body unless it is built with `http_status_as_error(false)`, which
 is why the example's adapter sets it.
 

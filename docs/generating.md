@@ -474,9 +474,61 @@ Three things are worth knowing:
 - **The generator emits from what the document describes, named or not.** A
   `$ref` to a named schema keeps that schema's name; a body or response an
   operation states inline is converted under its own `title`, or under a name
-  derived from the operation. `serde_json::Value` is left for a JSON body the
-  document states no schema for. `requestBody` `$ref`s are not followed, and
-  only `#/components/schemas/` references are.
+  derived from the operation. `serde_json::Value` is left for a JSON body or a
+  JSON response the document states no schema for. A `requestBody` that is a
+  `$ref` to `#/components/requestBodies/` is followed as the command line follows
+  it, a chain of references included, so the wrapper takes the type of the
+  component's schema and is optional where the component is. A schema that a
+  component states inline is a type for each operation that takes the component,
+  named after the operation. A schema's own `$ref` is followed to
+  `#/components/schemas/` and nowhere else. The load refuses any other, by the
+  reference, as the schema of a parameter, of the items of a list, of the JSON
+  body that is sent and of a multipart body, and as a property of a flat body.
+  The bless refuses it as the schema of a JSON response. A reference anywhere
+  else is typify's: below the top of a response's schema, below the property of
+  a request body, in a body that is sent as bytes, or under a key that is not
+  sent. typify takes the last segment of it for the name of a component, so it
+  types the component of that name, and it panics where the document has none.
+- **A `title` makes a schema stated inline one type, and a name is one type.**
+  A schema stated inline under a `title` is the type of that name. Where two
+  places state the same schema under it, they take one type and the `struct` is
+  written once: a component that two operations share, the same schema on two
+  operations, and a body and a response that state it alike. Where they state
+  different schemas, the bless is refused, since the second would take a type of
+  the first one's shape. Two schemas are the same as typify is given them, and
+  the type of a request body does not require what the API sets: a `readOnly`
+  property keeps its place in the type and leaves the `required` list. So a
+  schema whose `required` names a `readOnly` property is two schemas where a
+  body and a response both state it, and the bless is refused. The same schema
+  with the property not required is one. The refusal names each place, and
+  where a component states the schema it names the component and the operation
+  that takes it. For a response it names the first JSON body of the operation,
+  and the bodies state one schema, so a new `title` goes on each of them.
+  Repair: give one of the schemas another `title` in an Overlay, at the
+  component where there is one.
+- **A wrapper answers with the type its success responses state.** A success
+  response is a status from `200` to `299` or the range `2XX`; `default` is not
+  read. A response that is a `$ref` to `#/components/responses/` is followed, a
+  chain of references included. The JSON bodies of all of them, under every JSON
+  media type, are the answer, and they have to agree: one schema, whether named
+  or stated inline, gives one type. The client sends no `Accept` header, so a
+  server may answer with any of them. A success response with no `content`, such
+  as a `204`, stands beside the JSON body as an answer with no body, so the
+  wrapper answers `Option` of the type and `None` is the answer with no body. A
+  planned call (`Planned::send`) answers `Option` of that, where `None` is the
+  dry run, so there `Some(None)` is the answer with no body. A success response
+  whose `content` names no JSON media type adds nothing to the type, so a `200`
+  with a JSON body beside a `201` with a PDF answers with the type. The answer is
+  `NoContent` when no success response has a JSON body. `NoContent` takes an
+  empty body or any JSON and drops it, and a body that is not JSON, such as a
+  PDF, is a `client::Error::Decode`, because the typed call reads JSON only. A
+  response that cannot be followed is refused by name with the reference. So are
+  JSON bodies that do not state one schema, a body with no schema beside one
+  with a schema among them, with the status and the media type of each and the
+  response component that states it where there is one. `NoContent` is never the
+  answer to a response the generator could not read. The repair for the second
+  is an Overlay that gives the bodies one schema or removes one of them, made in
+  the component where there is one.
 - **A `content` key must be a media type.** A request body declared under a key
   with no `type/subtype` in it — `form-data` where `multipart/form-data` was
   meant — is a `LoadError` naming the operation and the key, rather than bytes
@@ -504,19 +556,19 @@ Three things are worth knowing:
   only". One schema serves a create and a read, so a `required` that lists `id`
   would make a type that a request cannot build. A type that a request body
   reaches does not require such a property, and the field is an `Option`: the
-  schema the body names or states, and every schema those refer to with a `$ref`.
+  schema the body names or states, behind `#/components/requestBodies/` or not,
+  and every schema those refer to with a `$ref`.
   A type that only responses reach keeps the document's `required`, because there
   it takes effect, so the generated type still refuses a response that lacks what
   the API promised. A property is `readOnly` as the command line reads it
   ([docs/cli.md](cli.md#flags)): marked, behind a `$ref` to a schema that is, or
   the `allOf` of one element that is. A schema that is an `allOf` is one type, so
   a property that the schema or any member declares read-only comes off the
-  `required` of the schema and of every member stated inline in it. Two limits. A
+  `required` of the schema and of every member stated inline in it. One limit: a
   member that is a `$ref` is a named schema, one type wherever it is used, so it
   keeps its own `required` unless it declares the property read-only itself: where
   it declares the property without `readOnly` and requires it, the composed type
-  requires it too. And a body that is a `$ref` to `#/components/requestBodies/` is
-  not followed, so what only such a body reaches keeps the document's `required`.
+  requires it too.
 - **A body the document leaves optional is an `Option` argument.** A body with
   `required: true` is an argument of its type: `&T` for a JSON body, `Vec<u8>`
   for one sent verbatim and `Vec<Part>` for a multipart body. A body without it

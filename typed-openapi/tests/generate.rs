@@ -4285,3 +4285,1003 @@ fn a_schema_that_leaves_the_rest_unsaid_or_shut_gets_no_map() {
         "`false` no longer closes the type:\n{types}"
     );
 }
+
+// ----------------------------------------------- what a wrapper answers with
+
+/// One operation, `getThing`, whose `responses` are `RESPONSES`, beside the
+/// responses and the schemas a `$ref` can lead to. The first three operations of
+/// the probe `A4/docs/refs.yaml` behind F-19 are this document with a different
+/// slot.
+const ANSWERS: &str = r##"
+openapi: 3.0.3
+info: { title: Answers, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things/{id}:
+    get:
+      operationId: getThing
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses: RESPONSES
+components:
+  responses:
+    ThingResponse:
+      description: OK
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Thing" }
+    Empty: { description: Nothing }
+    Two:
+      description: OK
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Thing" } }
+        application/hal+json: { schema: { $ref: "#/components/schemas/Other" } }
+    Same: { $ref: "#/components/responses/ThingResponse" }
+    Loop: { $ref: "#/components/responses/Again" }
+    Again: { $ref: "#/components/responses/Loop" }
+  schemas:
+    Thing: { type: object, properties: { a: { type: string } } }
+    Other: { type: object, properties: { b: { type: string } } }
+"##;
+
+/// What the bless step writes for [`ANSWERS`] with `responses` in the slot: the
+/// `ops.rs` of the document, or the refusal.
+fn answering(name: &str, responses: &str) -> Result<String, GenerateError> {
+    let dir = out(name);
+    let document = wrote(
+        &dir,
+        "answers.yaml",
+        &ANSWERS.replace("RESPONSES", responses),
+    );
+    Settings::new(document).write_to(&dir)?;
+    Ok(read(&dir.join("src/ops.rs")))
+}
+
+/// Whether the wrapper of `getThing` answers with `ty`, spelled as a generated
+/// file spells it.
+fn answers_with(ops: &str, ty: &str) -> bool {
+    ops.contains(&format!("-> Result<Call<'_, {ty}>, Error>"))
+}
+
+/// The probe's `getThing`: a success response that is a `$ref` to
+/// `#/components/responses/` has a body, and the wrapper returns its type. A
+/// wrapper that took it for a response with no content would return `NoContent`
+/// and `send` would throw the body away without a word.
+#[test]
+fn a_success_response_that_is_a_reference_is_typed() {
+    let ops = answering(
+        "answer-ref",
+        r##"{ "200": { $ref: "#/components/responses/ThingResponse" } }"##,
+    )
+    .expect("the document generates");
+    assert!(answers_with(&ops, "crate::types::Thing"), "{ops}");
+}
+
+/// A reference to a response that is itself a reference is followed to the end,
+/// as the reduction follows a chain of `requestBodies`.
+#[test]
+fn a_chain_of_response_references_is_followed() {
+    let ops = answering(
+        "answer-chain",
+        r##"{ "200": { $ref: "#/components/responses/Same" } }"##,
+    )
+    .expect("the document generates");
+    assert!(answers_with(&ops, "crate::types::Thing"), "{ops}");
+}
+
+/// The probe's `listThings`: `2XX` is a success status, and the answer is the
+/// array its schema states.
+#[test]
+fn a_success_response_under_a_range_is_typed() {
+    let ops = answering(
+        "answer-range",
+        r##"{ "2XX": { description: OK, content: { application/json: {
+            schema: { type: array, items: { $ref: "#/components/schemas/Thing" } } } } } }"##,
+    )
+    .expect("the document generates");
+    assert!(
+        answers_with(&ops, "::std::vec::Vec<crate::types::Thing>"),
+        "{ops}"
+    );
+}
+
+/// The probe's `latestThing` and its neighbours. A success response with no
+/// `content` is an answer with no body, and it stands beside one that has a JSON
+/// body, so the call answers `Option` of the type: `None` is the `204`. The order
+/// of the responses decides nothing, and neither does where the empty response
+/// is written.
+#[test]
+fn a_success_response_with_no_content_beside_a_json_one_makes_the_answer_an_option() {
+    const THING: &str = "crate::types::Thing";
+    for (label, responses, ty) in [
+        (
+            "a 204 listed before the 200",
+            r##"{ "204": { description: Nothing yet }, "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+            "::std::option::Option<crate::types::Thing>",
+        ),
+        (
+            "a 204 listed after the 200",
+            r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } } } },
+              "204": { description: Nothing yet } }"##,
+            "::std::option::Option<crate::types::Thing>",
+        ),
+        (
+            "a range with a JSON body beside a 204",
+            r##"{ "2XX": { description: OK, content: { application/json: {
+                schema: { type: array, items: { $ref: "#/components/schemas/Thing" } } } } },
+              "204": { description: Nothing yet } }"##,
+            "::std::option::Option<::std::vec::Vec<crate::types::Thing>>",
+        ),
+        (
+            "a response component with no content beside a JSON 200",
+            r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "202": { $ref: "#/components/responses/Empty" } }"##,
+            "::std::option::Option<crate::types::Thing>",
+        ),
+        (
+            "a JSON body with no schema",
+            r#"{ "200": { description: OK, content: { application/json: {} } },
+              "204": { description: Nothing yet } }"#,
+            "::std::option::Option<serde_json::Value>",
+        ),
+        (
+            "a body that is not JSON beside both",
+            r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "201": { description: Report, content: { application/pdf: {
+                schema: { type: string, format: binary } } } },
+              "204": { description: Nothing yet } }"##,
+            "::std::option::Option<crate::types::Thing>",
+        ),
+        (
+            "a JSON body beside a body that is not JSON",
+            r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "201": { description: Report, content: { application/pdf: {
+                schema: { type: string, format: binary } } } } }"##,
+            THING,
+        ),
+    ] {
+        let ops = answering("answer-option", responses).expect(label);
+        assert!(answers_with(&ops, ty), "{label}:\n{ops}");
+    }
+}
+
+/// sevDesk's two operations with two success responses name one schema twice,
+/// and so does a response that is a reference beside one that is stated: the
+/// wrapper has one answer when the responses agree on it.
+#[test]
+fn success_responses_that_name_one_type_answer_with_it() {
+    const THING: &str = "crate::types::Thing";
+    for (label, responses, ty) in [
+        (
+            "the same schema twice",
+            r##"{ "200": { description: OK, content: { application/json: {
+                schema: { $ref: "#/components/schemas/Thing" } } } },
+              "201": { description: Created, content: { application/json: {
+                schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+            THING,
+        ),
+        (
+            "a response component and a stated response",
+            r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "201": { description: Created, content: { application/json: {
+                schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+            THING,
+        ),
+        (
+            "an explicit code and the range around it",
+            r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "2XX": { $ref: "#/components/responses/Same" } }"##,
+            THING,
+        ),
+        (
+            "the same schema stated inline twice",
+            r#"{ "200": { description: OK, content: { application/json: {
+                schema: { type: object, properties: { c: { type: string } } } } } },
+              "201": { description: Created, content: { application/json: {
+                schema: { type: object, properties: { c: { type: string } } } } } } }"#,
+            "crate::types::GetThingResponse",
+        ),
+        (
+            "the same schema under two JSON media types of one response",
+            r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } },
+                "application/vnd.x+json": { schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+            THING,
+        ),
+    ] {
+        let ops = answering("answer-agree", responses).expect(label);
+        assert!(answers_with(&ops, ty), "{label}:\n{ops}");
+    }
+}
+
+/// The words of a refusal that names its operation: the `Operation` variant
+/// around an `Unsupported` one, with the reason it carries.
+fn reason_of(error: &GenerateError, op: &str) -> String {
+    let GenerateError::Operation { op: named, source } = error else {
+        panic!("not the refusal of an operation: {error:?}");
+    };
+    assert_eq!(named, op, "{error:?}");
+    let GenerateError::Unsupported(reason) = &**source else {
+        panic!("not an unsupported element: {source:?}");
+    };
+    reason.clone()
+}
+
+/// A label, success responses whose JSON bodies disagree, and the words of the
+/// refusal that names each body, in the order it names them.
+const DISAGREEING: [(&str, &str, &[&str]); 7] = [
+    (
+        "two named schemas, in two responses",
+        r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "201": { description: Created, content: { application/json: {
+                schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        &[
+            "`200` under `application/json` in `#/components/responses/ThingResponse` is \
+             `#/components/schemas/Thing`",
+            "`201` under `application/json` is `#/components/schemas/Other`",
+        ],
+    ),
+    (
+        "a named schema and one stated inline, in a response and a range",
+        r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "2XX": { description: OK, content: { application/json: {
+                schema: { type: object, properties: { b: { type: string } } } } } } }"##,
+        &[
+            "`200` under `application/json` in `#/components/responses/ThingResponse` is \
+             `#/components/schemas/Thing`",
+            "`2XX` under `application/json` is a schema stated inline",
+        ],
+    ),
+    (
+        "a JSON body with no schema and a named schema",
+        r##"{ "200": { description: OK, content: { application/json: {} } },
+              "201": { $ref: "#/components/responses/ThingResponse" } }"##,
+        &[
+            "`200` under `application/json` is a JSON body with no schema",
+            "`201` under `application/json` in `#/components/responses/ThingResponse` is \
+             `#/components/schemas/Thing`",
+        ],
+    ),
+    (
+        "two media types of one response",
+        r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } },
+                "application/vnd.x+json": { schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        &[
+            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`200` under `application/vnd.x+json` is `#/components/schemas/Other`",
+        ],
+    ),
+    (
+        "the third media type of one response",
+        r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } },
+                "application/vnd.x+json": { schema: { $ref: "#/components/schemas/Thing" } },
+                application/hal+json: { schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        &[
+            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`200` under `application/hal+json` is `#/components/schemas/Other`",
+        ],
+    ),
+    (
+        "two media types of a response component",
+        r##"{ "200": { $ref: "#/components/responses/Two" } }"##,
+        &[
+            "`200` under `application/json` in `#/components/responses/Two` is \
+             `#/components/schemas/Thing`",
+            "`200` under `application/hal+json` in `#/components/responses/Two` is \
+             `#/components/schemas/Other`",
+        ],
+    ),
+    (
+        "the second media type of the first response, and a later response",
+        r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } },
+                "application/vnd.x+json": { schema: { $ref: "#/components/schemas/Thing" } } } },
+              "201": { description: Created, content: {
+                application/hal+json: { schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        &[
+            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`201` under `application/hal+json` is `#/components/schemas/Other`",
+        ],
+    ),
+];
+
+/// Two JSON bodies that state different schemas leave the wrapper with no one type
+/// to return. Picking the first would be the generator choosing the answer for
+/// the adopter, so the bless refuses and names the operation, where each body
+/// stands (the status and the media type) and what each states. The three arms of
+/// what a body states are each read: a named schema, one stated inline, and none.
+///
+/// The client sends no `Accept` header, so the server may answer with any JSON
+/// media type the response lists: the rule holds inside one response as it does
+/// across two.
+#[test]
+fn json_bodies_that_state_different_schemas_are_refused_by_name() {
+    for (label, responses, words) in DISAGREEING {
+        let error = answering("answer-two", responses).expect_err(label);
+        let reason = reason_of(&error, "getThing");
+        // The body that came first in the document is named first.
+        let mut rest = reason.as_str();
+        for word in words {
+            let (_, after) = rest.split_once(word).unwrap_or_else(|| {
+                panic!("{label}: no `{word}` after the ones before it in\n{reason}")
+            });
+            rest = after;
+        }
+        assert!(
+            reason.contains("do not agree on one schema"),
+            "{label}: {reason}"
+        );
+    }
+}
+
+/// A response that is a reference this crate cannot follow is the document
+/// saying something the generator has no reading for. It is refused with the
+/// reference, and it is never `NoContent`, which takes an empty body or any JSON
+/// and drops it.
+#[test]
+fn a_success_response_that_cannot_be_followed_is_refused_by_name() {
+    for (reference, words) in [
+        ("#/components/responses/Nowhere", "does not resolve"),
+        ("#/components/schemas/Thing", "does not resolve"),
+        (
+            "#/components/responses/ThingResponse/content",
+            "points inside a component",
+        ),
+        ("#/components/responses/Loop", "is a reference cycle"),
+    ] {
+        let responses = format!(r#"{{ "200": {{ $ref: "{reference}" }} }}"#);
+        let error = answering("answer-unfollowed", &responses).expect_err(reference);
+        let reason = reason_of(&error, "getThing");
+        assert!(
+            reason.contains("`200`") && reason.contains(words),
+            "{reference}: {reason}"
+        );
+    }
+}
+
+/// A reference that is followed but leads to a schema the document never
+/// declared is refused by that schema, as it is for a request body.
+#[test]
+fn a_response_whose_schema_is_not_declared_is_refused_by_its_reference() {
+    let error = answering(
+        "answer-undeclared",
+        r##"{ "200": { description: OK, content: { application/json: {
+            schema: { $ref: "#/components/schemas/Nowhere" } } } } }"##,
+    )
+    .expect_err("the schema is not declared");
+    assert!(
+        matches!(&error, GenerateError::Operation { op, source }
+            if op == "getThing"
+                && matches!(&**source, GenerateError::NoType { schema } if schema == "Nowhere")),
+        "{error:?}"
+    );
+}
+
+/// The load refuses no `$ref` in a response, so a response whose schema is a
+/// `$ref` outside `#/components/schemas/` reaches the generator, which refuses it
+/// by that reference. The places where the load refuses one first are in
+/// `the_load_refuses_a_reference_out_of_the_schemas_where_it_reads_the_schema`.
+#[test]
+fn a_response_schema_that_leads_out_of_the_schemas_is_refused_by_its_reference() {
+    for reference in [
+        "#/definitions/Thing",
+        "#/components/responses/ThingResponse",
+    ] {
+        let responses = format!(
+            r#"{{ "200": {{ description: OK, content: {{ application/json: {{
+                schema: {{ $ref: "{reference}" }} }} }} }} }}"#
+        );
+        let error = answering("answer-outside", &responses).expect_err(reference);
+        let reason = reason_of(&error, "getThing");
+        assert!(
+            reason.contains(&format!("`{reference}`")) && reason.contains("#/components/schemas/"),
+            "{reference}: {reason}"
+        );
+    }
+}
+
+/// `NoContent` is the answer when no success response states a JSON body: there
+/// is none to type. A body under a status that is not a success, or under
+/// `default`, is not the answer of the call, and a body that is not JSON adds
+/// nothing to the type: the typed call reads JSON only, so a PDF is an
+/// `Error::Decode` whatever the wrapper returns.
+#[test]
+fn a_wrapper_answers_no_content_when_no_success_response_has_a_json_body() {
+    for (label, responses) in [
+        ("a 204", r#"{ "204": { description: Nothing } }"#),
+        ("a 200 with no content", r#"{ "200": { description: OK } }"#),
+        (
+            "a success whose content is not JSON",
+            r#"{ "200": { description: OK, content: { text/csv: {
+                schema: { type: string } } } } }"#,
+        ),
+        (
+            "a JSON body under a status that is not a success",
+            r##"{ "200": { description: OK }, "404": { description: Gone, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+        ),
+        (
+            "a JSON body under a redirect",
+            r##"{ "204": { description: Nothing }, "301": { description: Moved, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+        ),
+        (
+            "a JSON body under a range of errors",
+            r##"{ "204": { description: Nothing }, "4XX": { description: Wrong, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } } } },
+              "5XX": { description: Broken, content: { application/json: {
+                schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        ),
+        (
+            "a JSON body under `default`",
+            r##"{ "204": { description: Nothing }, default: { description: Oops, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        ),
+        (
+            "a response component with no content",
+            r##"{ "200": { $ref: "#/components/responses/Empty" } }"##,
+        ),
+    ] {
+        let ops = answering("answer-nothing", responses).expect(label);
+        assert!(answers_with(&ops, "NoContent"), "{label}:\n{ops}");
+    }
+}
+
+/// A JSON response that states no schema is a body of any shape, as a request
+/// body without one is. The answer is `serde_json::Value`: `NoContent` would
+/// accept the body and drop it.
+#[test]
+fn a_json_response_that_states_no_schema_is_any_json() {
+    let ops = answering(
+        "answer-shapeless",
+        r#"{ "200": { description: OK, content: { application/json: {} } } }"#,
+    )
+    .expect("the document generates");
+    assert!(answers_with(&ops, "serde_json::Value"), "{ops}");
+}
+
+// ------------------------------------------ a request body behind a component
+
+/// The probe's `A4/docs/reqbody.yaml` behind F-47: `createThing` takes its body
+/// from `#/components/requestBodies/`. The reduction follows the reference, so
+/// the command line has `--a` and `--json-body`, and the bless follows it too,
+/// where a bless that did not would refuse the whole document.
+///
+/// `BODY` is the component, written as a flow mapping.
+const BODIES: &str = r##"
+openapi: 3.0.3
+info: { title: ReqBody, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things:
+    post:
+      operationId: createThing
+      requestBody: { $ref: "#/components/requestBodies/ThingBody" }
+      responses:
+        "201": { description: Created }
+components:
+  requestBodies:
+    ThingBody: BODY
+    Alias: { $ref: "#/components/requestBodies/ThingBody" }
+  schemas:
+    Thing: { type: object, properties: { a: { type: string } } }
+"##;
+
+/// The component the probe uses.
+const THING_BODY: &str = r##"{ required: true, content: { application/json: {
+    schema: { $ref: "#/components/schemas/Thing" } } } }"##;
+
+/// What the bless step writes for [`BODIES`] with `body` as the component, as
+/// the text of `ops.rs` and `types.rs`.
+fn bodied(name: &str, body: &str) -> (String, String) {
+    let dir = out(name);
+    let document = wrote(&dir, "bodies.yaml", &BODIES.replace("BODY", body));
+    Settings::new(document)
+        .write_to(&dir)
+        .expect("the document generates");
+    (
+        read(&dir.join("src/ops.rs")),
+        read(&dir.join("src/types.rs")),
+    )
+}
+
+/// The wrapper takes the type of the schema the component names, and the check
+/// that holds a `--json-body` file to a type is that type's.
+#[test]
+fn a_request_body_that_is_a_reference_to_a_component_is_typed() {
+    let (ops, _) = bodied("body-ref", THING_BODY);
+    assert!(ops.contains("body: &crate::types::Thing"), "{ops}");
+    assert!(
+        ops.contains("fits::<crate::types::Thing>(\"createThing\", body)"),
+        "the check does not hold the file to the type:\n{ops}"
+    );
+}
+
+/// A chain of references is followed to the end, as the reduction follows it.
+#[test]
+fn a_request_body_behind_a_chain_of_references_is_typed() {
+    let dir = out("body-chain");
+    let document = BODIES.replace("BODY", THING_BODY).replace(
+        "{ $ref: \"#/components/requestBodies/ThingBody\" }\n      responses",
+        "{ $ref: \"#/components/requestBodies/Alias\" }\n      responses",
+    );
+    Settings::new(wrote(&dir, "bodies.yaml", &document))
+        .write_to(&dir)
+        .expect("the document generates");
+    let ops = read(&dir.join("src/ops.rs"));
+    assert!(ops.contains("body: &crate::types::Thing"), "{ops}");
+}
+
+/// Whether the body is required is the component's, as it is on the command
+/// line: a component that does not say so is an optional body.
+#[test]
+fn an_optional_body_behind_a_reference_is_an_option_argument() {
+    let (ops, _) = bodied(
+        "body-optional",
+        r##"{ content: { application/json: { schema: { $ref: "#/components/schemas/Thing" } } } }"##,
+    );
+    assert!(ops.contains("body: Option<&crate::types::Thing>"), "{ops}");
+}
+
+/// A schema the component states inline is a type of its own, named after the
+/// operation that takes the body, as a body stated on the operation is.
+#[test]
+fn a_schema_stated_inline_in_a_component_body_is_a_type_of_the_operation() {
+    let (ops, types) = bodied(
+        "body-inline",
+        r"{ required: true, content: { application/json: {
+            schema: { type: object, properties: { c: { type: string } } } } } }",
+    );
+    assert!(types.contains("pub struct CreateThingBody"), "{types}");
+    assert!(
+        ops.contains("body: &crate::types::CreateThingBody"),
+        "{ops}"
+    );
+}
+
+/// A JSON body the component states no schema for is any JSON, as it is on the
+/// operation.
+#[test]
+fn a_body_behind_a_reference_that_states_no_schema_is_any_json() {
+    let (ops, _) = bodied(
+        "body-shapeless",
+        r"{ required: true, content: { application/json: {} } }",
+    );
+    assert!(ops.contains("body: &serde_json::Value"), "{ops}");
+}
+
+/// Two operations that take the body of one component, and answer with the
+/// response of another, each stating its schema inline under `TITLE`.
+const SHARED: &str = r##"
+openapi: 3.0.3
+info: { title: Shared, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /a:
+    post:
+      operationId: makeA
+      requestBody: { $ref: "#/components/requestBodies/Draft" }
+      responses: { "200": { $ref: "#/components/responses/Made" } }
+  /b:
+    post:
+      operationId: makeB
+      requestBody: { $ref: "#/components/requestBodies/Draft" }
+      responses: { "200": { $ref: "#/components/responses/Made" } }
+components:
+  requestBodies:
+    Draft:
+      required: true
+      content:
+        application/json:
+          schema: { TITLE type: object, properties: { c: { type: string } } }
+  responses:
+    Made:
+      description: OK
+      content:
+        application/json:
+          schema: { TITLE type: object, properties: { d: { type: string } } }
+"##;
+
+/// A component that two operations share is one schema. Stated inline and
+/// untitled, it is a type for each operation, named after the operation, as two
+/// operations that state the same schema on their own are. Under a `title` it
+/// is one type that both take: typify hands the two the same definition, so the
+/// bless writes it once and does not refuse the two for sharing a name.
+#[test]
+fn an_inline_schema_in_a_component_that_two_operations_share_is_a_type_for_each_or_one_by_its_title()
+ {
+    let dir = out("shared-component");
+    let untitled = wrote(&dir, "untitled.yaml", &SHARED.replace("TITLE", ""));
+    Settings::new(untitled)
+        .write_to(dir.join("untitled"))
+        .expect("the untitled document generates");
+    let types = read(&dir.join("untitled/src/types.rs"));
+    for expected in ["pub struct MakeABody", "pub struct MakeBBody"] {
+        assert!(types.contains(expected), "no `{expected}`:\n{types}");
+    }
+
+    // One title for the body and another for the answer: the two are separate
+    // schemas, and a title that two of them share is a collision of its own.
+    let titled = SHARED
+        .replacen("TITLE", "title: Draft,", 1)
+        .replacen("TITLE", "title: Made,", 1);
+    Settings::new(wrote(&dir, "titled.yaml", &titled))
+        .write_to(dir.join("titled"))
+        .expect("a component shared by two operations is one type");
+    let types = read(&dir.join("titled/src/types.rs"));
+    let ops = read(&dir.join("titled/src/ops.rs"));
+    assert_eq!(types.matches("pub struct Draft ").count(), 1, "{types}");
+    assert_eq!(types.matches("pub struct Made ").count(), 1, "{types}");
+    assert_eq!(
+        ops.matches("body: &crate::types::Draft").count(),
+        4,
+        "{ops}"
+    );
+    assert_eq!(
+        ops.matches("-> Result<Call<'_, crate::types::Made>, Error>")
+            .count(),
+        4,
+        "{ops}"
+    );
+}
+
+/// Sharing is one schema stated once. Two operations that state different shapes
+/// under one `title` are two definitions of one name, and typify answers the
+/// second with the type it holds for the first, so the second wrapper would take
+/// a body of the wrong shape. They are refused.
+#[test]
+fn two_different_schemas_under_one_title_are_still_refused() {
+    let dir = out("shared-title");
+    let document = wrote(
+        &dir,
+        "document.yaml",
+        r##"
+openapi: 3.0.3
+info: { title: Titles, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /a:
+    post:
+      operationId: makeA
+      requestBody: { $ref: "#/components/requestBodies/A" }
+      responses: { "200": { description: OK } }
+  /b:
+    post:
+      operationId: makeB
+      requestBody: { $ref: "#/components/requestBodies/B" }
+      responses: { "200": { description: OK } }
+components:
+  requestBodies:
+    A: { content: { application/json: { schema: { title: Draft, type: object, properties: { c: { type: string } } } } } }
+    B: { content: { application/json: { schema: { title: Draft, type: object, properties: { d: { type: string } } } } } }
+"##,
+    );
+    let error = Settings::new(document)
+        .write_to(&dir)
+        .expect_err("one name cannot be two shapes");
+    assert!(
+        matches!(&error, GenerateError::OneType { inline: true, rust, .. } if rust == "Draft"),
+        "{error:?}"
+    );
+    // The schema stands in the component, and the repair is made there: the
+    // refusal names the component and the operation that takes it.
+    assert_eq!(
+        error.to_string(),
+        "the request body `#/components/requestBodies/A` that `makeA` takes and the \
+         request body `#/components/requestBodies/B` that `makeB` takes are both \
+         `Draft` in Rust; give an inline schema a `title` in an Overlay"
+    );
+}
+
+/// A response that a component states is named by the component too, and a chain
+/// of references is named by the entry that holds the schema, which is where the
+/// Overlay goes.
+#[test]
+fn a_response_component_that_claims_a_name_is_named_by_the_component() {
+    let dir = out("shared-response-title");
+    let document = wrote(
+        &dir,
+        "document.yaml",
+        r##"
+openapi: 3.0.3
+info: { title: Titles, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /a:
+    get:
+      operationId: getA
+      responses: { "200": { $ref: "#/components/responses/AliasOfA" } }
+  /b:
+    get:
+      operationId: getB
+      responses: { "200": { $ref: "#/components/responses/B" } }
+components:
+  responses:
+    AliasOfA: { $ref: "#/components/responses/A" }
+    A: { description: OK, content: { application/json: { schema: { title: Draft, type: object, properties: { c: { type: string } } } } } }
+    B: { description: OK, content: { application/json: { schema: { title: Draft, type: object, properties: { d: { type: string } } } } } }
+"##,
+    );
+    let error = Settings::new(document)
+        .write_to(&dir)
+        .expect_err("one name cannot be two shapes");
+    assert!(
+        matches!(&error, GenerateError::OneType { inline: true, rust, .. } if rust == "Draft"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "the response `#/components/responses/A` that `getA` answers with and the \
+         response `#/components/responses/B` that `getB` answers with are both \
+         `Draft` in Rust; give an inline schema a `title` in an Overlay"
+    );
+}
+
+/// Two operations that each state a body and a response on the operation itself,
+/// in the four slots `BODY_A`, `ANSWER_A`, `BODY_B` and `ANSWER_B`.
+const STATED_TWICE: &str = r#"
+openapi: 3.0.3
+info: { title: Stated, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /a:
+    post:
+      operationId: makeA
+      requestBody:
+        required: true
+        content: { application/json: { schema: BODY_A } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: ANSWER_A } } }
+  /b:
+    post:
+      operationId: makeB
+      requestBody:
+        required: true
+        content: { application/json: { schema: BODY_B } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: ANSWER_B } } }
+"#;
+
+/// A schema stated inline under a `title`.
+const DRAFT: &str = "{ title: Draft, type: object, properties: { c: { type: string } } }";
+
+/// What the bless step writes for [`STATED_TWICE`] with the four slots filled.
+fn stating(name: &str, slots: [&str; 4]) -> Result<(String, String), GenerateError> {
+    let dir = out(name);
+    let [body_a, answer_a, body_b, answer_b] = slots;
+    let document = STATED_TWICE
+        .replace("BODY_A", body_a)
+        .replace("ANSWER_A", answer_a)
+        .replace("BODY_B", body_b)
+        .replace("ANSWER_B", answer_b);
+    Settings::new(wrote(&dir, "stated.yaml", &document)).write_to(&dir)?;
+    Ok((
+        read(&dir.join("src/ops.rs")),
+        read(&dir.join("src/types.rs")),
+    ))
+}
+
+/// A name that typify holds is answered with the type it holds, so the claim on
+/// a Rust name passes when the second claimant states the schema of the first,
+/// wherever either is stated: on two operations, in a body and a response, or
+/// in a component two operations share. It is one schema, so one type is
+/// correct, and the `struct` is written once.
+#[test]
+fn a_titled_schema_that_is_stated_twice_alike_is_one_type() {
+    let other = "{ type: object, properties: { z: { type: string } } }";
+    let sets_id = "{ title: Draft, type: object, properties: { id: { type: integer, \
+                   readOnly: true } } }";
+    for (label, slots) in [
+        (
+            "a body and a response that state a read-only property they do not require",
+            [sets_id, sets_id, other, other],
+        ),
+        (
+            "the same response on two operations",
+            [
+                other,
+                DRAFT,
+                "{ type: object, properties: { y: { type: string } } }",
+                DRAFT,
+            ],
+        ),
+        (
+            "the same body on two operations",
+            [
+                DRAFT,
+                other,
+                DRAFT,
+                "{ type: object, properties: { y: { type: string } } }",
+            ],
+        ),
+        (
+            "the body and the response of one operation",
+            [
+                DRAFT,
+                DRAFT,
+                other,
+                "{ type: object, properties: { y: { type: string } } }",
+            ],
+        ),
+    ] {
+        let (ops, types) = stating("stated-alike", slots).expect(label);
+        assert_eq!(
+            types.matches("pub struct Draft ").count(),
+            1,
+            "{label}:\n{types}"
+        );
+        assert!(ops.contains("crate::types::Draft"), "{label}:\n{ops}");
+    }
+}
+
+/// A schema that differs, even in a word of its own, is a second shape under the
+/// name: the second wrapper would take a type of the wrong shape. The claim is
+/// held to the schema typify is given, and the type of a body does not require
+/// what the API sets. So one schema whose `required` names a `readOnly` property
+/// is two schemas where a body and a response both state it, and they are
+/// refused. Each refusal names where the two stand, the response of an operation
+/// among them.
+#[test]
+fn a_titled_schema_that_is_stated_twice_differently_is_refused() {
+    let other = "{ type: object, properties: { z: { type: string } } }";
+    let required_id = "{ title: Draft, type: object, required: [id], properties: { id: { \
+                       type: integer, readOnly: true } } }";
+    for (label, slots, sentence) in [
+        (
+            "another property on a response",
+            [
+                other,
+                DRAFT,
+                other,
+                "{ title: Draft, type: object, properties: { d: { type: string } } }",
+            ],
+            "the response stated inline by `makeA` and the response stated inline by \
+             `makeB` are both `Draft` in Rust",
+        ),
+        (
+            "a schema that requires a property the API sets, as a body and as a response",
+            [required_id, required_id, other, other],
+            "the request body stated inline by `makeA` and the response stated inline by \
+             `makeA` are both `Draft` in Rust",
+        ),
+    ] {
+        let error = stating("stated-unlike", slots).expect_err(label);
+        assert!(
+            matches!(&error, GenerateError::OneType { inline: true, rust, .. } if rust == "Draft"),
+            "{label}: {error:?}"
+        );
+        assert!(error.to_string().starts_with(sentence), "{label}: {error}");
+    }
+}
+
+/// A document with one operation, `paths`, and a component `Thing`: the
+/// reference `#/definitions/Thing` leads out of `#/components/schemas/` to a
+/// schema that would resolve if it were followed.
+fn outside(name: &str, paths: &str) -> Result<(String, String), GenerateError> {
+    let dir = out(name);
+    let document = wrote(
+        &dir,
+        "outside.yaml",
+        &format!(
+            "openapi: 3.0.3\ninfo: {{ title: Outside, version: \"1.0\" }}\n\
+             servers: [{{ url: \"http://localhost:9999\" }}]\n{paths}\
+             components:\n  schemas:\n    Thing: {{ type: object }}\n"
+        ),
+    );
+    Settings::new(document).write_to(&dir)?;
+    Ok((
+        read(&dir.join("src/ops.rs")),
+        read(&dir.join("src/types.rs")),
+    ))
+}
+
+/// The paths of [`outside`] for a read with `parameter` and no response body.
+fn reading(parameter: &str) -> String {
+    format!(
+        "paths:\n  /a:\n    get:\n      operationId: getA\n      parameters: [{parameter}]\n      \
+         responses: {{ \"200\": {{ description: OK }} }}\n"
+    )
+}
+
+/// The paths of [`outside`] for a write whose request body has `content`.
+fn writing(content: &str) -> String {
+    format!(
+        "paths:\n  /a:\n    post:\n      operationId: makeA\n      requestBody:\n        content: \
+         {content}\n      responses: {{ \"200\": {{ description: OK }} }}\n"
+    )
+}
+
+/// Where the load reads a schema, a `$ref` outside `#/components/schemas/` is
+/// refused before the generator meets it: the schema of a parameter, of the items
+/// of a list, of the JSON body that is sent and of a multipart body, and a
+/// property of a flat body.
+#[test]
+fn the_load_refuses_a_reference_out_of_the_schemas_where_it_reads_the_schema() {
+    let out_of_the_schemas = "$ref: '#/definitions/Thing'";
+    for (label, paths) in [
+        (
+            "a parameter",
+            reading(&format!(
+                "{{ name: p, in: query, schema: {{ {out_of_the_schemas} }} }}"
+            )),
+        ),
+        (
+            "the items of a list",
+            reading(&format!(
+                "{{ name: p, in: query, schema: {{ type: array, items: {{ {out_of_the_schemas} }} }} }}"
+            )),
+        ),
+        (
+            "the JSON body that is sent",
+            writing(&format!(
+                "{{ application/json: {{ schema: {{ {out_of_the_schemas} }} }} }}"
+            )),
+        ),
+        (
+            "a multipart body",
+            writing(&format!(
+                "{{ multipart/form-data: {{ schema: {{ {out_of_the_schemas} }} }} }}"
+            )),
+        ),
+        (
+            "a property of a flat body",
+            writing(&format!(
+                "{{ application/json: {{ schema: {{ type: object, properties: {{ t: {{ \
+                 {out_of_the_schemas} }} }} }} }} }}"
+            )),
+        ),
+    ] {
+        let error = outside("outside-refused", &paths).expect_err(label);
+        assert!(
+            matches!(
+                &error,
+                GenerateError::Unusable(LoadError::Unresolvable { .. })
+            ),
+            "{label}: {error:?}"
+        );
+    }
+}
+
+/// Where the load reads no schema, the reference goes on to typify: a body that
+/// is sent as bytes and a body under a key that is not sent are not read, and a
+/// property of a response's schema is typify's own. typify reads a reference by
+/// its last segment, so it types the component of that name.
+#[test]
+fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
+    let out_of_the_schemas = "$ref: '#/definitions/Thing'";
+    for (label, paths, argument) in [
+        (
+            "a body sent as bytes",
+            writing(&format!(
+                "{{ application/octet-stream: {{ schema: {{ {out_of_the_schemas} }} }} }}"
+            )),
+            "body: Option<Vec<u8>>",
+        ),
+        (
+            "a body under a key that is not sent",
+            writing(&format!(
+                "{{ application/json: {{ schema: {{ type: object, properties: {{ a: {{ type: \
+                 string }} }} }} }}, application/xml: {{ schema: {{ {out_of_the_schemas} }} }} }}"
+            )),
+            "body: Option<&crate::types::MakeABody>",
+        ),
+    ] {
+        let (ops, _) = outside("outside-blessed", &paths).expect(label);
+        assert!(ops.contains(argument), "{label}:\n{ops}");
+    }
+
+    let nested = format!(
+        "paths:\n  /a:\n    get:\n      operationId: getA\n      responses:\n        \"200\": {{ \
+         description: OK, content: {{ application/json: {{ schema: {{ type: object, properties: \
+         {{ t: {{ {out_of_the_schemas} }} }} }} }} }} }}\n"
+    );
+    let (_, types) = outside("outside-nested", &nested).expect("typify reads it");
+    assert!(
+        types.contains("pub t: ::std::option::Option<Thing>"),
+        "the component named by the last segment:\n{types}"
+    );
+}

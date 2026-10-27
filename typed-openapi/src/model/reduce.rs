@@ -40,8 +40,8 @@ use crate::required::{Step, spelled as target};
 use crate::scalar::{Items, Scalar, ScalarError};
 use crate::schema::{
     Fit, RefError, Template, array_of, description_of, format_of, is_content_type, is_json,
-    is_media_range, is_media_type, is_multipart, lists_only_null, read_only_of, resolve, scalar_of,
-    stated, template,
+    is_media_range, is_media_type, is_multipart, lists_only_null, read_only_of, resolve,
+    resolve_request_body, scalar_of, stated, template,
 };
 
 /// What a refusal calls the request body.
@@ -1782,15 +1782,7 @@ impl Body {
         let Some(body) = &op.request_body else {
             return Ok(Self::None);
         };
-        let body = under(
-            resolve(
-                body,
-                |key| components.request_bodies.get(key),
-                "requestBodies",
-            ),
-            id,
-            BODY,
-        )?;
+        let body = under(resolve_request_body(body, components), id, BODY)?;
         let required = body.required;
         // The first key that names JSON, wherever it stands, and else the first
         // key of all, whatever it names. `docs/validation.md` states the rule.

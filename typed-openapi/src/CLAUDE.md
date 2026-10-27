@@ -255,14 +255,15 @@ and else the first of all, so a multipart key is no better than another. The
 generator does not pick again: it reads the `media_type` field of the two JSON
 variants where it types an argument (`src/generate/names.rs` and
 `src/generate/ops.rs`), and `json_body` finds the entry under that key, so the
-type of a wrapper's argument and the request come from one entry. A response is
-another pick, over its own `content` with the same `is_json`. Only the key that is
-sent is read, so only that key can be refused (`MediaType`, `MediaRange`), and a
-range that stands after a key that names JSON loads. A media range is a `*` in
-the type or in the subtype (`is_media_range`). `is_json` reads the `+json` suffix
-and nothing else, so `application/*+json` names JSON: where it is the first key
-that does, it is the key that is sent, and it is refused as a range. A response
-is typed from it.
+type of a wrapper's argument and the request come from one entry. Only the key
+that is sent is read, so only that key can be refused (`MediaType`,
+`MediaRange`), and a range that stands after a key that names JSON loads. A
+media range is a `*` in the type or in the subtype (`is_media_range`). `is_json`
+reads the `+json` suffix and nothing else, so `application/*+json` names JSON:
+where it is the first key that does, it is the key that is sent, and it is
+refused as a range. A response is not sent, so it is read at every key of its
+`content` that `is_json` accepts, because the client sends no `Accept` header
+(`names::success`).
 
 `MediaType` is two questions. Every request body key that is picked is asked
 `is_media_type`, a `type/subtype` of two `token`s, and reads as `is_json` does,
@@ -783,22 +784,79 @@ The generator makes the same decision for the types (`NotRequired` in
 `src/generate/types.rs`). A type that a request body reaches does not require
 the property, and a type that only responses reach keeps the document's
 `required`, because there it takes effect. A body reaches the schemas it names
-or states and every schema those refer to (`reached`), found on the schemas as
-`schemars` holds them, so an `example` that spells a `$ref` reaches nothing. The
-visitor reads a property as `read_only_of` does, in `schemars` types: the
-property is marked, it refers to a schema that `read_only_of` found read-only,
-or it is an `allOf` of one element that is. `tests/readonly.rs` runs every
-spelling through both roads, so the flag is gone exactly where the type stops
-requiring the property. A schema that is an `allOf` is one type in typify, so
-`NotRequired::declared` reads the properties that the schema and every member
-declare read-only, a member that is a `$ref` through the named schema it leads
-to, and `relax` takes each off the `required` of the schema and of every member
-stated inline in it. A member that is a `$ref` keeps its own `required`, because
-the named schema is one type wherever it is used, and a body that names it alone
-requires what it declares without `readOnly`. That is the first of two limits.
-The second is a body that is a `$ref` to `#/components/requestBodies/`: the
-generator follows none, so a type that only such a body reaches keeps the
-document's `required`.
+or states, behind `#/components/requestBodies/` or not, and every schema those
+refer to (`reached`), found on the schemas as `schemars` holds them, so an
+`example` that spells a `$ref` reaches nothing. The visitor reads a property as
+`read_only_of` does, in `schemars` types: the property is marked, it refers to a
+schema that `read_only_of` found read-only, or it is an `allOf` of one element
+that is. `tests/readonly.rs` runs every spelling through both roads, so the flag
+is gone exactly where the type stops requiring the property. A schema that is an
+`allOf` is one type in typify, so `NotRequired::declared` reads the properties
+that the schema and every member declare read-only, a member that is a `$ref`
+through the named schema it leads to, and `relax` takes each off the `required`
+of the schema and of every member stated inline in it. A member that is a `$ref`
+keeps its own `required`, because the named schema is one type wherever it is
+used, and a body that names it alone requires what it declares without
+`readOnly`.
+
+**The generator follows a reference where the reduction follows it, through the
+same function.** `resolve_request_body` in `src/schema.rs` reads a `requestBody`
+that is a `$ref`, a chain of them included. `Body::build` in the reduction and
+`json_body` in `src/generate/names.rs` both ask it (the generator through
+`resolve_request_body_at`, which also says which entry holds the content), so
+the body a command line is built from and the type of a wrapper's argument are
+one entry of one `content` map. A copy of the reading in the generator would
+refuse a document at the bless that the command line serves, or type a wrapper
+from another entry than the request sends. The reduction refuses a `requestBody`
+`$ref` that cannot be followed before the generator meets it, so the refusal in
+`body_type` is a guard and no document reaches it. The load refuses a `$ref`
+outside `#/components/schemas/` as the schema of a parameter, of the items of a
+list, of the JSON body that is sent and of a multipart body, and as a property of
+a flat body. It refuses none in a body sent as bytes or under a key that is not
+sent, none below the property of a request body, and none in a response: typify
+reads such a reference by its last segment, so it types the component of that
+name, and panics where the document has none. A response is no part of a request, so the reduction reads
+none, and `resolve_response` is the generator's alone: the bless is where a
+response that cannot be followed, or whose schema leads out of
+`#/components/schemas/` at its top, is refused, by the reference.
+
+`names::success` reads every success response, a status from `200` to `299` and
+the range `2XX` but not `default`, and answers a `Reading`. Every JSON entry of
+every response is a `Statement`, and they have to state one schema: `Answer` is
+compared as the document spells it, a `$ref` to one name or a schema that reads
+the same. The client sends no `Accept` header, so a server may answer with any
+JSON media type that a response lists. Several schemas, or a response that
+cannot be followed, is an `Unanswerable`, which `response_type` in
+`src/generate/ops.rs` words as a refusal that names the operation, the status
+and the media type of each body, the response component that states it where
+there is one, and what it states. A response with no `content` is an answer with
+no body, so beside a JSON body the wrapper answers `Option` of its type
+(`Reading::JsonOrEmpty`) and `None` is the `204`: `parse` reads an empty body as
+`null`, which `Option` takes. `Planned::send` wraps the answer in the `Option` of
+a dry run, so on the planned road `Some(None)` is the `204` and `None` is the
+dry run. A response whose `content`
+names no JSON adds nothing to the type. The alternative is `NoContent`, which
+takes an empty body or any JSON and drops it, so it is the answer only where no
+success response has a JSON body: a `204`, no `content`, or `content` that is
+not JSON, whose non-empty body is an `Error::Decode` because the typed call
+reads JSON only.
+
+`Names::read` refuses one Rust name for two schemas. For the schemas a document
+declares typify writes a definition each, so one name is a `struct` twice. For a
+schema stated inline under a name typify holds, it answers with the type it
+holds, whatever the schema that asks, so the same id does not say that the
+schema is the same. `Claims::record` lets a second claimant through only when
+`Claim::is_shared_by` it: it asks for the same type and states an equal schema,
+as typify is given it after `NotRequired`, wherever each is stated. A component
+that two operations share, the same titled schema on two operations, and a body
+and a response that state it alike are one schema and one type. A schema whose
+`required` names a property the API sets is two schemas where a body and a
+response both state it, because the type of the body does not require that
+property, and they are refused. A schema that a component states is a `Site` of
+each operation that takes it, and `Home` says which component, so a refusal
+names the component and the operation and the repair is made there. The
+response site of an operation stands where its first JSON body does, and the
+refusal names that place alone.
 
 **One request builder serves both consumers.** A CLI reaches it through `tree`,
 a generated wrapper through `Values` directly. Anything that makes the command

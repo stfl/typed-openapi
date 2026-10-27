@@ -19,7 +19,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::GenerateError;
-use super::names::{JsonBody, Names, Site};
+use super::names::{Answer, Home, JsonBody, Names, Reading, Site, Statement, Unanswerable};
 use crate::model::{Body, Shape, declared, entry_of_flag};
 use crate::schema::{array_of, stated, typed};
 use crate::{Document, Operation};
@@ -92,8 +92,7 @@ pub(super) fn emit(
 /// One pass over the document, in its order — which is the order every
 /// generated list below is in, and the order `Api::new` checks.
 fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>, GenerateError> {
-    let empty = Components::default();
-    let components = api.components.as_ref().unwrap_or(&empty);
+    let components = super::names::components(api);
     model
         .iter()
         .map(|op| {
@@ -118,7 +117,7 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                     id: id.to_owned(),
                     group: op.group().as_str().to_owned(),
                     command: op.command().as_str().to_owned(),
-                    body: json_body_type(op, operation, names)?,
+                    body: json_body_type(op, operation, components, names)?,
                     method: wrapper(op, &declared, components, operation, names)?,
                     builder_method: builder_wrapper(op, &declared, components, operation, names)?,
                 })
@@ -314,11 +313,12 @@ fn ident(word: &str) -> Option<Ident> {
 fn json_body_type(
     op: &Operation,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<Option<TokenStream>, GenerateError> {
     match op.body() {
         Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
-            body_type(op, media_type, operation, names).map(Some)
+            body_type(op, media_type, operation, components, names).map(Some)
         }
         Body::None | Body::Opaque { .. } | Body::Multipart { .. } => Ok(None),
     }
@@ -344,7 +344,7 @@ fn wrapper(
         // positional call has no use for them.
         names: _,
     } = signature_of(op, declared, components, operation, names)?;
-    let response = response_type(op, operation, names)?;
+    let response = response_type(op, operation, components, names)?;
     let variant = variant_of(op)?;
     let doc = paragraphs(
         [summary, &signature, &gate]
@@ -444,7 +444,7 @@ fn builder_wrapper(
         names: arguments,
         ..
     } = signature_of(op, declared, components, operation, names)?;
-    let response = response_type(op, operation, names)?;
+    let response = response_type(op, operation, components, names)?;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
          required argument is a compile error."
@@ -564,7 +564,7 @@ fn signature_of(
     for param in op.params() {
         add_param(&mut out, param, declared, components, names)?;
     }
-    add_body(&mut out, op, operation, names)?;
+    add_body(&mut out, op, operation, components, names)?;
     Ok(out)
 }
 
@@ -580,6 +580,7 @@ fn add_body(
     out: &mut Signature,
     op: &Operation,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<(), GenerateError> {
     let (required, argument) = match op.body() {
@@ -594,7 +595,7 @@ fn add_body(
             required,
             ..
         } => {
-            let ty = body_type(op, media_type, operation, names)?;
+            let ty = body_type(op, media_type, operation, components, names)?;
             let name = out.argument(&format_ident!("body"), "body", "is the request body");
             // The operation is named so that an argument that does not serialise
             // says whose body it was, as `fits` does in `check_body`.
@@ -818,47 +819,114 @@ fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStrea
 /// The type of a JSON request body, read from the entry under `media_type`: the
 /// key the model sends the body under.
 ///
-/// A `$ref` keeps the named schema's type and a schema the operation states
-/// inline gets one of its own, so a body the document describes is a body the
-/// generated code holds a caller to. `serde_json::Value` is left for the one
-/// case that earns it: a JSON body the document states no schema for at all.
+/// A `$ref` keeps the named schema's type and a schema the body states inline,
+/// on the operation or in the component it takes, gets one of its own, so a body
+/// the document describes is a body the generated code holds a caller to.
+/// `serde_json::Value` is left for the one case that earns it: a JSON body the
+/// document states no schema for at all.
+///
+/// The reduction follows a `requestBody` `$ref` first and refuses the document
+/// that holds one it cannot follow, so the refusal here is a guard against the
+/// two readings coming apart, and not one that a document reaches.
 fn body_type(
     op: &Operation,
     media_type: &str,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    match super::names::json_body(operation, media_type) {
-        JsonBody::Referenced => Err(unsupported("requestBody $refs are not followed")),
+    let body = super::names::json_body(operation, media_type, components)
+        .map_err(|source| unsupported(format!("its request body cannot be followed: {source}")))?;
+    match body {
         JsonBody::Unkeyed => Err(unsupported(
             "no request body entry under the key the model sends",
         )),
         JsonBody::Shapeless => Ok(quote!(serde_json::Value)),
-        JsonBody::Stated(schema) => named_or_stated(schema, &Site::body(op.id()), names),
+        JsonBody::Stated { schema, .. } => named_or_stated(schema, &Site::body(op.id()), names),
     }
 }
 
 /// The type a successful response deserialises into.
+///
+/// `NoContent` is the answer where no success response has a JSON body, and
+/// nowhere else: a response that cannot be followed, or JSON bodies that do not
+/// agree, are refused. Where a response with no `content` stands beside one with
+/// a JSON body, the answer is `Option` of the type, because the typed call reads
+/// an empty body as `null` and `None` is the answer with no body. A planned call
+/// answers `Option` of that, where `None` is the dry run, so there the answer
+/// with no body is `Some(None)`.
 fn response_type(
     op: &Operation,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let Some(schema) = super::names::success(operation) else {
-        return Ok(quote!(NoContent));
+    let answer = |statement: Statement<'_>| match statement.answer {
+        Answer::Shapeless => Ok(quote!(serde_json::Value)),
+        Answer::Stated(schema) => named_or_stated(schema, &Site::response(op.id()), names),
     };
-    named_or_stated(schema, &Site::response(op.id()), names)
+    match super::names::success(operation, components).map_err(unanswerable)? {
+        Reading::NoJson => Ok(quote!(NoContent)),
+        Reading::Json(statement) => answer(statement),
+        Reading::JsonOrEmpty(statement) => {
+            let ty = answer(statement)?;
+            Ok(quote!(::std::option::Option<#ty>))
+        }
+    }
+}
+
+/// The refusal for success responses that have no one answer.
+///
+/// Both causes name the operation through the `Operation` variant that wraps
+/// this, the status of each response involved, and what each states. The repair
+/// is an Overlay, which is the adopter's to write: the generator picking one of
+/// two schemas would be a correction nobody can read in a diff. A body that a
+/// response component states is named with the component, because the Overlay
+/// goes there and every operation that takes the component is refused alike.
+fn unanswerable(refusal: Unanswerable<'_>) -> GenerateError {
+    match refusal {
+        Unanswerable::Unfollowed { status, source } => unsupported(format!(
+            "its success response `{status}` cannot be followed: {source}"
+        )),
+        Unanswerable::Disagree { first, second } => unsupported(format!(
+            "the JSON bodies of its success responses do not agree on one schema, so the \
+             wrapper has no one type to return: {} and {}; an Overlay that gives them one \
+             schema, or removes one of them, mends it",
+            said(&first),
+            said(&second),
+        )),
+    }
+}
+
+/// Where a body stands and what it states, as a sentence part: the status and
+/// the media type, the response component where one states the body, and the
+/// schema.
+fn said(statement: &Statement<'_>) -> String {
+    let at = match &statement.home {
+        Home::Operation => String::new(),
+        Home::Component(at) => format!(" in `{at}`"),
+    };
+    format!(
+        "`{}` under `{}`{at} is {}",
+        statement.status,
+        statement.media,
+        statement.answer.described()
+    )
 }
 
 /// The type a schema became, whether the document named it or stated it where
 /// it is used.
 ///
 /// A `$ref` is answered from the named schemas so that one pointing nowhere is
-/// refused by the reference it names, which is what an adopter can act on.
-/// Everything else was converted under [`Site`], and a site with no type would
-/// be this emitter and [`names::sites`](super::names::sites) disagreeing about
-/// what the document states — which they read through the same two functions,
-/// so they do not.
+/// refused by the reference it names, which is what an adopter can act on. A
+/// `$ref` that leads out of `#/components/schemas/` is refused by the reference
+/// too. The load refuses one as the schema of a parameter, of the items of a
+/// list, and of the JSON or multipart body that is sent, and refuses none in a
+/// response, so the schema of a response is where one arrives here. Everything
+/// else was converted under [`Site`], and a site with no type would be this
+/// emitter and [`names::sites`](super::names::sites) disagreeing about what the
+/// document states — which they read through the same two functions, so they do
+/// not.
 fn named_or_stated(
     schema: &ReferenceOr<Schema>,
     site: &Site,
@@ -866,6 +934,12 @@ fn named_or_stated(
 ) -> Result<TokenStream, GenerateError> {
     if let Some(name) = ref_name(schema) {
         return names.get(name).cloned();
+    }
+    if let ReferenceOr::Reference { reference } = schema {
+        return Err(unsupported(format!(
+            "`{reference}` leads out of the schemas: only `#/components/schemas/` \
+             references are followed"
+        )));
     }
     names
         .at(site)
