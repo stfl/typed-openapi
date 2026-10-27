@@ -696,15 +696,13 @@ fn stated(api: &openapiv3::OpenAPI, model: &Document) -> Result<Vec<Stated>, Gen
     super::names::sites(api, model)
         .into_iter()
         .map(|found| {
-            let value =
-                serde_json::to_value(found.schema).map_err(|source| GenerateError::Schema {
-                    name: found.described(),
-                    source,
-                })?;
-            Ok(Inline {
-                site: found.site,
-                home: found.home,
-                schema: as_json_schema(value),
+            found.try_map(|schema, described| {
+                let value =
+                    serde_json::to_value(schema).map_err(|source| GenerateError::Schema {
+                        name: described(),
+                        source,
+                    })?;
+                Ok(as_json_schema(value))
             })
         })
         .collect()
@@ -715,16 +713,13 @@ fn inline(stated: Vec<Stated>) -> Result<Vec<Inline<Schema>>, GenerateError> {
     stated
         .into_iter()
         .map(|found| {
-            let described = found.described();
-            let schema = typify_schema(found.schema).map_err(|source| {
-                GenerateError::Unsupported(format!(
-                    "{described} is not a JSON Schema typify accepts: {source}"
-                ))
-            })?;
-            Ok(Inline {
-                site: found.site,
-                home: found.home,
-                schema,
+            found.try_map(|schema, described| {
+                typify_schema(schema).map_err(|source| {
+                    GenerateError::Unsupported(format!(
+                        "{} is not a JSON Schema typify accepts: {source}",
+                        described()
+                    ))
+                })
             })
         })
         .collect()

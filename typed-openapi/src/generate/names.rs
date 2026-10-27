@@ -31,8 +31,10 @@
 //! share, the same titled schema on two operations, and a body and a response
 //! that state it alike are one schema and one type, and the `struct` is written
 //! once. It is wrong where the schemas differ, and then it is refused. "The same"
-//! is the schema as typify is given it, so a body and a response that differ
-//! only in what the API sets are two schemas.
+//! is the schema as typify is given it, and the type of a body does not require
+//! what the API sets. So a schema whose `required` names a `readOnly` property
+//! is two schemas where a body and a response both state it, and they are
+//! refused.
 //!
 //! It is also how the answer stays right for a type the adopter owns.
 //! [`Settings::replace`](super::Settings::replace) substitutes their type
@@ -216,6 +218,19 @@ impl<S> Inline<S> {
     pub(super) fn described(&self) -> String {
         self.site.described(&self.home)
     }
+
+    /// The same site and home around what `read` makes of the schema.
+    ///
+    /// `read` is given the sentence that names the schema as a function, so the
+    /// text is built by the read that refuses and by no other.
+    pub(super) fn try_map<T, E>(
+        self,
+        read: impl FnOnce(S, &dyn Fn() -> String) -> Result<T, E>,
+    ) -> Result<Inline<T>, E> {
+        let Self { site, home, schema } = self;
+        let schema = read(schema, &|| site.described(&home))?;
+        Ok(Inline { site, home, schema })
+    }
 }
 
 /// What asked for a type, for the refusal that names two of them.
@@ -296,8 +311,9 @@ impl Claim {
     /// the `required` of a body's. Where each is stated does not matter: a
     /// component that two operations share, the same titled schema on two
     /// operations, and a body and a response that state it alike are one schema
-    /// and one type. A body and a response that differ only in what the API sets
-    /// are two schemas, and are refused.
+    /// and one type. A schema whose `required` names a property the API sets is
+    /// two schemas where a body and a response both state it, because the body
+    /// does not require that property, and they are refused.
     fn is_shared_by(&self, id: &TypeId, origin: &Origin) -> bool {
         self.id == *id && self.stated.as_ref() == origin.stated()
     }
@@ -388,6 +404,10 @@ impl Names {
 /// Driven by the reduced model rather than by the document's paths, so that the
 /// set is exactly the operations the wrappers are emitted for — an operation
 /// the reduction dropped states nothing this generator has to name.
+///
+/// The JSON bodies of an operation's success responses state one schema, and the
+/// response site is the first of them, with the home of the response that holds
+/// it. A refusal over the schema names that place and no other.
 pub(super) fn sites<'a>(api: &'a OpenAPI, model: &Document) -> Vec<Inline<&'a Schema>> {
     let components = components(api);
     let mut found = Vec::new();
@@ -569,7 +589,8 @@ pub(super) enum Reading<'a> {
     Json(Statement<'a>),
     /// The JSON bodies agree on one answer, and a success response has no
     /// `content` at all, such as a `204`. The call answers `Option` of the type,
-    /// and `None` is the answer with no body.
+    /// and `None` is the answer with no body. A planned call wraps that in the
+    /// `Option` of a dry run, so there `Some(None)` is the answer with no body.
     JsonOrEmpty(Statement<'a>),
 }
 
@@ -752,4 +773,34 @@ fn defined_by_typify(ty: &Type<'_>) -> bool {
         ty.details(),
         TypeDetails::Enum(_) | TypeDetails::Struct(_) | TypeDetails::Newtype(_)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A read of an inline schema that succeeds leaves the site and the home as
+    /// they were, and one that refuses is given the sentence that names the
+    /// schema, with the component where one states it.
+    #[test]
+    fn a_read_of_an_inline_schema_keeps_its_place_and_names_it_when_it_refuses() {
+        let at = |schema| Inline {
+            site: Site::response("getA"),
+            home: Home::Component("#/components/responses/A".to_owned()),
+            schema,
+        };
+
+        let Ok(read) = at(2).try_map(|schema, _| Ok::<_, String>(schema * 10)) else {
+            panic!("the read does not refuse");
+        };
+        assert_eq!(read.schema, 20);
+        assert_eq!(read.site, Site::response("getA"));
+        assert!(matches!(read.home, Home::Component(at) if at == "#/components/responses/A"));
+
+        let refused = at(2).try_map(|_, described| Err::<(), _>(described()));
+        assert_eq!(
+            refused.err().as_deref(),
+            Some("the response `#/components/responses/A` that `getA` answers with")
+        );
+    }
 }

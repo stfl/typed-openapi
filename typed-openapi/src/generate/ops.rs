@@ -19,7 +19,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::GenerateError;
-use super::names::{Answer, JsonBody, Names, Reading, Site, Statement, Unanswerable};
+use super::names::{Answer, Home, JsonBody, Names, Reading, Site, Statement, Unanswerable};
 use crate::model::{Body, Shape, declared, entry_of_flag};
 use crate::schema::{array_of, stated, typed};
 use crate::{Document, Operation};
@@ -821,8 +821,9 @@ fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStrea
 ///
 /// A `$ref` keeps the named schema's type and a schema the body states inline,
 /// on the operation or in the component it takes, gets one of its own, so a body
-/// the document describes is a body the generated code holds a caller to. `serde_json::Value` is left for the one
-/// case that earns it: a JSON body the document states no schema for at all.
+/// the document describes is a body the generated code holds a caller to.
+/// `serde_json::Value` is left for the one case that earns it: a JSON body the
+/// document states no schema for at all.
 ///
 /// The reduction follows a `requestBody` `$ref` first and refuses the document
 /// that holds one it cannot follow, so the refusal here is a guard against the
@@ -851,7 +852,9 @@ fn body_type(
 /// nowhere else: a response that cannot be followed, or JSON bodies that do not
 /// agree, are refused. Where a response with no `content` stands beside one with
 /// a JSON body, the answer is `Option` of the type, because the typed call reads
-/// an empty body as `null` and `None` is the answer with no body.
+/// an empty body as `null` and `None` is the answer with no body. A planned call
+/// answers `Option` of that, where `None` is the dry run, so there the answer
+/// with no body is `Some(None)`.
 fn response_type(
     op: &Operation,
     operation: &openapiv3::Operation,
@@ -877,26 +880,34 @@ fn response_type(
 /// Both causes name the operation through the `Operation` variant that wraps
 /// this, the status of each response involved, and what each states. The repair
 /// is an Overlay, which is the adopter's to write: the generator picking one of
-/// two schemas would be a correction nobody can read in a diff.
+/// two schemas would be a correction nobody can read in a diff. A body that a
+/// response component states is named with the component, because the Overlay
+/// goes there and every operation that takes the component is refused alike.
 fn unanswerable(refusal: Unanswerable<'_>) -> GenerateError {
     match refusal {
         Unanswerable::Unfollowed { status, source } => unsupported(format!(
             "its success response `{status}` cannot be followed: {source}"
         )),
         Unanswerable::Disagree { first, second } => unsupported(format!(
-            "its success responses do not agree on one JSON body, so the wrapper has no one \
-             type to return: {} and {}; an Overlay that gives them one schema, or removes \
-             one of them, mends it",
+            "the JSON bodies of its success responses do not agree on one schema, so the \
+             wrapper has no one type to return: {} and {}; an Overlay that gives them one \
+             schema, or removes one of them, mends it",
             said(&first),
             said(&second),
         )),
     }
 }
 
-/// Where a body stands and what it states, as a sentence part.
+/// Where a body stands and what it states, as a sentence part: the status and
+/// the media type, the response component where one states the body, and the
+/// schema.
 fn said(statement: &Statement<'_>) -> String {
+    let at = match &statement.home {
+        Home::Operation => String::new(),
+        Home::Component(at) => format!(" in `{at}`"),
+    };
     format!(
-        "`{}` under `{}` is {}",
+        "`{}` under `{}`{at} is {}",
         statement.status,
         statement.media,
         statement.answer.described()
@@ -909,11 +920,13 @@ fn said(statement: &Statement<'_>) -> String {
 /// A `$ref` is answered from the named schemas so that one pointing nowhere is
 /// refused by the reference it names, which is what an adopter can act on. A
 /// `$ref` that leads out of `#/components/schemas/` is refused by the reference
-/// too: the load refuses it in a parameter and in a request body, and reads no
-/// response, so a response is where it arrives here. Everything else was
-/// converted under [`Site`], and a site with no type would be this emitter and
-/// [`names::sites`](super::names::sites) disagreeing about what the document
-/// states — which they read through the same two functions, so they do not.
+/// too. The load refuses one as the schema of a parameter, of the items of a
+/// list, and of the JSON or multipart body that is sent, and refuses none in a
+/// response, so the schema of a response is where one arrives here. Everything
+/// else was converted under [`Site`], and a site with no type would be this
+/// emitter and [`names::sites`](super::names::sites) disagreeing about what the
+/// document states — which they read through the same two functions, so they do
+/// not.
 fn named_or_stated(
     schema: &ReferenceOr<Schema>,
     site: &Site,

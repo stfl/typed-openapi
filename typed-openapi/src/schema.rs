@@ -159,8 +159,9 @@ pub(crate) fn resolve_schema<'c>(
 /// The request body that an operation's `requestBody` stands for:
 /// `#/components/requestBodies/` hops followed.
 ///
-/// The reduction reads a body through this, and so does the generator, so the
-/// body a command line is built from and the type a wrapper takes are the
+/// The reduction reads a body through this, and the generator through
+/// [`resolve_request_body_at`], which is this and says where the entry stands. So
+/// the body a command line is built from and the type a wrapper takes are the
 /// entry of one `content` map, and a reference one of them follows is a
 /// reference the other follows.
 pub(crate) fn resolve_request_body<'c>(
@@ -1232,8 +1233,9 @@ fn is_token(word: &str) -> bool {
 /// parameters after the essence.
 ///
 /// The suffix is all that is read, so `application/*+json` names JSON too. A
-/// request body and a response pick their `content` key by this, and a request
-/// body that picks a range is refused as one ([`is_media_range`]).
+/// request body picks the key it is sent under by this, and a response is read at
+/// every key that this accepts, since the client sends no `Accept` header. A
+/// request body that picks a range is refused as one ([`is_media_range`]).
 #[must_use]
 pub(crate) fn is_json(media_type: &str) -> bool {
     essence(media_type) == "application/json" || essence(media_type).ends_with("+json")

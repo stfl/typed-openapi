@@ -481,21 +481,31 @@ Three things are worth knowing:
   component's schema and is optional where the component is. A schema that a
   component states inline is a type for each operation that takes the component,
   named after the operation. A schema's own `$ref` is followed to
-  `#/components/schemas/` and nowhere else: the load refuses any other in a
-  parameter or a request body, and the bless refuses it in a response, each by
-  the reference.
+  `#/components/schemas/` and nowhere else. The load refuses any other, by the
+  reference, as the schema of a parameter, of the items of a list, of the JSON
+  body that is sent and of a multipart body, and as a property of a flat body.
+  The bless refuses it as the schema of a JSON response. A reference anywhere
+  else is typify's: below the top of a response's schema, below the property of
+  a request body, in a body that is sent as bytes, or under a key that is not
+  sent. typify takes the last segment of it for the name of a component, so it
+  types the component of that name, and it panics where the document has none.
 - **A `title` makes a schema stated inline one type, and a name is one type.**
   A schema stated inline under a `title` is the type of that name. Where two
   places state the same schema under it, they take one type and the `struct` is
   written once: a component that two operations share, the same schema on two
   operations, and a body and a response that state it alike. Where they state
   different schemas, the bless is refused, since the second would take a type of
-  the first one's shape. Two schemas are the same as the generator gets them,
-  which for a request body leaves out what the API sets, so a body and a
-  response that differ only in a `readOnly` property are two schemas. The
-  refusal names each place, and where a component states the schema it names
-  the component and the operation that takes it. Repair: give one of the
-  schemas another `title` in an Overlay, at the component where there is one.
+  the first one's shape. Two schemas are the same as typify is given them, and
+  the type of a request body does not require what the API sets: a `readOnly`
+  property keeps its place in the type and leaves the `required` list. So a
+  schema whose `required` names a `readOnly` property is two schemas where a
+  body and a response both state it, and the bless is refused. The same schema
+  with the property not required is one. The refusal names each place, and
+  where a component states the schema it names the component and the operation
+  that takes it. For a response it names the first JSON body of the operation,
+  and the bodies state one schema, so a new `title` goes on each of them.
+  Repair: give one of the schemas another `title` in an Overlay, at the
+  component where there is one.
 - **A wrapper answers with the type its success responses state.** A success
   response is a status from `200` to `299` or the range `2XX`; `default` is not
   read. A response that is a `$ref` to `#/components/responses/` is followed, a
@@ -505,16 +515,20 @@ Three things are worth knowing:
   server may answer with any of them. A success response with no `content`, such
   as a `204`, stands beside the JSON body as an answer with no body, so the
   wrapper answers `Option` of the type and `None` is the answer with no body. A
-  success response whose `content` names no JSON media type adds nothing to the
-  type, so a `200` with a JSON body beside a `201` with a PDF answers with the
-  type. The answer is `NoContent` when no success response has a JSON body.
-  `NoContent` takes an empty body or any JSON and drops it, and a body that is not
-  JSON, such as a PDF, is a `client::Error::Decode`, because the typed call reads
-  JSON only. A response that cannot be followed is refused by name with the
-  reference, and so are JSON bodies that state different schemas, with the status
-  and the media type of each; `NoContent` is never the answer to a response the
-  generator could not read. The repair for the second is an Overlay that gives
-  the bodies one schema or removes one of them.
+  planned call (`Planned::send`) answers `Option` of that, where `None` is the
+  dry run, so there `Some(None)` is the answer with no body. A success response
+  whose `content` names no JSON media type adds nothing to the type, so a `200`
+  with a JSON body beside a `201` with a PDF answers with the type. The answer is
+  `NoContent` when no success response has a JSON body. `NoContent` takes an
+  empty body or any JSON and drops it, and a body that is not JSON, such as a
+  PDF, is a `client::Error::Decode`, because the typed call reads JSON only. A
+  response that cannot be followed is refused by name with the reference. So are
+  JSON bodies that do not state one schema, a body with no schema beside one
+  with a schema among them, with the status and the media type of each and the
+  response component that states it where there is one. `NoContent` is never the
+  answer to a response the generator could not read. The repair for the second
+  is an Overlay that gives the bodies one schema or removes one of them, made in
+  the component where there is one.
 - **A `content` key must be a media type.** A request body declared under a key
   with no `type/subtype` in it — `form-data` where `multipart/form-data` was
   meant — is a `LoadError` naming the operation and the key, rather than bytes

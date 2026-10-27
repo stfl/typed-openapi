@@ -4311,6 +4311,11 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Thing" }
     Empty: { description: Nothing }
+    Two:
+      description: OK
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Thing" } }
+        application/hal+json: { schema: { $ref: "#/components/schemas/Other" } }
     Same: { $ref: "#/components/responses/ThingResponse" }
     Loop: { $ref: "#/components/responses/Again" }
     Again: { $ref: "#/components/responses/Loop" }
@@ -4504,16 +4509,17 @@ fn reason_of(error: &GenerateError, op: &str) -> String {
     reason.clone()
 }
 
-/// Success responses whose JSON bodies disagree, the words of the refusal that
-/// names each body, and a label.
-const DISAGREEING: [(&str, &str, &[&str]); 6] = [
+/// A label, success responses whose JSON bodies disagree, and the words of the
+/// refusal that names each body, in the order it names them.
+const DISAGREEING: [(&str, &str, &[&str]); 7] = [
     (
         "two named schemas, in two responses",
         r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
               "201": { description: Created, content: { application/json: {
                 schema: { $ref: "#/components/schemas/Other" } } } } }"##,
         &[
-            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`200` under `application/json` in `#/components/responses/ThingResponse` is \
+             `#/components/schemas/Thing`",
             "`201` under `application/json` is `#/components/schemas/Other`",
         ],
     ),
@@ -4523,7 +4529,8 @@ const DISAGREEING: [(&str, &str, &[&str]); 6] = [
               "2XX": { description: OK, content: { application/json: {
                 schema: { type: object, properties: { b: { type: string } } } } } } }"##,
         &[
-            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`200` under `application/json` in `#/components/responses/ThingResponse` is \
+             `#/components/schemas/Thing`",
             "`2XX` under `application/json` is a schema stated inline",
         ],
     ),
@@ -4533,7 +4540,8 @@ const DISAGREEING: [(&str, &str, &[&str]); 6] = [
               "201": { $ref: "#/components/responses/ThingResponse" } }"##,
         &[
             "`200` under `application/json` is a JSON body with no schema",
-            "`201` under `application/json` is `#/components/schemas/Thing`",
+            "`201` under `application/json` in `#/components/responses/ThingResponse` is \
+             `#/components/schemas/Thing`",
         ],
     ),
     (
@@ -4555,6 +4563,16 @@ const DISAGREEING: [(&str, &str, &[&str]); 6] = [
         &[
             "`200` under `application/json` is `#/components/schemas/Thing`",
             "`200` under `application/hal+json` is `#/components/schemas/Other`",
+        ],
+    ),
+    (
+        "two media types of a response component",
+        r##"{ "200": { $ref: "#/components/responses/Two" } }"##,
+        &[
+            "`200` under `application/json` in `#/components/responses/Two` is \
+             `#/components/schemas/Thing`",
+            "`200` under `application/hal+json` in `#/components/responses/Two` is \
+             `#/components/schemas/Other`",
         ],
     ),
     (
@@ -4594,7 +4612,7 @@ fn json_bodies_that_state_different_schemas_are_refused_by_name() {
             rest = after;
         }
         assert!(
-            reason.contains("do not agree on one JSON body"),
+            reason.contains("do not agree on one schema"),
             "{label}: {reason}"
         );
     }
@@ -4643,10 +4661,10 @@ fn a_response_whose_schema_is_not_declared_is_refused_by_its_reference() {
     );
 }
 
-/// The load reads no response, so a response whose schema is a `$ref` outside
-/// `#/components/schemas/` reaches the generator, which refuses it by that
-/// reference. A parameter's schema and a request body's are refused by the load
-/// before the generator meets them.
+/// The load refuses no `$ref` in a response, so a response whose schema is a
+/// `$ref` outside `#/components/schemas/` reaches the generator, which refuses it
+/// by that reference. The places where the load refuses one first are in
+/// `the_load_refuses_a_reference_out_of_the_schemas_where_it_reads_the_schema`.
 #[test]
 fn a_response_schema_that_leads_out_of_the_schemas_is_refused_by_its_reference() {
     for reference in [
@@ -4991,6 +5009,10 @@ components:
     let error = Settings::new(document)
         .write_to(&dir)
         .expect_err("one name cannot be two shapes");
+    assert!(
+        matches!(&error, GenerateError::OneType { inline: true, rust, .. } if rust == "Draft"),
+        "{error:?}"
+    );
     assert_eq!(
         error.to_string(),
         "the response `#/components/responses/A` that `getA` answers with and the \
@@ -4999,8 +5021,8 @@ components:
     );
 }
 
-/// Two operations, a body and a response, each stating the schema `SCHEMA` on the
-/// operation itself.
+/// Two operations that each state a body and a response on the operation itself,
+/// in the four slots `BODY_A`, `ANSWER_A`, `BODY_B` and `ANSWER_B`.
 const STATED_TWICE: &str = r#"
 openapi: 3.0.3
 info: { title: Stated, version: "1.0" }
@@ -5024,7 +5046,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: ANSWER_B } } }
 "#;
 
-/// A schema stated inline under a `title`, and another that differs from it.
+/// A schema stated inline under a `title`.
 const DRAFT: &str = "{ title: Draft, type: object, properties: { c: { type: string } } }";
 
 /// What the bless step writes for [`STATED_TWICE`] with the four slots filled.
@@ -5051,7 +5073,13 @@ fn stating(name: &str, slots: [&str; 4]) -> Result<(String, String), GenerateErr
 #[test]
 fn a_titled_schema_that_is_stated_twice_alike_is_one_type() {
     let other = "{ type: object, properties: { z: { type: string } } }";
+    let sets_id = "{ title: Draft, type: object, properties: { id: { type: integer, \
+                   readOnly: true } } }";
     for (label, slots) in [
+        (
+            "a body and a response that state a read-only property they do not require",
+            [sets_id, sets_id, other, other],
+        ),
         (
             "the same response on two operations",
             [
@@ -5092,15 +5120,17 @@ fn a_titled_schema_that_is_stated_twice_alike_is_one_type() {
 
 /// A schema that differs, even in a word of its own, is a second shape under the
 /// name: the second wrapper would take a type of the wrong shape. The claim is
-/// held to the schema typify is given, which for a body is the one that does not
-/// require what the API sets, so a body and a response that differ only there are
-/// two schemas and are refused.
+/// held to the schema typify is given, and the type of a body does not require
+/// what the API sets. So one schema whose `required` names a `readOnly` property
+/// is two schemas where a body and a response both state it, and they are
+/// refused. Each refusal names where the two stand, the response of an operation
+/// among them.
 #[test]
 fn a_titled_schema_that_is_stated_twice_differently_is_refused() {
     let other = "{ type: object, properties: { z: { type: string } } }";
     let required_id = "{ title: Draft, type: object, required: [id], properties: { id: { \
                        type: integer, readOnly: true } } }";
-    for (label, slots) in [
+    for (label, slots, sentence) in [
         (
             "another property on a response",
             [
@@ -5109,10 +5139,14 @@ fn a_titled_schema_that_is_stated_twice_differently_is_refused() {
                 other,
                 "{ title: Draft, type: object, properties: { d: { type: string } } }",
             ],
+            "the response stated inline by `makeA` and the response stated inline by \
+             `makeB` are both `Draft` in Rust",
         ),
         (
-            "a body and a response that differ in what the API sets",
+            "a schema that requires a property the API sets, as a body and as a response",
             [required_id, required_id, other, other],
+            "the request body stated inline by `makeA` and the response stated inline by \
+             `makeA` are both `Draft` in Rust",
         ),
     ] {
         let error = stating("stated-unlike", slots).expect_err(label);
@@ -5120,5 +5154,134 @@ fn a_titled_schema_that_is_stated_twice_differently_is_refused() {
             matches!(&error, GenerateError::OneType { inline: true, rust, .. } if rust == "Draft"),
             "{label}: {error:?}"
         );
+        assert!(error.to_string().starts_with(sentence), "{label}: {error}");
     }
+}
+
+/// A document with one operation, `paths`, and a component `Thing`: the
+/// reference `#/definitions/Thing` leads out of `#/components/schemas/` to a
+/// schema that would resolve if it were followed.
+fn outside(name: &str, paths: &str) -> Result<(String, String), GenerateError> {
+    let dir = out(name);
+    let document = wrote(
+        &dir,
+        "outside.yaml",
+        &format!(
+            "openapi: 3.0.3\ninfo: {{ title: Outside, version: \"1.0\" }}\n\
+             servers: [{{ url: \"http://localhost:9999\" }}]\n{paths}\
+             components:\n  schemas:\n    Thing: {{ type: object }}\n"
+        ),
+    );
+    Settings::new(document).write_to(&dir)?;
+    Ok((
+        read(&dir.join("src/ops.rs")),
+        read(&dir.join("src/types.rs")),
+    ))
+}
+
+/// The paths of [`outside`] for a read with `parameter` and no response body.
+fn reading(parameter: &str) -> String {
+    format!(
+        "paths:\n  /a:\n    get:\n      operationId: getA\n      parameters: [{parameter}]\n      \
+         responses: {{ \"200\": {{ description: OK }} }}\n"
+    )
+}
+
+/// The paths of [`outside`] for a write whose request body has `content`.
+fn writing(content: &str) -> String {
+    format!(
+        "paths:\n  /a:\n    post:\n      operationId: makeA\n      requestBody:\n        content: \
+         {content}\n      responses: {{ \"200\": {{ description: OK }} }}\n"
+    )
+}
+
+/// Where the load reads a schema, a `$ref` outside `#/components/schemas/` is
+/// refused before the generator meets it: the schema of a parameter, of the items
+/// of a list, of the JSON body that is sent and of a multipart body, and a
+/// property of a flat body.
+#[test]
+fn the_load_refuses_a_reference_out_of_the_schemas_where_it_reads_the_schema() {
+    let out_of_the_schemas = "$ref: '#/definitions/Thing'";
+    for (label, paths) in [
+        (
+            "a parameter",
+            reading(&format!(
+                "{{ name: p, in: query, schema: {{ {out_of_the_schemas} }} }}"
+            )),
+        ),
+        (
+            "the items of a list",
+            reading(&format!(
+                "{{ name: p, in: query, schema: {{ type: array, items: {{ {out_of_the_schemas} }} }} }}"
+            )),
+        ),
+        (
+            "the JSON body that is sent",
+            writing(&format!(
+                "{{ application/json: {{ schema: {{ {out_of_the_schemas} }} }} }}"
+            )),
+        ),
+        (
+            "a multipart body",
+            writing(&format!(
+                "{{ multipart/form-data: {{ schema: {{ {out_of_the_schemas} }} }} }}"
+            )),
+        ),
+        (
+            "a property of a flat body",
+            writing(&format!(
+                "{{ application/json: {{ schema: {{ type: object, properties: {{ t: {{ \
+                 {out_of_the_schemas} }} }} }} }} }}"
+            )),
+        ),
+    ] {
+        let error = outside("outside-refused", &paths).expect_err(label);
+        assert!(
+            matches!(
+                &error,
+                GenerateError::Unusable(LoadError::Unresolvable { .. })
+            ),
+            "{label}: {error:?}"
+        );
+    }
+}
+
+/// Where the load reads no schema, the reference goes on to typify: a body that
+/// is sent as bytes and a body under a key that is not sent are not read, and a
+/// property of a response's schema is typify's own. typify reads a reference by
+/// its last segment, so it types the component of that name.
+#[test]
+fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
+    let out_of_the_schemas = "$ref: '#/definitions/Thing'";
+    for (label, paths, argument) in [
+        (
+            "a body sent as bytes",
+            writing(&format!(
+                "{{ application/octet-stream: {{ schema: {{ {out_of_the_schemas} }} }} }}"
+            )),
+            "body: Option<Vec<u8>>",
+        ),
+        (
+            "a body under a key that is not sent",
+            writing(&format!(
+                "{{ application/json: {{ schema: {{ type: object, properties: {{ a: {{ type: \
+                 string }} }} }} }}, application/xml: {{ schema: {{ {out_of_the_schemas} }} }} }}"
+            )),
+            "body: Option<&crate::types::MakeABody>",
+        ),
+    ] {
+        let (ops, _) = outside("outside-blessed", &paths).expect(label);
+        assert!(ops.contains(argument), "{label}:\n{ops}");
+    }
+
+    let nested = format!(
+        "paths:\n  /a:\n    get:\n      operationId: getA\n      responses:\n        \"200\": {{ \
+         description: OK, content: {{ application/json: {{ schema: {{ type: object, properties: \
+         {{ t: {{ {out_of_the_schemas} }} }} }} }} }} }}\n"
+    );
+    let (_, types) = outside("outside-nested", &nested).expect("typify reads it");
+    assert!(
+        types.contains("pub t: ::std::option::Option<Thing>"),
+        "the component named by the last segment:\n{types}"
+    );
 }

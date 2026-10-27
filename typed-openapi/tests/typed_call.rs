@@ -504,6 +504,40 @@ fn a_call_to_an_option_answers_none_for_a_204_and_some_for_a_body() {
     );
 }
 
+/// A planned call has an `Option` of its own: `None` is the dry run, nothing sent.
+/// For a call to `Option<T>` the answer with no body is `Some(None)`, so a caller
+/// that matches `None` as the `204` of a write takes a dry run for it.
+#[test]
+fn a_planned_call_to_an_option_tells_a_204_from_a_dry_run() {
+    let client = client();
+    let doc = client.document();
+    let call = || {
+        client
+            .call::<Option<Thing>>(doc.get("deleteThing").expect("the write"), id(5))
+            .expect("values")
+    };
+    let confirmed = Answers::new().commit();
+
+    let mut empty = http::Response::new(Vec::new());
+    *empty.status_mut() = StatusCode::NO_CONTENT;
+    let no_body = call()
+        .plan(&confirmed)
+        .expect("a plan")
+        .send(&Recorder::new().answering_with(empty));
+    let body = call()
+        .plan(&confirmed)
+        .expect("a plan")
+        .send(&Recorder::new().answering(StatusCode::OK, &json!({"id": 5})));
+    let dry_run = call()
+        .plan(&Answers::new())
+        .expect("a plan")
+        .send(&Recorder::new().strict());
+
+    assert_eq!(no_body.expect("a 204 is no body"), Some(None));
+    assert_eq!(body.expect("a 200 has one"), Some(Some(Thing { id: 5 })));
+    assert_eq!(dry_run.expect("nothing to fail"), None);
+}
+
 /// `NoContent` takes an empty body or any JSON and holds nothing. A body that is
 /// not JSON is a `Decode`, because the typed call reads JSON only, whatever the
 /// document says the response is: a wrapper for an operation that answers with a
