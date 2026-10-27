@@ -1247,3 +1247,39 @@ Rewriting the emitted file instead would mean knowing which generated field came
 from which property, and that is typify's naming rule copied. A schema that
 reduces to the placeholder's own Rust name is a `GenerateError::Reserved`
 naming it.
+
+**A vendor's prose is inert in a generated doc comment, and the real rustdoc
+judges it.** `Prose` in `src/generate/prose.rs` is the only place a `summary` or
+a `description` becomes a doc comment. It finds code blocks with
+`pulldown-cmark`, with the options rustdoc passes (`DIALECT`), so the container
+a block stands in cannot hide it. A fence that rustdoc reads as Rust names the
+language `text`; `names_a_language` keeps the word of a plain language such as
+`json` and renames anything else, an attribute, `ignore-wasm32`, `{.json}`, or
+an entity that spells `rust`. An indented block has no word to change, so its
+indentation is capped. A `<` outside code is `\<`, a bidirectional control is
+its code point, and a carriage return is a line break. The crate depends on the
+version of `pulldown-cmark` that rustdoc is built with and on no newer one,
+because two versions read one text as different blocks (`- [ ]     x` is code to
+0.11 and text to 0.13), and a parser that disagrees with rustdoc is a guarantee
+about the wrong program. A move waits for rustdoc's.
+
+The parser has to be asked about the text that rustdoc asks it about, and that
+is not the text the generator writes. `rustfmt` rewrites the margins of a
+`/* */` comment: a leading tab is four spaces, any other white space where a
+line starts goes, and so does white space at its end (`margins`). rustc takes a
+column of stars out of the comment when every line after the first starts with
+one, along with the indentation in front of it, and leaves the first line at the
+column of its item, so a paragraph above a `***` is a code block; `starred`
+opens such a comment on a second blank line. rustdoc takes off the indentation
+that all lines share (`flush`). Each of these changes the answer to "is this a
+code block" for some text, and none shows in the generator's own text.
+
+So the judges are the programs, and an edit to `prose.rs` is finished when they
+pass. `tests/generate.rs` hands the generated comments to `rustdoc --test`,
+`rustc` and `rustdoc` for a matrix of containers and info strings, for a seeded
+random corpus, and for the control document. A list of shapes passes while a
+shape that nobody listed runs, and every hole in this module was one: the corpus
+is there to go past the list. `settled` reads the text again after every change,
+because one change can make the next necessary: escaping the `<` that opens an
+HTML block leaves lines for the parser, and one of them may open a fence. Its
+doc says why the loop ends.

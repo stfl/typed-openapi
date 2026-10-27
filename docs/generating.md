@@ -124,6 +124,25 @@ commit, to review and to remember.
 
 [`Summary`]: https://docs.rs/typed-openapi/latest/typed_openapi/summary/struct.Summary.html
 
+### The vendor's descriptions
+
+A `summary` or a `description` in the vendor's document is a doc comment in
+`src/types.rs` or `src/ops.rs`, and `cargo test --doc` and `cargo doc` read it as
+Markdown. The generator keeps the words and changes the Markdown where it would
+run, stop your build or put the vendor's markup on your pages:
+
+| The vendor wrote | The doc comment holds |
+|---|---|
+| a code block that rustdoc reads as Rust: a fence with no language or with `rust`, `ignore`, `{.json}` or `ignore-wasm32`, at the top or in a block quote or a list item | the same block, with the language `text` |
+| a fence that names a language rustdoc leaves alone, such as `json` | the fence as written |
+| an indented code block | the text, indented by three columns at most, so it is a paragraph |
+| a `<` outside a code block and a code span | `\<`, which the page shows as `<` |
+| a character that changes the direction of text (U+202A to U+202E, U+2066 to U+2069) | its code point, `\u{202e}`, because the compiler refuses the character in a comment |
+| a carriage return, alone or before a line feed | a line break |
+
+The command line's `--help` reads the model and not the doc comments, so it shows
+the document's text as written.
+
 ## `Settings`
 
 ```rust
