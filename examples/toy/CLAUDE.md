@@ -16,6 +16,11 @@ command line cares, `examples/toy/spec/cli.yaml`. `just bless` must
 leave `git diff` empty when nothing upstream has changed — a non-empty diff
 means either the vendor moved or the generator did.
 
+`examples/toy/xtask` reads `env!("CARGO_MANIFEST_DIR")`, so it blesses the tree
+it was built in. A scratch copy of the tree that shares the worktree's
+`CARGO_TARGET_DIR` blesses the worktree itself, because cargo does not build the
+copy again: give each copy its own target directory, or `touch` its files.
+
 **A type the adopter owns is held to the document by a test, because nothing
 else holds it.** A newtype the generator writes the whole of compiles the
 document's `pattern` into its own `FromStr`, so it cannot drift. A wrapper

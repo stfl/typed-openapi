@@ -1460,14 +1460,22 @@ the crate follows [Semantic Versioning][semver].
     which is not read (below), so it is `SevEntryDate` as it was.
   - An optional, nullable property that was an array, a map or an integer with
     a default is an `Option` too: it was a `Vec`, a `Map` or an `i64` that took
-    its default where the key was missing and refused a `null`. These are ten
+    its default where the key was missing and refused a `null`. These are twelve
     fields such as `GetChangesFromModelResponse.objects` and
     `ModelContact.status`.
   - A component that is nullable is a newtype over an `Option`, because every
     use of it takes `null`: `SevCompareHash(String)` is
-    `SevCompareHash(Option<SevCompareHashInner>)`, and the `pattern` and its
-    `FromStr` are on `SevCompareHashInner`. Its three uses are optional fields
-    and read `Option<SevCompareHash>`.
+    `SevCompareHash(Option<SevCompareHashInner>)`. The `pattern` and its
+    `FromStr` move to `SevCompareHashInner`, and so do `Eq`, `Hash`, `Ord`,
+    `PartialOrd`, `Display`, `TryFrom<&str>`, `TryFrom<String>`,
+    `From<_> for String` and a `Deref` to the `String`. `SevCompareHash` derives
+    `Deserialize`, `Serialize`, `Clone`, `Debug` and `PartialEq`, and derefs to
+    the `Option`. Its three uses are optional fields and read
+    `Option<SevCompareHash>`. Repair: build one as
+    `SevCompareHash(Some(SevCompareHashInner::try_from(text)?))` and read the
+    text through the inner type, or write an Overlay that removes `nullable`
+    from the component, which keeps `SevCompareHash(String)` and refuses the
+    `null` again.
   - `nullable` beside a `$ref` is not read. OpenAPI 3.0.3 says that properties
     added to a Reference Object "SHALL be ignored", and the object model does
     not hold them, so `{ $ref: X, nullable: true }` is `X` in the type as it
@@ -1483,10 +1491,10 @@ the crate follows [Semantic Versioning][semver].
   and writes none of them until the document, both emitters, the blob's round
   trip and `rustfmt` have all said yes. A refused bless leaves the committed
   artefacts as they were, byte for byte. Each file is then written beside its
-  destination as `<name>.bless-tmp` and renamed over it once every file is
-  written, so a disk that fills part-way stops the bless before any file is
-  replaced and the files beside are removed. Repair: none. What an adopter can
-  see besides:
+  destination as `<name>.bless-tmp`, flushed to the disk and renamed over it
+  once every file is written, so a disk that fills part-way stops the bless
+  before any file is replaced and the files beside are removed. Repair: none.
+  What an adopter can see besides:
   - A file at a destination is replaced and not written through: a symlink
     there becomes a file, and the new file takes the permissions that the
     process creates a file with, where the old one kept its own.
@@ -1497,6 +1505,10 @@ the crate follows [Semantic Versioning][semver].
   - `GenerateError::Write` also names a destination that is a directory, which
     is refused before any file is placed, and one that a file written beside it
     could not be renamed to.
+  - A directory that the bless made for a file stays, empty, when the bless
+    stops after it. The renames are one step each and not one step together, so
+    a power loss between two of them leaves some files new and the rest old.
+    Repair: run the bless again.
 
 ### Removed
 

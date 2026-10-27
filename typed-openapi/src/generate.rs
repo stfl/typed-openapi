@@ -606,7 +606,8 @@ pub enum GenerateError {
         /// it was making: under the directory given to [`Settings::write_to`],
         /// or where [`Settings::summary_page`] points.
         path: PathBuf,
-        /// The error the operating system returned.
+        /// The error the operating system returned, or the one this crate builds
+        /// for a destination that is a directory.
         #[source]
         source: io::Error,
     },
@@ -766,11 +767,13 @@ pub enum GenerateError {
     RustfmtSpawn {
         /// The generated file `rustfmt` was to format.
         path: PathBuf,
-        /// The error the operating system returned.
+        /// The error the operating system returned, or the one this crate builds
+        /// when it cannot take the standard input of the process.
         #[source]
         source: io::Error,
     },
-    /// `rustfmt` ran and exited with a failure.
+    /// `rustfmt` ran and exited with a failure, or printed text that is not
+    /// UTF-8.
     #[error("rustfmt rejected the generated {path}")]
     RustfmtFailed {
         /// The generated file `rustfmt` was to format.

@@ -5292,13 +5292,11 @@ fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
 
 /// The vendor's document as the first bless saw it: one operation, one type.
 ///
-/// The input of the probe `A4/docs/half.yaml` behind F-46 was refused because the
-/// generator did not follow the `$ref` of a list parameter, and it follows one
-/// now, so that document blesses. This one is refused for a reason that is the
+/// The revision that [`REVISION`] adds is refused for a reason that is the
 /// generator's own: `getOther` has two success responses that state two schemas,
 /// and the wrapper cannot answer with both. The refusal comes from the step that
-/// writes `ops.rs`, after the step that writes `types.rs`, which is the order
-/// that left a half-finished bless on disk.
+/// writes `ops.rs`, after the step that writes `types.rs`, so a bless that wrote
+/// each file as it went would have replaced `types.rs` by then.
 const THINGS: &str = r##"
 openapi: 3.0.3
 info: { title: Things, version: "1.0" }
@@ -5458,7 +5456,7 @@ fn a_bless_the_document_refuses_leaves_the_committed_artefacts_as_they_were() {
 
 /// A bless that the file system stops places nothing either. Every artefact is
 /// written beside its destination before the first is put in place, so the last
-/// one failing leaves the first three where they were, and removes what was
+/// one failing leaves the first four where they were, and removes what was
 /// written beside them.
 ///
 /// A file stands where the summary page's directory would be made, which is the
@@ -5630,6 +5628,12 @@ components:
         beside: { $ref: "#/components/schemas/Owner", nullable: true }
         nullable: { type: boolean }
         maybe: { type: string, nullable: true }
+        list: { type: array, nullable: true, items: { type: string } }
+        table: { type: object, nullable: true, additionalProperties: { type: string } }
+        ratio: { type: integer, nullable: true, default: 3 }
+        plain_list: { type: array, items: { type: string } }
+        plain_table: { type: object, additionalProperties: { type: string } }
+        plain_ratio: { type: integer, default: 3 }
     Owner:
       type: object
       properties:
@@ -5656,7 +5660,9 @@ fn nullable(name: &str) -> (String, String) {
     )
 }
 
-/// The type a generated struct gives a field, as its tokens print with no space.
+/// The type a generated struct gives a field, as its tokens print with no space
+/// and no trailing comma, which `rustfmt` writes in a list of arguments that runs
+/// over several lines.
 fn field_type(types: &str, name: &str, field: &str) -> String {
     let file: syn::File = syn::parse_str(types).expect("the generated types parse");
     let found = file.items.iter().find_map(|item| {
@@ -5678,10 +5684,11 @@ fn field_type(types: &str, name: &str, field: &str) -> String {
         .to_token_stream()
         .to_string()
         .replace(' ', "")
+        .replace(",>", ">")
 }
 
 /// A field and the type the bless step gives it.
-const NULLABLE_FIELDS: [(&str, &str); 15] = [
+const NULLABLE_FIELDS: [(&str, &str); 21] = [
     ("note", "::std::option::Option<::std::string::String>"),
     ("count", "::std::option::Option<i64>"),
     ("flag", "::std::option::Option<bool>"),
@@ -5699,6 +5706,23 @@ const NULLABLE_FIELDS: [(&str, &str); 15] = [
     ("money", "::std::option::Option<crate::Money>"),
     // Not required, so an `Option` already, and not an `Option` of one.
     ("maybe", "::std::option::Option<::std::string::String>"),
+    // Not required. Without the word the same three are a `Vec`, a map and an
+    // integer that takes its default, and with it each one is an `Option`.
+    (
+        "list",
+        "::std::option::Option<::std::vec::Vec<::std::string::String>>",
+    ),
+    (
+        "table",
+        "::std::option::Option<::std::collections::HashMap<::std::string::String,::std::string::String>>",
+    ),
+    ("ratio", "::std::option::Option<i64>"),
+    ("plain_list", "::std::vec::Vec<::std::string::String>"),
+    (
+        "plain_table",
+        "::std::collections::HashMap<::std::string::String,::std::string::String>",
+    ),
+    ("plain_ratio", "i64"),
     // What admits `null` already stays what it was.
     ("anything", "::serde_json::Value"),
     // What says nothing about `null` is not an `Option`.
@@ -5710,9 +5734,9 @@ const NULLABLE_FIELDS: [(&str, &str); 15] = [
 ];
 
 /// F-17. `nullable: true` is how a vendor says "or `null`", and typify reads it
-/// as a keyword it does not know, so a required, nullable property was a `String`
-/// and the vendor's own `null` failed to decode. Every shape that states it is an
-/// `Option` of what the schema describes, and a required one stays required.
+/// as a keyword it does not know, so the generator says it in a spelling that
+/// typify turns into an `Option`. Every shape that states it is an `Option` of
+/// what the schema describes, and a required one stays required.
 #[test]
 fn a_nullable_schema_is_an_option_wherever_the_type_is_written() {
     let (types, _) = nullable("nullable-fields");

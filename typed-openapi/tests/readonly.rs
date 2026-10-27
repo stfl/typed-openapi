@@ -1033,6 +1033,85 @@ fn every_spelling_of_read_only_is_optional_in_the_type() {
     }
 }
 
+/// Whether the type refuses a body that leaves out the key of `field`. typify
+/// writes an `Option` whose key must be there with a `deserialize_with` and one
+/// whose key may be missing with a `default`, and the type of the field is an
+/// `Option` in both.
+fn requires_the_key(body: &str, field: &str) -> bool {
+    let head = format!("pub {field}: ");
+    let start = body
+        .find(&head)
+        .unwrap_or_else(|| panic!("no `{head}` in\n{body}"));
+    body.get(..start)
+        .expect("a boundary")
+        .lines()
+        .rev()
+        .skip(1)
+        .take_while(|line| line.trim_start().starts_with("#["))
+        .any(|line| line.contains("deserialize_with"))
+}
+
+/// The ways a property is nullable and the API sets it. A `$ref` erases the word
+/// beside it, and `allOf` of the one reference is the spelling that keeps it, so
+/// the wrapper is where `nullable` and the flag stand together.
+const NULLABLE_SPELLINGS: [(&str, &str, &str); 3] = [
+    (
+        "on the property",
+        "{ type: integer, readOnly: true, nullable: true }",
+        "",
+    ),
+    (
+        "beside a wrapper of one element",
+        "{ allOf: [{ $ref: '#/components/schemas/Id' }], readOnly: true, nullable: true }",
+        "    Id: { type: integer }\n",
+    ),
+    (
+        "on the schema inside a wrapper",
+        "{ allOf: [{ $ref: '#/components/schemas/Id' }], nullable: true }",
+        "    Id: { type: integer, readOnly: true }\n",
+    ),
+];
+
+/// A property the API sets and that admits `null` is an `Option` the request body
+/// does not require, whichever way the document spells it: the flag is gone from
+/// the command line exactly where the type stops requiring the key, and `null`
+/// does not bring the requirement back.
+#[test]
+fn a_nullable_property_the_api_sets_is_not_required_of_the_type_a_request_reaches() {
+    for (label, id, extra) in NULLABLE_SPELLINGS {
+        let doc = loaded(&pet_with(id, extra));
+        assert_eq!(
+            operation(&doc, "createPet").body().read_only(),
+            &["id"],
+            "{label}"
+        );
+        let types = types_of("readonly-nullable", &pet_with(id, extra));
+        let pet = struct_of(&types, "Pet");
+        assert!(optional(field_type(pet, "id")), "{label}:\n{pet}");
+        assert!(!requires_the_key(pet, "id"), "{label}:\n{pet}");
+    }
+}
+
+/// The control of the test above: a property that admits `null` and that the API
+/// does not set is an `Option` whose key must be there, so `requires_the_key`
+/// tells a required `Option` from an optional one.
+#[test]
+fn a_nullable_property_the_api_does_not_set_is_a_key_that_must_be_there() {
+    for id in [
+        "{ type: integer, nullable: true }",
+        "{ allOf: [{ $ref: '#/components/schemas/Id' }], readOnly: false, nullable: true }",
+        "{ allOf: [{ $ref: '#/components/schemas/Id' }], nullable: true }",
+    ] {
+        let types = types_of(
+            "readonly-nullable-control",
+            &pet_with(id, "    Id: { type: integer }\n"),
+        );
+        let pet = struct_of(&types, "Pet");
+        assert!(optional(field_type(pet, "id")), "{id}:\n{pet}");
+        assert!(requires_the_key(pet, "id"), "{id}:\n{pet}");
+    }
+}
+
 /// `required` takes effect on a response (OpenAPI 3.0.3), so a type that only
 /// responses reach keeps it: sevdesk-cli's five required read-only properties are
 /// all of this kind.

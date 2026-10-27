@@ -81,6 +81,44 @@ someone deciding whether to use the crate, `docs/*.md` is reference for someone
 looking one thing up, this file and the directory notes it lists are for an
 agent changing the code.
 
+## Running the gate and the tests
+
+`just gate` stops at `blessed` while a bless output is uncommitted: commit the
+bless, then gate the commit. Run `just fmt` first, because a fmt diff stops the
+gate at its first step. Edit nothing in the worktree while a gate runs: its
+`package` recipe sees a dirty tree and the run is void.
+
+Clippy reaches test code, and a `just check` that ran before the last edit does
+not see what that edit adds. Run `cargo clippy --workspace --all-features
+--all-targets -- -D warnings` after the last edit and before every commit and
+amend; the gate's `check` also runs `cargo doc` with warnings denied. The
+thresholds are in `clippy.toml` and the denied lints in the lint block of
+`Cargo.toml`. Four fixes are not plain from the message: a case table that trips
+`too_many_lines` goes into a module `const` or a `fn` that returns it; a `mod
+tests` in `src/` denies `unwrap_used` and `expect_used`, so it writes `let … else
+{ panic!(..) }`; a long string is built with `write!(s, ..)` after `use
+std::fmt::Write as _`, because `format_push_string` is denied; and
+`string_slice` and `indexing_slicing` are answered by `split_once`,
+`strip_prefix` and `<[T; N]>::try_from`.
+
+The `warning[duplicate]` lines of `cargo-deny` in a green gate are bans and not
+compiler warnings: grep the log for `^warning:` and `^error`.
+
+A public variant that changes needs a CHANGELOG line for every trait impl it
+takes with it (`#[from]` gives a `From`).
+
+`rustfmt.toml` sets `format_code_in_doc_comments = true`. A test directory under
+`target/tmp` inherits it, because the nearest `rustfmt.toml` wins and nothing
+merges, and the tarball that the `package` recipe tests has no `rustfmt.toml`: a
+test that needs a setting writes its own.
+
+A test is a process of its own under nextest and a thread of a shared one under
+`cargo test`, so each test that calls `out(name)` takes a directory name of its
+own, and no `LazyLock` is shared by both. A new `[[test]]` target with
+`required-features` runs in the `package` recipe at once.
+`typed-openapi/tests/fixtures/shapes.json` is the library's own fixture for
+`fits` and a copy of no toy file.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins a dated nightly because four of `rustfmt.toml`'s

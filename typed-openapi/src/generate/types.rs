@@ -87,11 +87,17 @@
 //!
 //! A schema of one type says it in place (`type: [T, null]`), which typify reads
 //! as an `Option` of what the rest of the schema describes, and names the type
-//! as it names it without the word. Any other schema (a reference, a composition, one with no
-//! `type`) is one member of an `anyOf` beside `{type: null}`, and what it says
-//! about itself stays outside it, where typify and [`NotRequired`] read a title,
-//! a description, a default and `readOnly`. A schema that admits `null` already
-//! is left as it is, so no type is an `Option` of an `Option`.
+//! as it names it without the word. Any other schema (a reference, a
+//! composition, one with no `type`) is one member of an `anyOf` beside
+//! `{type: null}`, and what it says about itself stays outside it, where typify
+//! reads a title, a description and a default. A schema that admits `null`
+//! already is left as it is, so no type is an `Option` of an `Option`.
+//!
+//! The rewrite runs after [`NotRequired`] has read the schemas. That visitor reads
+//! `readOnly` as the reduction does, and the reduction reads an `allOf` of one
+//! element, which is the spelling that carries `nullable` beside a reference and
+//! which the rewrite puts inside an `anyOf`. A property that the API sets and that
+//! admits `null` is an `Option` that a request does not require, in every spelling.
 //!
 //! The rewrite reads the typed schema and not the JSON, as [`OpenWithAMap`] does,
 //! because the JSON also holds `default` and `example` data, and a property that
@@ -199,6 +205,7 @@ pub(super) fn emit(
     let mut definitions = schemas(definitions)?;
     let mut stated = inline(stated)?;
     set_by_the_api(api, model, &mut definitions, &mut stated);
+    admit_null(&mut definitions, &mut stated);
 
     let mut space = TypeSpace::new(&settings);
     space
@@ -445,7 +452,6 @@ fn schemas(definitions: Vec<Definition>) -> Result<Vec<(String, Schema)>, Genera
 fn typify_schema(value: Value) -> Result<Schema, serde_json::Error> {
     let mut schema: Schema = serde_json::from_value(value)?;
     OpenWithAMap.visit_schema(&mut schema);
-    AdmitsNull.visit_schema(&mut schema);
     Ok(schema)
 }
 
@@ -714,6 +720,21 @@ impl Visitor for OpenWithAMap {
     }
 }
 
+/// Says `nullable: true` as a schema that admits `null` in every schema typify
+/// is given, the named ones and the inline ones.
+///
+/// It runs after [`set_by_the_api`], because that reads a property as the
+/// reduction does, and the reduction reads an `allOf` of one element that
+/// [`AdmitsNull`] puts in an `anyOf`.
+fn admit_null(definitions: &mut [(String, Schema)], stated: &mut [Inline<Schema>]) {
+    for (_, schema) in definitions {
+        AdmitsNull.visit_schema(schema);
+    }
+    for inline in stated {
+        AdmitsNull.visit_schema(&mut inline.schema);
+    }
+}
+
 /// Says `nullable: true` as a schema that admits `null`, at every depth.
 struct AdmitsNull;
 
@@ -751,8 +772,9 @@ fn admits_null(schema: &SchemaObject) -> bool {
 /// A schema of one type says it in place (`type: [T, null]`), because typify
 /// reads that spelling as an `Option` of what the rest of the schema describes
 /// and keeps the name it would have given the type. Any other schema (a
-/// reference, a composition, an `enum`) is one member of an `anyOf` beside
-/// `null`, and what the schema said about itself stays outside it.
+/// reference, a composition, one with no `type`, a list of types) is one member
+/// of an `anyOf` beside `null`, and what the schema said about itself stays
+/// outside it.
 fn admitting_null(mut schema: SchemaObject) -> SchemaObject {
     if let Some(SingleOrVec::Single(only)) = schema.instance_type.as_mut() {
         let only = **only;
@@ -888,8 +910,10 @@ fn behind_a_reference(value: &mut Value, owned: &[Owned]) -> Result<(), Generate
 /// `nullable`, which is about the value and not about its shape: the type the
 /// adopter owns is not the one that says whether the vendor may send `null`.
 ///
-/// Which keys those are is schemars' answer rather than a list here, because
-/// schemars is what typify reads the schema with.
+/// The metadata is schemars' answer rather than a list here, because schemars is
+/// what typify reads the schema with. `nullable` is the one extension kept, and
+/// it is named by [`NULLABLE`], because schemars holds it with every other key
+/// it has no field for.
 fn reference_to(owned: &Owned, schema: Value) -> Result<Value, GenerateError> {
     let unreadable = |source: serde_json::Error| {
         GenerateError::Unsupported(format!(
@@ -940,9 +964,10 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use schemars::schema::Schema;
+    use schemars::visit::Visitor as _;
     use serde_json::json;
 
-    use super::{NotRequired, PLACEHOLDER, owned, typify_schema};
+    use super::{AdmitsNull, NotRequired, PLACEHOLDER, owned, typify_schema};
 
     /// Named schemas as typify reads them, from the JSON of each.
     fn named(schemas: Vec<(&str, serde_json::Value)>) -> BTreeMap<String, Schema> {
@@ -1050,17 +1075,18 @@ mod tests {
 
     /// What typify is given for `schema`, as JSON.
     fn given(schema: serde_json::Value) -> serde_json::Value {
-        let schema = typify_schema(schema).unwrap_or_else(|error| panic!("a schema: {error}"));
+        let mut schema = typify_schema(schema).unwrap_or_else(|error| panic!("a schema: {error}"));
+        AdmitsNull.visit_schema(&mut schema);
         serde_json::to_value(schema).unwrap_or_else(|error| panic!("JSON: {error}"))
     }
 
     /// `nullable: true` is said as a schema that admits `null`, in the spelling
     /// typify turns into an `Option`.
     ///
-    /// The schemas a document gives as a hand-built value are the ones no
-    /// document test reaches: `openapiv3` reads one `type`, so a list of types
-    /// that holds `null` already, or two types and no `null`, is a schema that
-    /// only this table builds.
+    /// A document states most of these rows, and `tests/generate.rs` holds them
+    /// through the bless. The table also holds the lists of types, which no
+    /// document can state: `openapiv3` reads one `type`, so a list of types with
+    /// `null` in it or without is a schema that only a hand-built value builds.
     #[test]
     fn nullable_is_said_as_a_schema_that_admits_null() {
         let reference = json!({ "$ref": "#/definitions/Thing" });
@@ -1106,6 +1132,11 @@ mod tests {
                 "a schema that holds anything",
                 json!({ "nullable": true, "description": "d" }),
                 json!({ "description": "d" }),
+            ),
+            (
+                "a schema that holds anything and an extension",
+                json!({ "nullable": true, "x-vendor": 1 }),
+                json!({ "x-vendor": 1 }),
             ),
             (
                 "the type null",

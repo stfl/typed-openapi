@@ -332,14 +332,18 @@ and `rustfmt` have all said yes. A vendor revision that the generator refuses
 therefore leaves the committed artefacts as they were, byte for byte, and not a
 new `types.rs` beside the old `ops.rs` and the old blob.
 
-Each file is then written beside its destination as `<name>.bless-tmp`, and
-renamed over it once every file is written. A disk that fills, or a path that
-cannot be made, stops the bless before any file is replaced, and the files
-written beside are removed, and so does a destination that is a directory. A
-file at a destination is replaced and not written through, so a symlink there
-becomes a file. A rename that fails all the same, after another succeeded,
-leaves the files already renamed: the first pass has shown that a file can be
-written there, so the file system refused it.
+Each file is then written beside its destination as `<name>.bless-tmp`, flushed
+to the disk, and renamed over the destination once every file is written. A disk
+that fills, or a path that cannot be made, stops the bless before any file is
+replaced, and the files written beside are removed, and so does a destination
+that is a directory. A directory that the bless made for a file stays, empty,
+when the bless stops. A file at a destination is replaced and not written
+through, so a symlink there becomes a file. A rename that fails all the same,
+after another succeeded, leaves the files already renamed: the first pass has
+shown that a file can be written there, so the file system refused it. The
+renames are one step each and not one step together, and the directory is not
+flushed after them, so a power loss between two of them leaves some files new
+and the rest old. Run the bless again and it writes the rest.
 
 The answer is what was written, so a run that asked for no page reports four
 paths and a script that copies or checks the answer copies or checks four files.
@@ -558,12 +562,10 @@ Three things are worth knowing:
 - **You add no dependency.** `bon` is named through `typed_openapi::bon`, so the
   proc-macro that expands the attribute is the version the generator emitted
   syntax for.
-- **It costs compile time, and no more than that.** Turning it on puts eleven
-  more crates in the dependency graph of the crate that holds the generated
-  code, two of them proc-macros. A clean build of that crate takes about two
-  seconds longer (3.7 s to 5.7 s), and the binary grows by 4 KB. A build that
-  leaves the feature off resolves none of them. [builders.md](builders.md) has
-  the table and how it was measured.
+- **It costs build time.** Turning it on adds crates to the dependency graph of
+  the crate that holds the generated code, and a build that leaves the feature
+  off resolves none of them. [builders.md](builders.md) has the table and how it
+  was measured.
 
 ## Requirements and limits
 
@@ -674,8 +676,10 @@ Three things are worth knowing:
 - **`nullable: true` makes the type an `Option`.** It is how an OpenAPI 3.0
   document says "or `null`", and the generated type reads the `null` the vendor
   sends. A property that the schema requires and calls nullable is an `Option`
-  whose key has to be there, and an optional one is an `Option`, as it is
-  without the keyword. Every shape that states it is read: a scalar, an enum, an
+  whose key has to be there. An optional one is an `Option` too, and so is an
+  optional array, map or scalar with a default, which without the keyword is a
+  `Vec`, a map or a value that takes its default. Every shape that states it is
+  read: a scalar, an enum, an
   object stated inline, an array and its items, a composition, and a format you
   own through `replace` (`Option<money::Money>`). A schema that holds anything
   admits `null` already and stays `serde_json::Value`. A component that is

@@ -11,16 +11,26 @@
 //! refused leaves the tree as it found it.
 //!
 //! The writing is two passes. Each file is written beside its destination
-//! first, so a full disk or a path that cannot be made stops the bless while
-//! every file in the tree is still the one that was committed, and what was
-//! written beside is removed. Only when every file is written is each renamed
-//! over its destination, which a file system does as one step: a reader sees the
-//! old file or the new one and never a part of either. A destination that is a
-//! directory is refused in the first pass, where nothing is placed yet. A rename
-//! that fails all the same, after another has succeeded, leaves the files that
-//! were renamed in place: the pass before it has shown that a file can be
-//! written there, so what refuses it is the file system.
+//! first and flushed to the disk, so a full disk or a path that cannot be made
+//! stops the bless while every file in the tree is still the one that was
+//! committed, and what was written beside is removed. Only when every file is
+//! written is each renamed over its destination, which a file system does as
+//! one step: a reader sees the old file or the new one and never a part of
+//! either. A destination that is a directory is refused in the first pass,
+//! where nothing is placed yet. A rename that fails all the same, after another
+//! has succeeded, leaves the files that were renamed in place: the pass before
+//! it has shown that a file can be written there, so what refuses it is the
+//! file system.
+//!
+//! The renames are one step each and not one step together, and the directory
+//! that holds them is not flushed. A power loss between two of them, or before
+//! the disk has the directory, leaves some files new and the rest old, and the
+//! bless run again writes the rest. Making the directories the first pass needs
+//! is not undone: a bless that stops there leaves them, empty. The mode of a
+//! destination is not copied to the file that replaces it, and a symlink there
+//! becomes a file.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -58,7 +68,9 @@ impl Artefacts {
 /// bound for.
 ///
 /// Dropping it removes every file that is still beside, so a bless that stops
-/// leaves none of its own behind. A file that was renamed is not there to remove.
+/// leaves none of its own behind. A removal that fails leaves its file and is not
+/// reported, because a drop has nobody to report to. A file that was renamed is
+/// not there to remove.
 #[derive(Default)]
 struct Beside(Vec<(PathBuf, PathBuf)>);
 
@@ -84,7 +96,12 @@ impl Beside {
         // Listed before it is written, because a write that fails half-way
         // leaves a file to remove.
         self.0.push((beside.clone(), path.to_path_buf()));
-        fs::write(&beside, contents).map_err(failed(path))
+        fs::File::create(&beside)
+            .and_then(|mut file| {
+                file.write_all(contents)?;
+                file.sync_all()
+            })
+            .map_err(failed(path))
     }
 
     /// Rename each file over its destination.
