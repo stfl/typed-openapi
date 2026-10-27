@@ -602,11 +602,17 @@ fn add_body(
         } => {
             let ty = body_type(op, media_type, operation, names)?;
             let name = out.argument(&format_ident!("body"), "body", "is the request body");
+            // The operation is named so that an argument that does not serialise
+            // says whose body it was, as `fits` does in `check_body`.
+            let id = op.id();
             let argument = BodyArgument {
                 ty: quote! { &#ty },
-                call: quote! { .json(crate::to_json(#name)?) },
+                call: quote! { .json(crate::to_json(#id, #name)?) },
                 payload: quote! {
-                    #name.map(crate::to_json).transpose()?.map(typed_openapi::Payload::Json)
+                    #name
+                        .map(|body| crate::to_json(#id, body))
+                        .transpose()?
+                        .map(typed_openapi::Payload::Json)
                 },
                 name,
             };

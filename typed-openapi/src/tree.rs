@@ -171,20 +171,11 @@ pub fn command(op: &Operation) -> Command {
         cmd = cmd.arg(arg);
     }
     cmd = body_args(cmd, op.body());
-    if op.effect() == Effect::Write {
-        // The operation's own word, not this crate's constant: the adopter may
-        // have chosen another one. Everything that spells the confirmation out
-        // for a reader — this flag, a gate's help, the long about below, the
-        // summary page — reads it from the same place, so a page cannot name a
-        // flag the subcommand does not accept.
-        cmd = cmd.arg(
-            Arg::new(COMMIT_ID)
-                .long(op.commit().to_owned())
-                .action(ArgAction::SetTrue)
-                .help("Send the request. Without it this is a dry run that prints it"),
-        );
-    }
-    apart(gates(cmd, op), op.body())
+    // The flag, a gate's help and the long about above read the confirmation word
+    // from the operation, and the summary page reads the document's, which a load
+    // writes as the same string, so the page of a document that a load wrote
+    // cannot name a flag that the subcommand does not accept.
+    apart(gates(confirmation(cmd, op), op), op.body())
 }
 
 /// `--json-body-template`, added last and held apart from every flag the
@@ -254,6 +245,51 @@ fn apart(cmd: Command, body: &Body) -> Command {
     cmd.arg(template_arg().conflicts_with_all(declared))
 }
 
+/// The confirmation flag of a write, added to a command of your own, in the word
+/// the operation carries.
+///
+/// [`command`] puts it on the subcommand it builds, and this is that same door:
+/// a verb you write yourself — one that fetches, decides, and then calls a
+/// write — adds it with this and spells neither the flag nor its word. The word
+/// is the document's, which an adopter chose with `Loading::commit`, so a help
+/// page, the gate flags of [`gates`] and the summary page all name the flag the
+/// verb accepts. [`answers`] reads it back.
+///
+/// A read declares no confirmation, so it is handed back unchanged, and a caller
+/// does not have to ask first:
+///
+/// ```rust,ignore
+/// tree::gates(tree::confirmation(Command::new("finalize-voucher").arg(id), op), op)
+/// ```
+///
+/// The help says "Send the request". A verb that sends more than one request
+/// replaces it, on the flag's id ([`COMMIT_ID`]), and keeps the word the
+/// operation chose. The replacement is for the command of a write:
+/// `Command::mut_arg` panics on an id that the command never declared, and the
+/// command of a read declares no [`COMMIT_ID`].
+///
+/// ```rust,ignore
+/// let verb = tree::confirmation(verb, op).mut_arg(COMMIT_ID, |arg| {
+///     arg.help("Send the writes. Without it this is a dry run that prints them")
+/// });
+/// ```
+#[must_use]
+pub fn confirmation(cmd: Command, op: &Operation) -> Command {
+    if op.effect() == Effect::Read {
+        return cmd;
+    }
+    // The operation's own word, not this crate's constant: the adopter may have
+    // chosen another one. The help that a gate prints for this command names the
+    // same word, so it names a flag that the command accepts. The long about of a
+    // command of your own is yours to write: put `op.commit()` into it.
+    cmd.arg(
+        Arg::new(COMMIT_ID)
+            .long(op.commit().to_owned())
+            .action(ArgAction::SetTrue)
+            .help("Send the request. Without it this is a dry run that prints it"),
+    )
+}
+
 /// The gate flags one operation names, added to a command of your own.
 ///
 /// [`command`] puts them on the subcommand it builds, and this is that same
@@ -261,13 +297,13 @@ fn apart(cmd: Command, body: &Body) -> Command {
 /// gated operation — adds them with this and spells nothing itself. One
 /// definition rather than two is what keeps the two command lines from coming to
 /// disagree about one operation, and an Overlay that renames a gate renames the
-/// flag on both.
+/// flag on both. The confirmation they are demanded beside is [`confirmation`].
 ///
 /// An operation that names no gate is handed back unchanged, so a caller does
 /// not have to ask first:
 ///
 /// ```rust,ignore
-/// tree::gates(Command::new("finalize-voucher").arg(id).arg(commit), op)
+/// tree::gates(tree::confirmation(Command::new("finalize-voucher").arg(id), op), op)
 /// ```
 #[must_use]
 pub fn gates(cmd: Command, op: &Operation) -> Command {
@@ -379,8 +415,8 @@ fn leave_out(path: &str) -> String {
 /// A flag the command never declared reads as unanswered, which is the closed
 /// answer: it holds the request back. That is what makes this safe to point at
 /// a command this crate did not build — a verb of your own, or one built before
-/// an Overlay named a new gate. Give your own command its flags with [`gates`]
-/// and the two stay in step by construction.
+/// an Overlay named a new gate. Give your own command its flags with
+/// [`confirmation`] and [`gates`], and the two stay in step by construction.
 #[must_use]
 pub fn answers(op: &Operation, matches: &ArgMatches) -> Answers {
     if op.effect() == Effect::Read {

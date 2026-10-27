@@ -12,7 +12,9 @@ use cli::app;
 use cli::output::Output;
 use http::StatusCode;
 use typed_openapi::tree::{self, ArgError, Asked, DispatchError};
-use typed_openapi::{BaseUrlError, Document, PlanError, Recorder, RequestError, ValueError};
+use typed_openapi::{
+    BaseUrlError, COMMIT_ID, Document, PlanError, Recorder, RequestError, ValueError,
+};
 
 /// The write the report quotes. Every field the document marks required is
 /// required on the command line too, so an incomplete PUT is refused here
@@ -961,6 +963,33 @@ fn the_chain_offers_every_gate_the_operation_it_calls_names() {
     }
 }
 
+/// The chain sends two writes, so the help of its confirmation says so, in the
+/// word the operation chose: the help a generated subcommand has is about one
+/// request.
+#[test]
+fn the_chains_confirmation_says_that_it_sends_the_writes() {
+    let api = api();
+    let root = app::root(&api);
+    let verb = root
+        .find_subcommand("finalize-voucher")
+        .expect("the verb is mounted");
+
+    let commit = verb
+        .get_arguments()
+        .find(|arg| arg.get_id() == COMMIT_ID)
+        .expect("the chain writes, so it offers the confirmation");
+
+    assert_eq!(
+        commit.get_long(),
+        Some(api.operation(OperationId::EnshrineVoucher).commit()),
+        "the word stays the operation's"
+    );
+    assert_eq!(
+        commit.get_help().map(ToString::to_string).as_deref(),
+        Some("Send the writes. Without it this is a dry run that prints them")
+    );
+}
+
 #[test]
 fn the_chain_skips_the_irreversible_step_for_a_voucher_that_is_not_open() {
     let client = Recorder::new().answering(StatusCode::OK, &voucher("paid"));
@@ -1037,6 +1066,42 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
             format!("{BASE}/vouchers/5"),
             format!("{BASE}/vouchers/5/enshrine"),
             format!("{BASE}/vouchers/5/render"),
+        ]
+    );
+}
+
+/// The chain decides on one request for each write and sends that one: the
+/// requests the dry run printed are, parsed back into method, target, headers and
+/// body, the requests `--commit` handed the transport. A chain that built a
+/// request to decide on and another to send would be equal here only while
+/// building is pure.
+#[test]
+fn the_chain_sends_the_requests_it_printed() {
+    let script = || {
+        Recorder::new()
+            .answering(StatusCode::OK, &voucher("open"))
+            .answering(StatusCode::OK, &voucher("paid"))
+            .answering(StatusCode::OK, &voucher("paid"))
+    };
+    let dry = run(&script(), FINALIZE);
+    let wet = script();
+    let committed: Vec<&str> = FINALIZE.iter().copied().chain(["--commit"]).collect();
+    run(&wet, &committed);
+
+    let printed: Vec<Printed> = dry.stdout.split("\n\n").map(Printed::parse).collect();
+    let sent: Vec<Printed> = wet.take().iter().map(Printed::of).collect();
+
+    assert_eq!(printed.len(), 3, "the fetch and the two writes");
+    assert_eq!(printed, sent);
+    assert_eq!(
+        printed
+            .iter()
+            .map(|request| format!("{} {}", request.method, request.target))
+            .collect::<Vec<_>>(),
+        [
+            "GET /vouchers/5",
+            "POST /vouchers/5/enshrine",
+            "GET /vouchers/5/render",
         ]
     );
 }

@@ -759,9 +759,7 @@ fn refused_on_every_road(secret: &Uri) {
         "{planned:?}"
     );
 
-    let client = Client::over(doc.clone())
-        .expect("a client")
-        .with_base(secret.clone());
+    let client = Client::over(doc.clone()).with_base(secret.clone());
     let call = client
         .call::<NoContent>(op, Values::new().param("name", "a"))
         .expect("the values are fine");
@@ -891,9 +889,7 @@ fn the_debug_of_a_client_holds_no_userinfo_and_no_query() {
             "base: http://127.0.0.1:18473/api",
         ),
     ] {
-        let client = Client::over(doc.clone())
-            .expect("a client")
-            .with_base(base(text));
+        let client = Client::over(doc.clone()).with_base(base(text));
         let debug = format!("{client:?}");
         assert!(debug.contains(shown), "{text}: {debug}");
         assert!(
@@ -931,7 +927,7 @@ fn the_debug_of_a_document_read_from_a_blob_holds_no_userinfo_and_no_query() {
         let edited: Document = serde_json::from_value(value).expect("the edit reads back");
         let document = Document::from_blob(&edited.to_blob().expect("the edit encodes"))
             .expect("a blob is not refused for its base");
-        let client = Client::over(document.clone()).expect("a client");
+        let client = Client::over(document.clone());
 
         for (what, debug) in [
             ("document", format!("{document:?}")),

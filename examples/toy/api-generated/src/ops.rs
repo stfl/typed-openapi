@@ -218,7 +218,7 @@ impl Api {
     ) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(
             OperationId::CreateVoucher,
-            Values::new().json(crate::to_json(body)?),
+            Values::new().json(crate::to_json("createVoucher", body)?),
         )
     }
     /**
@@ -245,7 +245,9 @@ impl Api {
     ) -> Result<Call<'_, crate::types::Voucher>, Error> {
         self.call(
             OperationId::UpdateVoucher,
-            Values::new().param("id", id).json(crate::to_json(body)?),
+            Values::new()
+                .param("id", id)
+                .json(crate::to_json("updateVoucher", body)?),
         )
     }
     /**
@@ -282,7 +284,9 @@ impl Api {
     ) -> Result<Call<'_, NoContent>, Error> {
         self.call(
             OperationId::SendVoucherByEmail,
-            Values::new().param("id", id).json(crate::to_json(body)?),
+            Values::new()
+                .param("id", id)
+                .json(crate::to_json("sendVoucherByEmail", body)?),
         )
     }
     /**
@@ -298,7 +302,7 @@ impl Api {
     ) -> Result<Call<'_, crate::types::Contact>, Error> {
         self.call(
             OperationId::CreateContact,
-            Values::new().json(crate::to_json(body)?),
+            Values::new().json(crate::to_json("createContact", body)?),
         )
     }
     /**
@@ -315,7 +319,9 @@ impl Api {
     ) -> Result<Call<'_, crate::types::ContactLabels>, Error> {
         self.call(
             OperationId::SetContactLabels,
-            Values::new().param("id", id).json(crate::to_json(body)?),
+            Values::new()
+                .param("id", id)
+                .json(crate::to_json("setContactLabels", body)?),
         )
     }
     /**
@@ -361,7 +367,7 @@ impl Api {
     ) -> Result<Call<'_, crate::types::CreateLedgerEntryResponse>, Error> {
         self.call(
             OperationId::CreateLedgerEntry,
-            Values::new().json(crate::to_json(body)?),
+            Values::new().json(crate::to_json("createLedgerEntry", body)?),
         )
     }
     /**

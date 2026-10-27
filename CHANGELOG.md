@@ -99,6 +99,25 @@ the crate follows [Semantic Versioning][semver].
   beside a `--json-body` file whose top level is not an object is refused. It
   was dropped, and the file went out as it was. Repair: drop the flag, or send an
   object.
+- **`Call::plan`, `client::Planned` and `tree::confirmation`: the typed call and
+  a verb of your own take the gate a command line has.** `Call::plan(&Answers)`
+  puts a typed call to the gate and returns a `Planned`. It holds the verdict
+  (`plan()`) and the request that was decided on (`request()`), and
+  `Planned::send` and `send_async` send that request and answer `Some(T)`, or
+  send nothing and answer `None` for a dry run. The request is built once, so
+  what a caller prints as a dry run is what a confirmed run sends, and no
+  signature takes an operation and a request side by side. A `Planned` is
+  `#[must_use]`, so a plan that is dropped unused is a warning.
+  `tree::confirmation(cmd, op)` adds the confirmation flag to a command of your
+  own in the word the operation carries, as `tree::command` does, and adds none
+  for a read. Its help says "Send the request"; a verb that sends several
+  replaces it with `.mut_arg(COMMIT_ID, |arg| arg.help(..))` on the command of
+  a write, because `mut_arg` panics on a read, which has no such flag. A verb
+  that spelled `Arg::new(COMMIT_ID).long(COMMIT)` itself accepted `--commit`
+  only, so with `Loading::commit("yes")` the help of its gate flags named
+  `--yes`, a flag the verb refused. Repair: use `tree::confirmation(cmd, op)` in
+  the place of that `Arg`, and `Call::plan` where you called `Plan::decide` on a
+  typed call.
 
 ### Changed
 
@@ -178,16 +197,16 @@ the crate follows [Semantic Versioning][semver].
   read the cause in a test with `error.source()`; printing `{error}` alone no
   longer shows it. Most messages lose only the `: <cause>` they ended with:
   `OverlayError`, `PlanError::Request`, `ArgError`,
-  `client::Error::{Document, Request, Encode, Decode}`,
+  `client::Error::{Document, Request}`,
   `LoadError::ServerUrl` and `GenerateError::{Yaml, Schema, Typify, NotRust,
-  Blob}`. These are worded anew:
+  Blob}`. These are worded anew (the four call-time variants of `client::Error`
+  are in the entry that names their operation, under *Changed*):
   - `ValueError::BadValue`: ``<op>: `<name>` was given a value the document
     refuses``
   - `LoadError::Unresolvable`: ``<op>: `<name>` has a `$ref` that cannot be
     followed``
   - `LoadError::Unrunnable`: ``<op>: `<name>` states a rule that cannot run``
-  - `client::Error::Transport` and `DispatchError::Transport`: `the transport
-    failed`
+  - `DispatchError::Transport`: `the transport failed`
   - `GenerateError::Read`, `Write` and `RustfmtSpawn`: `cannot read <path>`,
     `cannot write <path>` and `cannot run rustfmt on <path>`
   - `GenerateError::Overlay`: `cannot use <path>`
@@ -1215,6 +1234,70 @@ the crate follows [Semantic Versioning][semver].
       `GateTakenByName`, `CommitTakenByName` or, for a header, `HeaderName`. A
       parameter whose `x-cli-requires` lists such a value is refused the same
       way, where it was `LoadError::RequiresUnreachable`. Repair: as above.
+- **`Plan::decide` takes an `Invocation` and builds the request itself.** At
+  0.0.2 it was `Plan::decide(op, &answers, request) -> Plan`, which took any
+  request beside any operation: a write's request beside a read's `op` was
+  `Send`. It is
+  `Plan::decide(&invocation, &base, &answers) -> Result<Plan, RequestError>`,
+  and the gate reads the operation that the invocation holds, so the verdict and
+  the request are about one operation. The error is the request's: a base with
+  userinfo or a query, or a URI or a header that `http` cannot build.
+  `Plan::build` keeps its signature. Repair:
+  `Plan::decide(&Invocation::new(op, values)?, &base, &answers)?`, or
+  `Plan::build(op, &base, values, &answers)?`; for a typed call,
+  `call.plan(&answers)?`.
+- **`Client::over` returns `Self`.** It returned `Result<Client, client::Error>`
+  and never failed. Repair: drop the `?` or the `expect` after it. The generated
+  `Api::new` still returns a `Result`, for the blob it reads and the inventory
+  it checks.
+- **The four call-time variants of `client::Error` name their operation.** Each
+  gains a field `op`, the `operationId` of the operation whose call failed:
+  `Encode(source)` is `Encode { op, source }`, `Transport(source)` is
+  `Transport { op, source }`, `Status { status, body }` is
+  `Status { op, status, body }`, and `Decode { source, raw }` is
+  `Decode { op, source, raw }`. The messages begin with it:
+  `<op>: cannot serialise the request body`, `<op>: the transport failed`,
+  `<op>: the server answered <status>` and
+  `<op>: the response is not the shape the document promises`. Repair: a pattern
+  that binds the fields of one of them adds `op` or `..`, and a tuple pattern of
+  `Encode` or `Transport` becomes a struct pattern.
+- **The `source` of `client::Error::Decode` is a `client::DecodeError`, not a
+  `serde_json::Error`.** The message of `serde_json` can quote the value, the
+  key or the variant that it refused, and the chain of an error is printed where
+  a log reads it: a string value of 3,000 characters made a chain of 3,138
+  bytes. `DecodeError` holds `class` (a `DecodeClass`: `Syntax`, `Eof`, `Data`,
+  and `Io`, which a slice cannot raise), `line` and `column`, and no byte of the
+  body. It prints the words of its class, the line and the column, such as `the
+  body does not fit the type at line 1 column 48`. The text stays in `raw`, and
+  `Error::body()` reads it. `docs/client.md` says what the position and the
+  class mean. Repair: where a caller read the kind or the position from the
+  `serde_json::Error` (`downcast_ref` on `source()`), read `class`, `line` and
+  `column` from the `DecodeError` and the text from `Error::body()`; the
+  expected type is not named, so look at the body near that line and column, and
+  at all of it where the line is 0.
+- **`client::to_json` takes the operation, and a generated wrapper passes it.**
+  It is `to_json(op, &value)` where it was `to_json(&value)`, so that the
+  `Encode` error of a body that does not serialise names whose body it was. The
+  generated `ops.rs` calls `crate::to_json("createVoucher", body)?`, so an
+  `ops.rs` written by an earlier release does not compile. Repair: run the bless
+  step again and commit `ops.rs`; a wrapper of your own passes its
+  `operationId`. A bless step that links the crate it writes, as sevdesk-cli's
+  `xtask` does for its `surface` task, does not build until that crate compiles,
+  so the first bless after the upgrade is run with that dependency cut for the
+  one run.
+- **`client::Error::Status` no longer prints the server's body.** It printed
+  `<status>: <body>`, and the body can hold a credential or a client's data,
+  where an error is printed to a log. It prints
+  `<op>: the server answered <status>`. The body stays in the field `body`, and
+  `Error::body()` reads it for `Status` and for `Decode`, which holds the text
+  it could not read. Repair: where a caller showed the server's reason through
+  `{error}`, show `error.body()` as well, where that is allowed.
+- **The summary page escapes `|` in a table cell.** A name that holds one, an
+  `operationId` or a parameter, ended its cell in the table of parameters
+  carried without a flag, so the row had more cells than the header. It is
+  written `\|`, which a Markdown reader shows as `|`, in a code span too. A page
+  that names no such value is unchanged. Repair: run the bless step again, where
+  the adoption commits the page (`Settings::summary_page`).
 
 ### Removed
 

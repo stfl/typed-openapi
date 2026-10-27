@@ -98,7 +98,7 @@ pub mod values;
 /// generator emitted syntax for.
 #[cfg(feature = "builder")]
 pub use bon;
-pub use client::{Call, Client, NoContent};
+pub use client::{Call, Client, NoContent, Planned};
 pub use model::{
     Body, COMMIT, COMMIT_ID, Carrier, Document, DocumentError, Effect, Field, Gate, JSON_BODY,
     JSON_BODY_TEMPLATE, Join, List, Location, Operation, Param, Place, RAW_BODY, Shape,

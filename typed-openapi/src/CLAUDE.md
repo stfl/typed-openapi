@@ -9,9 +9,15 @@ in the root `CLAUDE.md`, and the rules of the example are in
 **The gate is default-closed and derived from the document.** `Plan::decide` in
 `src/plan.rs` is the only place that decides whether a request is sent. A write
 without confirmation is a `DryRun` carrying the exact request a confirmed run
-would send — the same value, so the two cannot drift. Whether an operation
-writes comes from the HTTP method plus the document's `x-cli-writes` marker,
-never from a name or a heuristic.
+would send — the same value, so the two cannot drift. `Plan::decide` takes the
+`Invocation`, which holds its operation, and builds the request from it, so the
+verdict and the request are about one operation by construction: no signature
+takes an operation and a request side by side, and a read's verdict cannot be
+put on a write's request. A typed call reaches it through `Call::plan`, whose
+`Planned` holds the plan and is the only thing that sends it (`Planned::send`),
+so the request a caller printed is the request that goes out and a dry run
+cannot be sent. Whether an operation writes comes from the HTTP method plus the
+document's `x-cli-writes` marker, never from a name or a heuristic.
 
 An operation may name further gates in `x-cli-gates`, and they are demanded
 *in addition to* the confirmation: `Plan::Send` wants the commit and every gate
@@ -43,16 +49,19 @@ sight has nothing for a gate to hold. The chosen word travels in the blob on the
 document and on every operation, so a help page, the summary and a generated doc
 comment all name the flag the binary accepts.
 
-`tree::gates` is the one place a gate becomes a flag, and `tree::command` goes
-through it, so a hand-written verb and a generated subcommand cannot spell one
-gate two ways. `tree::answers` reads a flag the command never declared as
-unanswered rather than panicking, which is what makes the reading safe to point
-at a command this crate did not build. `tree::values` reads every flag the same
-way, with `try_get_*`: a flag the command never declared was not given, a flag
-stored as another type is `ArgError::FlagType`, which names it, and a field's
-flag that the field's rule refuses is `ArgError::FieldValue`. A command of the
-adopter's own can declare a flag with any parser, and nothing after `values`
-holds a body field to its rule.
+`tree::gates` is the one place a gate becomes a flag, and `tree::confirmation`
+the one place the confirmation does, in the word the operation carries.
+`tree::command` goes through both, so a hand-written verb and a generated
+subcommand cannot spell one gate, or the confirmation, two ways, and a verb
+spells neither word itself. A read declares no confirmation, so
+`tree::confirmation` hands its command back as it was given. `tree::answers`
+reads a flag the command never declared as unanswered rather than panicking,
+which is what makes the reading safe to point at a command this crate did not
+build. `tree::values` reads every flag the same way, with `try_get_*`: a flag
+the command never declared was not given, a flag stored as another type is
+`ArgError::FlagType`, which names it, and a field's flag that the field's rule
+refuses is `ArgError::FieldValue`. A command of the adopter's own can declare a
+flag with any parser, and nothing after `values` holds a body field to its rule.
 
 **Both command names are decided while the document is reduced.** `Grouping` in
 `src/names.rs` reads the rule off every path once; an `Operation` carries the
@@ -838,6 +847,39 @@ the same. The query is left out with the userinfo because a key goes there, and
 a request from a base that holds one is refused. The text of the operator's own
 argument is the operator's, and clap repeats it in its own errors.
 
+**A call-time error names its operation, and no message or cause of this crate
+prints a byte the server sent.**
+`client::Error::{Encode, Transport, Status, Decode}` carry `op`, the
+`operationId`, and their messages begin with it, so a log line says which call
+failed. `Values` names it too, in the message of its `ValueError`. `Encode`
+comes from `to_json` while a generated wrapper builds the arguments of a call,
+before the call exists, and `Transport`, `Status` and `Decode` come once the
+request goes to the client. `Request` is raised while the request is built,
+after the call exists and before anything is sent, and names no operation.
+`Status` prints the operation and the status and never the body: the body is the
+server's and can hold a credential or a client's data, and sevdesk-cli
+re-exports the type as its own error, where its rule "No peer bytes in an error"
+applies. The cause is printed where the message is, because whoever reports an
+error walks `source()`, so the cause of `Decode` holds no byte of the body
+either: it is a `DecodeError`, which keeps what `serde_json` says of the kind of
+failure (`DecodeClass`) and of the line and the column, and none of its message,
+which can quote the value, the key or the variant it refused. What the place and
+the class of that cause mean is said in two places that keep the same words, the
+docs of `DecodeError` and `DecodeClass` and `docs/client.md`, so a change to one
+is a change to the other, and `tests/typed_call.rs` holds the bodies that were
+probed. A change to those words is checked against a probe of every failure, as
+the rule below says. `Syntax` is `serde_json`'s category and holds valid JSON of
+a form it will not take, so its words claim nothing about the JSON. No
+`serde_json::Error` is held by `Decode`, because a caller that can get one can
+print it. The cause of `Encode` is `serde_json::Error`, which can quote only the
+caller's own value, and the cause of `Transport` is the client's error, which
+prints what that client prints. The body is the field, and `Error::body` reads
+it for `Status` and for the `raw` of `Decode`. A variant added to the call-time
+group carries `op`, and a cause of it that could hold the server's bytes is a
+type of this crate that keeps none. `to_json` takes the operation, because only
+the generated wrapper knows which operation a body is the body of, so an
+argument that does not serialise names it.
+
 **A request body is held to the generated type in one place, and an undeclared
 property has no way through.** `client::fits` is where a JSON body meets the
 type of its operation. The library cannot name that type, so the adopter's seam
@@ -1038,12 +1080,15 @@ it. A variant says when the crate raises it. A field says what the value is or
 where it comes from: the `operationId`, the flag as the operator typed it, the
 path into the body. It never says the `#[error]` message again, because the
 message prints it already. A doc that says what a foreign cause's message holds
-says only what a probe of every failure shows. Reading a `serde_json::Value`
-into a type names a value and a type for some failures, and for others only a
-missing key or an unmatched `untagged` enum. That read, `postcard` and `syn`
-over tokens carry no position. The adapter rule, that an adapter must not turn a
-status code into an error, is on `SyncClient` and `AsyncClient` themselves,
-because an adopter writes an adapter from that page.
+says only what a probe of every failure shows, and the same holds for the class
+and the position of a `serde_json::Error`: a sentence about them is a rule that
+every probe keeps or an example that a test holds, and a list of cases says
+"such as". Reading a `serde_json::Value` into a type names a value and a type
+for some failures, and for others only a missing key or an unmatched `untagged`
+enum. That read, `postcard` and `syn` over tokens carry no position. The adapter
+rule, that an adapter must not turn a status code into an error, is on
+`SyncClient` and `AsyncClient` themselves, because an adopter writes an adapter
+from that page.
 
 **A feature shows as a label, and no item writes it.** `src/lib.rs` turns
 `--cfg docsrs` into `feature(doc_cfg)`, and rustdoc then labels every item
@@ -1167,16 +1212,17 @@ which is the whole defect this exists to retire, and deriving also keeps the
 postcard blob the size it is. The type is feature-free, because a shipped binary
 that loaded a blob has to answer the question a bless step answered.
 
-`Summary`'s `Display` is the page a bless step renders, and the counts a test
-asserts against are the accessors on the same value — so the sentence a reader
-is shown and the number a test pins cannot drift apart. The page carries its
-provenance from `Settings::summary_header`, beside the headers the other
-generated files get: the command that counts it again and the documents it was
-counted from, because a count a reader cannot re-take is a claim rather than a
-measurement, and the two look identical on the page.
-`examples/toy/api/tests/summary.rs` is the demonstration that the shape is
-right — it builds the toy README's own sentences out of the summary — and any
-count this crate adds owes a row there.
+`Summary`'s `Display` is the page a bless step renders, and a name the document
+chose goes into a table cell through `cell`, which escapes `|` as a Markdown
+reader needs, in a code span too. The counts a test asserts against are the
+accessors on the same value — so the sentence a reader is shown and the number a
+test pins cannot drift apart. The page carries its provenance from
+`Settings::summary_header`, beside the headers the other generated files get:
+the command that counts it again and the documents it was counted from, because
+a count a reader cannot re-take is a claim rather than a measurement, and the
+two look identical on the page. `examples/toy/api/tests/summary.rs` is the
+demonstration that the shape is right — it builds the toy README's own sentences
+out of the summary — and any count this crate adds owes a row there.
 
 **The value is derived for everyone; the file is asked for.** `Settings::write_to`
 writes four artefacts and answers with what it wrote;

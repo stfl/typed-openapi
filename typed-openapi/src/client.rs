@@ -2,7 +2,20 @@
 //!
 //! [`Client`] holds one document and hands out [`Call`]s by `operationId`.
 //! `Call` knows what its answer deserialises into, so sending is one expression
-//! in each flavour and a caller never names a response type twice.
+//! in each flavour and a caller never names a response type twice. A caller that
+//! wants the gate a command line has plans the call with its [`Answers`] and
+//! sends what it planned ([`Call::plan`], [`Planned`]).
+//!
+//! Four errors carry the operation as a field, `op`, and their messages begin
+//! with it. A generated wrapper raises `Encode` through [`to_json`] while it
+//! builds the arguments of a call, before the call exists, and `Transport`,
+//! `Status` and `Decode` come once the request goes to the client. No message of
+//! theirs prints what the server sent, and neither does the cause of a `Decode`:
+//! the body is a field of the error, and [`Error::body`] reads it. The cause of a
+//! `Transport` is the client's own error, which prints what that client prints.
+//! `Values` names the operation too, in the message of its `ValueError`. A
+//! `Request` is raised after the call exists and before anything is sent, and
+//! names no operation.
 //!
 //! Nothing here is specific to one API. A generated wrapper is the typed door
 //! onto [`Client::call`]: it names the `operationId`, names the arguments under
@@ -20,6 +33,7 @@ use thiserror::Error;
 
 use crate::body_reader::{Read, Step, read};
 use crate::model::{Document, DocumentError, DriftError, Operation};
+use crate::plan::{Answers, Plan};
 use crate::request::{Invocation, RequestError, ValueError, without_userinfo_and_query};
 use crate::transport::{AsyncClient, HttpRequest, HttpResponse, SyncClient};
 use crate::values::Values;
@@ -50,34 +64,54 @@ pub enum Error {
     #[error(transparent)]
     Drift(#[from] DriftError),
     /// The values do not satisfy the operation. The message names the
-    /// parameter, or says the body is the problem.
+    /// operation, and the parameter or the body that is the problem.
     #[error(transparent)]
     Values(#[from] ValueError),
     /// The values satisfied the operation and the request they render to could
     /// not be built: the base URL holds userinfo or a query, or the `http` crate
-    /// refused what the document names, such as a header name.
+    /// refused what the document names, a URI, a header name or a header value.
+    /// It is raised before anything is sent and names no operation.
     #[error(transparent)]
     Request(#[from] RequestError),
     /// A typed argument that does not serialise to JSON, so there is no body to
-    /// send. The cause is `serde_json`'s reading of the value.
-    #[error("cannot serialise the request body")]
-    Encode(#[source] serde_json::Error),
+    /// send.
+    #[error("{op}: cannot serialise the request body")]
+    Encode {
+        /// The `operationId` of the operation the argument is the body of.
+        op: String,
+        /// `serde_json`'s reading of the value.
+        #[source]
+        source: serde_json::Error,
+    },
     /// The client refused the request or never got an answer, carrying the
     /// error the client itself returned.
     ///
     /// Boxed, so this type does not grow a parameter for the client. Whether
     /// the request left is a reading only an adapter can make, so it belongs
     /// above the seam, and a failure nobody has classified is one that may have
-    /// arrived. The concrete error is here to be read: `downcast_ref` recovers
-    /// `C::Error`, and [`Call::request`] hands back the bytes for a caller who
-    /// would rather send them through the client's own `send` and box nothing.
-    /// `docs/client.md` shows both.
-    #[error("the transport failed")]
-    Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// arrived. The concrete error is here to be read: `downcast_ref` on the
+    /// `source` recovers `C::Error`, and [`Call::request`] hands back the bytes
+    /// for a caller who would rather send them through the client's own `send`
+    /// and box nothing. `docs/client.md` shows both.
+    #[error("{op}: the transport failed")]
+    Transport {
+        /// The `operationId` of the operation whose request was sent.
+        op: String,
+        /// The error the client returned.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// The server answered with a status that is not a success. Nothing is
     /// deserialised out of such a response, whatever its body holds.
-    #[error("{status}: {body}")]
+    ///
+    /// The message names the operation and the status and nothing the server
+    /// sent: the body is the server's, it can hold a credential or a client's
+    /// data, and the message is printed where a log reads it. A caller that
+    /// needs the body reads the field, or [`Error::body`].
+    #[error("{op}: the server answered {status}")]
     Status {
+        /// The `operationId` of the operation whose request was answered.
+        op: String,
         /// The status the server answered.
         status: StatusCode,
         /// The response body as text, with bytes that are not UTF-8 replaced.
@@ -85,15 +119,147 @@ pub enum Error {
     },
     /// A success response whose body is not the type the document promises for
     /// it.
-    #[error("the response is not the shape the document promises")]
+    ///
+    /// The cause holds the kind of failure and its place, and no byte of the
+    /// body: serde's own message can quote the value, the key or the variant it
+    /// refused, and the chain of an error is printed where a log reads it. The
+    /// text is in `raw`.
+    #[error("{op}: the response is not the shape the document promises")]
     Decode {
-        /// `serde_json`'s reading of the body, with the line and column where
-        /// it stopped.
+        /// The `operationId` of the operation whose request was answered.
+        op: String,
+        /// What kind of failure it was, and its place in the text that was read.
         #[source]
-        source: serde_json::Error,
+        source: DecodeError,
         /// The response body as text, with bytes that are not UTF-8 replaced.
         raw: String,
     },
+}
+
+/// The kind of failure that a response body is, and its place, and nothing the
+/// body said.
+///
+/// The place is the line and the column that `serde_json` gives over the text it
+/// read. That text is the body, or `null` for an empty body, which has nothing
+/// in `raw`.
+///
+/// `serde_json` can word its failure with the value, the key or the variant it
+/// refused, and with the type it expected. This keeps the class of the failure
+/// and the place and nothing else of that message: the cause of an
+/// [`Error::Decode`], so the length of a chain that a log prints is bounded by
+/// the two numbers whatever the server sent.
+///
+/// The line counts from 1. The column is the number of bytes of that line before
+/// the place, so it counts bytes and not characters and it can fall inside a
+/// character. The place is at or after the start of what the reader refused.
+/// Both numbers are 0 where `serde_json` has no place to give. That happens for
+/// some types in some positions, such as an untagged enum that no variant
+/// matches, an internally tagged enum whose content is refused, a type whose
+/// `try_from` refuses, and a type whose own `Deserialize` reads a value of
+/// another type and then refuses it, like the type that typify writes for a
+/// string with a pattern.
+///
+/// [`Error::body`] replaces bytes that are not UTF-8 by U+FFFD, so after such
+/// bytes on the line the same column in it can point earlier than the place in
+/// the body, and never later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("{class} at line {line} column {column}")]
+#[non_exhaustive]
+pub struct DecodeError {
+    /// What kind of failure it was.
+    pub class: DecodeClass,
+    /// The line of the place, counted from 1, or 0 where the reader has no place
+    /// to give.
+    pub line: usize,
+    /// The number of bytes of that line before the place, or 0 where the reader
+    /// has no place to give.
+    pub column: usize,
+}
+
+impl DecodeError {
+    /// What `serde_json` reports about its failure, without the message: it
+    /// holds the bytes that the cause must not.
+    pub(crate) fn of(error: &serde_json::Error) -> Self {
+        use serde_json::error::Category;
+        Self {
+            class: match error.classify() {
+                Category::Syntax => DecodeClass::Syntax,
+                Category::Eof => DecodeClass::Eof,
+                Category::Data => DecodeClass::Data,
+                Category::Io => DecodeClass::Io,
+            },
+            line: error.line(),
+            column: error.column(),
+        }
+    }
+}
+
+/// What kind of failure a [`DecodeError`] is, in the words that `serde_json`
+/// classifies its own by.
+///
+/// The class is that of the first failure the reader found as it read from the
+/// start of the body. It says nothing about the text after the place: a body
+/// that is cut off, or that goes on with text that is not JSON, can be `Syntax`,
+/// `Eof` or `Data`.
+///
+/// It is a class and not an error: [`DecodeError`] is the cause, and its message
+/// begins with the words of its class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DecodeClass {
+    /// `serde_json` calls the failure a syntax error. The text is not JSON, or
+    /// it is JSON that the reader will not take, such as a number past the range
+    /// of an `f64` or a nesting past its recursion limit where the type reads
+    /// the value, `null` or a number where the type is an externally tagged
+    /// enum, and a key that is not a number in quotes where the keys of a map
+    /// are numbers.
+    Syntax,
+    /// The text ends inside a value, or before any value starts when it holds
+    /// white space only.
+    Eof,
+    /// The reader took the text up to the place as JSON, and the type refuses
+    /// something that the reader read, such as a string, a list or an object
+    /// where the type takes an integer, `300` where it takes a `u8`, an object
+    /// that lacks a property, a property or a variant that the type does not
+    /// take, or a value that the type refuses itself.
+    Data,
+    /// The reader failed. A body is a slice in memory, which cannot fail to be
+    /// read; the variant is here because a reading of `serde_json`'s categories
+    /// that left one out would have to panic.
+    Io,
+}
+
+impl fmt::Display for DecodeClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Syntax => "the JSON reader refused the body",
+            Self::Eof => "the body ends early",
+            Self::Data => "the body does not fit the type",
+            Self::Io => "the body could not be read",
+        })
+    }
+}
+
+impl Error {
+    /// What the server sent, for the two errors that hold a response: the body
+    /// of a [`Error::Status`], and the text a [`Error::Decode`] could not read.
+    /// Bytes that are not UTF-8 are replaced.
+    ///
+    /// It is a method and not part of any message or cause, because the body is
+    /// the server's and the chain of an error is printed where a log reads it.
+    #[must_use]
+    pub fn body(&self) -> Option<&str> {
+        match self {
+            Self::Status { body, .. } => Some(body),
+            Self::Decode { raw, .. } => Some(raw),
+            Self::Document(_)
+            | Self::Drift(_)
+            | Self::Values(_)
+            | Self::Request(_)
+            | Self::Encode { .. }
+            | Self::Transport { .. } => None,
+        }
+    }
 }
 
 /// One document, one server, and a typed way to call anything in it.
@@ -125,9 +291,13 @@ impl Client {
     /// `Client::over(Document::load(document, overlay)?)` and handles the load
     /// failure under its own type, so no shape on this page depends on which
     /// build a reader is looking at.
-    pub fn over(document: Document) -> Result<Self, Error> {
+    ///
+    /// It cannot fail: the reduction is in hand, and the base is the one it
+    /// carries.
+    #[must_use]
+    pub fn over(document: Document) -> Self {
         let base = document.base().clone();
-        Ok(Self { document, base })
+        Self { document, base }
     }
 
     /// Point at a different server than the document's first one.
@@ -532,15 +702,13 @@ impl<T> fmt::Debug for Call<'_, T> {
     }
 }
 
-impl<T: DeserializeOwned> Call<'_, T> {
+impl<'a, T: DeserializeOwned> Call<'a, T> {
     /// What the document says about the operation this call was built from:
     /// whether it writes, and which gates it stands behind.
     ///
     /// A Rust caller is trusted and is stopped by nothing here. A caller that
-    /// wants the same gate a CLI has hands this to [`Plan::decide`], which is
-    /// what the `finalize-voucher` verb in the example does.
-    ///
-    /// [`Plan::decide`]: crate::Plan::decide
+    /// wants the same gate a CLI has plans the call with [`Call::plan`], which
+    /// is what the `finalize-voucher` verb in the example does.
     #[must_use]
     pub fn operation(&self) -> &Operation {
         self.invocation.operation()
@@ -552,42 +720,194 @@ impl<T: DeserializeOwned> Call<'_, T> {
         Ok(self.invocation.request(self.base)?)
     }
 
+    /// Put the call to the gate: a read is sent on sight, and a write is sent
+    /// once `answers` confirm it and answer every gate it names.
+    ///
+    /// The request is built here, once, and the [`Planned`] that comes back
+    /// holds it. What a caller prints as a dry run and what [`Planned::send`]
+    /// sends are that one value, so the two cannot drift. Nothing is sent and no
+    /// client is asked for.
+    pub fn plan(&self, answers: &Answers) -> Result<Planned<'a, T>, Error> {
+        Ok(Planned {
+            operation: self.invocation.operation(),
+            plan: Plan::decide(&self.invocation, self.base, answers)?,
+            response: PhantomData,
+        })
+    }
+
     /// Send it and deserialise the answer.
     pub fn send<C: SyncClient>(&self, client: &C) -> Result<T, Error> {
-        parse(&client.send(self.request()?).map_err(transport)?)
+        deliver(self.operation().id(), client, self.request()?)
     }
 
     /// The same, inside a runtime.
     pub async fn send_async<C: AsyncClient>(&self, client: &C) -> Result<T, Error> {
-        parse(&client.send(self.request()?).await.map_err(transport)?)
+        deliver_async(self.operation().id(), client, self.request()?).await
     }
 }
 
-fn transport<E: std::error::Error + Send + Sync + 'static>(error: E) -> Error {
-    Error::Transport(Box::new(error))
+/// A call that the gate has decided about, holding the request it decided on.
+///
+/// [`Call::plan`] is the only way to one. The verdict, the request it is about
+/// and the type of the answer are one value, so a request cannot be sent through
+/// a call that did not plan it, and a dry run cannot be sent at all: [`send`]
+/// answers `None` for it and asks the client for nothing.
+///
+/// A plan that nothing sends sends nothing, so dropping one unused is a warning:
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use typed_openapi::client::Error;
+/// use typed_openapi::{Answers, Call, NoContent};
+///
+/// fn forget(call: &Call<'_, NoContent>) -> Result<(), Error> {
+///     call.plan(&Answers::new())?;
+///     Ok(())
+/// }
+/// ```
+///
+/// The same function compiles where the plan is read:
+///
+/// ```
+/// #![deny(unused_must_use)]
+/// use typed_openapi::client::Error;
+/// use typed_openapi::{Answers, Call, NoContent};
+///
+/// fn look(call: &Call<'_, NoContent>) -> Result<String, Error> {
+///     let planned = call.plan(&Answers::new())?;
+///     Ok(planned.request().uri().to_string())
+/// }
+/// ```
+///
+/// [`send`]: Planned::send
+#[must_use = "a planned call sends nothing until `send` or `send_async` is called"]
+pub struct Planned<'a, T> {
+    operation: &'a Operation,
+    plan: Plan,
+    response: PhantomData<fn() -> T>,
+}
+
+/// The verdict and the operation, and not the request: a `Debug` goes to logs,
+/// and the request holds the header values and the body the caller gave.
+impl<T> fmt::Debug for Planned<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Planned")
+            .field("operation", &self.operation.id())
+            .field(
+                "verdict",
+                &match self.plan {
+                    Plan::Send(_) => "Send",
+                    Plan::DryRun(_) => "DryRun",
+                },
+            )
+            .field("response", &std::any::type_name::<T>())
+            .finish()
+    }
+}
+
+impl<T> Planned<'_, T> {
+    /// What the gate decided, with the request: [`Plan::Send`] for a read and
+    /// for a write that was confirmed, [`Plan::DryRun`] for a write that was
+    /// not.
+    #[must_use]
+    pub fn plan(&self) -> &Plan {
+        &self.plan
+    }
+
+    /// The request, whichever way the gate went. A dry run prints exactly the
+    /// bytes that [`Planned::send`] sends.
+    #[must_use]
+    pub fn request(&self) -> &HttpRequest {
+        self.plan.request()
+    }
+}
+
+impl<T: DeserializeOwned> Planned<'_, T> {
+    /// Carry out what the gate decided: send the planned request and
+    /// deserialise the answer, or, for a dry run, send nothing and answer
+    /// `None`.
+    ///
+    /// It consumes the plan, so the request is built once and sent at most once.
+    pub fn send<C: SyncClient>(self, client: &C) -> Result<Option<T>, Error> {
+        match self.plan {
+            Plan::Send(request) => deliver(self.operation.id(), client, request).map(Some),
+            Plan::DryRun(_) => Ok(None),
+        }
+    }
+
+    /// The same, inside a runtime.
+    pub async fn send_async<C: AsyncClient>(self, client: &C) -> Result<Option<T>, Error> {
+        match self.plan {
+            Plan::Send(request) => deliver_async(self.operation.id(), client, request)
+                .await
+                .map(Some),
+            Plan::DryRun(_) => Ok(None),
+        }
+    }
+}
+
+/// Send `request` for the operation `op`, and read the answer.
+fn deliver<T: DeserializeOwned, C: SyncClient>(
+    op: &str,
+    client: &C,
+    request: HttpRequest,
+) -> Result<T, Error> {
+    parse(
+        op,
+        &client.send(request).map_err(|error| transport(op, error))?,
+    )
+}
+
+/// The same, inside a runtime.
+async fn deliver_async<T: DeserializeOwned, C: AsyncClient>(
+    op: &str,
+    client: &C,
+    request: HttpRequest,
+) -> Result<T, Error> {
+    parse(
+        op,
+        &client
+            .send(request)
+            .await
+            .map_err(|error| transport(op, error))?,
+    )
+}
+
+fn transport<E: std::error::Error + Send + Sync + 'static>(op: &str, error: E) -> Error {
+    Error::Transport {
+        op: op.to_owned(),
+        source: Box::new(error),
+    }
 }
 
 /// Status first, then the body — never deserialise the success type out of an
 /// error response.
-fn parse<T: DeserializeOwned>(response: &HttpResponse) -> Result<T, Error> {
+fn parse<T: DeserializeOwned>(op: &str, response: &HttpResponse) -> Result<T, Error> {
     let body = response.body();
     if !response.status().is_success() {
         return Err(Error::Status {
+            op: op.to_owned(),
             status: response.status(),
             body: String::from_utf8_lossy(body).into_owned(),
         });
     }
     // An empty body is how "no content" arrives; `NoContent` accepts `null`.
     let bytes = if body.is_empty() { b"null" } else { &body[..] };
-    serde_json::from_slice(bytes).map_err(|source| Error::Decode {
-        source,
+    serde_json::from_slice(bytes).map_err(|error| Error::Decode {
+        op: op.to_owned(),
+        source: DecodeError::of(&error),
         raw: String::from_utf8_lossy(body).into_owned(),
     })
 }
 
-/// The request body of a typed wrapper, as JSON.
-pub fn to_json<T: Serialize>(value: &T) -> Result<serde_json::Value, Error> {
-    serde_json::to_value(value).map_err(Error::Encode)
+/// The request body of a typed wrapper, as JSON. `op` is the `operationId` of
+/// the operation the value is the body of, and the error that a value which does
+/// not serialise raises names it.
+pub fn to_json<T: Serialize>(op: &str, value: &T) -> Result<serde_json::Value, Error> {
+    serde_json::to_value(value).map_err(|source| Error::Encode {
+        op: op.to_owned(),
+        source,
+    })
 }
 
 #[cfg(test)]
@@ -599,7 +919,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
-    use super::{BodyError, fits};
+    use super::{BodyError, DecodeClass, DecodeError, fits};
 
     /// A body with a list of objects in it, which is the shape whose refusal
     /// is hardest to place by eye: serde's own message does not say which
@@ -1241,5 +1561,29 @@ mod tests {
         };
         assert_eq!(op, "write");
         assert_eq!(source.to_string(), "this type is not written");
+    }
+
+    /// A reader that fails: the one way `serde_json` raises its `Io` category,
+    /// which a slice never does.
+    struct Failing;
+
+    impl std::io::Read for Failing {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("secret-token"))
+        }
+    }
+
+    #[test]
+    fn a_read_that_fails_is_its_own_class_and_prints_nothing_of_the_failure() {
+        let failed = serde_json::from_reader::<_, u8>(Failing).unwrap_err();
+
+        let cause = DecodeError::of(&failed);
+
+        assert_eq!(cause.class, DecodeClass::Io);
+        assert!(
+            cause.to_string().starts_with("the body could not be read"),
+            "{cause}"
+        );
+        assert!(!cause.to_string().contains("secret-token"), "{cause}");
     }
 }

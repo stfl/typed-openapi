@@ -22,7 +22,7 @@ use http::{Method, StatusCode};
 use serde_json::json;
 use typed_openapi::tree::{self, ArgError, Asked, DispatchError, Outcome, Selection};
 use typed_openapi::{
-    Answers, COMMIT, COMMIT_ID, Document, HttpRequest, JSON_BODY, JSON_BODY_TEMPLATE, Plan, Reach,
+    Answers, COMMIT_ID, Document, HttpRequest, JSON_BODY, JSON_BODY_TEMPLATE, Loading, Plan, Reach,
     Recorder, RecorderError, SyncClient, Values, render,
 };
 
@@ -1045,6 +1045,120 @@ fn an_operation_that_names_no_gate_adds_no_flag() {
     );
 }
 
+/// A document that chose another word to confirm with. The words a verb of the
+/// caller's own spells are the operation's: `tree::confirmation` reads the one
+/// the operation carries, so the verb accepts what its help names.
+fn confirmed_with_yes() -> Document {
+    Document::load_with(
+        TOY,
+        OVERLAYS,
+        &Loading::new()
+            .commit("yes")
+            .expect("`yes` is a word a flag can have"),
+    )
+    .expect("the document loads with its own word")
+}
+
+/// `A7/docs/gated.yaml` with `A7_COMMIT_WORD=yes`: a hand-written verb spells no
+/// word of its own, so the flag it accepts is the flag the gate's help names. The
+/// door adds the flag the generated subcommand carries, in the operation's word,
+/// with the same id, help and action.
+#[test]
+fn a_verb_of_your_own_carries_the_confirmation_the_subcommand_carries() {
+    for doc in [document(), confirmed_with_yes()] {
+        let op = doc
+            .get("enshrineVoucher")
+            .expect("the document describes it");
+        let word = op.commit();
+
+        let mine = tree::confirmation(Command::new("finalize-voucher"), op);
+        let generated = tree::command(op);
+
+        let (mine_arg, generated_arg) = (flag(&mine, word), flag(&generated, word));
+        assert_eq!(mine_arg.get_id(), generated_arg.get_id());
+        assert_eq!(mine_arg.get_id().as_str(), COMMIT_ID);
+        assert_eq!(
+            mine_arg.get_help().map(ToString::to_string),
+            generated_arg.get_help().map(ToString::to_string)
+        );
+        assert!(matches!(mine_arg.get_action(), ArgAction::SetTrue));
+        assert!(!mine_arg.is_required_set(), "a dry run needs no word");
+
+        // Nothing else came with it, and the help page names no other word.
+        let added: Vec<&str> = mine
+            .get_arguments()
+            .filter_map(|arg| arg.get_long())
+            .filter(|long| *long != "help")
+            .collect();
+        assert_eq!(added, [word]);
+    }
+}
+
+/// The verb takes the word the operation chose and refuses the one it did not,
+/// and `tree::answers` reads it back as the confirmation.
+#[test]
+fn a_verb_of_your_own_accepts_the_word_the_operation_chose() {
+    let doc = confirmed_with_yes();
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+    let verb = || tree::gates(tree::confirmation(Command::new("finalize-voucher"), op), op);
+
+    let matches = verb()
+        .try_get_matches_from(["finalize-voucher", "--enshrine", "--yes"])
+        .expect("the chosen word and the gate are accepted");
+    let answered = tree::answers(op, &matches);
+    assert!(answered.committed(), "`--yes` is the confirmation");
+    assert!(answered.answered(op.gates().first().expect("one gate")));
+
+    let refused = verb()
+        .try_get_matches_from(["finalize-voucher", "--enshrine", "--commit"])
+        .expect_err("`--commit` is not this document's word");
+    assert_eq!(refused.kind(), clap::error::ErrorKind::UnknownArgument);
+
+    let unconfirmed = verb()
+        .try_get_matches_from(["finalize-voucher", "--enshrine"])
+        .expect("a dry run is a command line");
+    assert!(!tree::answers(op, &unconfirmed).committed());
+}
+
+/// The help of a gate says which word it is demanded beside. A verb that adds
+/// the gate with `tree::gates` and the confirmation with `tree::confirmation`
+/// names, on one page, only flags it accepts.
+#[test]
+fn the_help_of_a_verb_names_only_flags_it_accepts() {
+    let doc = confirmed_with_yes();
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+    let mut verb = tree::gates(tree::confirmation(Command::new("finalize-voucher"), op), op);
+
+    let help = verb.render_long_help().to_string();
+
+    assert!(help.contains("--yes"), "{help}");
+    assert!(
+        !help.contains("--commit"),
+        "a flag the verb refuses is on its help page:\n{help}"
+    );
+}
+
+/// A read declares no confirmation, so the door hands the command back as it was
+/// given it, as `tree::gates` does for an operation with no gate. A caller adds
+/// it unconditionally and asks the document nothing.
+#[test]
+fn a_read_adds_no_confirmation() {
+    let doc = document();
+    let op = doc.get("getVoucher").expect("the document describes it");
+
+    let mine = tree::confirmation(Command::new("show"), op);
+
+    assert!(
+        mine.get_arguments()
+            .filter_map(|arg| arg.get_long())
+            .all(|long| long == "help")
+    );
+}
+
 /// A command this crate did not build has no answer for a gate it never
 /// declared, and no answer is the closed one: the request is held back, rather
 /// than the reading panicking on a flag clap has not heard of.
@@ -1056,8 +1170,7 @@ fn a_gate_flag_a_command_never_declared_reads_as_unanswered() {
         .expect("the document describes it");
     // A verb of the caller's own that offers `--commit` and no gate flag: the
     // shape `tree::gates` exists to prevent, and the one that must still answer.
-    let matches = Command::new("finalize-voucher")
-        .arg(Arg::new(COMMIT_ID).long(COMMIT).action(ArgAction::SetTrue))
+    let matches = tree::confirmation(Command::new("finalize-voucher"), op)
         .get_matches_from(["finalize-voucher", "--commit"]);
 
     let answered = tree::answers(op, &matches);

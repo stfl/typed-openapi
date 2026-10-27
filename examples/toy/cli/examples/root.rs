@@ -57,9 +57,11 @@ fn run() -> Result<String, Box<dyn std::error::Error>> {
     Ok(
         match tree::dispatch(api.document(), api.base(), &Ureq::new(), &matches)? {
             Outcome::Sent(response) => String::from_utf8_lossy(response.body()).into_owned(),
+            // The word is the document's, the one every write is confirmed with.
             Outcome::DryRun(request) => format!(
-                "{}\ndry run: nothing was sent. Add --commit to send it.\n",
-                render(&request)
+                "{}\ndry run: nothing was sent. Add --{} to send it.\n",
+                render(&request),
+                api.document().commit()
             ),
             // `--json-body-template`. Nothing was built and nothing was sent,
             // so the skeleton is the whole of the output and goes out clean —

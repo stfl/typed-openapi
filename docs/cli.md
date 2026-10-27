@@ -791,10 +791,37 @@ Named gates: --enshrine. Each one is required, and demanded in addition to
 --commit.
 ```
 
-A verb you write yourself joins in through the same three calls the generated
-surface uses: `tree::gates` puts the flags on your command, `tree::answers`
-reads them back, and `Plan::decide` does the rest. The flags are spelled in one
-place, so the two command lines cannot come to disagree about one operation.
+A verb you write yourself joins in through the same calls the generated surface
+uses: `tree::confirmation` and `tree::gates` put the flags on your command,
+`tree::answers` reads them back, and `Call::plan` puts a typed call to the gate
+with them. The flags are spelled in one place, in the document's own words, so
+the two command lines cannot come to disagree about one operation. A document
+whose bless step confirms with `yes` has `--yes` on your verb too, and its gate
+flags say "in addition to --yes".
+
+The help of the confirmation flag says "Send the request". A verb that sends
+more than one replaces it on the flag's id and keeps the word:
+`finalize-voucher`, whose chain sends two writes, says "Send the writes". The
+replacement is for the command of a write, because `Command::mut_arg` panics on
+an id the command never declared and a read declares no confirmation flag.
+
+```rust,ignore
+tree::confirmation(verb, op).mut_arg(COMMIT_ID, |arg| {
+    arg.help("Send the writes. Without it this is a dry run that prints them")
+})
+```
+
+The plan holds the request the gate decided on. What your verb prints for a dry
+run and what it sends once the write is confirmed are that one value, and a dry
+run has nothing to send:
+
+```rust,ignore
+let planned = api.enshrine_voucher(id)?.plan(&answers)?;
+println!("{}", render(planned.request()));
+if let Some(voucher) = planned.send(&client)? {
+    // the write was confirmed, it was sent, and this is its typed answer
+}
+```
 
 A flag your command does not declare reads as **unanswered**, which holds the
 request back. So a command built before an Overlay named a new gate goes on

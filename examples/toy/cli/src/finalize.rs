@@ -9,8 +9,8 @@
 //! vendor revision drops `enshrineVoucher`, this file stops compiling and names
 //! it — the CLI does not discover it at run time against a customer's ledger.
 
-use api::{Api, Call, Voucher, VoucherStatus};
-use typed_openapi::{Answers, Plan, SyncClient, render};
+use api::{Api, Call, OperationId, Voucher, VoucherStatus};
+use typed_openapi::{Answers, Operation, SyncClient, render};
 
 use crate::app::Error;
 use crate::output::Output;
@@ -68,6 +68,15 @@ pub fn call(api: &Api, step: Step) -> Result<Call<'_, Voucher>, api::Error> {
     }
 }
 
+/// The operation whose words the chain stands behind: its gates and the word that
+/// confirms it. The chain's other write, the render, names no gate, and the
+/// confirmation word is the document's, so this is the one operation that the
+/// command line, the dispatch and the note of a dry run all ask.
+#[must_use]
+pub fn gate(api: &Api) -> &Operation {
+    api.operation(OperationId::EnshrineVoucher)
+}
+
 /// What the chain's writes came to, once the gate has had its say.
 #[derive(Debug)]
 enum Wrote {
@@ -84,11 +93,16 @@ pub fn run<C: SyncClient>(
     id: i64,
     answers: &Answers,
 ) -> Result<Output, Error> {
-    let fetch = api.get_voucher(id)?;
-    let mut printed = vec![render(&fetch.request()?)];
-    // The read runs in both modes: the plan is a function of what the server
-    // says the voucher is, so there is nothing to print without it.
-    let voucher = fetch.send(client)?;
+    // The fetch is planned as the writes are, so the request that is printed is
+    // the request that is sent. The read runs in both modes: the plan is a
+    // function of what the server says the voucher is, so there is nothing to
+    // print without it. A read is sent on sight, so a plan with nothing to send
+    // is a document that made the fetch a write.
+    let fetch = api.get_voucher(id)?.plan(answers)?;
+    let mut printed = vec![render(fetch.request())];
+    let Some(voucher) = fetch.send(client)? else {
+        return Err(Error::FetchHeld);
+    };
     let steps = plan(&voucher);
     if steps.is_empty() {
         return Ok(Output::note(
@@ -99,16 +113,16 @@ pub fn run<C: SyncClient>(
 
     let mut wrote = Wrote::Nothing;
     for step in steps {
-        let step = call(api, step)?;
         // The same gate the `raw` path uses, asked once per request, so the
         // chain cannot disagree with a single operation about what a dry run
         // is — including which words it wants: the enshrine stands behind
         // `--enshrine` here for the same reason it does under `raw`, because
-        // both ask the operation.
-        let decided = Plan::decide(step.operation(), answers, step.request()?);
-        printed.push(render(decided.request()));
-        if let Plan::Send(_) = decided {
-            wrote = Wrote::Everything(step.send(client)?);
+        // both ask the operation. The plan holds the request the gate decided
+        // on, so the request printed below is the request `send` sends.
+        let planned = call(api, step)?.plan(answers)?;
+        printed.push(render(planned.request()));
+        if let Some(last) = planned.send(client)? {
+            wrote = Wrote::Everything(last);
         }
     }
 
@@ -116,8 +130,11 @@ pub fn run<C: SyncClient>(
     Ok(match wrote {
         Wrote::Nothing => Output::note(
             printed,
-            "dry run: the fetch above ran, the writes did not. \
-             Add --commit to send them.\n",
+            format!(
+                "dry run: the fetch above ran, the writes did not. \
+                 Add --{} to send them.\n",
+                gate(api).commit()
+            ),
         ),
         Wrote::Everything(last) => Output::value(&printed, &last),
     })
