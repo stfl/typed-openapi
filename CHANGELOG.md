@@ -1359,14 +1359,17 @@ the crate follows [Semantic Versioning][semver].
   is built with, and its dependency `unicase`; a build that does not turn the
   feature on compiles neither.
 - **A wrapper answers with the type its success responses state, and a request
-  body can be a component.** The generator read the first status from `200` to
-  `299` of an operation, in document order, and typed its answer only when that
-  response was written on the operation with a JSON body. Any other success
-  response made the wrapper return `NoContent`, which accepts a body and drops
-  it: a response that is a `$ref` to `#/components/responses/`, the range `2XX`,
-  and a `200` listed after a `204`. `api.get_thing(5)?.send(&client)?` succeeded
-  and the caller never saw the answer. The generator reads every success response, which
-  is a status from `200` to `299` and the range `2XX`, and follows a `$ref` to
+  body can be a component.** The generator typed the answer from the first
+  status from `200` to `299` of an operation, in document order, and read no
+  other success response and no range. It typed that answer only when the
+  response was written on the operation with a JSON body. Any other first
+  response made the wrapper return `NoContent`, which takes an empty body or any
+  JSON and drops it: a response that is a `$ref` to `#/components/responses/`,
+  the range `2XX`, and a `200` listed after a `204`.
+  `api.get_thing(5)?.send(&client)?` succeeded and the caller never saw the
+  answer. A `200` listed first was typed, and then every `204` answer was an
+  `Error::Decode`. The generator reads every success response, which is a status
+  from `200` to `299` and the range `2XX`, and follows a `$ref` to
   `#/components/responses/`, a chain of references included. `default` is not
   read.
   - A wrapper that returned `NoContent` for such a response returns its body
@@ -1376,34 +1379,58 @@ the crate follows [Semantic Versioning][semver].
     names `NoContent` for such a call, as a return type or a pattern, no longer
     compiles. Repair: run the bless step again, commit `ops.rs` and `types.rs`,
     and name the type of the body.
-  - The responses that have a JSON body have to agree. Two that state different
-    schemas leave the wrapper with no one type, so the bless is refused with
+  - An operation with a JSON success response beside one with no `content`, such
+    as a `204` or a response component with no `content`, answers `Option` of
+    the type, whichever is listed first. `None` is the answer with no body. A
+    `204` answer was `NoContent` or an `Error::Decode`, by the order of the
+    two. Repair: run the bless step again, commit `ops.rs`, and match `None` for
+    the answer with no body.
+  - The JSON bodies of the success responses have to agree, under every JSON
+    media type of each response, because the client sends no `Accept` header and
+    a server may answer with any of them. Two that state different schemas leave
+    the wrapper with no one type, so the bless is refused with
     `GenerateError::Operation` around `GenerateError::Unsupported`, naming the
-    operation, both statuses and what each states. The first status of the two
-    used to decide, silently. Repair: an Overlay that gives both one schema, or
-    that removes the response the wrapper should not read. Two responses that
-    state the same schema, named or inline, are one answer, as sevDesk's two
-    operations with a `200` and a `201` are.
+    operation, the status and the media type of each body, and what each
+    states. The first body decided, silently: a `200` with `application/json: A`
+    and `application/vnd.x+json: B` was `A`. Repair: an Overlay that gives the
+    bodies one schema, or that removes the one the wrapper should not read. Two
+    bodies that state the same schema, named or inline, are one answer, as
+    sevDesk's two operations with a `200` and a `201` are.
   - A success response that cannot be followed (a reference to a response that
     the document does not hold, one that points inside a component, or a cycle)
-    is refused by name with the reference, where the wrapper returned
-    `NoContent`. Repair: an Overlay that corrects or removes the reference.
+    is refused by name with the reference, where the base never looked at it.
+    A response whose schema is a `$ref` outside `#/components/schemas/` is
+    refused with that reference. Repair: an Overlay that corrects or removes the
+    reference.
   - `NoContent` stays the answer where no success response has a JSON body: a
     `204`, a response with no `content`, and `content` under a media type that
-    is not JSON.
+    is not JSON. A success response with a body that is not JSON adds nothing to
+    the type, so a `200` with a JSON body beside a `201` with a PDF answers with
+    the type of the `200`. A body that is not JSON is an `Error::Decode`, as it
+    was, because the typed call reads JSON only.
   - A `requestBody` that is a `$ref` to `#/components/requestBodies/` is
     followed, as the command line has always followed it, so the bless is not
     refused with "requestBody $refs are not followed". The wrapper takes the
     type of the component's schema, and its argument is optional where the
     component is not `required`. The reduction and the generator read a
-    `requestBody` through one function, so a reference one follows is a reference
-    the other follows. A type that only such a body reaches stops requiring its
-    `readOnly` properties, as one that a body stated on the operation reaches
-    does. A schema that a component states inline is a type for each operation
-    that takes the component, named after the operation, and under a `title` it
-    is one type that all of them take. Two operations that state different
-    schemas under one `title` are refused as they were. Repair: none. Run the
-    bless step again and commit `ops.rs` and `types.rs`.
+    `requestBody` through one function, so a reference one follows is a
+    reference the other follows. A type that only such a body reaches stops
+    requiring its `readOnly` properties, as one that a body stated on the
+    operation reaches does. A schema that a component states inline is a type
+    for each operation that takes the component, named after the operation.
+    Repair: none. Run the bless step again and commit `ops.rs` and `types.rs`.
+  - A name that two schemas stated inline take is one type where the schemas are
+    equal, wherever each is stated, and it was refused as
+    `GenerateError::OneType`. Under a `title`, a component that two operations
+    share is one type that both take. So are three shapes that were refused: two
+    operations that each state the same titled response schema inline, the same
+    with a request body, and one operation whose body and response state the
+    same titled schema. Different schemas under one `title` are still refused,
+    and so are a body and a response that differ only in a `readOnly` property,
+    because the type of a body does not require what the API sets. A refusal
+    over a schema that a component states names the component and the operation
+    that takes it. Repair: none. Run the bless step again and commit `ops.rs`
+    and `types.rs`.
 
 ### Removed
 

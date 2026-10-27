@@ -19,7 +19,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::GenerateError;
-use super::names::{Answer, JsonBody, Names, Site};
+use super::names::{Answer, JsonBody, Names, Reading, Site, Statement, Unanswerable};
 use crate::model::{Body, Shape, declared, entry_of_flag};
 use crate::schema::{array_of, stated, typed};
 use crate::{Document, Operation};
@@ -819,10 +819,14 @@ fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStrea
 /// The type of a JSON request body, read from the entry under `media_type`: the
 /// key the model sends the body under.
 ///
-/// A `$ref` keeps the named schema's type and a schema the operation states
-/// inline gets one of its own, so a body the document describes is a body the
-/// generated code holds a caller to. `serde_json::Value` is left for the one
+/// A `$ref` keeps the named schema's type and a schema the body states inline,
+/// on the operation or in the component it takes, gets one of its own, so a body
+/// the document describes is a body the generated code holds a caller to. `serde_json::Value` is left for the one
 /// case that earns it: a JSON body the document states no schema for at all.
+///
+/// The reduction follows a `requestBody` `$ref` first and refuses the document
+/// that holds one it cannot follow, so the refusal here is a guard against the
+/// two readings coming apart, and not one that a document reaches.
 fn body_type(
     op: &Operation,
     media_type: &str,
@@ -837,36 +841,79 @@ fn body_type(
             "no request body entry under the key the model sends",
         )),
         JsonBody::Shapeless => Ok(quote!(serde_json::Value)),
-        JsonBody::Stated(schema) => named_or_stated(schema, &Site::body(op.id()), names),
+        JsonBody::Stated { schema, .. } => named_or_stated(schema, &Site::body(op.id()), names),
     }
 }
 
 /// The type a successful response deserialises into.
 ///
 /// `NoContent` is the answer where no success response has a JSON body, and
-/// nowhere else: a response that has one and cannot be typed is refused.
+/// nowhere else: a response that cannot be followed, or JSON bodies that do not
+/// agree, are refused. Where a response with no `content` stands beside one with
+/// a JSON body, the answer is `Option` of the type, because the typed call reads
+/// an empty body as `null` and `None` is the answer with no body.
 fn response_type(
     op: &Operation,
     operation: &openapiv3::Operation,
     components: &Components,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    match super::names::success(operation, components)? {
-        None => Ok(quote!(NoContent)),
-        Some(Answer::Shapeless) => Ok(quote!(serde_json::Value)),
-        Some(Answer::Stated(schema)) => named_or_stated(schema, &Site::response(op.id()), names),
+    let answer = |statement: Statement<'_>| match statement.answer {
+        Answer::Shapeless => Ok(quote!(serde_json::Value)),
+        Answer::Stated(schema) => named_or_stated(schema, &Site::response(op.id()), names),
+    };
+    match super::names::success(operation, components).map_err(unanswerable)? {
+        Reading::NoJson => Ok(quote!(NoContent)),
+        Reading::Json(statement) => answer(statement),
+        Reading::JsonOrEmpty(statement) => {
+            let ty = answer(statement)?;
+            Ok(quote!(::std::option::Option<#ty>))
+        }
     }
+}
+
+/// The refusal for success responses that have no one answer.
+///
+/// Both causes name the operation through the `Operation` variant that wraps
+/// this, the status of each response involved, and what each states. The repair
+/// is an Overlay, which is the adopter's to write: the generator picking one of
+/// two schemas would be a correction nobody can read in a diff.
+fn unanswerable(refusal: Unanswerable<'_>) -> GenerateError {
+    match refusal {
+        Unanswerable::Unfollowed { status, source } => unsupported(format!(
+            "its success response `{status}` cannot be followed: {source}"
+        )),
+        Unanswerable::Disagree { first, second } => unsupported(format!(
+            "its success responses do not agree on one JSON body, so the wrapper has no one \
+             type to return: {} and {}; an Overlay that gives them one schema, or removes \
+             one of them, mends it",
+            said(&first),
+            said(&second),
+        )),
+    }
+}
+
+/// Where a body stands and what it states, as a sentence part.
+fn said(statement: &Statement<'_>) -> String {
+    format!(
+        "`{}` under `{}` is {}",
+        statement.status,
+        statement.media,
+        statement.answer.described()
+    )
 }
 
 /// The type a schema became, whether the document named it or stated it where
 /// it is used.
 ///
 /// A `$ref` is answered from the named schemas so that one pointing nowhere is
-/// refused by the reference it names, which is what an adopter can act on.
-/// Everything else was converted under [`Site`], and a site with no type would
-/// be this emitter and [`names::sites`](super::names::sites) disagreeing about
-/// what the document states — which they read through the same two functions,
-/// so they do not.
+/// refused by the reference it names, which is what an adopter can act on. A
+/// `$ref` that leads out of `#/components/schemas/` is refused by the reference
+/// too: the load refuses it in a parameter and in a request body, and reads no
+/// response, so a response is where it arrives here. Everything else was
+/// converted under [`Site`], and a site with no type would be this emitter and
+/// [`names::sites`](super::names::sites) disagreeing about what the document
+/// states — which they read through the same two functions, so they do not.
 fn named_or_stated(
     schema: &ReferenceOr<Schema>,
     site: &Site,
@@ -874,6 +921,12 @@ fn named_or_stated(
 ) -> Result<TokenStream, GenerateError> {
     if let Some(name) = ref_name(schema) {
         return names.get(name).cloned();
+    }
+    if let ReferenceOr::Reference { reference } = schema {
+        return Err(unsupported(format!(
+            "`{reference}` leads out of the schemas: only `#/components/schemas/` \
+             references are followed"
+        )));
     }
     names
         .at(site)

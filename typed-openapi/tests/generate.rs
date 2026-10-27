@@ -4310,6 +4310,7 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Thing" }
+    Empty: { description: Nothing }
     Same: { $ref: "#/components/responses/ThingResponse" }
     Loop: { $ref: "#/components/responses/Again" }
     Again: { $ref: "#/components/responses/Loop" }
@@ -4379,17 +4380,66 @@ fn a_success_response_under_a_range_is_typed() {
     );
 }
 
-/// The probe's `latestThing`: the `204` is listed first and has no body, and the
-/// `200` has one. The first success status is not the answer.
+/// The probe's `latestThing` and its neighbours. A success response with no
+/// `content` is an answer with no body, and it stands beside one that has a JSON
+/// body, so the call answers `Option` of the type: `None` is the `204`. The order
+/// of the responses decides nothing, and neither does where the empty response
+/// is written.
 #[test]
-fn a_204_listed_before_the_200_does_not_take_the_body_from_the_wrapper() {
-    let ops = answering(
-        "answer-204-first",
-        r##"{ "204": { description: Nothing yet }, "200": { description: OK, content: {
-            application/json: { schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
-    )
-    .expect("the document generates");
-    assert!(answers_with(&ops, "crate::types::Thing"), "{ops}");
+fn a_success_response_with_no_content_beside_a_json_one_makes_the_answer_an_option() {
+    const THING: &str = "crate::types::Thing";
+    for (label, responses, ty) in [
+        (
+            "a 204 listed before the 200",
+            r##"{ "204": { description: Nothing yet }, "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+            "::std::option::Option<crate::types::Thing>",
+        ),
+        (
+            "a 204 listed after the 200",
+            r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } } } },
+              "204": { description: Nothing yet } }"##,
+            "::std::option::Option<crate::types::Thing>",
+        ),
+        (
+            "a range with a JSON body beside a 204",
+            r##"{ "2XX": { description: OK, content: { application/json: {
+                schema: { type: array, items: { $ref: "#/components/schemas/Thing" } } } } },
+              "204": { description: Nothing yet } }"##,
+            "::std::option::Option<::std::vec::Vec<crate::types::Thing>>",
+        ),
+        (
+            "a response component with no content beside a JSON 200",
+            r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "202": { $ref: "#/components/responses/Empty" } }"##,
+            "::std::option::Option<crate::types::Thing>",
+        ),
+        (
+            "a JSON body with no schema",
+            r#"{ "200": { description: OK, content: { application/json: {} } },
+              "204": { description: Nothing yet } }"#,
+            "::std::option::Option<serde_json::Value>",
+        ),
+        (
+            "a body that is not JSON beside both",
+            r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "201": { description: Report, content: { application/pdf: {
+                schema: { type: string, format: binary } } } },
+              "204": { description: Nothing yet } }"##,
+            "::std::option::Option<crate::types::Thing>",
+        ),
+        (
+            "a JSON body beside a body that is not JSON",
+            r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
+              "201": { description: Report, content: { application/pdf: {
+                schema: { type: string, format: binary } } } } }"##,
+            THING,
+        ),
+    ] {
+        let ops = answering("answer-option", responses).expect(label);
+        assert!(answers_with(&ops, ty), "{label}:\n{ops}");
+    }
 }
 
 /// sevDesk's two operations with two success responses name one schema twice,
@@ -4397,24 +4447,28 @@ fn a_204_listed_before_the_200_does_not_take_the_body_from_the_wrapper() {
 /// wrapper has one answer when the responses agree on it.
 #[test]
 fn success_responses_that_name_one_type_answer_with_it() {
-    for (label, responses) in [
+    const THING: &str = "crate::types::Thing";
+    for (label, responses, ty) in [
         (
             "the same schema twice",
             r##"{ "200": { description: OK, content: { application/json: {
                 schema: { $ref: "#/components/schemas/Thing" } } } },
               "201": { description: Created, content: { application/json: {
                 schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+            THING,
         ),
         (
             "a response component and a stated response",
             r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
               "201": { description: Created, content: { application/json: {
                 schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+            THING,
         ),
         (
             "an explicit code and the range around it",
             r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
               "2XX": { $ref: "#/components/responses/Same" } }"##,
+            THING,
         ),
         (
             "the same schema stated inline twice",
@@ -4422,14 +4476,17 @@ fn success_responses_that_name_one_type_answer_with_it() {
                 schema: { type: object, properties: { c: { type: string } } } } } },
               "201": { description: Created, content: { application/json: {
                 schema: { type: object, properties: { c: { type: string } } } } } } }"#,
+            "crate::types::GetThingResponse",
+        ),
+        (
+            "the same schema under two JSON media types of one response",
+            r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } },
+                "application/vnd.x+json": { schema: { $ref: "#/components/schemas/Thing" } } } } }"##,
+            THING,
         ),
     ] {
         let ops = answering("answer-agree", responses).expect(label);
-        let ty = if label.contains("inline") {
-            "crate::types::GetThingResponse"
-        } else {
-            "crate::types::Thing"
-        };
         assert!(answers_with(&ops, ty), "{label}:\n{ops}");
     }
 }
@@ -4447,33 +4504,90 @@ fn reason_of(error: &GenerateError, op: &str) -> String {
     reason.clone()
 }
 
-/// Two success responses that name different JSON types leave the wrapper with
-/// no one type to return. Picking the first would be the generator choosing the
-/// answer for the adopter, so the bless refuses and names the operation and both
-/// responses.
-#[test]
-fn success_responses_that_name_two_types_are_refused_by_name() {
-    for responses in [
+/// Success responses whose JSON bodies disagree, the words of the refusal that
+/// names each body, and a label.
+const DISAGREEING: [(&str, &str, &[&str]); 5] = [
+    (
+        "two named schemas, in two responses",
         r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
               "201": { description: Created, content: { application/json: {
                 schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        &[
+            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`201` under `application/json` is `#/components/schemas/Other`",
+        ],
+    ),
+    (
+        "a named schema and one stated inline, in a response and a range",
         r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
               "2XX": { description: OK, content: { application/json: {
                 schema: { type: object, properties: { b: { type: string } } } } } } }"##,
-    ] {
-        let error = answering("answer-two", responses).expect_err("two answers");
+        &[
+            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`2XX` under `application/json` is a schema stated inline",
+        ],
+    ),
+    (
+        "a JSON body with no schema and a named schema",
+        r##"{ "200": { description: OK, content: { application/json: {} } },
+              "201": { $ref: "#/components/responses/ThingResponse" } }"##,
+        &[
+            "`200` under `application/json` is a JSON body with no schema",
+            "`201` under `application/json` is `#/components/schemas/Thing`",
+        ],
+    ),
+    (
+        "two media types of one response",
+        r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } },
+                "application/vnd.x+json": { schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        &[
+            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`200` under `application/vnd.x+json` is `#/components/schemas/Other`",
+        ],
+    ),
+    (
+        "the second media type of the first response, and a later response",
+        r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } },
+                "application/vnd.x+json": { schema: { $ref: "#/components/schemas/Thing" } } } },
+              "201": { description: Created, content: {
+                application/hal+json: { schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        &[
+            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`201` under `application/hal+json` is `#/components/schemas/Other`",
+        ],
+    ),
+];
+
+/// Two JSON bodies that state different schemas leave the wrapper with no one type
+/// to return. Picking the first would be the generator choosing the answer for
+/// the adopter, so the bless refuses and names the operation, where each body
+/// stands (the status and the media type) and what each states. The three arms of
+/// what a body states are each read: a named schema, one stated inline, and none.
+///
+/// The client sends no `Accept` header, so the server may answer with any JSON
+/// media type the response lists: the rule holds inside one response as it does
+/// across two.
+#[test]
+fn json_bodies_that_state_different_schemas_are_refused_by_name() {
+    for (label, responses, words) in DISAGREEING {
+        let error = answering("answer-two", responses).expect_err(label);
         let reason = reason_of(&error, "getThing");
+        for word in words {
+            assert!(reason.contains(word), "{label}: no `{word}` in\n{reason}");
+        }
         assert!(
-            reason.contains("`200`") && (reason.contains("`201`") || reason.contains("`2XX`")),
-            "{reason}"
+            reason.contains("do not agree on one JSON body"),
+            "{label}: {reason}"
         );
-        assert!(reason.contains("different"), "{reason}");
     }
 }
 
 /// A response that is a reference this crate cannot follow is the document
 /// saying something the generator has no reading for. It is refused with the
-/// reference, and it is never `NoContent`, which accepts any body.
+/// reference, and it is never `NoContent`, which takes an empty body or any JSON
+/// and drops it.
 #[test]
 fn a_success_response_that_cannot_be_followed_is_refused_by_name() {
     for (reference, words) in [
@@ -4513,9 +4627,34 @@ fn a_response_whose_schema_is_not_declared_is_refused_by_its_reference() {
     );
 }
 
+/// The load reads no response, so a response whose schema is a `$ref` outside
+/// `#/components/schemas/` reaches the generator, which refuses it by that
+/// reference. A parameter's schema and a request body's are refused by the load
+/// before the generator meets them.
+#[test]
+fn a_response_schema_that_leads_out_of_the_schemas_is_refused_by_its_reference() {
+    for reference in [
+        "#/definitions/Thing",
+        "#/components/responses/ThingResponse",
+    ] {
+        let responses = format!(
+            r#"{{ "200": {{ description: OK, content: {{ application/json: {{
+                schema: {{ $ref: "{reference}" }} }} }} }} }}"#
+        );
+        let error = answering("answer-outside", &responses).expect_err(reference);
+        let reason = reason_of(&error, "getThing");
+        assert!(
+            reason.contains(&format!("`{reference}`")) && reason.contains("#/components/schemas/"),
+            "{reference}: {reason}"
+        );
+    }
+}
+
 /// `NoContent` is the answer when no success response states a JSON body: there
 /// is none to type. A body under a status that is not a success, or under
-/// `default`, is not the answer of the call.
+/// `default`, is not the answer of the call, and a body that is not JSON adds
+/// nothing to the type: the typed call reads JSON only, so a PDF is an
+/// `Error::Decode` whatever the wrapper returns.
 #[test]
 fn a_wrapper_answers_no_content_when_no_success_response_has_a_json_body() {
     for (label, responses) in [
@@ -4553,19 +4692,7 @@ fn a_wrapper_answers_no_content_when_no_success_response_has_a_json_body() {
             r##"{ "200": { $ref: "#/components/responses/Empty" } }"##,
         ),
     ] {
-        let responses = responses.to_owned();
-        let document = ANSWERS.replace(
-            "    Same:",
-            "    Empty: { description: Nothing }\n    Same:",
-        );
-        let dir = out("answer-nothing");
-        let path = wrote(
-            &dir,
-            "answers.yaml",
-            &document.replace("RESPONSES", &responses),
-        );
-        Settings::new(path).write_to(&dir).expect(label);
-        let ops = read(&dir.join("src/ops.rs"));
+        let ops = answering("answer-nothing", responses).expect(label);
         assert!(answers_with(&ops, "NoContent"), "{label}:\n{ops}");
     }
 }
@@ -4806,9 +4933,176 @@ components:
         matches!(&error, GenerateError::OneType { inline: true, rust, .. } if rust == "Draft"),
         "{error:?}"
     );
-    let reported = reported(&error);
-    assert!(
-        reported.contains("`makeA`") && reported.contains("`makeB`"),
-        "{reported}"
+    // The schema stands in the component, and the repair is made there: the
+    // refusal names the component and the operation that takes it.
+    assert_eq!(
+        error.to_string(),
+        "the request body `#/components/requestBodies/A` that `makeA` takes and the \
+         request body `#/components/requestBodies/B` that `makeB` takes are both \
+         `Draft` in Rust; give an inline schema a `title` in an Overlay"
     );
+}
+
+/// A response that a component states is named by the component too, and a chain
+/// of references is named by the entry that holds the schema, which is where the
+/// Overlay goes.
+#[test]
+fn a_response_component_that_claims_a_name_is_named_by_the_component() {
+    let dir = out("shared-response-title");
+    let document = wrote(
+        &dir,
+        "document.yaml",
+        r##"
+openapi: 3.0.3
+info: { title: Titles, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /a:
+    get:
+      operationId: getA
+      responses: { "200": { $ref: "#/components/responses/AliasOfA" } }
+  /b:
+    get:
+      operationId: getB
+      responses: { "200": { $ref: "#/components/responses/B" } }
+components:
+  responses:
+    AliasOfA: { $ref: "#/components/responses/A" }
+    A: { description: OK, content: { application/json: { schema: { title: Draft, type: object, properties: { c: { type: string } } } } } }
+    B: { description: OK, content: { application/json: { schema: { title: Draft, type: object, properties: { d: { type: string } } } } } }
+"##,
+    );
+    let error = Settings::new(document)
+        .write_to(&dir)
+        .expect_err("one name cannot be two shapes");
+    assert_eq!(
+        error.to_string(),
+        "the response `#/components/responses/A` that `getA` answers with and the \
+         response `#/components/responses/B` that `getB` answers with are both \
+         `Draft` in Rust; give an inline schema a `title` in an Overlay"
+    );
+}
+
+/// Two operations, a body and a response, each stating the schema `SCHEMA` on the
+/// operation itself.
+const STATED_TWICE: &str = r#"
+openapi: 3.0.3
+info: { title: Stated, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /a:
+    post:
+      operationId: makeA
+      requestBody:
+        required: true
+        content: { application/json: { schema: BODY_A } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: ANSWER_A } } }
+  /b:
+    post:
+      operationId: makeB
+      requestBody:
+        required: true
+        content: { application/json: { schema: BODY_B } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: ANSWER_B } } }
+"#;
+
+/// A schema stated inline under a `title`, and another that differs from it.
+const DRAFT: &str = "{ title: Draft, type: object, properties: { c: { type: string } } }";
+
+/// What the bless step writes for [`STATED_TWICE`] with the four slots filled.
+fn stating(name: &str, slots: [&str; 4]) -> Result<(String, String), GenerateError> {
+    let dir = out(name);
+    let [body_a, answer_a, body_b, answer_b] = slots;
+    let document = STATED_TWICE
+        .replace("BODY_A", body_a)
+        .replace("ANSWER_A", answer_a)
+        .replace("BODY_B", body_b)
+        .replace("ANSWER_B", answer_b);
+    Settings::new(wrote(&dir, "stated.yaml", &document)).write_to(&dir)?;
+    Ok((
+        read(&dir.join("src/ops.rs")),
+        read(&dir.join("src/types.rs")),
+    ))
+}
+
+/// A name that typify holds is answered with the type it holds, so the claim on
+/// a Rust name passes when the second claimant states the schema of the first,
+/// wherever either is stated: on two operations, in a body and a response, or
+/// in a component two operations share. It is one schema, so one type is
+/// correct, and the `struct` is written once.
+#[test]
+fn a_titled_schema_that_is_stated_twice_alike_is_one_type() {
+    let other = "{ type: object, properties: { z: { type: string } } }";
+    for (label, slots) in [
+        (
+            "the same response on two operations",
+            [
+                other,
+                DRAFT,
+                "{ type: object, properties: { y: { type: string } } }",
+                DRAFT,
+            ],
+        ),
+        (
+            "the same body on two operations",
+            [
+                DRAFT,
+                other,
+                DRAFT,
+                "{ type: object, properties: { y: { type: string } } }",
+            ],
+        ),
+        (
+            "the body and the response of one operation",
+            [
+                DRAFT,
+                DRAFT,
+                other,
+                "{ type: object, properties: { y: { type: string } } }",
+            ],
+        ),
+    ] {
+        let (ops, types) = stating("stated-alike", slots).expect(label);
+        assert_eq!(
+            types.matches("pub struct Draft ").count(),
+            1,
+            "{label}:\n{types}"
+        );
+        assert!(ops.contains("crate::types::Draft"), "{label}:\n{ops}");
+    }
+}
+
+/// A schema that differs, even in a word of its own, is a second shape under the
+/// name: the second wrapper would take a type of the wrong shape. The claim is
+/// held to the schema typify is given, which for a body is the one that does not
+/// require what the API sets, so a body and a response that differ only there are
+/// two schemas and are refused.
+#[test]
+fn a_titled_schema_that_is_stated_twice_differently_is_refused() {
+    let other = "{ type: object, properties: { z: { type: string } } }";
+    let required_id = "{ title: Draft, type: object, required: [id], properties: { id: { \
+                       type: integer, readOnly: true } } }";
+    for (label, slots) in [
+        (
+            "another property on a response",
+            [
+                other,
+                DRAFT,
+                other,
+                "{ title: Draft, type: object, properties: { d: { type: string } } }",
+            ],
+        ),
+        (
+            "a body and a response that differ in what the API sets",
+            [required_id, required_id, other, other],
+        ),
+    ] {
+        let error = stating("stated-unlike", slots).expect_err(label);
+        assert!(
+            matches!(&error, GenerateError::OneType { inline: true, rust, .. } if rust == "Draft"),
+            "{label}: {error:?}"
+        );
+    }
 }

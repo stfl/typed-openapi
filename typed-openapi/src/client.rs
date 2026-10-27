@@ -38,10 +38,12 @@ use crate::request::{Invocation, RequestError, ValueError, without_userinfo_and_
 use crate::transport::{AsyncClient, HttpRequest, HttpResponse, SyncClient};
 use crate::values::Values;
 
-/// A response the document promises no body for.
+/// A response the document promises no JSON body for.
 ///
-/// It deserialises from anything, including an empty body, so an operation that
-/// answers `201` with nothing is not a special case at the call site.
+/// It takes an empty body or any JSON and holds nothing, so an operation that
+/// answers `201` with nothing is not a special case at the call site. A body
+/// that is not JSON, such as a PDF, is an [`Error::Decode`]: a typed call reads
+/// JSON only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoContent;
 
@@ -891,7 +893,8 @@ fn parse<T: DeserializeOwned>(op: &str, response: &HttpResponse) -> Result<T, Er
             body: String::from_utf8_lossy(body).into_owned(),
         });
     }
-    // An empty body is how "no content" arrives; `NoContent` accepts `null`.
+    // An empty body is how "no content" arrives; `NoContent` and `Option` take
+    // `null`, and `Option` reads it as `None`.
     let bytes = if body.is_empty() { b"null" } else { &body[..] };
     serde_json::from_slice(bytes).map_err(|error| Error::Decode {
         op: op.to_owned(),

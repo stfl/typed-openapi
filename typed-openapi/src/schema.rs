@@ -89,10 +89,12 @@ pub(crate) fn resolve<'c, T>(
     section: impl Fn(&str) -> Option<&'c ReferenceOr<T>>,
     name: &str,
 ) -> Result<&'c T, RefError> {
-    follow(value, &section, name, &mut BTreeSet::new())
+    follow(value, &section, name, &mut BTreeSet::new()).map(|(item, _)| item)
 }
 
-/// The same walk, with the references already taken handed in.
+/// The same walk, with the references already taken handed in, and the last
+/// reference it took with the item it ended at: where the item stands, which is
+/// `None` for an item written where the walk began.
 ///
 /// What terminates it is that set and not a count of the hops, which is the
 /// argument [`crate::required`] makes about its own walk and it holds here for
@@ -111,13 +113,15 @@ fn follow<'c, T>(
     section: &impl Fn(&str) -> Option<&'c ReferenceOr<T>>,
     name: &str,
     seen: &mut BTreeSet<&'c str>,
-) -> Result<&'c T, RefError> {
+) -> Result<(&'c T, Option<&'c str>), RefError> {
     let prefix = format!("#/components/{name}/");
     let mut current = value;
+    let mut at = None;
     loop {
         match current {
-            ReferenceOr::Item(item) => return Ok(item),
+            ReferenceOr::Item(item) => return Ok((item, at)),
             ReferenceOr::Reference { reference } => {
+                at = Some(reference.as_str());
                 if !seen.insert(reference.as_str()) {
                     return Err(RefError::Cycle {
                         reference: reference.clone(),
@@ -163,24 +167,41 @@ pub(crate) fn resolve_request_body<'c>(
     body: &'c ReferenceOr<RequestBody>,
     components: &'c Components,
 ) -> Result<&'c RequestBody, RefError> {
-    resolve(
+    resolve_request_body_at(body, components).map(|(body, _)| body)
+}
+
+/// [`resolve_request_body`], and the reference the entry stands behind: the last
+/// hop of the chain, which is the entry a refusal sends an adopter to. `None`
+/// where the body is written on the operation.
+pub(crate) fn resolve_request_body_at<'c>(
+    body: &'c ReferenceOr<RequestBody>,
+    components: &'c Components,
+) -> Result<(&'c RequestBody, Option<&'c str>), RefError> {
+    follow(
         body,
-        |key| components.request_bodies.get(key),
+        &|key| components.request_bodies.get(key),
         "requestBodies",
+        &mut BTreeSet::new(),
     )
 }
 
 /// The response that one status of an operation stands for:
-/// `#/components/responses/` hops followed.
+/// `#/components/responses/` hops followed, and the reference the entry stands
+/// behind (`None` where the response is written on the operation).
 ///
-/// Only the generator reads a response, because a response is no part of a
-/// request: the reduction has no use for one.
+/// Only the generator follows a response's `$ref`, because a response is no part
+/// of a request: the reduction has no use for one.
 #[cfg(feature = "generate")]
 pub(crate) fn resolve_response<'c>(
     response: &'c ReferenceOr<Response>,
     components: &'c Components,
-) -> Result<&'c Response, RefError> {
-    resolve(response, |key| components.responses.get(key), "responses")
+) -> Result<(&'c Response, Option<&'c str>), RefError> {
+    follow(
+        response,
+        &|key| components.responses.get(key),
+        "responses",
+        &mut BTreeSet::new(),
+    )
 }
 
 /// The section every schema reference in this module resolves against.
@@ -234,7 +255,7 @@ fn unwrapped<'c>(
 ) -> Result<&'c Schema, RefError> {
     let schemas = schemas(components);
     let mut seen = BTreeSet::new();
-    let mut current = follow(schema, &schemas, "schemas", &mut seen)?;
+    let (mut current, _) = follow(schema, &schemas, "schemas", &mut seen)?;
     loop {
         passed(current);
         let SchemaKind::AllOf { all_of } = &current.schema_kind else {
@@ -243,7 +264,7 @@ fn unwrapped<'c>(
         let [only] = all_of.as_slice() else {
             return Ok(current);
         };
-        current = follow(only, &schemas, "schemas", &mut seen)?;
+        (current, _) = follow(only, &schemas, "schemas", &mut seen)?;
     }
 }
 

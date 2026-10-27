@@ -476,6 +476,61 @@ fn a_status_says_the_same_whatever_the_body_holds() {
     );
 }
 
+/// An operation with a JSON `200` beside a `204` is generated as a call to
+/// `Option` of the type: the `204` arrives as an empty body, which `parse` reads
+/// as `null`, and `None` is the answer with no body. A call to `T` would fail the
+/// same answer with a `Decode`, where the command line succeeds on it.
+#[test]
+fn a_call_to_an_option_answers_none_for_a_204_and_some_for_a_body() {
+    let client = client();
+    let doc = client.document();
+    let call = || {
+        client
+            .call::<Option<Thing>>(doc.get("getThing").expect("the read"), id(5))
+            .expect("values")
+    };
+
+    let mut empty = http::Response::new(Vec::new());
+    *empty.status_mut() = StatusCode::NO_CONTENT;
+    let none = call().send(&Recorder::new().answering_with(empty));
+    let some = call().send(&Recorder::new().answering(StatusCode::OK, &json!({"id": 5})));
+    let wrong = call().send(&Recorder::new().answering(StatusCode::OK, &json!({"id": "x"})));
+
+    assert_eq!(none.expect("a 204 is no body"), None);
+    assert_eq!(some.expect("a 200 has one"), Some(Thing { id: 5 }));
+    assert!(
+        matches!(&wrong, Err(ClientError::Decode { op, .. }) if op == "getThing"),
+        "a body that is not the type is still refused: {wrong:?}"
+    );
+}
+
+/// `NoContent` takes an empty body or any JSON and holds nothing. A body that is
+/// not JSON is a `Decode`, because the typed call reads JSON only, whatever the
+/// document says the response is: a wrapper for an operation that answers with a
+/// PDF returns `NoContent`, and no caller gets the bytes through it.
+#[test]
+fn no_content_takes_an_empty_body_or_any_json_and_a_body_that_is_not_json_is_a_decode() {
+    let client = client();
+    let doc = client.document();
+    let sent = |body: &[u8]| {
+        client
+            .call::<NoContent>(doc.get("getThing").expect("the read"), id(5))
+            .expect("values")
+            .send(&Recorder::new().answering_with(http::Response::new(body.to_vec())))
+    };
+
+    for body in [&b""[..], b"42", br#"{"a":1}"#, b"null"] {
+        assert_eq!(sent(body).expect("JSON or nothing"), NoContent, "{body:?}");
+    }
+    for body in [&b"%PDF-1.4 ..."[..], b"PK\x03\x04", b"id,name\n5,x\n"] {
+        let error = sent(body).expect_err("not JSON");
+        assert!(
+            matches!(&error, ClientError::Decode { op, .. } if op == "getThing"),
+            "{body:?}: {error:?}"
+        );
+    }
+}
+
 /// The planned road on a runtime has its own call to the parser and to the
 /// client, so it names the operation on its own: a status and a failing client.
 #[test]

@@ -53,11 +53,12 @@
 //!
 //! # A schema stated inline is converted here too
 //!
-//! [`names::sites`](super::names::sites) finds every schema an operation
-//! states where it uses it rather than under a name, and each one is handed to
-//! typify beside the named ones. That is the whole of what makes an inline
-//! request body a type: typify converts any schema it is given, and the named
-//! schemas were the only ones being offered. The rewrite reaches them too, so a
+//! [`names::sites`](super::names::sites) finds every schema that a request body
+//! or a response states where it is used rather than under a name, on the
+//! operation or in the component it takes, and each one is handed to typify
+//! beside the named ones. That is the whole of what makes an inline request
+//! body a type: typify converts any schema it is given, and the named schemas
+//! were the only ones being offered. The rewrite reaches them too, so a
 //! `format` declared inside an inline body becomes the adopter's type exactly
 //! as it does inside a named schema.
 //!
@@ -101,15 +102,16 @@ use syn::visit_mut::VisitMut;
 use typify::{TypeSpace, TypeSpaceImpl, TypeSpaceSettings};
 
 use super::GenerateError;
-use super::names::{Names, Site};
+use super::names::{Inline, Names};
 use crate::Document;
 use crate::schema::read_only_of;
 
 /// One schema of the document, under its own name, in typify's dialect.
 type Definition = (String, Value);
 
-/// One schema an operation states inline, in typify's dialect.
-type Stated = (Site, Value);
+/// One schema that a request body or a response states inline, in typify's
+/// dialect.
+type Stated = Inline<Value>;
 
 /// The crate typify writes into a generated `pattern` check.
 const ENGINE: &str = "regress";
@@ -148,8 +150,8 @@ pub(super) fn emit(
     for (_, schema) in &mut definitions {
         behind_a_reference(schema, &owned)?;
     }
-    for (_, schema) in &mut stated {
-        behind_a_reference(schema, &owned)?;
+    for inline in &mut stated {
+        behind_a_reference(&mut inline.schema, &owned)?;
     }
 
     // Read before the placeholders join them: `Names` answers for the schemas
@@ -435,7 +437,7 @@ fn set_by_the_api(
     api: &OpenAPI,
     model: &Document,
     definitions: &mut [(String, Schema)],
-    stated: &mut [(Site, Schema)],
+    stated: &mut [Inline<Schema>],
 ) {
     let read_only = read_only_schemas(api);
     let reached = reached(api, model, definitions, stated);
@@ -452,8 +454,8 @@ fn set_by_the_api(
     {
         relax.visit_schema(schema);
     }
-    for (_, schema) in stated.iter_mut().filter(|(site, _)| site.is_body()) {
-        relax.visit_schema(schema);
+    for inline in stated.iter_mut().filter(|inline| inline.site.is_body()) {
+        relax.visit_schema(&mut inline.schema);
     }
 }
 
@@ -489,7 +491,7 @@ fn reached(
     api: &OpenAPI,
     model: &Document,
     definitions: &[(String, Schema)],
-    stated: &[(Site, Schema)],
+    stated: &[Inline<Schema>],
 ) -> BTreeSet<String> {
     let defined: BTreeMap<&str, &Schema> = definitions
         .iter()
@@ -505,8 +507,8 @@ fn reached(
                 .collect(),
             ReferenceOr::Item(_) => stated
                 .iter()
-                .filter(|(at, _)| *at == site)
-                .flat_map(|(_, schema)| refers_to(schema))
+                .filter(|inline| inline.site == site)
+                .flat_map(|inline| refers_to(&inline.schema))
                 .collect::<Vec<_>>(),
         })
         .collect();
@@ -684,7 +686,8 @@ impl Visitor for OpenWithAMap {
     }
 }
 
-/// Every schema an operation states inline, in the model's order.
+/// Every schema that the request body or the response of an operation states
+/// inline, in the model's order.
 ///
 /// They are read in typify's dialect like the named ones, so a `$ref` on a
 /// property of an inline body reaches the same definition a named schema's
@@ -692,28 +695,37 @@ impl Visitor for OpenWithAMap {
 fn stated(api: &openapiv3::OpenAPI, model: &Document) -> Result<Vec<Stated>, GenerateError> {
     super::names::sites(api, model)
         .into_iter()
-        .map(|(site, schema)| {
-            let value = serde_json::to_value(schema).map_err(|source| GenerateError::Schema {
-                name: site.described(),
-                source,
-            })?;
-            Ok((site, as_json_schema(value)))
+        .map(|found| {
+            let value =
+                serde_json::to_value(found.schema).map_err(|source| GenerateError::Schema {
+                    name: found.described(),
+                    source,
+                })?;
+            Ok(Inline {
+                site: found.site,
+                home: found.home,
+                schema: as_json_schema(value),
+            })
         })
         .collect()
 }
 
 /// The same schemas as typify's own type.
-fn inline(stated: Vec<Stated>) -> Result<Vec<(Site, Schema)>, GenerateError> {
+fn inline(stated: Vec<Stated>) -> Result<Vec<Inline<Schema>>, GenerateError> {
     stated
         .into_iter()
-        .map(|(site, value)| {
-            let schema = typify_schema(value).map_err(|source| {
+        .map(|found| {
+            let described = found.described();
+            let schema = typify_schema(found.schema).map_err(|source| {
                 GenerateError::Unsupported(format!(
-                    "{} is not a JSON Schema typify accepts: {source}",
-                    site.described()
+                    "{described} is not a JSON Schema typify accepts: {source}"
                 ))
             })?;
-            Ok((site, schema))
+            Ok(Inline {
+                site: found.site,
+                home: found.home,
+                schema,
+            })
         })
         .collect()
 }

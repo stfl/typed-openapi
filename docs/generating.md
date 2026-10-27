@@ -480,23 +480,41 @@ Three things are worth knowing:
   it, a chain of references included, so the wrapper takes the type of the
   component's schema and is optional where the component is. A schema that a
   component states inline is a type for each operation that takes the component,
-  named after the operation. Under a `title` it is one type that all of them
-  take, and two operations that state different shapes under one `title` are
-  refused, since a name is one type.
+  named after the operation. A schema's own `$ref` is followed to
+  `#/components/schemas/` and nowhere else: the load refuses any other in a
+  parameter or a request body, and the bless refuses it in a response, each by
+  the reference.
+- **A `title` makes a schema stated inline one type, and a name is one type.**
+  A schema stated inline under a `title` is the type of that name. Where two
+  places state the same schema under it, they take one type and the `struct` is
+  written once: a component that two operations share, the same schema on two
+  operations, and a body and a response that state it alike. Where they state
+  different schemas, the bless is refused, since the second would take a type of
+  the first one's shape. Two schemas are the same as the generator gets them,
+  which for a request body leaves out what the API sets, so a body and a
+  response that differ only in a `readOnly` property are two schemas. The
+  refusal names each place, and where a component states the schema it names
+  the component and the operation that takes it. Repair: give one of the
+  schemas another `title` in an Overlay, at the component where there is one.
 - **A wrapper answers with the type its success responses state.** A success
   response is a status from `200` to `299` or the range `2XX`; `default` is not
   read. A response that is a `$ref` to `#/components/responses/` is followed, a
-  chain of references included. The responses that have a JSON body are the
-  answer, and they have to agree: one schema, whether named or stated inline,
-  gives one type, and a `204` listed beside a `200` takes nothing from it. The
-  answer is `NoContent` when no success response has a JSON body: a `204`, a
-  response with no `content`, and `content` under a media type that is not JSON,
-  which the typed call cannot decode. A response that cannot be followed is
-  refused by name with the reference, and so are success responses that state
-  different schemas, with both statuses; `NoContent` accepts any body and drops
-  it, so it is never the answer to a response the generator could not read. The
-  repair for the second is an Overlay that gives the responses one schema or
-  removes one of them.
+  chain of references included. The JSON bodies of all of them, under every JSON
+  media type, are the answer, and they have to agree: one schema, whether named
+  or stated inline, gives one type. The client sends no `Accept` header, so a
+  server may answer with any of them. A success response with no `content`, such
+  as a `204`, stands beside the JSON body as an answer with no body, so the
+  wrapper answers `Option` of the type and `None` is the answer with no body. A
+  success response whose `content` names no JSON media type adds nothing to the
+  type, so a `200` with a JSON body beside a `201` with a PDF answers with the
+  type. The answer is `NoContent` when no success response has a JSON body.
+  `NoContent` takes an empty body or any JSON and drops it, and a body that is not
+  JSON, such as a PDF, is a `client::Error::Decode`, because the typed call reads
+  JSON only. A response that cannot be followed is refused by name with the
+  reference, and so are JSON bodies that state different schemas, with the status
+  and the media type of each; `NoContent` is never the answer to a response the
+  generator could not read. The repair for the second is an Overlay that gives
+  the bodies one schema or removes one of them.
 - **A `content` key must be a media type.** A request body declared under a key
   with no `type/subtype` in it — `form-data` where `multipart/form-data` was
   meant — is a `LoadError` naming the operation and the key, rather than bytes
