@@ -983,7 +983,9 @@ fn a_forgery_clap_builds_is_refused_all_the_same() {
 /// of it is inside the line: clap builds the command tree, nothing a gate holds
 /// back is sent, and only the run that meets the value fails. For the last two
 /// the rule refuses an absent server or an absent `operationId`, which a blob
-/// cannot hold, and the values here are ones that a load accepts too.
+/// cannot hold, and the values here are ones that a load accepts too. Two
+/// operations of one `operationId` are the exception: a load refuses them, and
+/// the blob below holds them, because no binary is stopped by them.
 #[test]
 fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {
     let read = |edit: Edit| {
@@ -1048,6 +1050,25 @@ fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {
     // `NoOperationId`: an empty id is a name in messages and in `get`.
     let doc = read(|value| operation(value, "getVoucher")["id"] = json!(""));
     assert!(doc.get("").is_some());
+
+    // `DuplicateOperationId`: the command line mounts each operation under its
+    // own `<group> <command>`, which the check holds apart, so no id is asked
+    // for. `get` answers with the first of the two, and a generated wrapper
+    // reaches its operation by position, so the pairing with the inventory is
+    // what a drifted blob fails.
+    let doc = read(|value| operation(value, "getVoucher")["id"] = json!("listVouchers"));
+    assert_eq!(
+        doc.get("listVouchers").map(typed_openapi::Operation::path),
+        Some("/vouchers")
+    );
+    let honest = read(|_| {});
+    let rows: Vec<(&str, &str, &str)> = honest
+        .operations()
+        .iter()
+        .map(|op| (op.id(), op.method().as_str(), op.path()))
+        .collect();
+    assert!(honest.matches(&rows).is_ok());
+    assert!(doc.matches(&rows).is_err());
 }
 
 /// `getVoucher` takes `id` in the path; `ghost` is no parameter of it.

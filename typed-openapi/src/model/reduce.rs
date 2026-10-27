@@ -19,6 +19,7 @@
 //! exists.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use http::header::HeaderName;
 use http::{Method, Uri};
@@ -147,6 +148,28 @@ pub enum LoadError {
         method: String,
         /// The path template that holds the operation.
         path: String,
+    },
+    /// Two operations with one `operationId`. OpenAPI says it MUST be unique, and
+    /// it is the name every later refusal, [`Document::get`] and every generated
+    /// wrapper uses, so with two of one name it names neither. An Overlay gives
+    /// one of them another.
+    #[error(
+        "`{id}` is the operationId of both `{first_method} {first_path}` and \
+         `{second_method} {second_path}`; an Overlay gives one of them another"
+    )]
+    DuplicateOperationId {
+        /// The `operationId` the two operations share.
+        id: String,
+        /// The method of the operation that comes first in the document,
+        /// lowercase, as the path item spells it.
+        first_method: String,
+        /// The path template that holds the operation that comes first.
+        first_path: String,
+        /// The method of the later operation, lowercase, as the path item spells
+        /// it.
+        second_method: String,
+        /// The path template that holds the later operation.
+        second_path: String,
     },
     /// A `servers` on a path item or on an operation. A request goes to
     /// [`Document::base`], the first server of the document, and the caller
@@ -982,6 +1005,7 @@ impl Document {
             commit,
         };
 
+        unique_ids(doc)?;
         let mut ops: Vec<Operation> = Vec::new();
         for (path, item) in &doc.paths.paths {
             let item = match item {
@@ -1006,6 +1030,37 @@ impl Document {
             ops,
         })
     }
+}
+
+/// Refuses the first `operationId` that two operations share.
+///
+/// It runs before any operation is read, because every refusal that follows names
+/// its operation by the id, and with two of one name the id names neither. An
+/// operation with no id is left to `Operation::build`, which refuses it. A path
+/// item that is a `$ref` holds no operation here, and the loop that reads the
+/// operations refuses it.
+fn unique_ids(doc: &OpenAPI) -> Result<(), LoadError> {
+    let mut first_of: HashMap<&str, (&str, &str)> = HashMap::new();
+    for (path, item) in &doc.paths.paths {
+        let ReferenceOr::Item(item) = item else {
+            continue;
+        };
+        for (method, op) in item.iter() {
+            let Some(id) = op.operation_id.as_deref() else {
+                continue;
+            };
+            if let Some((first_method, first_path)) = first_of.insert(id, (method, path)) {
+                return Err(LoadError::DuplicateOperationId {
+                    id: id.to_owned(),
+                    first_method: first_method.to_owned(),
+                    first_path: first_path.to_owned(),
+                    second_method: method.to_owned(),
+                    second_path: path.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The base of every request: the URL of the first server, once it is a URL that
