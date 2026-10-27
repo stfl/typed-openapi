@@ -851,7 +851,8 @@ argument is the operator's, and clap repeats it in its own errors.
 prints a byte the server sent.**
 `client::Error::{Encode, Transport, Status, Decode}` carry `op`, the
 `operationId`, and their messages begin with it, so a log line says which call
-failed. `Encode` comes from `to_json` while a generated wrapper builds the
+failed. `Values` names it too, in the message of its `ValueError`. `Encode`
+comes from `to_json` while a generated wrapper builds the
 arguments of a call, before the call exists, and `Transport`, `Status` and
 `Decode` come once the request goes to the client. `Request` is raised while
 the request is built, after the call exists and before anything is sent, and
@@ -863,7 +864,12 @@ whoever reports an error walks `source()`, so the cause of `Decode` holds no
 byte of the body either: it is a `DecodeError`, which keeps what `serde_json`
 says of the kind of failure (`DecodeClass`) and of the line and the column, and
 none of its message, which can quote the value, the key or the variant it
-refused.
+refused. The position is a place in the text that was read, and a doc about it
+says only what a probe of each class shows (`tests/typed_call.rs` holds each): an
+empty body is read as `null`, which a struct refuses at line 1 column 4, after the
+end of the body, and which an externally tagged enum refuses as `Syntax`; and a
+type that refuses a value it had read whole, an untagged enum at the top of a
+body, has no place and gives 0 and 0.
 No `serde_json::Error` is held by `Decode`, because a caller that can get one
 can print it. The cause of `Encode` is `serde_json::Error`, which can quote only
 the caller's own value, and the cause of `Transport` is the client's error,

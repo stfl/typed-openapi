@@ -5,13 +5,14 @@
 //! and the request it is about cannot come from two operations. A `Call` plans
 //! with what a caller answered and sends what it planned, so a request that is
 //! printed as a dry run is the request that goes out when the write is
-//! confirmed. Four errors say which operation it was. `to_json` raises `Encode`
-//! while a wrapper builds the arguments of a call, before the call exists, and
-//! `Transport`, `Status` and `Decode` come once the request goes to the client.
-//! No message of theirs and no cause of a `Decode` prints a byte the server
-//! sent: the body is a field. The cause of a `Transport` is the client's own
-//! error and prints what that client prints. `Request` comes after the call
-//! exists and before anything is sent, and names no operation.
+//! confirmed. Four errors carry the operation as a field, `op`. `to_json` raises
+//! `Encode` while a wrapper builds the arguments of a call, before the call
+//! exists, and `Transport`, `Status` and `Decode` come once the request goes to
+//! the client. No message of theirs and no cause of a `Decode` prints a byte the
+//! server sent: the body is a field. The cause of a `Transport` is the client's
+//! own error and prints what that client prints. `Values` names the operation in
+//! the message of its `ValueError`. `Request` comes after the call exists and
+//! before anything is sent, and names no operation.
 //!
 //! The inputs are the probes of SEV-249: `A1/errs` (`chains`) for the 500 with a
 //! body that holds a credential, and the code reading of F-33 for the pairing.
@@ -32,9 +33,11 @@ use std::task::{Context, Poll, Waker};
 use http::StatusCode;
 use serde::Deserialize;
 use serde_json::json;
-use typed_openapi::client::{Client, DecodeClass, Error as ClientError, Planned, to_json};
+use typed_openapi::client::{
+    Client, DecodeClass, DecodeError, Error as ClientError, Planned, to_json,
+};
 use typed_openapi::{
-    Answers, Document, Invocation, Plan, Reach, Recorder, RecorderError, Values, render,
+    Answers, Document, Invocation, NoContent, Plan, Reach, Recorder, RecorderError, Values, render,
 };
 
 /// A read, a write, a write that stands behind a gate, and a write that takes a
@@ -516,15 +519,28 @@ fn an_async_planned_call_names_the_operation_of_its_failure() {
 
 /// A 200 whose body is `body`, read as a `Strict` by a typed call to `getThing`.
 fn decode_failure(body: &str) -> ClientError {
+    failure_as::<Strict>(body)
+}
+
+/// A 200 whose body is `body`, read as a `T` by a typed call to `getThing`.
+fn failure_as<T: std::fmt::Debug + serde::de::DeserializeOwned>(body: &str) -> ClientError {
     let client = client();
     let doc = client.document();
     let recorder = Recorder::new().answering_with(http::Response::new(body.as_bytes().to_vec()));
 
     client
-        .call::<Strict>(doc.get("getThing").expect("the read"), id(5))
+        .call::<T>(doc.get("getThing").expect("the read"), id(5))
         .expect("values")
         .send(&recorder)
-        .expect_err("the body is not a `Strict`")
+        .expect_err("the body is not a `T`")
+}
+
+/// The cause of a `Decode`, which the error holds.
+fn cause(error: &ClientError) -> DecodeError {
+    let ClientError::Decode { source, .. } = error else {
+        panic!("a decode: {error:?}");
+    };
+    *source
 }
 
 /// Every message down the chain of `error`, outermost first, joined.
@@ -664,7 +680,7 @@ fn a_decode_cause_tells_the_three_classes_apart() {
             DecodeClass::Syntax,
             1,
             2,
-            "the body is not JSON at line 1 column 2",
+            "the body cannot be read as JSON at line 1 column 2",
         ),
         (
             r#"{"id":"#,
@@ -693,37 +709,159 @@ fn a_decode_cause_tells_the_three_classes_apart() {
     }
 }
 
-/// A body that stops, or that is refused, at a line break is read at the start
-/// of the next line, and serde counts that position as column 0.
+/// Column 0 is the start of a line, wherever the read stops there: a body that
+/// ends after a line break, a body that goes on after it, and the first line
+/// itself.
 #[test]
 fn a_decode_cause_at_the_start_of_a_line_has_column_0() {
-    for (body, class, words) in [
+    for (body, class, line, words) in [
         (
             "{\"id\":\n",
             DecodeClass::Eof,
+            2,
             "the body ends early at line 2 column 0",
         ),
         (
             "\n",
             DecodeClass::Eof,
+            2,
             "the body ends early at line 2 column 0",
         ),
         (
             "{\"id\":\"a\nb\"}",
             DecodeClass::Syntax,
-            "the body is not JSON at line 2 column 0",
+            2,
+            "the body cannot be read as JSON at line 2 column 0",
+        ),
+        (
+            "{\"id\":\n[1]}",
+            DecodeClass::Data,
+            2,
+            "the body does not fit the type at line 2 column 0",
         ),
     ] {
         let error = decode_failure(body);
 
-        let ClientError::Decode { source, .. } = &error else {
-            panic!("a decode: {error:?}");
-        };
+        let source = cause(&error);
 
         assert_eq!(source.class, class, "{body:?}");
-        assert_eq!((source.line, source.column), (2, 0), "{body:?}");
+        assert_eq!((source.line, source.column), (line, 0), "{body:?}");
         assert_eq!(source.to_string(), words);
     }
+
+    let error = failure_as::<Vec<Thing>>("{}");
+
+    let source = cause(&error);
+    assert_eq!(source.class, DecodeClass::Data);
+    assert_eq!((source.line, source.column), (1, 0), "the first line too");
+}
+
+/// An empty body is how "no content" arrives, and a call reads it as `null`:
+/// `NoContent` takes it, and a type that refuses `null` fails at line 1 column 4,
+/// after the end of a body with nothing in it. There is nothing at that place to
+/// read in `raw`.
+#[test]
+fn an_empty_body_is_read_as_null() {
+    let client = client();
+    let doc = client.document();
+    let empty = || Recorder::new().answering_with(http::Response::new(Vec::new()));
+
+    let none = client
+        .call::<NoContent>(doc.get("getThing").expect("the read"), id(5))
+        .expect("values")
+        .send(&empty())
+        .expect("`null` is no content");
+    let error = failure_as::<Thing>("");
+
+    assert_eq!(none, NoContent);
+    let source = cause(&error);
+    assert_eq!(source.class, DecodeClass::Data);
+    assert_eq!((source.line, source.column), (1, 4));
+    assert_eq!(
+        error.to_string(),
+        "getThing: the response is not the shape the document promises"
+    );
+    assert_eq!(
+        source.to_string(),
+        "the body does not fit the type at line 1 column 4"
+    );
+    assert!(
+        matches!(&error, ClientError::Decode { op, raw, .. } if op == "getThing" && raw.is_empty()),
+        "{error:?}"
+    );
+    assert_eq!(error.body(), Some(""));
+}
+
+/// `Syntax` is a body that `serde_json` cannot read, which includes JSON it
+/// refuses: a number out of its range, a nesting past its recursion limit, and
+/// `null` where the type is an externally tagged enum.
+#[test]
+fn a_decode_cause_of_json_serde_cannot_read_is_syntax() {
+    let deep = "[".repeat(200);
+
+    let out_of_range = decode_failure(r#"{"id":1e999}"#);
+    let too_deep = failure_as::<serde_json::Value>(&deep);
+    let null_for_an_enum = failure_as::<Kind>("null");
+
+    for (error, line, column, words) in [
+        (
+            out_of_range,
+            1,
+            11,
+            "the body cannot be read as JSON at line 1 column 11",
+        ),
+        (
+            too_deep,
+            1,
+            128,
+            "the body cannot be read as JSON at line 1 column 128",
+        ),
+        (
+            null_for_an_enum,
+            1,
+            1,
+            "the body cannot be read as JSON at line 1 column 1",
+        ),
+    ] {
+        let source = cause(&error);
+
+        assert_eq!(source.class, DecodeClass::Syntax, "{words}");
+        assert_eq!((source.line, source.column), (line, column), "{words}");
+        assert_eq!(source.to_string(), words);
+    }
+}
+
+/// The reader has no place for a type that itself refuses a value it had read
+/// whole, so the line and the column are 0: an untagged enum that no variant
+/// matches, when it is the type of the body. The same type inside a struct is
+/// refused by the struct's read, which has a place.
+#[test]
+fn a_decode_cause_has_no_place_for_a_type_that_refuses_a_value_it_read_whole() {
+    /// Taken from an integer only.
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum Number {
+        Whole(#[expect(dead_code, reason = "read by serde only")] i64),
+    }
+    #[derive(Debug, Deserialize)]
+    struct Holder {
+        #[expect(dead_code, reason = "read by serde only")]
+        number: Number,
+    }
+
+    let alone = failure_as::<Number>(r#""x""#);
+    let inside = failure_as::<Holder>(r#"{"number":"x"}"#);
+
+    let alone = cause(&alone);
+    assert_eq!(alone.class, DecodeClass::Data);
+    assert_eq!((alone.line, alone.column), (0, 0));
+    assert_eq!(
+        alone.to_string(),
+        "the body does not fit the type at line 0 column 0"
+    );
+    let inside = cause(&inside);
+    assert_eq!(inside.class, DecodeClass::Data);
+    assert_eq!((inside.line, inside.column), (1, 14));
 }
 
 /// A failure of the client names the operation, on the planned road and on the
@@ -785,8 +923,8 @@ fn an_argument_that_does_not_serialise_names_the_operation() {
     assert!(error.body().is_none());
 }
 
-/// What a call raises before it runs is not a call-time error and has no
-/// operation of its own: the values name it already.
+/// A refused value is `Values`, which has no `op` field of its own: the message
+/// of the `ValueError` it carries begins with the operation.
 #[test]
 fn a_refused_value_is_the_values_own_error() {
     let client = client();
@@ -797,5 +935,6 @@ fn a_refused_value_is_the_values_own_error() {
         .expect_err("the id is required");
 
     assert!(matches!(error, ClientError::Values(_)), "{error:?}");
+    assert_eq!(error.to_string(), "getThing: `id` is required");
     assert!(error.body().is_none());
 }

@@ -6,14 +6,16 @@
 //! wants the gate a command line has plans the call with its [`Answers`] and
 //! sends what it planned ([`Call::plan`], [`Planned`]).
 //!
-//! Four errors name the operation. A generated wrapper raises `Encode` through
-//! [`to_json`] while it builds the arguments of a call, before the call exists,
-//! and `Transport`, `Status` and `Decode` come once the request goes to the
-//! client. No message of theirs prints what the server sent, and neither does
-//! the cause of a `Decode`: the body is a field of the error, and
-//! [`Error::body`] reads it. The cause of a `Transport` is the client's own
-//! error, which prints what that client prints. A `Request` is raised after the
-//! call exists and before anything is sent, and names no operation.
+//! Four errors carry the operation as a field, `op`, and their messages begin
+//! with it. A generated wrapper raises `Encode` through [`to_json`] while it
+//! builds the arguments of a call, before the call exists, and `Transport`,
+//! `Status` and `Decode` come once the request goes to the client. No message of
+//! theirs prints what the server sent, and neither does the cause of a `Decode`:
+//! the body is a field of the error, and [`Error::body`] reads it. The cause of a
+//! `Transport` is the client's own error, which prints what that client prints.
+//! `Values` names the operation too, in the message of its `ValueError`. A
+//! `Request` is raised after the call exists and before anything is sent, and
+//! names no operation.
 //!
 //! Nothing here is specific to one API. A generated wrapper is the typed door
 //! onto [`Client::call`]: it names the `operationId`, names the arguments under
@@ -62,7 +64,7 @@ pub enum Error {
     #[error(transparent)]
     Drift(#[from] DriftError),
     /// The values do not satisfy the operation. The message names the
-    /// parameter, or says the body is the problem.
+    /// operation, and the parameter or the body that is the problem.
     #[error(transparent)]
     Values(#[from] ValueError),
     /// The values satisfied the operation and the request they render to could
@@ -142,17 +144,24 @@ pub enum Error {
 /// refused, and with the type it expected. This keeps the class of the failure
 /// and the position of the read and nothing else of that message: the cause of
 /// an [`Error::Decode`], so the length of a chain that a log prints is bounded
-/// by the two numbers whatever the server sent. The line and the column are the
-/// reader's own. The column is 0 when the read stopped before the first
-/// character of a line, which is where a body ends after a line break. The text
-/// is [`Error::body`].
+/// by the two numbers whatever the server sent.
+///
+/// The line and the column are the reader's own, and they are a place in the text
+/// it read. That text is the body, except that an empty body is read as `null`: a
+/// struct, a list or a scalar refuses it as [`DecodeClass::Data`] at line 1
+/// column 4, after the end of a body with nothing in it. The column is 0 when the
+/// read stopped at the start of a line, the first line included. Both numbers are
+/// 0 when the type itself refused a value that the reader had read whole, as an
+/// untagged enum that no variant matches does when it is the type of the body.
+/// [`Error::body`] reads the body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("{class} at line {line} column {column}")]
 #[non_exhaustive]
 pub struct DecodeError {
     /// What kind of failure it was.
     pub class: DecodeClass,
-    /// The line of the body where the read stopped.
+    /// The line of the text that was read where the read stopped, or 0 where the
+    /// reader has no place to give.
     pub line: usize,
     /// The column of that line where the read stopped.
     pub column: usize,
@@ -184,12 +193,17 @@ impl DecodeError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeClass {
-    /// The body is not JSON.
+    /// `serde_json` calls the failure a syntax error. That is a body that is not
+    /// JSON, and JSON that it will not read, such as a number out of its range, a
+    /// nesting past its recursion limit, or `null` where the type is an
+    /// externally tagged enum.
     Syntax,
     /// The body is JSON that ends before the value does.
     Eof,
-    /// The body is JSON and is not the type: a value of another type, a missing
-    /// property, a property or a variant that the type does not take.
+    /// The text is JSON and is not the type: a value of another type, a missing
+    /// property, a property or a variant that the type does not take. An empty
+    /// body is the text `null`, which a struct, a list or a scalar refuses as
+    /// this.
     Data,
     /// The reader failed. A body is a slice in memory, which cannot fail to be
     /// read; the variant is here because a reading of `serde_json`'s categories
@@ -200,7 +214,7 @@ pub enum DecodeClass {
 impl fmt::Display for DecodeClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Syntax => "the body is not JSON",
+            Self::Syntax => "the body cannot be read as JSON",
             Self::Eof => "the body ends early",
             Self::Data => "the body does not fit the type",
             Self::Io => "the body could not be read",

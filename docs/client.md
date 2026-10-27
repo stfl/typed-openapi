@@ -189,11 +189,11 @@ other.
 
 ## What a call's error says
 
-Four errors say which operation it was, in the words of the `operationId`, so a
-log line needs no context to be read. A generated wrapper raises `Encode`
-through `to_json` while it builds the arguments of a call, before the call
-exists. `Transport`, `Status` and `Decode` come once the request goes to the
-client:
+Four errors carry the `operationId` as a field, `op`, and their messages begin
+with it, so a log line needs no context to be read. A generated wrapper raises
+`Encode` through `to_json` while it builds the arguments of a call, before the
+call exists. `Transport`, `Status` and `Decode` come once the request goes to
+the client:
 
 | `client::Error` | message |
 |---|---|
@@ -202,10 +202,14 @@ client:
 | `Status { op, status, body }` | `getVoucher: the server answered 404 Not Found` |
 | `Decode { op, source, raw }` | `getVoucher: the response is not the shape the document promises` |
 
+`Values`, which a call raises when the values do not satisfy the operation,
+names the operation too, in the message of its `ValueError`: each of them begins
+with it (``getVoucher: `id` is required``).
+
 `Request`, which a call raises while it builds the request and before anything
-is sent, names no operation. Its message says what is wrong with the base URL or
-with what the document names, except for `RequestError::Http`, whose message is
-`cannot build the request` and whose cause says what the `http` crate refused.
+is sent, names no operation. Its message says what is wrong with the base URL
+(`RequestError::Base`). For `RequestError::Http` the message is
+`cannot build the request`, and its cause is the error of the `http` crate.
 
 No message of the four prints what the server sent, and the cause of a `Decode`
 does not either. The body of a response is the server's: it can hold a
@@ -214,9 +218,9 @@ stays in the error. `Status` has it in `body`, `Decode` has the text it could
 not read in `raw`, and `Error::body()` reads whichever the error holds.
 
 The cause of a `Decode` is a `DecodeError`. It holds the kind of failure
-(`DecodeClass`: the body is not JSON, the body ends early, or the body is JSON
-that does not fit the type), the line and the column where the read stopped, and
-no byte of the body:
+(`DecodeClass`: `Syntax`, the body cannot be read as JSON; `Eof`, the body ends
+early; or `Data`, the body is JSON that does not fit the type), the line and the
+column where the read stopped, and no byte of the body:
 
 ```text
 getVoucher: the response is not the shape the document promises
@@ -225,10 +229,20 @@ getVoucher: the response is not the shape the document promises
 
 `serde_json` says more, `invalid type: string "…", expected i64`, and can quote
 the value, the key or the variant that it refused. That is why the cause does
-not say it, and it does not name the expected type either. The column is 0 when
-the read stopped before the first character of a line, which is where a body
-ends after a line break. To see what was refused, read `Error::body()` at that
-line and column.
+not say it, and it does not name the expected type either.
+
+The line and the column are a place in the text that the reader read. That text
+is the body, except that an empty body is read as `null`: a struct, a list or a
+scalar refuses `null` as `Data` at line 1 column 4, after the end of a body with
+nothing in it. `Syntax` is what `serde_json` calls a syntax error, which
+includes JSON that it will not read, such as a number out of its range, a nesting
+past its recursion limit, or `null` where the type is an externally tagged enum.
+The column is 0 when the read stopped at the start of a line, the first line
+included. Both numbers are 0 when the type itself refused a value that the reader
+had read whole, as an untagged enum that no variant matches does when it is the
+type of the body. To see what was refused, read `Error::body()` at that line and
+column. Where the line is 0, read the whole body; an empty body has nothing to
+read.
 
 The cause of a `Transport` is the error of the client that you passed, and it
 prints what that client prints. A cause is printed once, on its own line, by

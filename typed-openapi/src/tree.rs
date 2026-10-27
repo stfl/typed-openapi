@@ -173,8 +173,8 @@ pub fn command(op: &Operation) -> Command {
     cmd = body_args(cmd, op.body());
     // The flag, a gate's help and the long about above read the confirmation word
     // from the operation, and the summary page reads the document's, which a load
-    // writes as the same string, so a page cannot name a flag that the
-    // subcommand does not accept.
+    // writes as the same string, so the page of a document that a load wrote
+    // cannot name a flag that the subcommand does not accept.
     apart(gates(confirmation(cmd, op), op), op.body())
 }
 
