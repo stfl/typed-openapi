@@ -6019,8 +6019,8 @@ fn a_replacement_that_is_no_rust_path_is_refused_by_name_before_typify_runs() {
     }
 }
 
-/// A path that typify takes is still taken, whatever its shape: a name, a rooted
-/// name, a name under `crate` and a name with arguments.
+/// A path that typify takes generates, whatever its shape: a name, a rooted name, a
+/// name under `crate` and a name with arguments.
 #[test]
 fn a_replacement_that_is_a_rust_path_generates() {
     for (label, rust) in [
@@ -6271,7 +6271,7 @@ fn the_refusal_of_a_cycle_of_allof_says_what_leads_to_what() {
 /// reference (an `allOf` of the schema and a description). Wrappers of one element
 /// that name each other are no merge either.
 #[test]
-fn a_loop_that_is_no_merge_still_generates() {
+fn a_loop_that_is_no_merge_generates() {
     for (label, schemas) in [
         (
             "a property that points back",

@@ -1818,9 +1818,9 @@ fn refused_by_name(name: &str, document: &str) -> GenerateError {
 
 /// The bless never succeeds over a crate that does not compile (F-12): each of the
 /// documents above is refused, by the variant that names it and in words that name
-/// both items. Each one blessed with exit 0 at `74b77b9` and was a compile error in
-/// the generated file, so a refusal that is removed turns its row into the
-/// compiler's output.
+/// both items. Each is a document that blesses with exit 0 where the generator does
+/// not ask, and is a compile error in the generated file, so a refusal that is
+/// removed turns its row into the compiler's output.
 #[test]
 fn two_items_of_the_generated_code_that_share_a_name_refuse_the_bless_by_name() {
     for (at, collision) in COLLISIONS.iter().enumerate() {

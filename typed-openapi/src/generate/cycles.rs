@@ -40,8 +40,7 @@
 //! is in a type that typify builds out of the merge and not along a reference that
 //! the document spells out. A member that adds nothing but a sentence is the
 //! idiom above and converts, so the line between the two is typify's reading of
-//! what a merge adds, which this crate does not copy. Measured, and left to the
-//! next release that moves typify.
+//! what a merge adds, which this crate does not copy.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 

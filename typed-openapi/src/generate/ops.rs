@@ -310,6 +310,9 @@ fn operation_ident(word: &str) -> Result<Ident, GenerateError> {
 /// answers that, and it is not the arm below it: `accept_as_ident` asks whether
 /// a word may stand unquoted, so it says yes to `3rd_firing` and to the empty
 /// string, and only `syn` refuses a word that is no identifier in any spelling.
+/// The word of a parameter has an `x` in front of a digit first
+/// ([`spelled_with_a_digit`]), so for a parameter only an emptied word reaches
+/// `None`; an `operationId` that starts with a digit does.
 fn ident(word: &str) -> Option<Ident> {
     if typify::accept_as_ident(word) {
         return syn::parse_str(word).ok();
