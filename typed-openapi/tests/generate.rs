@@ -1749,12 +1749,27 @@ fn the_generated_code_names_every_standard_item_by_its_full_path() {
         .write_to(&hostile)
         .expect("the control document generates");
 
-    for (label, root) in [("toy", toy), ("hostile", hostile)] {
+    for (label, root) in [("toy", toy), ("hostile", hostile.clone())] {
         let types = bare_standard_items(&read(&root.join("src/types.rs")), false);
         assert!(types.is_empty(), "{label}: types.rs names {types:?} bare");
         let ops = bare_standard_items(&read(&root.join("src/ops.rs")), true);
         assert!(ops.is_empty(), "{label}: ops.rs names {ops:?} bare");
     }
+
+    // The one type position that is the standard item's: the `String` of the
+    // `TryFrom` that wraps a type the adopter owns. A schema called `String` is a
+    // newtype that derefs to the standard one, so the impl for the bare word still
+    // compiles, and it converts from the schema where it says it converts from a
+    // string. No compile can tell, so the text does.
+    let types = read(&hostile.join("src/types.rs"));
+    assert!(
+        !types.contains("TryFrom<String>"),
+        "a `TryFrom` of the generated types converts from the schema called `String`"
+    );
+    assert!(
+        types.contains("impl ::std::convert::TryFrom<::std::string::String> for Cone"),
+        "the newtype over the type the adopter owns does not convert from a string:\n{types}"
+    );
 }
 
 /// A named schema that is a bare string: no `pattern`, no `enum`, no `format`.
@@ -6154,6 +6169,28 @@ fn any_other_panic_of_typify_is_a_refusal_naming_the_schema_too() {
         );
         assert_nothing_written(&dir, label);
     }
+}
+
+/// typify converts the whole set in one call, so a panic does not say which schema
+/// it was converting. The generator converts again, each schema with what it
+/// refers to, the one that refers to the fewest first, so that the schema that
+/// holds the cause is named and not one that refers to it, wherever the document
+/// puts them.
+#[test]
+fn the_schema_that_holds_the_cause_is_named_and_not_the_one_that_refers_to_it() {
+    // `Outer` stands first and holds a reference to `Inner`, whose enum is the
+    // cause: the conversion of `Outer` panics too, because it takes `Inner` in.
+    const OUTER_FIRST: &str = "    Outer: { type: object, properties: { inner: { $ref: \
+        '#/components/schemas/Inner' } } }\n    Inner: { type: string, enum: [active, ACTIVE] }\n";
+    let dir = out("panic-leaf");
+    let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(OUTER_FIRST)))
+        .write_to(&dir)
+        .expect_err("two values are one variant");
+
+    assert!(
+        matches!(&failure, GenerateError::Panicked { schema, .. } if schema == "the schema `Inner`"),
+        "{failure:?}"
+    );
 }
 
 /// Every refusal of the cycle test names the schemas that make the cycle, in the
