@@ -1267,13 +1267,14 @@ the crate follows [Semantic Versioning][semver].
   a log reads it: a string value of 3,000 characters made a chain of 3,138
   bytes. `DecodeError` holds `class` (a `DecodeClass`: `Syntax`, `Eof`, `Data`,
   and `Io`, which a slice cannot raise), `line` and `column`, and no byte of the
-  body. It prints `the body does not fit the type at line 1 column 48`. The text
-  stays in `raw`, and `Error::body()` reads it. `docs/client.md` says what the
-  position and the class mean. Repair: where a caller read the kind or the
-  position from the `serde_json::Error` (`downcast_ref` on `source()`), read
-  `class`, `line` and `column` from the `DecodeError` and the text from
-  `Error::body()`; the expected type is not named, so look at the body near that
-  place, and at all of it where the line is 0.
+  body. It prints the words of its class, the line and the column, such as `the
+  body does not fit the type at line 1 column 48`. The text stays in `raw`, and
+  `Error::body()` reads it. `docs/client.md` says what the position and the
+  class mean. Repair: where a caller read the kind or the position from the
+  `serde_json::Error` (`downcast_ref` on `source()`), read `class`, `line` and
+  `column` from the `DecodeError` and the text from `Error::body()`; the
+  expected type is not named, so look at the body near that line and column, and
+  at all of it where the line is 0.
 - **`client::to_json` takes the operation, and a generated wrapper passes it.**
   It is `to_json(op, &value)` where it was `to_json(&value)`, so that the
   `Encode` error of a body that does not serialise names whose body it was. The

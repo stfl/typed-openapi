@@ -219,8 +219,8 @@ not read in `raw`, and `Error::body()` reads whichever the error holds.
 
 The cause of a `Decode` is a `DecodeError`. It holds the kind of failure
 (`DecodeClass`: `Syntax`, the JSON reader refused the body; `Eof`, the body ends
-early; or `Data`, the body does not fit the type), the line and the column where
-the read stopped, and no byte of the body:
+early; or `Data`, the body does not fit the type), its place, and no byte of the
+body:
 
 ```text
 getVoucher: the response is not the shape the document promises
@@ -231,23 +231,24 @@ getVoucher: the response is not the shape the document promises
 the value, the key or the variant that it refused. That is why the cause does
 not say it, and it does not name the expected type either.
 
-The line and the column are `serde_json`'s, over the text it read. That text is
-the body, or `null` for an empty body, which has nothing in `raw`. The line
-counts from 1. The column is the number of bytes of that line before the place,
-so it counts bytes and not characters and it can fall inside a character. The
-place is at or after the start of what the reader refused. Both numbers are 0
-where `serde_json` has no place to give. That happens for some types in some
-positions, such as an untagged enum that no variant matches, an internally
-tagged enum whose content is refused, and a type whose own `Deserialize` or
-`try_from` refuses what it was given, like the type that typify writes for a
-string with a pattern. Where the line is 0, read the whole body. `Error::body()`
-replaces bytes that are not UTF-8 by U+FFFD, so after such bytes on the line the
-same column in it can point earlier than the place in the body, and never later.
+The place is the line and the column that `serde_json` gives over the text it
+read. That text is the body, or `null` for an empty body, which has nothing in
+`raw`. The line counts from 1. The column is the number of bytes of that line
+before the place, so it counts bytes and not characters and it can fall inside a
+character. The place is at or after the start of what the reader refused. Both
+numbers are 0 where `serde_json` has no place to give. That happens for some
+types in some positions, such as an untagged enum that no variant matches, an
+internally tagged enum whose content is refused, a type whose `try_from`
+refuses, and a type whose own `Deserialize` reads a value of another type and
+then refuses it, like the type that typify writes for a string with a pattern.
+Where the line is 0, read the whole body. `Error::body()` replaces bytes that
+are not UTF-8 by U+FFFD, so after such bytes on the line the same column in it
+can point earlier than the place in the body, and never later.
 
 The class is that of the first failure the reader found as it read from the
-start of the body. The reader reads nothing after that place, so the class says
-nothing about the text after it: a body that is cut off, or that goes on with
-text that is not JSON, can be `Syntax`, `Eof` or `Data`.
+start of the body. It says nothing about the text after the place: a body that
+is cut off, or that goes on with text that is not JSON, can be `Syntax`, `Eof`
+or `Data`.
 
 - `Syntax` is what `serde_json` calls a syntax error. The text is not JSON, or
   it is JSON that the reader will not take, such as a number past the range of
@@ -257,10 +258,10 @@ text that is not JSON, can be `Syntax`, `Eof` or `Data`.
 - `Eof` is a text that ends inside a value, or before any value starts when it
   holds white space only.
 - `Data` is a text that the reader took as JSON up to the place, and the type
-  refuses what it found there, such as a string, a list or an object where the
-  type takes an integer, `300` where it takes a `u8`, a missing property, a
-  property or a variant that the type does not take, or a value that the type
-  refuses itself.
+  refuses something that the reader read, such as a string, a list or an object
+  where the type takes an integer, `300` where it takes a `u8`, an object that
+  lacks a property, a property or a variant that the type does not take, or a
+  value that the type refuses itself.
 
 The cause of a `Transport` is the error of the client that you passed, and it
 prints what that client prints. A cause is printed once, on its own line, by

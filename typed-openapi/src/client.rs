@@ -120,16 +120,15 @@ pub enum Error {
     /// A success response whose body is not the type the document promises for
     /// it.
     ///
-    /// The cause holds the kind of failure and where the read stopped, and no
-    /// byte of the body: serde's own message can quote the value, the key or the
-    /// variant it refused, and the chain of an error is printed where a log
-    /// reads it. The text is in `raw`.
+    /// The cause holds the kind of failure and its place, and no byte of the
+    /// body: serde's own message can quote the value, the key or the variant it
+    /// refused, and the chain of an error is printed where a log reads it. The
+    /// text is in `raw`.
     #[error("{op}: the response is not the shape the document promises")]
     Decode {
         /// The `operationId` of the operation whose request was answered.
         op: String,
-        /// What kind of failure it was, and the line and column where the read
-        /// stopped.
+        /// What kind of failure it was, and its place in the text that was read.
         #[source]
         source: DecodeError,
         /// The response body as text, with bytes that are not UTF-8 replaced.
@@ -137,25 +136,28 @@ pub enum Error {
     },
 }
 
-/// Where a response body stopped being the type the document promises, and
-/// what kind of failure it was, and nothing the body said.
+/// The kind of failure that a response body is, and its place, and nothing the
+/// body said.
+///
+/// The place is the line and the column that `serde_json` gives over the text it
+/// read. That text is the body, or `null` for an empty body, which has nothing
+/// in `raw`.
 ///
 /// `serde_json` can word its failure with the value, the key or the variant it
 /// refused, and with the type it expected. This keeps the class of the failure
-/// and the position of the read and nothing else of that message: the cause of
-/// an [`Error::Decode`], so the length of a chain that a log prints is bounded
-/// by the two numbers whatever the server sent.
+/// and the place and nothing else of that message: the cause of an
+/// [`Error::Decode`], so the length of a chain that a log prints is bounded by
+/// the two numbers whatever the server sent.
 ///
-/// The line and the column are `serde_json`'s own, over the text it read. That
-/// text is the body, or `null` for an empty body, which has nothing in `raw`.
 /// The line counts from 1. The column is the number of bytes of that line before
 /// the place, so it counts bytes and not characters and it can fall inside a
 /// character. The place is at or after the start of what the reader refused.
 /// Both numbers are 0 where `serde_json` has no place to give. That happens for
 /// some types in some positions, such as an untagged enum that no variant
-/// matches, an internally tagged enum whose content is refused, and a type
-/// whose own `Deserialize` or `try_from` refuses what it was given, like the
-/// type that typify writes for a string with a pattern.
+/// matches, an internally tagged enum whose content is refused, a type whose
+/// `try_from` refuses, and a type whose own `Deserialize` reads a value of
+/// another type and then refuses it, like the type that typify writes for a
+/// string with a pattern.
 ///
 /// [`Error::body`] replaces bytes that are not UTF-8 by U+FFFD, so after such
 /// bytes on the line the same column in it can point earlier than the place in
@@ -166,8 +168,8 @@ pub enum Error {
 pub struct DecodeError {
     /// What kind of failure it was.
     pub class: DecodeClass,
-    /// The line of the text that was read where the read stopped, counted from
-    /// 1, or 0 where the reader has no place to give.
+    /// The line of the place, counted from 1, or 0 where the reader has no place
+    /// to give.
     pub line: usize,
     /// The number of bytes of that line before the place, or 0 where the reader
     /// has no place to give.
@@ -196,9 +198,9 @@ impl DecodeError {
 /// classifies its own by.
 ///
 /// The class is that of the first failure the reader found as it read from the
-/// start of the body. The reader reads nothing after that place, so the class
-/// says nothing about the text after it: a body that is cut off, or that goes
-/// on with text that is not JSON, can be `Syntax`, `Eof` or `Data`.
+/// start of the body. It says nothing about the text after the place: a body
+/// that is cut off, or that goes on with text that is not JSON, can be `Syntax`,
+/// `Eof` or `Data`.
 ///
 /// It is a class and not an error: [`DecodeError`] is the cause, and its message
 /// begins with the words of its class.
@@ -216,10 +218,10 @@ pub enum DecodeClass {
     /// white space only.
     Eof,
     /// The reader took the text up to the place as JSON, and the type refuses
-    /// what it found there, such as a string, a list or an object where the type
-    /// takes an integer, `300` where it takes a `u8`, a missing property, a
-    /// property or a variant that the type does not take, or a value that the
-    /// type refuses itself.
+    /// something that the reader read, such as a string, a list or an object
+    /// where the type takes an integer, `300` where it takes a `u8`, an object
+    /// that lacks a property, a property or a variant that the type does not
+    /// take, or a value that the type refuses itself.
     Data,
     /// The reader failed. A body is a slice in memory, which cannot fail to be
     /// read; the variant is here because a reading of `serde_json`'s categories

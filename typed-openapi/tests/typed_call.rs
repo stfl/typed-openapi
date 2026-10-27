@@ -581,14 +581,13 @@ fn a_decode_names_the_operation_and_keeps_the_text() {
     );
     assert!(
         error.source().is_some(),
-        "where the read stopped is the cause"
+        "the kind of failure and its place are the cause"
     );
     assert!(error.body().is_some_and(|held| held.contains("\"x\"")));
 }
 
 /// A 200 that a `Strict` refuses, the words of its body (its values and its
-/// keys) that serde can quote in its own message, and the column where serde
-/// stopped.
+/// keys) that serde can quote in its own message, and the column of its place.
 struct Refused {
     body: String,
     quoted: &'static [&'static str],
@@ -651,9 +650,8 @@ fn a_decode_chain_holds_no_byte_of_the_body() {
     }
 }
 
-/// The cause of a `Decode` says what kind of failure it was and where the read
-/// stopped, which is what serde's own message says about the body besides the
-/// bytes of it.
+/// The cause of a `Decode` says what kind of failure it was and its place, which
+/// is what serde's own message says about the body besides the bytes of it.
 #[test]
 fn a_decode_cause_says_the_class_the_line_and_the_column() {
     for Refused { body, column, .. } in refused() {
@@ -705,10 +703,12 @@ fn a_decode_cause_tells_the_three_classes_apart() {
 }
 
 /// The class is that of the first failure the reader found as it read from the
-/// start, and the reader reads nothing after that place. A body that is cut off
-/// can be `Data` (the reader refused a value before the cut), `Syntax` (the cut
-/// is in a number that the type skips) or `Eof` (the cut is in a number that it
-/// reads), and text after the place that is not JSON does not change the class.
+/// start, and it says nothing about the text after the place. A body that is cut
+/// off can be `Data` (the reader refused a value before the cut), `Syntax` (the
+/// cut is in a number that the type skips) or `Eof` (the cut is in a number that
+/// it reads). A body that goes on with text that is not JSON can be `Data` (the
+/// reader refused a value before that text) or `Syntax` (the reader meets that
+/// text before the type refuses anything).
 #[test]
 fn a_decode_class_is_that_of_the_first_failure_and_not_of_the_text_after_it() {
     for (error, class, line, column) in [
@@ -747,6 +747,12 @@ fn a_decode_class_is_that_of_the_first_failure_and_not_of_the_text_after_it() {
             8,
         ),
         (failure_as::<Thing>(r#"{"id":1."#), DecodeClass::Eof, 1, 8),
+        (
+            failure_as::<Thing>(r#"{"id":1<html>"#),
+            DecodeClass::Syntax,
+            1,
+            8,
+        ),
     ] {
         let source = cause(&error);
 
@@ -896,9 +902,9 @@ fn an_empty_body_is_read_as_null() {
 /// it holds JSON that is valid: a number past the range of an `f64` or a nesting
 /// past the recursion limit, where the type reads the value; `null` or a number
 /// where the type is an externally tagged enum, in a field too; and a key that is
-/// not a number in quotes where the keys of a map are numbers. `99999999999999999999`
-/// for an `i64` is past the range of the type and not of an `f64`, and it is
-/// `Data`.
+/// not a number in quotes where the keys of a map are numbers.
+/// `99999999999999999999` for an `i64` and `300` for a `u8` are past the range
+/// of the type and not of an `f64`, and they are `Data`.
 #[test]
 fn a_decode_cause_of_valid_json_the_reader_refuses_is_syntax() {
     /// A required field of an externally tagged enum.
@@ -930,10 +936,15 @@ fn a_decode_cause_of_valid_json_the_reader_refuses_is_syntax() {
         );
     }
 
-    let past_the_type = cause(&failure_as::<i64>("99999999999999999999"));
+    for (error, column) in [
+        (failure_as::<i64>("99999999999999999999"), 20),
+        (failure_as::<u8>("300"), 3),
+    ] {
+        let source = cause(&error);
 
-    assert_eq!(past_the_type.class, DecodeClass::Data);
-    assert_eq!((past_the_type.line, past_the_type.column), (1, 20));
+        assert_eq!(source.class, DecodeClass::Data, "{error:?}");
+        assert_eq!((source.line, source.column), (1, column), "{error:?}");
+    }
 }
 
 /// Taken from an integer only.
@@ -1025,10 +1036,12 @@ fn a_decode_cause_has_no_place_for_some_types_in_some_positions() {
     }
 }
 
-/// The types of the test above have a place in a struct field and in a list, and
-/// an enum has one for a failure that is not its own refusal.
+/// A struct field and a list have a place for the types of the test above. The
+/// `Deserialize` that serde derives for `Tagged` refuses a tag that it does not
+/// take and a missing tag, and has a place for both. `Number` has one for a body
+/// that is not JSON and for one that ends early.
 #[test]
-fn the_same_types_have_a_place_in_other_positions() {
+fn a_decode_cause_has_a_place_in_a_field_a_list_a_refused_tag_and_broken_text() {
     let placed = [
         (
             failure_as::<Holder>(r#"{"number":"x"}"#),

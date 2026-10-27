@@ -852,33 +852,33 @@ prints a byte the server sent.**
 `client::Error::{Encode, Transport, Status, Decode}` carry `op`, the
 `operationId`, and their messages begin with it, so a log line says which call
 failed. `Values` names it too, in the message of its `ValueError`. `Encode`
-comes from `to_json` while a generated wrapper builds the
-arguments of a call, before the call exists, and `Transport`, `Status` and
-`Decode` come once the request goes to the client. `Request` is raised while
-the request is built, after the call exists and before anything is sent, and
-names no operation. `Status` prints the operation and the status and never
-the body: the body is the server's and can hold a credential or a client's data,
-and sevdesk-cli re-exports the type as its own error, where its rule "No peer
-bytes in an error" applies. The cause is printed where the message is, because
-whoever reports an error walks `source()`, so the cause of `Decode` holds no
-byte of the body either: it is a `DecodeError`, which keeps what `serde_json`
-says of the kind of failure (`DecodeClass`) and of the line and the column, and
-none of its message, which can quote the value, the key or the variant it
-refused. What the position and the class of that cause mean is said once, on
-`DecodeError` and `DecodeClass` and in `docs/client.md`, and
-`tests/typed_call.rs` holds the bodies that were probed. A change to those words
-is checked against a probe of every failure, as the rule below says. `Syntax` is
-`serde_json`'s category and holds valid JSON of a form it will not take, so its
-words claim nothing about the JSON.
-No `serde_json::Error` is held by `Decode`, because a caller that can get one
-can print it. The cause of `Encode` is `serde_json::Error`, which can quote only
-the caller's own value, and the cause of `Transport` is the client's error,
-which prints what that client prints. The body is the field, and `Error::body`
-reads it for `Status` and for the `raw` of `Decode`. A variant added to the
-call-time group carries `op`, and a cause of it that could hold the server's
-bytes is a type of this crate that keeps none. `to_json` takes the operation,
-because only the generated wrapper knows which operation a body is the body of,
-so an argument that does not serialise names it.
+comes from `to_json` while a generated wrapper builds the arguments of a call,
+before the call exists, and `Transport`, `Status` and `Decode` come once the
+request goes to the client. `Request` is raised while the request is built,
+after the call exists and before anything is sent, and names no operation.
+`Status` prints the operation and the status and never the body: the body is the
+server's and can hold a credential or a client's data, and sevdesk-cli
+re-exports the type as its own error, where its rule "No peer bytes in an error"
+applies. The cause is printed where the message is, because whoever reports an
+error walks `source()`, so the cause of `Decode` holds no byte of the body
+either: it is a `DecodeError`, which keeps what `serde_json` says of the kind of
+failure (`DecodeClass`) and of the line and the column, and none of its message,
+which can quote the value, the key or the variant it refused. What the place and
+the class of that cause mean is said in two places that keep the same words, the
+docs of `DecodeError` and `DecodeClass` and `docs/client.md`, so a change to one
+is a change to the other, and `tests/typed_call.rs` holds the bodies that were
+probed. A change to those words is checked against a probe of every failure, as
+the rule below says. `Syntax` is `serde_json`'s category and holds valid JSON of
+a form it will not take, so its words claim nothing about the JSON. No
+`serde_json::Error` is held by `Decode`, because a caller that can get one can
+print it. The cause of `Encode` is `serde_json::Error`, which can quote only the
+caller's own value, and the cause of `Transport` is the client's error, which
+prints what that client prints. The body is the field, and `Error::body` reads
+it for `Status` and for the `raw` of `Decode`. A variant added to the call-time
+group carries `op`, and a cause of it that could hold the server's bytes is a
+type of this crate that keeps none. `to_json` takes the operation, because only
+the generated wrapper knows which operation a body is the body of, so an
+argument that does not serialise names it.
 
 **A request body is held to the generated type in one place, and an undeclared
 property has no way through.** `client::fits` is where a JSON body meets the
