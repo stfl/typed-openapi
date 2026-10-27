@@ -111,11 +111,13 @@ the crate follows [Semantic Versioning][semver].
   `tree::confirmation(cmd, op)` adds the confirmation flag to a command of your
   own in the word the operation carries, as `tree::command` does, and adds none
   for a read. Its help says "Send the request"; a verb that sends several
-  replaces it with `.mut_arg(COMMIT_ID, |arg| arg.help(..))`. A verb that
-  spelled `Arg::new(COMMIT_ID).long(COMMIT)` itself accepted `--commit` only, so
-  with `Loading::commit("yes")` the help of its gate flags named `--yes`, a flag
-  the verb refused. Repair: use `tree::confirmation(cmd, op)` in the place of
-  that `Arg`, and `Call::plan` where you called `Plan::decide` on a typed call.
+  replaces it with `.mut_arg(COMMIT_ID, |arg| arg.help(..))` on the command of
+  a write, because `mut_arg` panics on a read, which has no such flag. A verb
+  that spelled `Arg::new(COMMIT_ID).long(COMMIT)` itself accepted `--commit`
+  only, so with `Loading::commit("yes")` the help of its gate flags named
+  `--yes`, a flag the verb refused. Repair: use `tree::confirmation(cmd, op)` in
+  the place of that `Arg`, and `Call::plan` where you called `Plan::decide` on a
+  typed call.
 
 ### Changed
 
@@ -1260,9 +1262,9 @@ the crate follows [Semantic Versioning][semver].
   that binds the fields of one of them adds `op` or `..`, and a tuple pattern of
   `Encode` or `Transport` becomes a struct pattern.
 - **The `source` of `client::Error::Decode` is a `client::DecodeError`, not a
-  `serde_json::Error`.** The message of `serde_json` quotes the value, the key
-  or the variant that it refused, and the chain of an error is printed where a
-  log reads it: a string value of 3,000 characters made a chain of 3,138 bytes.
+  `serde_json::Error`.** The message of `serde_json` can quote the value, the
+  key or the variant that it refused, and the chain of an error is printed where
+  a log reads it: a string value of 3,000 characters made a chain of 3,138 bytes.
   `DecodeError` holds `class` (a `DecodeClass`: `Syntax` for a body that is not
   JSON, `Eof` for one that ends early, `Data` for JSON that is not the type, and
   `Io`, which a slice cannot raise), `line` and `column`, and no byte of the

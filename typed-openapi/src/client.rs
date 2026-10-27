@@ -6,12 +6,14 @@
 //! wants the gate a command line has plans the call with its [`Answers`] and
 //! sends what it planned ([`Call::plan`], [`Planned`]).
 //!
-//! The four errors a call raises once it sends (`Status`, `Decode`, `Transport`
-//! and `Encode`) name the operation. No message of theirs prints what the server
-//! sent, and neither does the cause of a `Decode`: the body is a field of the
-//! error, and [`Error::body`] reads it. The cause of a `Transport` is the
-//! client's own error, which prints what that client prints. A `Request` is
-//! raised before anything is sent and names no operation.
+//! Four errors name the operation. A generated wrapper raises `Encode` through
+//! [`to_json`] while it builds the arguments of a call, before the call exists,
+//! and `Transport`, `Status` and `Decode` come once the request goes to the
+//! client. No message of theirs prints what the server sent, and neither does
+//! the cause of a `Decode`: the body is a field of the error, and
+//! [`Error::body`] reads it. The cause of a `Transport` is the client's own
+//! error, which prints what that client prints. A `Request` is raised after the
+//! call exists and before anything is sent, and names no operation.
 //!
 //! Nothing here is specific to one API. A generated wrapper is the typed door
 //! onto [`Client::call`]: it names the `operationId`, names the arguments under
@@ -65,8 +67,8 @@ pub enum Error {
     Values(#[from] ValueError),
     /// The values satisfied the operation and the request they render to could
     /// not be built: the base URL holds userinfo or a query, or the `http` crate
-    /// refused what the document names, a URI or a header name. It is raised
-    /// before anything is sent and names no operation.
+    /// refused what the document names, a URI, a header name or a header value.
+    /// It is raised before anything is sent and names no operation.
     #[error(transparent)]
     Request(#[from] RequestError),
     /// A typed argument that does not serialise to JSON, so there is no body to
@@ -117,7 +119,7 @@ pub enum Error {
     /// it.
     ///
     /// The cause holds the kind of failure and where the read stopped, and no
-    /// byte of the body: serde's own message quotes the value, the key or the
+    /// byte of the body: serde's own message can quote the value, the key or the
     /// variant it refused, and the chain of an error is printed where a log
     /// reads it. The text is in `raw`.
     #[error("{op}: the response is not the shape the document promises")]
@@ -136,11 +138,14 @@ pub enum Error {
 /// Where a response body stopped being the type the document promises, and
 /// what kind of failure it was, and nothing the body said.
 ///
-/// `serde_json` words its failure with the value, the key or the variant it
-/// refused. This is what is left of that message once the bytes of the body are
-/// taken out: the cause of an [`Error::Decode`], so a chain that a log prints
-/// holds a fixed number of bytes whatever the server sent. The line and the
-/// column are the reader's own, counted from 1; the text is [`Error::body`].
+/// `serde_json` can word its failure with the value, the key or the variant it
+/// refused, and with the type it expected. This keeps the class of the failure
+/// and the position of the read and nothing else of that message: the cause of
+/// an [`Error::Decode`], so the length of a chain that a log prints is bounded
+/// by the two numbers whatever the server sent. The line and the column are the
+/// reader's own. The column is 0 when the read stopped before the first
+/// character of a line, which is where a body ends after a line break. The text
+/// is [`Error::body`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("{class} at line {line} column {column}")]
 #[non_exhaustive]
@@ -173,24 +178,34 @@ impl DecodeError {
 
 /// What kind of failure a [`DecodeError`] is, in the words that `serde_json`
 /// classifies its own by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+///
+/// It is a class and not an error: [`DecodeError`] is the cause, and its message
+/// begins with the words of its class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeClass {
     /// The body is not JSON.
-    #[error("the body is not JSON")]
     Syntax,
     /// The body is JSON that ends before the value does.
-    #[error("the body ends early")]
     Eof,
     /// The body is JSON and is not the type: a value of another type, a missing
     /// property, a property or a variant that the type does not take.
-    #[error("the body does not fit the type")]
     Data,
     /// The reader failed. A body is a slice in memory, which cannot fail to be
     /// read; the variant is here because a reading of `serde_json`'s categories
     /// that left one out would have to panic.
-    #[error("the body could not be read")]
     Io,
+}
+
+impl fmt::Display for DecodeClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Syntax => "the body is not JSON",
+            Self::Eof => "the body ends early",
+            Self::Data => "the body does not fit the type",
+            Self::Io => "the body could not be read",
+        })
+    }
 }
 
 impl Error {

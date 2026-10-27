@@ -363,8 +363,8 @@ impl Summary {
 /// vendor's, and either can hold one, so each goes through here. So does the
 /// reason a parameter has no flag: it is the crate's own words for a document
 /// that was loaded, and any text for a `Document` read from a blob or from
-/// another format, because `Unsupported::Keyword` holds a `String`. A gate and a
-/// group are spelled `[a-z0-9-]` and hold none.
+/// another format, because `Unsupported::Keyword` and `Unsupported::Style` hold
+/// a `String`. A gate and a group are spelled `[a-z0-9-]` and hold none.
 fn cell(text: &str) -> String {
     text.replace('|', "\\|")
 }

@@ -171,8 +171,9 @@ pub fn command(op: &Operation) -> Command {
         cmd = cmd.arg(arg);
     }
     cmd = body_args(cmd, op.body());
-    // The flag, a gate's help, the long about above and the summary page read the
-    // confirmation word from the operation, so a page cannot name a flag that the
+    // The flag, a gate's help and the long about above read the confirmation word
+    // from the operation, and the summary page reads the document's, which a load
+    // writes as the same string, so a page cannot name a flag that the
     // subcommand does not accept.
     apart(gates(confirmation(cmd, op), op), op.body())
 }
@@ -263,7 +264,9 @@ fn apart(cmd: Command, body: &Body) -> Command {
 ///
 /// The help says "Send the request". A verb that sends more than one request
 /// replaces it, on the flag's id ([`COMMIT_ID`]), and keeps the word the
-/// operation chose:
+/// operation chose. The replacement is for the command of a write:
+/// `Command::mut_arg` panics on an id that the command never declared, and the
+/// command of a read declares no [`COMMIT_ID`].
 ///
 /// ```rust,ignore
 /// let verb = tree::confirmation(verb, op).mut_arg(COMMIT_ID, |arg| {

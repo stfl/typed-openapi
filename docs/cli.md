@@ -801,7 +801,9 @@ flags say "in addition to --yes".
 
 The help of the confirmation flag says "Send the request". A verb that sends
 more than one replaces it on the flag's id and keeps the word:
-`finalize-voucher`, whose chain sends two writes, says "Send the writes".
+`finalize-voucher`, whose chain sends two writes, says "Send the writes". The
+replacement is for the command of a write, because `Command::mut_arg` panics on
+an id the command never declared and a read declares no confirmation flag.
 
 ```rust,ignore
 tree::confirmation(verb, op).mut_arg(COMMIT_ID, |arg| {

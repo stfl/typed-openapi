@@ -353,10 +353,12 @@ pub enum RequestError {
     #[error(transparent)]
     Base(#[from] BaseUrlError),
     /// The `http` crate refused the request: it cannot build a URI from the base
-    /// and the document's path, or it cannot carry a header name.
+    /// and the document's path, or it cannot carry a header name or a header
+    /// value.
     ///
-    /// A header name is refused while a document loads, so only a blob that no
-    /// load wrote can hold one. A path is not checked at load: one with a
+    /// A header name and the `Content-Type` of a body are refused while a
+    /// document loads, so only a `Document` that no load wrote can hold one that
+    /// the `http` crate refuses. A path is not checked at load: one with a
     /// character that a URI cannot hold (`/odd path/x`) loads, and each request
     /// of its operation fails here.
     #[error("cannot build the request")]

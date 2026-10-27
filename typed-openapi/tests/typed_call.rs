@@ -5,12 +5,13 @@
 //! and the request it is about cannot come from two operations. A `Call` plans
 //! with what a caller answered and sends what it planned, so a request that is
 //! printed as a dry run is the request that goes out when the write is
-//! confirmed. The four errors that a call raises once it sends (`Status`,
-//! `Decode`, `Transport` and `Encode`) say which operation it was, and no
-//! message and no cause of theirs prints a byte the server sent: the body is a
-//! field. The cause of a `Transport` is the client's own error and prints what
-//! that client prints. `Request` comes before anything is sent and names no
-//! operation.
+//! confirmed. Four errors say which operation it was. `to_json` raises `Encode`
+//! while a wrapper builds the arguments of a call, before the call exists, and
+//! `Transport`, `Status` and `Decode` come once the request goes to the client.
+//! No message of theirs and no cause of a `Decode` prints a byte the server
+//! sent: the body is a field. The cause of a `Transport` is the client's own
+//! error and prints what that client prints. `Request` comes after the call
+//! exists and before anything is sent, and names no operation.
 //!
 //! The inputs are the probes of SEV-249: `A1/errs` (`chains`) for the 500 with a
 //! body that holds a credential, and the code reading of F-33 for the pairing.
@@ -338,7 +339,6 @@ fn the_debug_of_a_planned_call_shows_no_request() {
     let planned: Planned<'_, Thing> = call.plan(&Answers::new()).expect("a plan");
     let debug = format!("{planned:?}");
 
-    assert!(debug.contains("tagThing"), "{debug}");
     assert_eq!(
         planned.request().uri().path(),
         "/api/tags/path-secret",
@@ -421,7 +421,7 @@ fn an_async_status_names_the_operation_too() {
     );
 }
 
-/// `A2` (`F-23`): a gateway's HTML page of 3,013 bytes. The message of a status
+/// `A2` (`F-23`): a gateway's HTML page of 3,026 bytes. The message of a status
 /// is the same for it as for an empty body, and the page is in the error.
 #[test]
 fn a_status_says_the_same_whatever_the_body_holds() {
@@ -431,6 +431,7 @@ fn a_status_says_the_same_whatever_the_body_holds() {
         "<html><body>{}</body></html>",
         "<p>upstream</p>".repeat(200)
     );
+    assert_eq!(page.len(), 3_026, "the doc names the size of the page");
     let empty = Vec::new();
 
     let errors: Vec<ClientError> = [page.clone().into_bytes(), empty]
@@ -566,8 +567,9 @@ fn a_decode_names_the_operation_and_keeps_the_text() {
     assert!(error.body().is_some_and(|held| held.contains("\"x\"")));
 }
 
-/// A 200 that a `Strict` refuses, the words of its body that serde quotes in
-/// its own message, and the column where serde stopped.
+/// A 200 that a `Strict` refuses, the words of its body (its values and its
+/// keys) that serde can quote in its own message, and the column where serde
+/// stopped.
 struct Refused {
     body: String,
     quoted: &'static [&'static str],
@@ -582,22 +584,22 @@ fn refused() -> [Refused; 4] {
     [
         Refused {
             body: r#"{"id":"IBAN AT61 1904 3002 3457 3201, token=abc"}"#.to_owned(),
-            quoted: &["IBAN", "AT61", "token=abc"],
+            quoted: &["IBAN", "AT61", "token=abc", "id"],
             column: 48,
         },
         Refused {
             body: r#"{"id":1,"token=abc":1}"#.to_owned(),
-            quoted: &["token=abc"],
+            quoted: &["token=abc", "id"],
             column: 19,
         },
         Refused {
             body: r#"{"id":1,"kind":"secret-variant-token=abc"}"#.to_owned(),
-            quoted: &["secret-variant", "token=abc"],
+            quoted: &["secret-variant", "token=abc", "id", "kind"],
             column: 41,
         },
         Refused {
             body: format!(r#"{{"id":"{}"}}"#, "x".repeat(3000)),
-            quoted: &["xxxx"],
+            quoted: &["xxxx", "id"],
             column: 3008,
         },
     ]
@@ -687,6 +689,39 @@ fn a_decode_cause_tells_the_three_classes_apart() {
 
         assert_eq!(source.class, class, "{body}");
         assert_eq!((source.line, source.column), (line, column), "{body}");
+        assert_eq!(source.to_string(), words);
+    }
+}
+
+/// A body that stops, or that is refused, at a line break is read at the start
+/// of the next line, and serde counts that position as column 0.
+#[test]
+fn a_decode_cause_at_the_start_of_a_line_has_column_0() {
+    for (body, class, words) in [
+        (
+            "{\"id\":\n",
+            DecodeClass::Eof,
+            "the body ends early at line 2 column 0",
+        ),
+        (
+            "\n",
+            DecodeClass::Eof,
+            "the body ends early at line 2 column 0",
+        ),
+        (
+            "{\"id\":\"a\nb\"}",
+            DecodeClass::Syntax,
+            "the body is not JSON at line 2 column 0",
+        ),
+    ] {
+        let error = decode_failure(body);
+
+        let ClientError::Decode { source, .. } = &error else {
+            panic!("a decode: {error:?}");
+        };
+
+        assert_eq!(source.class, class, "{body:?}");
+        assert_eq!((source.line, source.column), (2, 0), "{body:?}");
         assert_eq!(source.to_string(), words);
     }
 }

@@ -189,8 +189,11 @@ other.
 
 ## What a call's error says
 
-The four errors that a call raises once it sends say which operation it was, in
-the words of the `operationId`, so a log line needs no context to be read:
+Four errors say which operation it was, in the words of the `operationId`, so a
+log line needs no context to be read. A generated wrapper raises `Encode`
+through `to_json` while it builds the arguments of a call, before the call
+exists. `Transport`, `Status` and `Decode` come once the request goes to the
+client:
 
 | `client::Error` | message |
 |---|---|
@@ -200,8 +203,9 @@ the words of the `operationId`, so a log line needs no context to be read:
 | `Decode { op, source, raw }` | `getVoucher: the response is not the shape the document promises` |
 
 `Request`, which a call raises while it builds the request and before anything
-is sent, names no operation: its message says what is wrong with the base URL or
-with what the document names.
+is sent, names no operation. Its message says what is wrong with the base URL or
+with what the document names, except for `RequestError::Http`, whose message is
+`cannot build the request` and whose cause says what the `http` crate refused.
 
 No message of the four prints what the server sent, and the cause of a `Decode`
 does not either. The body of a response is the server's: it can hold a
@@ -219,9 +223,12 @@ getVoucher: the response is not the shape the document promises
       caused by: the body does not fit the type at line 1 column 48
 ```
 
-`serde_json` says more, `invalid type: string "…", expected i64`, and quotes the
-value, the key or the variant that it refused. That is why the cause does not
-say it. To see what was refused, read `Error::body()` at that line and column.
+`serde_json` says more, `invalid type: string "…", expected i64`, and can quote
+the value, the key or the variant that it refused. That is why the cause does
+not say it, and it does not name the expected type either. The column is 0 when
+the read stopped before the first character of a line, which is where a body
+ends after a line break. To see what was refused, read `Error::body()` at that
+line and column.
 
 The cause of a `Transport` is the error of the client that you passed, and it
 prints what that client prints. A cause is printed once, on its own line, by
