@@ -233,27 +233,34 @@ not say it, and it does not name the expected type either.
 
 The line and the column are `serde_json`'s, over the text it read. That text is
 the body, or `null` for an empty body, which has nothing in `raw`. The line
-counts from 1. The column is the number of bytes of that line that the reader
-had read when it stopped, so it counts bytes and not characters, it can fall
-inside a character, and it is 0 where the reader had read none of the line. The
-place is at or after the start of what the reader refused: after a value of the
-wrong type, after a key that the type does not take, after an object that lacks
-a property. Both numbers are 0 where `serde_json` has no place to give. Some
-types leave it none, at the top of the body or below it: an untagged enum that
-no variant matches, an internally tagged enum whose content is refused, and a
-type that is read through `try_from` and refuses. Where the line is 0, read the
-whole body. `Error::body()` holds the body with each byte that is not UTF-8
-replaced by U+FFFD, which is three bytes long, so after such a byte the place is
-earlier in that text than in the body.
+counts from 1. The column is the number of bytes of that line before the place,
+so it counts bytes and not characters and it can fall inside a character. The
+place is at or after the start of what the reader refused. Both numbers are 0
+where `serde_json` has no place to give. That happens for some types in some
+positions, such as an untagged enum that no variant matches, an internally
+tagged enum whose content is refused, and a type whose own `Deserialize` or
+`try_from` refuses what it was given, like the type that typify writes for a
+string with a pattern. Where the line is 0, read the whole body. `Error::body()`
+replaces bytes that are not UTF-8 by U+FFFD, so after such bytes on the line the
+same column in it can point earlier than the place in the body, and never later.
 
-`Syntax` is what `serde_json` calls a syntax error. It is a body that is not
-JSON, and JSON that the reader will not take, such as a number past the range of
-an `f64`, a nesting past its recursion limit, `null` or a number where the type
-is an externally tagged enum, and a key that is not a number in quotes where the
-keys of a map are numbers. `Data` is JSON that the reader took and whose value
-is not what the type takes: a string where the type takes an integer, a number
-past the range of the type, a missing property, a property or a variant that the
-type does not take, or a value that the type refuses itself.
+The class is that of the first failure the reader found as it read from the
+start of the body. The reader reads nothing after that place, so the class says
+nothing about the text after it: a body that is cut off, or that goes on with
+text that is not JSON, can be `Syntax`, `Eof` or `Data`.
+
+- `Syntax` is what `serde_json` calls a syntax error. The text is not JSON, or
+  it is JSON that the reader will not take, such as a number past the range of
+  an `f64` or a nesting past its recursion limit where the type reads the value,
+  `null` or a number where the type is an externally tagged enum, and a key that
+  is not a number in quotes where the keys of a map are numbers.
+- `Eof` is a text that ends inside a value, or before any value starts when it
+  holds white space only.
+- `Data` is a text that the reader took as JSON up to the place, and the type
+  refuses what it found there, such as a string, a list or an object where the
+  type takes an integer, `300` where it takes a `u8`, a missing property, a
+  property or a variant that the type does not take, or a value that the type
+  refuses itself.
 
 The cause of a `Transport` is the error of the client that you passed, and it
 prints what that client prints. A cause is printed once, on its own line, by

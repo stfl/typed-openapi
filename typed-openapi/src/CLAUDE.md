@@ -864,17 +864,12 @@ whoever reports an error walks `source()`, so the cause of `Decode` holds no
 byte of the body either: it is a `DecodeError`, which keeps what `serde_json`
 says of the kind of failure (`DecodeClass`) and of the line and the column, and
 none of its message, which can quote the value, the key or the variant it
-refused. The position is `serde_json`'s over the text it read, which is the
-body, or `null` for an empty one, and a doc about it says only what a probe of
-every failure shows, as the rule below says (`tests/typed_call.rs` holds the
-bodies that were probed): the column counts the bytes of the line that the
-reader had read, so it can be 0 anywhere in a body and can fall inside a
-character; the place is at or after the start of what was refused; some types
-give line 0 and column 0, at the top of a body or below it (an untagged enum, an
-internally tagged enum, a `try_from`); and `Error::body()` replaces bytes that
-are not UTF-8, which moves the place in it. `Syntax` is `serde_json`'s category
-and holds valid JSON of a form it will not take, so its words claim nothing
-about the JSON.
+refused. What the position and the class of that cause mean is said once, on
+`DecodeError` and `DecodeClass` and in `docs/client.md`, and
+`tests/typed_call.rs` holds the bodies that were probed. A change to those words
+is checked against a probe of every failure, as the rule below says. `Syntax` is
+`serde_json`'s category and holds valid JSON of a form it will not take, so its
+words claim nothing about the JSON.
 No `serde_json::Error` is held by `Decode`, because a caller that can get one
 can print it. The cause of `Encode` is `serde_json::Error`, which can quote only
 the caller's own value, and the cause of `Transport` is the client's error,
@@ -1085,12 +1080,15 @@ it. A variant says when the crate raises it. A field says what the value is or
 where it comes from: the `operationId`, the flag as the operator typed it, the
 path into the body. It never says the `#[error]` message again, because the
 message prints it already. A doc that says what a foreign cause's message holds
-says only what a probe of every failure shows. Reading a `serde_json::Value`
-into a type names a value and a type for some failures, and for others only a
-missing key or an unmatched `untagged` enum. That read, `postcard` and `syn`
-over tokens carry no position. The adapter rule, that an adapter must not turn a
-status code into an error, is on `SyncClient` and `AsyncClient` themselves,
-because an adopter writes an adapter from that page.
+says only what a probe of every failure shows, and the same holds for the class
+and the position of a `serde_json::Error`: a sentence about them is a rule that
+every probe keeps or an example that a test holds, and a list of cases says
+"such as". Reading a `serde_json::Value` into a type names a value and a type
+for some failures, and for others only a missing key or an unmatched `untagged`
+enum. That read, `postcard` and `syn` over tokens carry no position. The adapter
+rule, that an adapter must not turn a status code into an error, is on
+`SyncClient` and `AsyncClient` themselves, because an adopter writes an adapter
+from that page.
 
 **A feature shows as a label, and no item writes it.** `src/lib.rs` turns
 `--cfg docsrs` into `feature(doc_cfg)`, and rustdoc then labels every item
