@@ -87,7 +87,7 @@ pub(super) fn emit(
     })?;
     // A summary and a description are the vendor's prose, and a wrapper's doc
     // is where they land.
-    super::Prose.visit_file_mut(&mut file);
+    super::prose::Prose.visit_file_mut(&mut file);
     Ok(format!("{header}{}", prettyplease::unparse(&file)))
 }
 

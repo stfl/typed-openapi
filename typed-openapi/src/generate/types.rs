@@ -183,7 +183,7 @@ pub(super) fn emit(
             source,
         })?;
     ThroughThisCrate.visit_file_mut(&mut file);
-    super::Prose.visit_file_mut(&mut file);
+    super::prose::Prose.visit_file_mut(&mut file);
     let mut displays = display_impls(&file)?;
     file.items.append(&mut displays);
     for promise in promises(&file, replacements)?.into_iter().rev() {
