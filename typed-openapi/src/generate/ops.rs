@@ -141,7 +141,7 @@ fn operation_id(ops: &[Emitted]) -> TokenStream {
     let idents = ops.iter().map(|op| &op.variant);
     let from_command = ops.iter().map(|op| {
         let (group, command, variant) = (&op.group, &op.command, &op.variant);
-        quote! { (#group, #command) => Some(Self::#variant) }
+        quote! { (#group, #command) => ::std::option::Option::Some(Self::#variant) }
     });
     let check_body = check_body(ops);
 
@@ -169,10 +169,10 @@ fn operation_id(ops: &[Emitted]) -> TokenStream {
             #[doc = "This is the one place a name off the command line becomes"]
             #[doc = "a typed operation; everything past it is exhaustive."]
             #[must_use]
-            pub fn from_command(group: &str, command: &str) -> Option<Self> {
+            pub fn from_command(group: &str, command: &str) -> ::std::option::Option<Self> {
                 match (group, command) {
                     #(#from_command,)*
-                    _ => None,
+                    _ => ::std::option::Option::None,
                 }
             }
 
@@ -196,7 +196,8 @@ fn check_body(ops: &[Emitted]) -> TokenStream {
         .filter(|op| op.body.is_none())
         .map(|op| &op.variant)
         .collect();
-    let untyped = (!untyped.is_empty()).then(|| quote! { #(Self::#untyped)|* => Ok(()) });
+    let untyped = (!untyped.is_empty())
+        .then(|| quote! { #(Self::#untyped)|* => ::std::result::Result::Ok(()) });
     quote! {
         #[doc = "Does `body` fit the type this operation's wrapper takes?"]
         #[doc = ""]
@@ -208,7 +209,7 @@ fn check_body(ops: &[Emitted]) -> TokenStream {
         pub fn check_body(
             self,
             body: &serde_json::Value,
-        ) -> Result<(), typed_openapi::client::BodyError> {
+        ) -> ::std::result::Result<(), typed_openapi::client::BodyError> {
             match self {
                 #(#typed,)*
                 #untyped
@@ -354,7 +355,7 @@ fn wrapper(
     );
     parses(quote! {
         #[doc = #doc]
-        pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
+        pub fn #name(&self, #(#args),*) -> ::std::result::Result<Call<'_, #response>, Error> {
             self.call(OperationId::#variant, Values::new() #(#builder)*)
         }
     })
@@ -452,7 +453,7 @@ fn builder_wrapper(
     parses(quote! {
         #[doc = #doc]
         #[builder]
-        pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
+        pub fn #name(&self, #(#args),*) -> ::std::result::Result<Call<'_, #response>, Error> {
             self.#plain(#(#arguments),*)
         }
     })
@@ -638,7 +639,7 @@ fn add_body(
                  which this crate does not assemble."
             ));
             let argument = BodyArgument {
-                ty: quote! { Vec<u8> },
+                ty: quote! { ::std::vec::Vec<u8> },
                 call: quote! { .raw(#name) },
                 payload: quote! { #name.map(typed_openapi::Payload::Raw) },
                 name,
@@ -654,7 +655,7 @@ fn add_body(
             );
             out.notes.push(multipart_note(&name, names));
             let argument = BodyArgument {
-                ty: quote! { Vec<Part> },
+                ty: quote! { ::std::vec::Vec<Part> },
                 call: quote! { .multipart(#name) },
                 payload: quote! { #name.map(typed_openapi::Payload::Multipart) },
                 name,
@@ -689,7 +690,7 @@ impl BodyArgument {
             out.args.push(quote! { #name: #ty });
             out.builder.push(call);
         } else {
-            out.args.push(quote! { #name: Option<#ty> });
+            out.args.push(quote! { #name: ::std::option::Option<#ty> });
             out.builder.push(quote! { .body(#payload) });
             out.notes.push(optional_note(&name));
         }
@@ -744,7 +745,7 @@ fn add_param(
         // A list parameter is the wire name given once per value, which is the
         // repetition a repeated flag reaches the request builder with.
         let ty = list_type(param.name(), schema, components, names)?;
-        out.args.push(quote! { #ident: Vec<#ty> });
+        out.args.push(quote! { #ident: ::std::vec::Vec<#ty> });
         out.builder.push(quote! { .each(#wire, #ident) });
     } else if param.required() {
         let ty = scalar_type(schema, names)?;
@@ -752,7 +753,7 @@ fn add_param(
         out.builder.push(quote! { .param(#wire, #ident) });
     } else {
         let ty = scalar_type(schema, names)?;
-        out.args.push(quote! { #ident: Option<#ty> });
+        out.args.push(quote! { #ident: ::std::option::Option<#ty> });
         out.builder.push(quote! { .maybe(#wire, #ident) });
     }
     Ok(())

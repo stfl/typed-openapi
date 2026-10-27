@@ -165,7 +165,7 @@ fn arguments(ops: &str, wrapper: &str) -> Vec<String> {
         .split_once(&opened)
         .unwrap_or_else(|| panic!("the generated file declares `{wrapper}`"));
     let (signature, _) = after
-        .split_once(") -> Result")
+        .split_once(") -> ::std::result::Result")
         .expect("every wrapper answers with a Result");
     signature
         .split(',')

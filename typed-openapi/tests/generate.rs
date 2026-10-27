@@ -156,7 +156,7 @@ fn an_overridden_parameter_is_one_argument_typed_by_the_operations_entry() {
     let ops = read(&dir.join("src/ops.rs"));
 
     assert!(
-        ops.contains("pub fn get_thing(&self, id: i64, key: Option<&str>)"),
+        dense(&ops).contains("pubfnget_thing(&self,id:i64,key:::std::option::Option<&str>)"),
         "the wrapper does not take the operation's `id` and the path item's `key`:\n{ops}"
     );
     assert!(
@@ -217,7 +217,7 @@ fn an_integer_format_types_a_body_property_and_leaves_a_parameter_an_i64() {
         "a body property with `minimum: 0` is not a `u64`:\n{types}"
     );
     assert!(
-        ops.contains("limit: Option<i64>"),
+        ops.contains("limit: ::std::option::Option<i64>"),
         "a parameter of `format: int32` is not an `i64` argument:\n{ops}"
     );
 }
@@ -302,35 +302,35 @@ fn optional_bodies() -> [OptionalBody; 5] {
         OptionalBody {
             what: "a flat body with a required property",
             wrapper: "create_reminder",
-            argument: "body:Option<&crate::types::CreateReminderBody>",
+            argument: "body:::std::option::Option<&crate::types::CreateReminderBody>",
             builder: json("createReminder"),
             note,
         },
         OptionalBody {
             what: "a flat body with no required property",
             wrapper: "create_note",
-            argument: "body:Option<&crate::types::CreateNoteBody>",
+            argument: "body:::std::option::Option<&crate::types::CreateNoteBody>",
             builder: json("createNote"),
             note,
         },
         OptionalBody {
             what: "a body that goes whole",
             wrapper: "create_export",
-            argument: "body:Option<&crate::types::CreateExportBody>",
+            argument: "body:::std::option::Option<&crate::types::CreateExportBody>",
             builder: json("createExport"),
             note,
         },
         OptionalBody {
             what: "a body sent verbatim",
             wrapper: "upload_attachment",
-            argument: "body:Option<Vec<u8>>",
+            argument: "body:::std::option::Option<::std::vec::Vec<u8>>",
             builder: ".body(body.map(typed_openapi::Payload::Raw))".to_owned(),
             note,
         },
         OptionalBody {
             what: "a multipart body",
             wrapper: "upload_scan",
-            argument: "parts:Option<Vec<Part>>",
+            argument: "parts:::std::option::Option<::std::vec::Vec<Part>>",
             builder: ".body(parts.map(typed_openapi::Payload::Multipart))".to_owned(),
             note: "`parts` is optional: with `None` the request carries no body.",
         },
@@ -395,14 +395,14 @@ fn a_required_body_is_a_plain_argument() {
             "a body sent verbatim",
             &toy,
             "upload_document",
-            "body:Vec<u8>",
+            "body:::std::vec::Vec<u8>",
             ".raw(body)",
         ),
         (
             "a multipart body",
             &toy,
             "upload_document_multipart",
-            "parts:Vec<Part>",
+            "parts:::std::vec::Vec<Part>",
             ".multipart(parts)",
         ),
         (
@@ -906,10 +906,10 @@ fn a_scalar_read_through_a_wrapper_or_an_any_schema_is_an_argument_of_its_type()
     let ops = read(&dir.join("src/ops.rs"));
 
     for argument in [
-        "floor: Option<i64>",
-        "code: Option<crate::types::Code>",
-        "days: Vec<&str>",
-        "codes: Vec<crate::types::Code>",
+        "floor: ::std::option::Option<i64>",
+        "code: ::std::option::Option<crate::types::Code>",
+        "days: ::std::vec::Vec<&str>",
+        "codes: ::std::vec::Vec<crate::types::Code>",
         "ratio: f64",
     ] {
         assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
@@ -959,10 +959,10 @@ fn a_list_parameter_whose_array_is_named_is_a_vec_argument() {
     let ops = read(&dir.join("src/ops.rs"));
 
     for argument in [
-        "days: Vec<&str>",
-        "weeks: Vec<&str>",
-        "codes: Vec<crate::types::Code>",
-        "kinds: Vec<crate::types::Code>",
+        "days: ::std::vec::Vec<&str>",
+        "weeks: ::std::vec::Vec<&str>",
+        "codes: ::std::vec::Vec<crate::types::Code>",
+        "kinds: ::std::vec::Vec<crate::types::Code>",
     ] {
         assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
     }
@@ -979,7 +979,10 @@ fn a_list_that_openapiv3_holds_as_any_is_a_vec_argument() {
         .expect("the document generates");
     let ops = read(&dir.join("src/ops.rs"));
 
-    for argument in ["days: Vec<&str>", "codes: Vec<crate::types::Code>"] {
+    for argument in [
+        "days: ::std::vec::Vec<&str>",
+        "codes: ::std::vec::Vec<crate::types::Code>",
+    ] {
         assert!(ops.contains(argument), "no `{argument}` in\n{ops}");
     }
 }
@@ -1018,7 +1021,7 @@ fn a_list_parameter_is_a_vec_argument_and_one_with_no_flag_is_no_argument() {
     let ops = read(&dir.join("src/ops.rs"));
 
     assert!(
-        ops.contains("tag: Vec<&str>"),
+        ops.contains("tag: ::std::vec::Vec<&str>"),
         "the list is not a Vec:\n{ops}"
     );
     assert!(
@@ -1516,7 +1519,8 @@ fn a_parameter_named_after_a_keyword_is_a_raw_identifier_and_keeps_its_wire_name
 
     let ops = read(&dir.join("src/ops.rs"));
     assert!(
-        ops.contains("r#type: Option<&str>") && ops.contains("r#ref: Option<&str>"),
+        ops.contains("r#type: ::std::option::Option<&str>")
+            && ops.contains("r#ref: ::std::option::Option<&str>"),
         "a keyword parameter is not a raw identifier:\n{ops}"
     );
     assert!(
@@ -1574,7 +1578,8 @@ fn a_parameter_whose_name_starts_with_a_digit_gets_a_prefixed_identifier_and_kee
 
     let ops = read(&dir.join("src/ops.rs"));
     assert!(
-        ops.contains("x3ds: Option<&str>") && ops.contains("x2: Option<&str>"),
+        ops.contains("x3ds: ::std::option::Option<&str>")
+            && ops.contains("x2: ::std::option::Option<&str>"),
         "a digit is not the start of an identifier:\n{ops}"
     );
     assert!(
@@ -1657,6 +1662,98 @@ fn both_generated_files_allow_every_warning_and_say_why() {
             )),
             "{file} gives no reason that covers `warnings`:\n{allowed}"
         );
+    }
+}
+
+/// The standard items that generated code names, and that a schema can be called.
+const STANDARD: [&str; 10] = [
+    "Ok", "Err", "Some", "None", "String", "Vec", "Option", "Result", "Box", "Default",
+];
+
+/// Every place in `source` where a standard item is named by one bare word: a
+/// path of one segment in an expression or a pattern, and in a type for a type
+/// that a file holds none of. `Default::default` is the standard item's own path
+/// of two, and counts too.
+fn bare_standard_items(source: &str, types_too: bool) -> Vec<String> {
+    use syn::visit_mut::VisitMut;
+
+    struct Bare {
+        found: Vec<String>,
+        types_too: bool,
+    }
+    impl Bare {
+        fn note(&mut self, path: &syn::Path) {
+            let words: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+            let bare = path.leading_colon.is_none()
+                && match words.as_slice() {
+                    [one] => STANDARD.contains(&one.as_str()),
+                    [first, second] => first == "Default" && second == "default",
+                    _ => false,
+                };
+            if bare {
+                self.found.push(words.join("::"));
+            }
+        }
+    }
+    impl VisitMut for Bare {
+        fn visit_expr_path_mut(&mut self, expr: &mut syn::ExprPath) {
+            self.note(&expr.path);
+            syn::visit_mut::visit_expr_path_mut(self, expr);
+        }
+        fn visit_pat_tuple_struct_mut(&mut self, pat: &mut syn::PatTupleStruct) {
+            self.note(&pat.path);
+            syn::visit_mut::visit_pat_tuple_struct_mut(self, pat);
+        }
+        fn visit_pat_ident_mut(&mut self, pat: &mut syn::PatIdent) {
+            if STANDARD.contains(&pat.ident.to_string().as_str()) {
+                self.found.push(pat.ident.to_string());
+            }
+        }
+        fn visit_type_path_mut(&mut self, ty: &mut syn::TypePath) {
+            if self.types_too {
+                self.note(&ty.path);
+            }
+            syn::visit_mut::visit_type_path_mut(self, ty);
+        }
+    }
+
+    let mut file: syn::File = syn::parse_file(source).expect("a generated file is Rust");
+    let mut bare = Bare {
+        found: Vec::new(),
+        types_too,
+    };
+    bare.visit_file_mut(&mut file);
+    bare.found
+}
+
+/// A schema is free to be called `Ok`, `Err`, `Some`, `None`, `String`, `Vec`,
+/// `Option`, `Result`, `Box` or `Default`, so the generated code names each of
+/// those items by its full path, and nothing it writes means whatever a schema is
+/// called. `types.rs` is typify's, and the items that it writes by one word are
+/// the ones of its own templates (`Ok(…)`, `Err(…)`, `Default::default()`), found
+/// in expressions and patterns, where a bare word is never a schema; the types of
+/// a file are the schemas'. `ops.rs` is this crate's own, and not one word of it
+/// is bare, a type included, because it names a schema only by the path of the
+/// module that holds it.
+///
+/// The compile test of `tests/hostile.rs` holds both files to the meaning. This
+/// holds `ops.rs` to the text, because no schema can be called what `ops.rs`
+/// names, so no compile would fail.
+#[test]
+fn the_generated_code_names_every_standard_item_by_its_full_path() {
+    let toy = out("standard-paths");
+    layered().write_to(&toy).expect("the fixtures generate");
+    let hostile = out("standard-paths-hostile");
+    Settings::new(HOSTILE)
+        .replace("cone-number", "crate::pyrometry::Cone")
+        .write_to(&hostile)
+        .expect("the control document generates");
+
+    for (label, root) in [("toy", toy), ("hostile", hostile)] {
+        let types = bare_standard_items(&read(&root.join("src/types.rs")), false);
+        assert!(types.is_empty(), "{label}: types.rs names {types:?} bare");
+        let ops = bare_standard_items(&read(&root.join("src/ops.rs")), true);
+        assert!(ops.is_empty(), "{label}: ops.rs names {ops:?} bare");
     }
 }
 
@@ -3253,7 +3350,7 @@ fn a_schema_the_adopter_owns_is_named_by_the_adopters_own_path() {
         "the wrapper does not answer with the type the adopter owns:\n{ops}"
     );
     assert!(
-        ops.contains("over:Option<crate::types::Cents>"),
+        ops.contains("over:::std::option::Option<crate::types::Cents>"),
         "the wrapper does not take the type the named schema became:\n{ops}"
     );
     assert!(
@@ -3860,11 +3957,15 @@ fn a_response_stated_inline_is_a_type_too() {
         "the response the operation states inline generated no type:\n{types}"
     );
     assert!(
-        ops.contains("Result<Call<'_,crate::types::CreateLedgerEntryResponse>,Error>"),
+        ops.contains(
+            "::std::result::Result<Call<'_,crate::types::CreateLedgerEntryResponse>,Error>"
+        ),
         "the wrapper does not deserialise into it"
     );
     assert!(
-        ops.contains("Result<Call<'_,::std::vec::Vec<crate::types::Voucher>>,Error>"),
+        ops.contains(
+            "::std::result::Result<Call<'_,::std::vec::Vec<crate::types::Voucher>>,Error>"
+        ),
         "a list stated inline lost the type of what is in it"
     );
 }
@@ -3912,7 +4013,7 @@ fn the_item_of_a_list_stated_inline_is_a_type() {
 
     assert!(
         ops.contains(
-            "Result<Call<'_,::std::vec::Vec<crate::types::ListPositionsResponseItem>>,Error>"
+            "::std::result::Result<Call<'_,::std::vec::Vec<crate::types::ListPositionsResponseItem>>,Error>"
         ),
         "the item of the list is not a type:\n{ops}"
     );
@@ -4420,7 +4521,9 @@ fn answering(name: &str, responses: &str) -> Result<String, GenerateError> {
 /// Whether the wrapper of `getThing` answers with `ty`, spelled as a generated
 /// file spells it.
 fn answers_with(ops: &str, ty: &str) -> bool {
-    ops.contains(&format!("-> Result<Call<'_, {ty}>, Error>"))
+    dense(ops).contains(&dense(&format!(
+        "-> ::std::result::Result<Call<'_, {ty}>, Error>"
+    )))
 }
 
 /// The probe's `getThing`: a success response that is a `$ref` to
@@ -4904,7 +5007,10 @@ fn an_optional_body_behind_a_reference_is_an_option_argument() {
         "body-optional",
         r##"{ content: { application/json: { schema: { $ref: "#/components/schemas/Thing" } } } }"##,
     );
-    assert!(ops.contains("body: Option<&crate::types::Thing>"), "{ops}");
+    assert!(
+        ops.contains("body: ::std::option::Option<&crate::types::Thing>"),
+        "{ops}"
+    );
 }
 
 /// A schema the component states inline is a type of its own, named after the
@@ -5002,7 +5108,7 @@ fn an_inline_schema_in_a_component_that_two_operations_share_is_a_type_for_each_
         "{ops}"
     );
     assert_eq!(
-        ops.matches("-> Result<Call<'_, crate::types::Made>, Error>")
+        ops.matches("-> ::std::result::Result<Call<'_, crate::types::Made>, Error>")
             .count(),
         4,
         "{ops}"
@@ -5339,7 +5445,7 @@ fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
             writing(&format!(
                 "{{ application/octet-stream: {{ schema: {{ {out_of_the_schemas} }} }} }}"
             )),
-            "body: Option<Vec<u8>>",
+            "body: ::std::option::Option<::std::vec::Vec<u8>>",
         ),
         (
             "a body under a key that is not sent",
@@ -5347,7 +5453,7 @@ fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
                 "{{ application/json: {{ schema: {{ type: object, properties: {{ a: {{ type: \
                  string }} }} }} }}, application/xml: {{ schema: {{ {out_of_the_schemas} }} }} }}"
             )),
-            "body: Option<&crate::types::MakeABody>",
+            "body: ::std::option::Option<&crate::types::MakeABody>",
         ),
     ] {
         let (ops, _) = outside("outside-blessed", &paths).expect(label);
