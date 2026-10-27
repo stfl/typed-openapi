@@ -1556,30 +1556,108 @@ fn an_operation_that_cannot_be_spelled_names_itself() {
     );
 }
 
-/// The same naming, for a parameter: what the adopter needs is the operation
-/// and the parameter, not a position in a token stream.
+/// An optional parameter whose name starts with a digit (`3ds`, a vendor's
+/// three-domain-secure flag) has a flag on the command line, and a Rust
+/// identifier does not start with a digit. The parameter's name is its wire key,
+/// so an Overlay cannot rename it and could only remove it: the generator puts
+/// `_` in front of the word instead, and the wrapper says which wire key the
+/// argument sends.
 #[test]
-fn a_parameter_that_cannot_be_spelled_names_itself_and_its_operation() {
-    let dir = out("unspellable-param");
-    let document = KEYWORDED.replace("- name: type", "- name: \"2\"");
-    let failure = Settings::new(wrote(&dir, "document.yaml", &document))
+fn a_parameter_whose_name_starts_with_a_digit_gets_a_prefixed_identifier_and_keeps_its_wire_key() {
+    let dir = out("digit-param");
+    let document = KEYWORDED
+        .replace("- name: type", "- name: 3ds")
+        .replace("- name: ref", "- name: \"2\"");
+    Settings::new(wrote(&dir, "document.yaml", &document))
         .write_to(&dir)
-        .expect_err("`2` has no spelling as a Rust identifier");
+        .expect("a name that starts with a digit is a spelling problem and not a refusal");
+
+    let ops = read(&dir.join("src/ops.rs"));
     assert!(
-        matches!(&failure, GenerateError::Operation { op, .. } if op == "listVouchers"),
-        "{failure:?}"
+        ops.contains("_3ds: Option<&str>") && ops.contains("_2: Option<&str>"),
+        "a digit is not the start of an identifier:\n{ops}"
     );
-    assert_eq!(
-        failure.to_string(),
-        "the wrapper for listVouchers cannot be generated"
+    assert!(
+        ops.contains(r#".maybe("3ds", _3ds)"#) && ops.contains(r#".maybe("2", _2)"#),
+        "the wire key has to survive the spelling:\n{ops}"
     );
-    assert_eq!(
-        failure
-            .source()
-            .expect("the operation's failure has a cause")
-            .to_string(),
-        "parameter `2` has no spelling as a Rust identifier",
+    for said in [
+        "`_3ds` sends the document's `3ds`, under a name of its own: a Rust identifier does not \
+         start with a digit, so `_` stands in front of the word.",
+        "`_2` sends the document's `2`, under a name of its own: a Rust identifier does not \
+         start with a digit, so `_` stands in front of the word.",
+    ] {
+        assert!(
+            ops.contains(said),
+            "the wrapper does not say which wire key the argument sends:\n{ops}"
+        );
+    }
+}
+
+/// The prefix is one more spelling of the plain word, so it moves aside for an
+/// argument declared before it as any other does, and the wrapper gives both
+/// reasons for the name it ends with.
+#[test]
+fn a_prefixed_identifier_that_is_spent_moves_aside_and_says_both_reasons() {
+    let dir = out("digit-param-spent");
+    let document = KEYWORDED
+        .replace("- name: type", "- name: _3ds")
+        .replace("- name: ref", "- name: 3ds");
+    Settings::new(wrote(&dir, "document.yaml", &document))
+        .write_to(&dir)
+        .expect("two spellings of one word are one more argument");
+
+    let ops = read(&dir.join("src/ops.rs"));
+    assert!(
+        ops.contains(r#".maybe("_3ds", _3ds)"#) && ops.contains(r#".maybe("3ds", _3ds_2)"#),
+        "the later parameter keeps its wire key under the next name:\n{ops}"
     );
+    assert!(
+        ops.contains(
+            "`_3ds_2` sends the document's `3ds`, under a name of its own: a Rust identifier \
+             does not start with a digit, so `_` stands in front of the word, and an argument \
+             declared before it had already spent that spelling."
+        ),
+        "the wrapper gives one reason for a name that has two:\n{ops}"
+    );
+}
+
+/// An adopter's lint set can be as strict as they like (`clippy::nursery`,
+/// `missing_docs`, `unused_qualifications`, then `-D warnings`), and none of it
+/// is aimed at a file they did not write. The exemption is the same block in both
+/// files, it names `warnings` beside the groups it has always named, and its
+/// reason says that the crate holding the file does not grade it.
+#[test]
+fn both_generated_files_allow_every_warning_and_say_why() {
+    let dir = out("allowed");
+    layered().write_to(&dir).expect("the fixtures generate");
+
+    for file in ["src/types.rs", "src/ops.rs"] {
+        let source = read(&dir.join(file));
+        let (_, after) = source
+            .split_once("#![allow(")
+            .unwrap_or_else(|| panic!("{file} carries no `#![allow(`"));
+        let (allowed, _) = after
+            .split_once(")]")
+            .unwrap_or_else(|| panic!("{file} does not close its `#![allow(`"));
+        let items: Vec<&str> = allowed
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.ends_with(','))
+            .collect();
+        assert!(
+            items.contains(&"warnings,"),
+            "{file} does not allow `warnings`: {items:?}"
+        );
+        // The reason is one string that the file spells over two lines.
+        assert!(
+            dense(&allowed.replace('\\', "")).contains(&dense(
+                "reason = \"generated source is not graded on style or on any lint that the crate \
+                 holding it turns on; the allow covers this module and nothing else\""
+            )),
+            "{file} gives no reason that covers `warnings`:\n{allowed}"
+        );
+    }
 }
 
 /// A named schema that is a bare string: no `pattern`, no `enum`, no `format`.

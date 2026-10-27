@@ -94,8 +94,16 @@ const DEFAULT_COMMAND: &str = "cargo run -p xtask -- bless";
 /// It is an inner attribute rather than a wrapping module so that the exemption
 /// travels with the file it exempts, and it is the same block in every
 /// generated file so that an adopter can grep for it.
+///
+/// `warnings` is what keeps the file quiet under a lint set that this list does
+/// not name, such as `clippy::nursery`, `missing_docs` and
+/// `unused_qualifications`, and under `-D warnings` on top of it: a lint at the
+/// level `warn` is a lint that the adopter chose, and none of it is aimed at a
+/// file that they did not write. A lint they set to `deny` by name is theirs
+/// to repair in their own configuration, and the allow does not reach it.
 const ALLOW: &str = "\
 #![allow(
+    warnings,
     clippy::all,
     clippy::pedantic,
     clippy::restriction,
@@ -103,8 +111,8 @@ const ALLOW: &str = "\
     unreachable_pub,
     unused,
     rustdoc::all,
-    reason = \"generated source is not graded on style; the allow covers this \\
-              module and nothing else\"
+    reason = \"generated source is not graded on style or on any lint that the crate \\
+              holding it turns on; the allow covers this module and nothing else\"
 )]
 ";
 

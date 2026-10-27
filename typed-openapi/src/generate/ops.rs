@@ -531,17 +531,32 @@ impl Signature {
     ///
     /// `carries` says what the argument is in the document's own terms, because
     /// that is the half the reader is missing: the identifier is in front of
-    /// them and the thing it stands for is not.
+    /// them and the thing it stands for is not. `led_by_digit` says the word got
+    /// its `_` because the document's own started with a digit, which is the other
+    /// reason an argument is spelled in a way nobody wrote.
     ///
     /// Every argument comes through here rather than through [`Signature::bind`],
     /// so an argument added later cannot be given a name without being
     /// accounted for under it.
-    fn argument(&mut self, plain: &Ident, word: &str, carries: &str) -> Ident {
+    fn argument(&mut self, plain: &Ident, word: &str, carries: &str, led_by_digit: bool) -> Ident {
         let bound = self.bind(plain.clone(), word);
+        let mut reasons = Vec::new();
+        if led_by_digit {
+            reasons.push(
+                "a Rust identifier does not start with a digit, so `_` stands in front of the word",
+            );
+        }
         if bound != *plain {
+            reasons.push(if led_by_digit {
+                "an argument declared before it had already spent that spelling"
+            } else {
+                "an argument declared before it had already spent the plain spelling"
+            });
+        }
+        if !reasons.is_empty() {
             self.notes.push(format!(
-                "`{bound}` {carries}, under a name of its own: an argument \
-                 declared before it had already spent the plain spelling."
+                "`{bound}` {carries}, under a name of its own: {}.",
+                reasons.join(", and ")
             ));
         }
         bound
@@ -596,7 +611,7 @@ fn add_body(
             ..
         } => {
             let ty = body_type(op, media_type, operation, components, names)?;
-            let name = out.argument(&format_ident!("body"), "body", "is the request body");
+            let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
             // The operation is named so that an argument that does not serialise
             // says whose body it was, as `fits` does in `check_body`.
             let id = op.id();
@@ -617,7 +632,7 @@ fn add_body(
             media_type,
             required,
         } => {
-            let name = out.argument(&format_ident!("body"), "body", "is the request body");
+            let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
             out.notes.push(format!(
                 "`{name}` is sent verbatim under the document's own `{media_type}`, \
                  which this crate does not assemble."
@@ -631,7 +646,12 @@ fn add_body(
             (*required, argument)
         }
         Body::Multipart { names, required } => {
-            let name = out.argument(&format_ident!("parts"), "parts", "carries the body's parts");
+            let name = out.argument(
+                &format_ident!("parts"),
+                "parts",
+                "carries the body's parts",
+                false,
+            );
             out.notes.push(multipart_note(&name, names));
             let argument = BodyArgument {
                 ty: quote! { Vec<Part> },
@@ -705,7 +725,7 @@ fn add_param(
             return Ok(());
         }
     };
-    let word = param.name().to_snake_case();
+    let (word, led_by_digit) = spelled_with_a_digit(param.name().to_snake_case());
     let plain = ident(&word).ok_or_else(|| {
         unsupported(format!(
             "parameter `{}` has no spelling as a Rust identifier",
@@ -716,6 +736,7 @@ fn add_param(
         &plain,
         &word,
         &format!("sends the document's `{}`", param.name()),
+        led_by_digit,
     );
     let schema = param_schema(declared, param.name())?;
     let wire = param.name();
@@ -735,6 +756,22 @@ fn add_param(
         out.builder.push(quote! { .maybe(#wire, #ident) });
     }
     Ok(())
+}
+
+/// `word` with a `_` in front of it where it starts with a digit, and whether it
+/// did.
+///
+/// A parameter's name is its wire key, so an Overlay cannot spell it another way
+/// and a name the identifier rules refuse would refuse the whole bless for a
+/// parameter the command line serves. `_` is the one character that makes a word
+/// that starts with a digit an identifier and changes nothing else about it, and
+/// the wrapper says which wire key the argument sends.
+fn spelled_with_a_digit(word: String) -> (String, bool) {
+    if word.starts_with(|first: char| first.is_ascii_digit()) {
+        (format!("_{word}"), true)
+    } else {
+        (word, false)
+    }
 }
 
 fn multipart_note(parts: &Ident, names: &[String]) -> String {
