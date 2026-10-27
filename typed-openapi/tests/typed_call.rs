@@ -37,7 +37,8 @@ use typed_openapi::client::{
     Client, DecodeClass, DecodeError, Error as ClientError, Planned, to_json,
 };
 use typed_openapi::{
-    Answers, Document, Invocation, NoContent, Plan, Reach, Recorder, RecorderError, Values, render,
+    Answers, Document, Invocation, NoContent, Plan, Reach, Recorder, RecorderError, ValueError,
+    Values, render,
 };
 
 /// A read, a write, a write that stands behind a gate, and a write that takes a
@@ -523,10 +524,12 @@ fn decode_failure(body: &str) -> ClientError {
 }
 
 /// A 200 whose body is `body`, read as a `T` by a typed call to `getThing`.
-fn failure_as<T: std::fmt::Debug + serde::de::DeserializeOwned>(body: &str) -> ClientError {
+fn failure_as<T: std::fmt::Debug + serde::de::DeserializeOwned>(
+    body: impl AsRef<[u8]>,
+) -> ClientError {
     let client = client();
     let doc = client.document();
-    let recorder = Recorder::new().answering_with(http::Response::new(body.as_bytes().to_vec()));
+    let recorder = Recorder::new().answering_with(http::Response::new(body.as_ref().to_vec()));
 
     client
         .call::<T>(doc.get("getThing").expect("the read"), id(5))
@@ -654,11 +657,7 @@ fn a_decode_chain_holds_no_byte_of_the_body() {
 #[test]
 fn a_decode_cause_says_the_class_the_line_and_the_column() {
     for Refused { body, column, .. } in refused() {
-        let error = decode_failure(&body);
-
-        let ClientError::Decode { source, .. } = &error else {
-            panic!("a decode: {error:?}");
-        };
+        let source = cause(&decode_failure(&body));
 
         assert_eq!(source.class, DecodeClass::Data, "{body}");
         assert_eq!((source.line, source.column), (1, column), "{body}");
@@ -680,7 +679,7 @@ fn a_decode_cause_tells_the_three_classes_apart() {
             DecodeClass::Syntax,
             1,
             2,
-            "the body cannot be read as JSON at line 1 column 2",
+            "the JSON reader refused the body at line 1 column 2",
         ),
         (
             r#"{"id":"#,
@@ -697,11 +696,7 @@ fn a_decode_cause_tells_the_three_classes_apart() {
             "the body does not fit the type at line 3 column 13",
         ),
     ] {
-        let error = decode_failure(body);
-
-        let ClientError::Decode { source, .. } = &error else {
-            panic!("a decode: {error:?}");
-        };
+        let source = cause(&decode_failure(body));
 
         assert_eq!(source.class, class, "{body}");
         assert_eq!((source.line, source.column), (line, column), "{body}");
@@ -709,57 +704,91 @@ fn a_decode_cause_tells_the_three_classes_apart() {
     }
 }
 
-/// Column 0 is the start of a line, wherever the read stops there: a body that
-/// ends after a line break, a body that goes on after it, and the first line
-/// itself.
+/// The column is the number of bytes of the line that the reader had read when
+/// it stopped, wherever in the body that is. It is 0 where the reader had read
+/// none of the line: the first line, a line that a body ends on, a line break
+/// inside a string, a list where the type takes an object, and an object where
+/// the type takes a list. A syntax error at the first byte of a line is 1,
+/// because the reader had read that byte, and an object that lacks a property is
+/// refused after its last byte.
 #[test]
-fn a_decode_cause_at_the_start_of_a_line_has_column_0() {
-    for (body, class, line, words) in [
-        (
-            "{\"id\":\n",
-            DecodeClass::Eof,
-            2,
-            "the body ends early at line 2 column 0",
-        ),
-        (
-            "\n",
-            DecodeClass::Eof,
-            2,
-            "the body ends early at line 2 column 0",
-        ),
-        (
-            "{\"id\":\"a\nb\"}",
-            DecodeClass::Syntax,
-            2,
-            "the body cannot be read as JSON at line 2 column 0",
-        ),
-        (
-            "{\"id\":\n[1]}",
-            DecodeClass::Data,
-            2,
-            "the body does not fit the type at line 2 column 0",
-        ),
+fn a_decode_column_is_the_bytes_of_the_line_the_reader_had_read() {
+    for (body, class, line, column) in [
+        ("{\"id\":\n", DecodeClass::Eof, 2, 0),
+        ("\n", DecodeClass::Eof, 2, 0),
+        ("{\"id\":\"a\nb\"}", DecodeClass::Syntax, 2, 0),
+        ("{\"id\":\n[1]}", DecodeClass::Data, 2, 0),
+        ("x", DecodeClass::Syntax, 1, 1),
+        ("<html>", DecodeClass::Syntax, 1, 1),
+        ("\nx", DecodeClass::Syntax, 2, 1),
+        ("{\"id\":1,\nx}", DecodeClass::Syntax, 2, 1),
+        ("{}", DecodeClass::Data, 1, 2),
     ] {
-        let error = decode_failure(body);
-
-        let source = cause(&error);
+        let source = cause(&decode_failure(body));
 
         assert_eq!(source.class, class, "{body:?}");
-        assert_eq!((source.line, source.column), (line, 0), "{body:?}");
-        assert_eq!(source.to_string(), words);
+        assert_eq!((source.line, source.column), (line, column), "{body:?}");
     }
 
-    let error = failure_as::<Vec<Thing>>("{}");
+    let source = cause(&failure_as::<Vec<Thing>>("{}"));
+
+    assert_eq!(source.class, DecodeClass::Data);
+    assert_eq!((source.line, source.column), (1, 0), "an object for a list");
+}
+
+/// The column counts bytes and not characters, so after a character of two bytes
+/// it is one more than the characters before it, and where the reader stops on
+/// the first byte of a character it falls inside that character.
+#[test]
+fn a_decode_column_counts_bytes_and_can_fall_inside_a_character() {
+    let after = r#"{"id":"ä"}"#;
+    let inside = r#"{"id":ä}"#;
+
+    let after_cause = cause(&decode_failure(after));
+    let inside_cause = cause(&decode_failure(inside));
+
+    assert_eq!(after_cause.class, DecodeClass::Data);
+    assert_eq!(
+        after_cause.column,
+        after.find('}').expect("the object closes"),
+        "the bytes before the closing brace, which are one more than its characters"
+    );
+    assert_eq!(after.chars().take_while(|&c| c != '}').count(), 9);
+    assert_eq!(inside_cause.class, DecodeClass::Syntax);
+    assert_eq!((inside_cause.line, inside_cause.column), (1, 7));
+    assert!(
+        !inside.is_char_boundary(inside_cause.column),
+        "column 7 is the first byte of `ä`, which has two"
+    );
+}
+
+/// `Error::body()` holds the body with each byte that is not UTF-8 replaced by
+/// U+FFFD, which is three bytes, so after such a byte the place that the numbers
+/// give is earlier in it than in the body.
+#[test]
+fn a_decode_place_is_later_in_the_text_of_the_body_after_a_byte_that_is_not_utf8() {
+    let body = b"{\"zz\":\"\xff\",\"id\":\"x\"}";
+
+    let error = failure_as::<Thing>(body);
 
     let source = cause(&error);
+    let held = error.body().expect("the text of the body");
     assert_eq!(source.class, DecodeClass::Data);
-    assert_eq!((source.line, source.column), (1, 0), "the first line too");
+    assert_eq!((source.line, source.column), (1, 18));
+    assert_eq!(body.get(source.column..), Some(&b"}"[..]), "the body");
+    assert_eq!(held.len(), body.len() + 2, "one byte became three");
+    assert_eq!(
+        held.as_bytes().get(source.column..),
+        Some(&b"x\"}"[..]),
+        "the same column in the text of the body is two bytes early"
+    );
 }
 
 /// An empty body is how "no content" arrives, and a call reads it as `null`:
-/// `NoContent` takes it, and a type that refuses `null` fails at line 1 column 4,
-/// after the end of a body with nothing in it. There is nothing at that place to
-/// read in `raw`.
+/// `NoContent` takes it, and a type that refuses `null` fails in that text, not
+/// in a body with nothing in it. A struct refuses it as `Data` at line 1 column 4,
+/// after the end of `null`, an externally tagged enum as `Syntax` at its first
+/// byte, and `raw` is empty.
 #[test]
 fn an_empty_body_is_read_as_null() {
     let client = client();
@@ -790,51 +819,62 @@ fn an_empty_body_is_read_as_null() {
         "{error:?}"
     );
     assert_eq!(error.body(), Some(""));
+
+    let tagged = cause(&failure_as::<Kind>(""));
+
+    assert_eq!(tagged.class, DecodeClass::Syntax);
+    assert_eq!((tagged.line, tagged.column), (1, 1));
 }
 
-/// `Syntax` is a body that `serde_json` cannot read, which includes JSON it
-/// refuses: a number out of its range, a nesting past its recursion limit, and
-/// `null` where the type is an externally tagged enum.
+/// `Syntax` is `serde_json`'s category for a refusal of the form of the text, and
+/// it holds JSON that is valid: a number past the range of an `f64`, whatever the
+/// type; a nesting past the recursion limit; `null` or a number where the type is
+/// an externally tagged enum, in a field too; and a key that is not a number in
+/// quotes where the keys of a map are numbers. A number past the range of the
+/// type and not of an `f64` is `Data`.
 #[test]
-fn a_decode_cause_of_json_serde_cannot_read_is_syntax() {
-    let deep = "[".repeat(200);
+fn a_decode_cause_of_valid_json_the_reader_refuses_is_syntax() {
+    /// A required field of an externally tagged enum.
+    #[derive(Debug, Deserialize)]
+    struct Needs {
+        #[expect(dead_code, reason = "read by serde only")]
+        kind: Kind,
+    }
+    let nested = format!("{}{}", "[".repeat(200), "]".repeat(200));
 
-    let out_of_range = decode_failure(r#"{"id":1e999}"#);
-    let too_deep = failure_as::<serde_json::Value>(&deep);
-    let null_for_an_enum = failure_as::<Kind>("null");
+    let refused = [
+        (decode_failure(r#"{"id":1e999}"#), 1, 11),
+        (failure_as::<String>("1e999"), 1, 5),
+        (failure_as::<serde_json::Value>(&nested), 1, 128),
+        (failure_as::<Kind>("null"), 1, 1),
+        (failure_as::<Kind>("5"), 1, 1),
+        (failure_as::<Needs>(r#"{"kind":null}"#), 1, 9),
+        (failure_as::<BTreeMap<i32, i32>>(r#"{"a":1}"#), 1, 2),
+    ];
 
-    for (error, line, column, words) in [
-        (
-            out_of_range,
-            1,
-            11,
-            "the body cannot be read as JSON at line 1 column 11",
-        ),
-        (
-            too_deep,
-            1,
-            128,
-            "the body cannot be read as JSON at line 1 column 128",
-        ),
-        (
-            null_for_an_enum,
-            1,
-            1,
-            "the body cannot be read as JSON at line 1 column 1",
-        ),
-    ] {
+    for (error, line, column) in refused {
         let source = cause(&error);
 
-        assert_eq!(source.class, DecodeClass::Syntax, "{words}");
-        assert_eq!((source.line, source.column), (line, column), "{words}");
-        assert_eq!(source.to_string(), words);
+        assert_eq!(source.class, DecodeClass::Syntax, "{source}");
+        assert_eq!((source.line, source.column), (line, column), "{source}");
+        assert_eq!(
+            source.to_string(),
+            format!("the JSON reader refused the body at line {line} column {column}")
+        );
     }
+
+    let past_the_type = cause(&failure_as::<i64>("99999999999999999999"));
+
+    assert_eq!(past_the_type.class, DecodeClass::Data);
+    assert_eq!((past_the_type.line, past_the_type.column), (1, 20));
 }
 
-/// The reader has no place for a type that itself refuses a value it had read
+/// `serde_json` has no place for some types that refuse a value it had read
 /// whole, so the line and the column are 0: an untagged enum that no variant
-/// matches, when it is the type of the body. The same type inside a struct is
-/// refused by the struct's read, which has a place.
+/// matches, an internally tagged enum whose content is refused, and a type that
+/// is read through `try_from` and refuses, at the top of a body, and the
+/// untagged enum in a newtype struct and in an `Option` too. A struct that holds
+/// the untagged enum reads it through its own field, and its read has a place.
 #[test]
 fn a_decode_cause_has_no_place_for_a_type_that_refuses_a_value_it_read_whole() {
     /// Taken from an integer only.
@@ -844,21 +884,56 @@ fn a_decode_cause_has_no_place_for_a_type_that_refuses_a_value_it_read_whole() {
         Whole(#[expect(dead_code, reason = "read by serde only")] i64),
     }
     #[derive(Debug, Deserialize)]
+    struct Newtype(#[expect(dead_code, reason = "read by serde only")] Number);
+    #[derive(Debug, Deserialize)]
     struct Holder {
         #[expect(dead_code, reason = "read by serde only")]
         number: Number,
     }
+    /// An enum that reads its tag first and refuses the content.
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "t")]
+    enum Tagged {
+        A {
+            #[expect(dead_code, reason = "read by serde only")]
+            x: i64,
+        },
+    }
+    /// A natural number, refused by its own `try_from`.
+    #[derive(Debug, Deserialize)]
+    #[serde(try_from = "i64")]
+    struct Natural(#[expect(dead_code, reason = "read by serde only")] i64);
+    impl TryFrom<i64> for Natural {
+        type Error = &'static str;
 
-    let alone = failure_as::<Number>(r#""x""#);
+        fn try_from(value: i64) -> Result<Self, Self::Error> {
+            if value < 0 {
+                Err("below 0")
+            } else {
+                Ok(Self(value))
+            }
+        }
+    }
+
+    let none = [
+        failure_as::<Number>(r#""x""#),
+        failure_as::<Newtype>(r#""x""#),
+        failure_as::<Option<Number>>(r#""x""#),
+        failure_as::<Natural>("-1"),
+        failure_as::<Tagged>(r#"{"t":"A","x":"s"}"#),
+    ];
     let inside = failure_as::<Holder>(r#"{"number":"x"}"#);
 
-    let alone = cause(&alone);
-    assert_eq!(alone.class, DecodeClass::Data);
-    assert_eq!((alone.line, alone.column), (0, 0));
-    assert_eq!(
-        alone.to_string(),
-        "the body does not fit the type at line 0 column 0"
-    );
+    for error in none {
+        let source = cause(&error);
+
+        assert_eq!(source.class, DecodeClass::Data, "{error:?}");
+        assert_eq!((source.line, source.column), (0, 0), "{error:?}");
+        assert_eq!(
+            source.to_string(),
+            "the body does not fit the type at line 0 column 0"
+        );
+    }
     let inside = cause(&inside);
     assert_eq!(inside.class, DecodeClass::Data);
     assert_eq!((inside.line, inside.column), (1, 14));
@@ -934,7 +1009,14 @@ fn a_refused_value_is_the_values_own_error() {
         .call::<Thing>(doc.get("getThing").expect("the read"), Values::new())
         .expect_err("the id is required");
 
-    assert!(matches!(error, ClientError::Values(_)), "{error:?}");
+    assert!(
+        matches!(
+            &error,
+            ClientError::Values(ValueError::MissingParam { op, name })
+                if op == "getThing" && name == "id"
+        ),
+        "{error:?}"
+    );
     assert_eq!(error.to_string(), "getThing: `id` is required");
     assert!(error.body().is_none());
 }

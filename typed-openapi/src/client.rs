@@ -146,24 +146,33 @@ pub enum Error {
 /// an [`Error::Decode`], so the length of a chain that a log prints is bounded
 /// by the two numbers whatever the server sent.
 ///
-/// The line and the column are the reader's own, and they are a place in the text
-/// it read. That text is the body, except that an empty body is read as `null`: a
-/// struct, a list or a scalar refuses it as [`DecodeClass::Data`] at line 1
-/// column 4, after the end of a body with nothing in it. The column is 0 when the
-/// read stopped at the start of a line, the first line included. Both numbers are
-/// 0 when the type itself refused a value that the reader had read whole, as an
-/// untagged enum that no variant matches does when it is the type of the body.
-/// [`Error::body`] reads the body.
+/// The line and the column are `serde_json`'s own, over the text it read. That
+/// text is the body, or `null` for an empty body, which has nothing in `raw`.
+/// The line counts from 1. The column is the number of bytes of that line that
+/// the reader had read when it stopped, so it counts bytes and not characters,
+/// it can fall inside a character, and it is 0 where the reader had read none of
+/// the line. The place is at or after the start of what the reader refused:
+/// after a value of the wrong type, after a key that the type does not take,
+/// after an object that lacks a property. Both numbers are 0 where `serde_json`
+/// has no place to give. Some types leave it none, at the top of a body or below
+/// it: an untagged enum that no variant matches, an internally tagged enum whose
+/// content is refused, and a type that is read through `try_from` and refuses.
+///
+/// [`Error::body`] holds the body with each byte that is not UTF-8 replaced by
+/// U+FFFD, which is three bytes long, so after such a byte the place that the
+/// numbers give is earlier in that text than in the body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("{class} at line {line} column {column}")]
 #[non_exhaustive]
 pub struct DecodeError {
     /// What kind of failure it was.
     pub class: DecodeClass,
-    /// The line of the text that was read where the read stopped, or 0 where the
-    /// reader has no place to give.
+    /// The line of the text that was read where the read stopped, counted from
+    /// 1, or 0 where the reader has no place to give.
     pub line: usize,
-    /// The column of that line where the read stopped.
+    /// The number of bytes of that line that the reader had read where it
+    /// stopped, which is 0 where it had read none of the line and where it has
+    /// no place to give.
     pub column: usize,
 }
 
@@ -194,16 +203,18 @@ impl DecodeError {
 #[non_exhaustive]
 pub enum DecodeClass {
     /// `serde_json` calls the failure a syntax error. That is a body that is not
-    /// JSON, and JSON that it will not read, such as a number out of its range, a
-    /// nesting past its recursion limit, or `null` where the type is an
-    /// externally tagged enum.
+    /// JSON, and JSON that it will not read, such as a number past the range of
+    /// an `f64`, a nesting past its recursion limit, `null` or a number where the
+    /// type is an externally tagged enum, and a key that is not a number in
+    /// quotes where the keys of a map are numbers.
     Syntax,
-    /// The body is JSON that ends before the value does.
+    /// The body ends before the value does, or before any value starts when it
+    /// holds white space only.
     Eof,
-    /// The text is JSON and is not the type: a value of another type, a missing
-    /// property, a property or a variant that the type does not take. An empty
-    /// body is the text `null`, which a struct, a list or a scalar refuses as
-    /// this.
+    /// The text is JSON that the reader took, and its value is not what the type
+    /// takes, such as a string where the type takes an integer, a number past
+    /// the range of the type, a missing property, a property or a variant that
+    /// the type does not take, or a value that the type refuses itself.
     Data,
     /// The reader failed. A body is a slice in memory, which cannot fail to be
     /// read; the variant is here because a reading of `serde_json`'s categories
@@ -214,7 +225,7 @@ pub enum DecodeClass {
 impl fmt::Display for DecodeClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Syntax => "the body cannot be read as JSON",
+            Self::Syntax => "the JSON reader refused the body",
             Self::Eof => "the body ends early",
             Self::Data => "the body does not fit the type",
             Self::Io => "the body could not be read",

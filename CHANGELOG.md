@@ -1265,21 +1265,26 @@ the crate follows [Semantic Versioning][semver].
   `serde_json::Error`.** The message of `serde_json` can quote the value, the
   key or the variant that it refused, and the chain of an error is printed where
   a log reads it: a string value of 3,000 characters made a chain of 3,138 bytes.
-  `DecodeError` holds `class` (a `DecodeClass`: `Syntax` for a body that
-  `serde_json` cannot read as JSON, `Eof` for one that ends early, `Data` for
-  JSON that is not the type, and `Io`, which a slice cannot raise), `line` and
-  `column`, and no byte of the body. It prints
-  `the body does not fit the type at line 1 column 48`. The text stays in `raw`,
-  and `Error::body()` reads it. The position is a place in the text that was
-  read, which is the body except that an empty body is read as `null`: a struct,
-  a list or a scalar refuses it as `Data` at line 1 column 4, after the end of the
-  body. The column is 0 at the start of a line, and both numbers are 0 when the
-  type itself refuses a value that was read whole, as an untagged enum that no
-  variant matches does when it is the type of the body. Repair: where a caller
-  read the kind or the position from the `serde_json::Error` (`downcast_ref` on
-  `source()`), read `class`, `line` and `column` from the `DecodeError` and the
-  text from `Error::body()`; the expected type is not named, so read the body
-  at that line and column, and all of it where the line is 0.
+  `DecodeError` holds `class` (a `DecodeClass`: `Syntax` for a body that is not
+  JSON and for JSON of a form that `serde_json` will not take, `Eof` for one
+  that ends early, `Data` for JSON whose value is not what the type takes, and
+  `Io`, which a slice cannot raise), `line` and `column`, and no byte of the
+  body. It prints `the body does not fit the type at line 1 column 48`, and
+  `Syntax` prints `the JSON reader refused the body`. The text stays in `raw`,
+  and `Error::body()` reads it. The position is `serde_json`'s, over the text it
+  read, which is the body, or `null` for an empty body. The column is the number
+  of bytes of the line that the reader had read, so it counts bytes, it can fall
+  inside a character, and it is 0 where the reader had read none of the line.
+  Both numbers are 0 where `serde_json` has no place to give, which some types
+  leave it, at the top of a body or below it: an untagged enum that no variant
+  matches, an internally tagged enum whose content is refused, and a type that
+  is read through `try_from` and refuses. `Error::body()` replaces each byte
+  that is not UTF-8 by U+FFFD, which is three bytes long, so after one the place
+  is earlier in it than in the body. Repair: where a caller read the kind or the
+  position from the `serde_json::Error` (`downcast_ref` on `source()`), read
+  `class`, `line` and `column` from the `DecodeError` and the text from
+  `Error::body()`; the expected type is not named, so look at the body near that
+  line and column, and at all of it where the line is 0.
 - **`client::to_json` takes the operation, and a generated wrapper passes it.**
   It is `to_json(op, &value)` where it was `to_json(&value)`, so that the
   `Encode` error of a body that does not serialise names whose body it was. The

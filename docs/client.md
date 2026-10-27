@@ -218,9 +218,9 @@ stays in the error. `Status` has it in `body`, `Decode` has the text it could
 not read in `raw`, and `Error::body()` reads whichever the error holds.
 
 The cause of a `Decode` is a `DecodeError`. It holds the kind of failure
-(`DecodeClass`: `Syntax`, the body cannot be read as JSON; `Eof`, the body ends
-early; or `Data`, the body is JSON that does not fit the type), the line and the
-column where the read stopped, and no byte of the body:
+(`DecodeClass`: `Syntax`, the JSON reader refused the body; `Eof`, the body ends
+early; or `Data`, the body does not fit the type), the line and the column where
+the read stopped, and no byte of the body:
 
 ```text
 getVoucher: the response is not the shape the document promises
@@ -231,18 +231,29 @@ getVoucher: the response is not the shape the document promises
 the value, the key or the variant that it refused. That is why the cause does
 not say it, and it does not name the expected type either.
 
-The line and the column are a place in the text that the reader read. That text
-is the body, except that an empty body is read as `null`: a struct, a list or a
-scalar refuses `null` as `Data` at line 1 column 4, after the end of a body with
-nothing in it. `Syntax` is what `serde_json` calls a syntax error, which
-includes JSON that it will not read, such as a number out of its range, a nesting
-past its recursion limit, or `null` where the type is an externally tagged enum.
-The column is 0 when the read stopped at the start of a line, the first line
-included. Both numbers are 0 when the type itself refused a value that the reader
-had read whole, as an untagged enum that no variant matches does when it is the
-type of the body. To see what was refused, read `Error::body()` at that line and
-column. Where the line is 0, read the whole body; an empty body has nothing to
-read.
+The line and the column are `serde_json`'s, over the text it read. That text is
+the body, or `null` for an empty body, which has nothing in `raw`. The line
+counts from 1. The column is the number of bytes of that line that the reader
+had read when it stopped, so it counts bytes and not characters, it can fall
+inside a character, and it is 0 where the reader had read none of the line. The
+place is at or after the start of what the reader refused: after a value of the
+wrong type, after a key that the type does not take, after an object that lacks
+a property. Both numbers are 0 where `serde_json` has no place to give. Some
+types leave it none, at the top of the body or below it: an untagged enum that
+no variant matches, an internally tagged enum whose content is refused, and a
+type that is read through `try_from` and refuses. Where the line is 0, read the
+whole body. `Error::body()` holds the body with each byte that is not UTF-8
+replaced by U+FFFD, which is three bytes long, so after such a byte the place is
+earlier in that text than in the body.
+
+`Syntax` is what `serde_json` calls a syntax error. It is a body that is not
+JSON, and JSON that the reader will not take, such as a number past the range of
+an `f64`, a nesting past its recursion limit, `null` or a number where the type
+is an externally tagged enum, and a key that is not a number in quotes where the
+keys of a map are numbers. `Data` is JSON that the reader took and whose value
+is not what the type takes: a string where the type takes an integer, a number
+past the range of the type, a missing property, a property or a variant that the
+type does not take, or a value that the type refuses itself.
 
 The cause of a `Transport` is the error of the client that you passed, and it
 prints what that client prints. A cause is printed once, on its own line, by
