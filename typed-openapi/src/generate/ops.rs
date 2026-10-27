@@ -19,7 +19,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::GenerateError;
-use super::names::{JsonBody, Names, Site};
+use super::names::{Answer, JsonBody, Names, Site};
 use crate::model::{Body, Shape, declared, entry_of_flag};
 use crate::schema::{array_of, stated, typed};
 use crate::{Document, Operation};
@@ -92,8 +92,7 @@ pub(super) fn emit(
 /// One pass over the document, in its order — which is the order every
 /// generated list below is in, and the order `Api::new` checks.
 fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>, GenerateError> {
-    let empty = Components::default();
-    let components = api.components.as_ref().unwrap_or(&empty);
+    let components = super::names::components(api);
     model
         .iter()
         .map(|op| {
@@ -118,7 +117,7 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                     id: id.to_owned(),
                     group: op.group().as_str().to_owned(),
                     command: op.command().as_str().to_owned(),
-                    body: json_body_type(op, operation, names)?,
+                    body: json_body_type(op, operation, components, names)?,
                     method: wrapper(op, &declared, components, operation, names)?,
                     builder_method: builder_wrapper(op, &declared, components, operation, names)?,
                 })
@@ -314,11 +313,12 @@ fn ident(word: &str) -> Option<Ident> {
 fn json_body_type(
     op: &Operation,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<Option<TokenStream>, GenerateError> {
     match op.body() {
         Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
-            body_type(op, media_type, operation, names).map(Some)
+            body_type(op, media_type, operation, components, names).map(Some)
         }
         Body::None | Body::Opaque { .. } | Body::Multipart { .. } => Ok(None),
     }
@@ -344,7 +344,7 @@ fn wrapper(
         // positional call has no use for them.
         names: _,
     } = signature_of(op, declared, components, operation, names)?;
-    let response = response_type(op, operation, names)?;
+    let response = response_type(op, operation, components, names)?;
     let variant = variant_of(op)?;
     let doc = paragraphs(
         [summary, &signature, &gate]
@@ -444,7 +444,7 @@ fn builder_wrapper(
         names: arguments,
         ..
     } = signature_of(op, declared, components, operation, names)?;
-    let response = response_type(op, operation, names)?;
+    let response = response_type(op, operation, components, names)?;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
          required argument is a compile error."
@@ -564,7 +564,7 @@ fn signature_of(
     for param in op.params() {
         add_param(&mut out, param, declared, components, names)?;
     }
-    add_body(&mut out, op, operation, names)?;
+    add_body(&mut out, op, operation, components, names)?;
     Ok(out)
 }
 
@@ -580,6 +580,7 @@ fn add_body(
     out: &mut Signature,
     op: &Operation,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<(), GenerateError> {
     let (required, argument) = match op.body() {
@@ -594,7 +595,7 @@ fn add_body(
             required,
             ..
         } => {
-            let ty = body_type(op, media_type, operation, names)?;
+            let ty = body_type(op, media_type, operation, components, names)?;
             let name = out.argument(&format_ident!("body"), "body", "is the request body");
             // The operation is named so that an argument that does not serialise
             // says whose body it was, as `fits` does in `check_body`.
@@ -826,10 +827,12 @@ fn body_type(
     op: &Operation,
     media_type: &str,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    match super::names::json_body(operation, media_type) {
-        JsonBody::Referenced => Err(unsupported("requestBody $refs are not followed")),
+    let body = super::names::json_body(operation, media_type, components)
+        .map_err(|source| unsupported(format!("its request body cannot be followed: {source}")))?;
+    match body {
         JsonBody::Unkeyed => Err(unsupported(
             "no request body entry under the key the model sends",
         )),
@@ -839,15 +842,20 @@ fn body_type(
 }
 
 /// The type a successful response deserialises into.
+///
+/// `NoContent` is the answer where no success response has a JSON body, and
+/// nowhere else: a response that has one and cannot be typed is refused.
 fn response_type(
     op: &Operation,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let Some(schema) = super::names::success(operation) else {
-        return Ok(quote!(NoContent));
-    };
-    named_or_stated(schema, &Site::response(op.id()), names)
+    match super::names::success(operation, components)? {
+        None => Ok(quote!(NoContent)),
+        Some(Answer::Shapeless) => Ok(quote!(serde_json::Value)),
+        Some(Answer::Stated(schema)) => named_or_stated(schema, &Site::response(op.id()), names),
+    }
 }
 
 /// The type a schema became, whether the document named it or stated it where

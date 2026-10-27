@@ -21,9 +21,11 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use http::HeaderValue;
+#[cfg(feature = "generate")]
+use openapiv3::Response;
 use openapiv3::{
     AnySchema, ArrayType, BooleanType, Components, IntegerType, NumberType, ObjectType,
-    ReferenceOr, Schema, SchemaKind, StringType, Type, VariantOrUnknownOrEmpty,
+    ReferenceOr, RequestBody, Schema, SchemaKind, StringType, Type, VariantOrUnknownOrEmpty,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -148,6 +150,37 @@ pub(crate) fn resolve_schema<'c>(
     components: &'c Components,
 ) -> Result<&'c Schema, RefError> {
     resolve(schema, schemas(components), "schemas")
+}
+
+/// The request body that an operation's `requestBody` stands for:
+/// `#/components/requestBodies/` hops followed.
+///
+/// The reduction reads a body through this, and so does the generator, so the
+/// body a command line is built from and the type a wrapper takes are the
+/// entry of one `content` map, and a reference one of them follows is a
+/// reference the other follows.
+pub(crate) fn resolve_request_body<'c>(
+    body: &'c ReferenceOr<RequestBody>,
+    components: &'c Components,
+) -> Result<&'c RequestBody, RefError> {
+    resolve(
+        body,
+        |key| components.request_bodies.get(key),
+        "requestBodies",
+    )
+}
+
+/// The response that one status of an operation stands for:
+/// `#/components/responses/` hops followed.
+///
+/// Only the generator reads a response, because a response is no part of a
+/// request: the reduction has no use for one.
+#[cfg(feature = "generate")]
+pub(crate) fn resolve_response<'c>(
+    response: &'c ReferenceOr<Response>,
+    components: &'c Components,
+) -> Result<&'c Response, RefError> {
+    resolve(response, |key| components.responses.get(key), "responses")
 }
 
 /// The section every schema reference in this module resolves against.

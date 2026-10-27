@@ -1223,6 +1223,85 @@ fn an_inline_request_body_stops_requiring_it_and_an_inline_response_does_not() {
     assert_eq!(field_type(stamp, "id"), "i64", "{stamp}");
 }
 
+/// Two operations whose bodies are `$ref`s to `#/components/requestBodies/`: one
+/// to a component that names `Pet`, which refers to `Owner`, and one to a chain
+/// of two that states its schema inline and refers to `Tag`. `Receipt` is only an
+/// answer.
+const COMPONENT_BODIES: &str = "openapi: 3.0.3
+info: { title: t, version: '1' }
+servers: [{ url: 'http://localhost:9999' }]
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      requestBody: { $ref: '#/components/requestBodies/NewPet' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Receipt' }
+  /owners:
+    post:
+      operationId: createOwner
+      requestBody: { $ref: '#/components/requestBodies/Alias' }
+      responses: { '201': { description: Created } }
+components:
+  requestBodies:
+    NewPet:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Pet' }
+    Alias: { $ref: '#/components/requestBodies/Stated' }
+    Stated:
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [id, tag]
+            properties:
+              id: { type: integer, readOnly: true }
+              tag: { $ref: '#/components/schemas/Tag' }
+  schemas:
+    Pet:
+      type: object
+      required: [id, owner]
+      properties:
+        id: { type: integer, readOnly: true }
+        owner: { $ref: '#/components/schemas/Owner' }
+    Owner:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer, readOnly: true }
+    Tag:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer, readOnly: true }
+    Receipt:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer, readOnly: true }
+";
+
+/// A request body that is a `$ref` to `#/components/requestBodies/` reaches what
+/// the component names or states, and everything those refer to, as a body stated
+/// on the operation does. A type that only such a body reaches stops requiring the
+/// property, and a type that only a response reaches does not.
+#[test]
+fn a_body_behind_a_component_reaches_the_types_it_names_and_the_types_those_name() {
+    let types = types_of("readonly-component-body", COMPONENT_BODIES);
+    for reached in ["Pet", "Owner", "Tag", "CreateOwnerBody"] {
+        let body = struct_of(&types, reached);
+        assert_eq!(field_type(body, "id"), OPTIONAL_ID, "{reached}:\n{body}");
+    }
+    let receipt = struct_of(&types, "Receipt");
+    assert_eq!(field_type(receipt, "id"), "i64", "{receipt}");
+}
+
 /// The two operations of the compositions below: one takes `schema` as its
 /// request body, and the other returns `response` as its response.
 fn composed(request: &str, response: &str, schemas: &str) -> String {

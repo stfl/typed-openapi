@@ -20,7 +20,12 @@
 //! so the alternative is a generated file carrying the same `struct` twice —
 //! and this is the rule the command line already follows, where two operations
 //! reducing to one `<group> <command>` are refused by name rather than one of
-//! them being renamed by a generator nobody asked.
+//! them being renamed by a generator nobody asked. One schema stated in one
+//! place and reached from two is not two definitions: a component that two
+//! operations share, with a `title` on the schema it states inline, is a type
+//! that both take. typify answers a name it already holds with the type it
+//! holds, whatever shape the new schema has, so the refusal stands unless the
+//! two schemas are the same.
 //!
 //! It is also how the answer stays right for a type the adopter owns.
 //! [`Settings::replace`](super::Settings::replace) substitutes their type
@@ -56,8 +61,9 @@
 //! reproduces it, and either way it is put through the same refusal.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
-use openapiv3::{MediaType, OpenAPI, PathItem, ReferenceOr, Schema, StatusCode};
+use openapiv3::{Components, MediaType, OpenAPI, PathItem, ReferenceOr, Schema, StatusCode};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use schemars::schema::{Schema as JsonSchema, SchemaObject};
@@ -66,6 +72,7 @@ use typify::{Type, TypeDetails, TypeId, TypeSpace};
 
 use super::GenerateError;
 use crate::model::Body;
+use crate::schema::{RefError, is_json, resolve_request_body, resolve_response};
 use crate::{Document, Operation};
 
 /// The module a generated type is reached through, from the file beside it.
@@ -146,16 +153,78 @@ impl Site {
 enum Origin {
     /// A schema the document declares under `components.schemas`.
     Named(String),
-    /// A schema an operation states where it uses it.
-    Inline(Site),
+    /// A schema an operation states where it uses it, and the schema it states.
+    Inline(Site, Box<JsonSchema>),
 }
 
 impl Origin {
     fn described(&self) -> String {
         match self {
             Origin::Named(schema) => format!("the schema `{schema}`"),
-            Origin::Inline(site) => site.described(),
+            Origin::Inline(site, _) => site.described(),
         }
+    }
+
+    /// The schema, where an operation states it.
+    fn stated(&self) -> Option<&JsonSchema> {
+        match self {
+            Origin::Named(_) => None,
+            Origin::Inline(_, schema) => Some(schema.as_ref()),
+        }
+    }
+}
+
+/// The Rust names asked for so far, and who asked first.
+#[derive(Default)]
+struct Claims(BTreeMap<String, Claim>);
+
+impl Claims {
+    /// Record that `origin` asked for the type `id`, which typify spells `rust`.
+    ///
+    /// A second claimant of a name is refused, unless it is the first asking
+    /// again.
+    fn record(&mut self, rust: String, id: TypeId, origin: &Origin) -> Result<(), GenerateError> {
+        let asked = origin.described();
+        let Some(first) = self.0.get(&rust) else {
+            let stated = origin.stated().cloned();
+            self.0.insert(rust, Claim { id, asked, stated });
+            return Ok(());
+        };
+        if first.is_asked_again(&id, origin) {
+            return Ok(());
+        }
+        Err(GenerateError::OneType {
+            first: first.asked.clone(),
+            second: asked,
+            // typify's own spelling of the name, rather than the token stream's,
+            // because this is a sentence an adopter reads.
+            rust,
+            // The declared schemas are resolved before the inline ones, so the
+            // later claimant is inline whenever either is.
+            inline: matches!(origin, Origin::Inline(..)),
+        })
+    }
+}
+
+/// Who asked for a Rust name first.
+struct Claim {
+    /// The type typify answered with.
+    id: TypeId,
+    /// The sentence that names the claimant.
+    asked: String,
+    /// The schema, where the claimant is stated inline.
+    stated: Option<JsonSchema>,
+}
+
+impl Claim {
+    /// Whether `origin` asking for the type `id` is the claimant asking again.
+    ///
+    /// typify hands back the type it holds for a name it holds, so the same id
+    /// does not say that the schema is the same. The schema is the same where one
+    /// schema is stated in one place and reached from two, as a component that
+    /// two operations share is.
+    fn is_asked_again(&self, id: &TypeId, origin: &Origin) -> bool {
+        self.id == *id && self.stated.as_ref() == origin.stated()
     }
 }
 
@@ -189,11 +258,11 @@ impl Names {
             let id = space
                 .add_type_with_name(&schema, Some(site.suggested()))
                 .map_err(|error| GenerateError::Typify(Box::new(error)))?;
-            resolved.push((Origin::Inline(site), id));
+            resolved.push((Origin::Inline(site, Box::new(schema)), id));
         }
 
         let defined = defined_in(space);
-        let mut claimed: BTreeMap<String, String> = BTreeMap::new();
+        let mut claimed = Claims::default();
         let mut names = Self {
             named: BTreeMap::new(),
             inline: BTreeMap::new(),
@@ -210,24 +279,12 @@ impl Names {
                 });
             }
             let path = path_of(&ty, &defined)?;
-            let asked = origin.described();
-            if defined_by_typify(&ty)
-                && let Some(first) = claimed.insert(ty.name(), asked.clone())
-            {
-                return Err(GenerateError::OneType {
-                    first,
-                    second: asked,
-                    // typify's own spelling of the name, rather than the token
-                    // stream's, because this is a sentence an adopter reads.
-                    rust: ty.name(),
-                    // The declared schemas are resolved before the inline ones,
-                    // so the later claimant is inline whenever either is.
-                    inline: matches!(origin, Origin::Inline(_)),
-                });
+            if defined_by_typify(&ty) {
+                claimed.record(ty.name(), id, &origin)?;
             }
             match origin {
                 Origin::Named(schema) => names.named.insert(schema, path),
-                Origin::Inline(site) => names.inline.insert(site, path),
+                Origin::Inline(site, _) => names.inline.insert(site, path),
             };
         }
         Ok(names)
@@ -256,19 +313,34 @@ impl Names {
 /// set is exactly the operations the wrappers are emitted for — an operation
 /// the reduction dropped states nothing this generator has to name.
 pub(super) fn sites<'a>(api: &'a OpenAPI, model: &Document) -> Vec<(Site, &'a Schema)> {
+    let components = components(api);
     let mut found = Vec::new();
     for op in model {
         let Some((_, operation)) = find(api, op) else {
             continue;
         };
-        if let Some(ReferenceOr::Item(schema)) = body_of(operation, op) {
+        if let Some(ReferenceOr::Item(schema)) = body_of(operation, op, components) {
             found.push((Site::body(op.id()), schema));
         }
-        if let Some(ReferenceOr::Item(schema)) = success(operation) {
+        // An answer that cannot be read states no schema here; the emitter of the
+        // wrappers meets the same refusal and names it.
+        if let Ok(Some(Answer::Stated(ReferenceOr::Item(schema)))) = success(operation, components)
+        {
             found.push((Site::response(op.id()), schema));
         }
     }
     found
+}
+
+/// The `components` of the document, or none where it holds none: a `$ref` then
+/// leads nowhere, as it does where the reduction reads the same document.
+///
+/// One empty set for the process, so that what is read through it lives as long
+/// as the document does and a document without `components` needs no owner for
+/// its stand-in.
+pub(super) fn components(api: &OpenAPI) -> &Components {
+    static NONE: LazyLock<Components> = LazyLock::new(Components::default);
+    api.components.as_ref().unwrap_or(&NONE)
 }
 
 /// The schema of every JSON request body a wrapper takes, named or stated, and
@@ -280,27 +352,32 @@ pub(super) fn bodies<'a>(
     api: &'a OpenAPI,
     model: &Document,
 ) -> Vec<(Site, &'a ReferenceOr<Schema>)> {
+    let components = components(api);
     model
         .into_iter()
         .filter_map(|op| {
             let (_, operation) = find(api, op)?;
-            Some((Site::body(op.id()), body_of(operation, op)?))
+            Some((Site::body(op.id()), body_of(operation, op, components)?))
         })
         .collect()
 }
 
 /// The schema of the JSON body that `op` sends, where the document states one.
+///
+/// A body that cannot be followed states no schema here. The emitter of the
+/// wrappers reads it through [`json_body`] too, and names the refusal.
 fn body_of<'a>(
     operation: &'a openapiv3::Operation,
     op: &Operation,
+    components: &'a Components,
 ) -> Option<&'a ReferenceOr<Schema>> {
     let (Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. }) = op.body()
     else {
         return None;
     };
-    match json_body(operation, media_type) {
-        JsonBody::Stated(schema) => Some(schema),
-        JsonBody::Referenced | JsonBody::Unkeyed | JsonBody::Shapeless => None,
+    match json_body(operation, media_type, components) {
+        Ok(JsonBody::Stated(schema)) => Some(schema),
+        Ok(JsonBody::Unkeyed | JsonBody::Shapeless) | Err(_) => None,
     }
 }
 
@@ -311,10 +388,9 @@ fn body_of<'a>(
 /// refuses are named here rather than collapsed into "no body", so the refusal
 /// can say which of them it was.
 pub(super) enum JsonBody<'a> {
-    /// The operation declares no `requestBody`, or declares it as a `$ref`.
-    Referenced,
-    /// It declares one, and has no `content` entry under the key the model
-    /// sends it under: the model and the document it was reduced from disagree.
+    /// The operation declares no `requestBody`, or its `content` has no entry
+    /// under the key the model sends it under: the model and the document it was
+    /// reduced from disagree.
     Unkeyed,
     /// It declares a JSON body and states no schema for it: the document
     /// describes no shape.
@@ -328,34 +404,103 @@ pub(super) enum JsonBody<'a> {
 ///
 /// The key is the model's and is not picked again here: the reduction chooses
 /// the entry a body is sent under in one place, and the type of a wrapper's
-/// argument is read from the entry that is sent.
-pub(super) fn json_body<'a>(operation: &'a openapiv3::Operation, media_type: &str) -> JsonBody<'a> {
-    let Some(ReferenceOr::Item(body)) = &operation.request_body else {
-        return JsonBody::Referenced;
+/// argument is read from the entry that is sent. A `requestBody` that is a
+/// `$ref` is followed as the reduction follows it ([`resolve_request_body`]), so
+/// a body is the same entry on both roads.
+pub(super) fn json_body<'a>(
+    operation: &'a openapiv3::Operation,
+    media_type: &str,
+    components: &'a Components,
+) -> Result<JsonBody<'a>, RefError> {
+    let Some(body) = &operation.request_body else {
+        return Ok(JsonBody::Unkeyed);
     };
-    let Some(media) = body.content.get(media_type) else {
-        return JsonBody::Unkeyed;
+    let Some(media) = resolve_request_body(body, components)?
+        .content
+        .get(media_type)
+    else {
+        return Ok(JsonBody::Unkeyed);
     };
-    match &media.schema {
+    Ok(match &media.schema {
         None => JsonBody::Shapeless,
         Some(schema) => JsonBody::Stated(schema),
+    })
+}
+
+/// What the JSON body of a success response says it is.
+#[derive(Debug, PartialEq)]
+pub(super) enum Answer<'a> {
+    /// The body states no schema: any JSON is the answer, as it is for a request
+    /// body that states none.
+    Shapeless,
+    /// The schema the body states.
+    Stated(&'a ReferenceOr<Schema>),
+}
+
+impl Answer<'_> {
+    /// How a refusal names what a response says, beside its status.
+    fn described(&self) -> String {
+        match self {
+            Answer::Shapeless => "a JSON body with no schema".to_owned(),
+            Answer::Stated(ReferenceOr::Reference { reference }) => format!("`{reference}`"),
+            Answer::Stated(ReferenceOr::Item(_)) => "a schema stated inline".to_owned(),
+        }
     }
 }
 
-/// The schema a successful response deserialises from, where the document
-/// states one.
+/// What the success responses of an operation answer with, or `None` where none
+/// of them has a JSON body and the call answers
+/// [`NoContent`](crate::NoContent).
 ///
-/// Every answer a caller has no type for — no success status, no JSON content,
-/// no schema — is the same answer, so this is an `Option` rather than a
-/// reading like [`JsonBody`]: a wrapper returns `NoContent` for all three.
-pub(super) fn success(operation: &openapiv3::Operation) -> Option<&ReferenceOr<Schema>> {
-    let (_, response) = operation.responses.responses.iter().find(
-        |(status, _)| matches!(status, StatusCode::Code(code) if (200..300).contains(code)),
-    )?;
-    let ReferenceOr::Item(response) = response else {
-        return None;
-    };
-    json(&response.content)?.schema.as_ref()
+/// A success response is a status in `200` to `299` and the range `2XX`, with a
+/// `$ref` to `#/components/responses/` followed as the reduction follows a
+/// request body. The ones that have a JSON body are the answer, and they have
+/// to agree: a wrapper has one return type, and choosing one of several here
+/// would be the generator choosing for the adopter. Two responses agree when
+/// they state the same schema, a `$ref` to the same name or a schema that reads
+/// the same. A response with no JSON content has no body to type, whatever its
+/// status, so a `204` beside a `200` takes nothing from it. `default` is not a
+/// success response and is not read.
+///
+/// A response that cannot be followed is refused, and so are responses that
+/// disagree: an answer that cannot be typed is never `NoContent`, which
+/// accepts any body and drops it.
+pub(super) fn success<'a>(
+    operation: &'a openapiv3::Operation,
+    components: &'a Components,
+) -> Result<Option<Answer<'a>>, GenerateError> {
+    let mut first: Option<(String, Answer<'a>)> = None;
+    for (status, response) in &operation.responses.responses {
+        if !matches!(status, StatusCode::Code(200..=299) | StatusCode::Range(2)) {
+            continue;
+        }
+        let response = resolve_response(response, components).map_err(|source| {
+            GenerateError::Unsupported(format!(
+                "its success response `{status}` cannot be followed: {source}"
+            ))
+        })?;
+        let Some(media) = json(&response.content) else {
+            continue;
+        };
+        let stated = media
+            .schema
+            .as_ref()
+            .map_or(Answer::Shapeless, Answer::Stated);
+        let Some((earlier, kept)) = &first else {
+            first = Some((status.to_string(), stated));
+            continue;
+        };
+        if *kept != stated {
+            return Err(GenerateError::Unsupported(format!(
+                "its success responses `{earlier}` and `{status}` name different JSON \
+                 schemas, {} and {}, so the wrapper has no one type to return; an Overlay \
+                 that gives both one schema, or removes one of them, mends it",
+                kept.described(),
+                stated.described()
+            )));
+        }
+    }
+    Ok(first.map(|(_, answer)| answer))
 }
 
 /// The document's own entry for an operation the model already accepted.
@@ -377,7 +522,7 @@ fn json<'a>(
 ) -> Option<&'a MediaType> {
     content
         .into_iter()
-        .find_map(|(name, media)| crate::schema::is_json(name).then_some(media))
+        .find_map(|(name, media)| is_json(name).then_some(media))
 }
 
 /// A named schema of the document, as typify spells a reference to one.
