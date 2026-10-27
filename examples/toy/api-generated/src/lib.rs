@@ -30,10 +30,13 @@
 //! bless step never touches either.
 //!
 //! This is a separate crate so that an edit to `api` recompiles the adopter's
-//! lines and not this volume. Its whole dependency list is `serde`, `http`, the
-//! runtime crate and `money` — the regex engine a generated `pattern` check
-//! runs on arrives re-exported through the runtime crate, so there is nothing
-//! to declare for that and nothing about a generator reaches this crate.
+//! lines and not this volume. Its dependency list is `serde`, `serde_json`,
+//! `http`, the runtime crate and `money`. The toy's document states no
+//! `date-time`, `date` or `uuid` format, so it declares neither `chrono` nor
+//! `uuid`, which a document that states one adds (`docs/generating.md`, *The
+//! dependencies*). The regex engine a generated `pattern` check runs on arrives
+//! re-exported through the runtime crate, so there is nothing to declare for
+//! that and nothing about a generator reaches this crate.
 
 mod client;
 

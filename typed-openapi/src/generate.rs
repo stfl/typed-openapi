@@ -62,17 +62,20 @@
 //! correction that stops applying is the loudest thing a vendor revision can
 //! do, and this is where it is heard. The failure names the layer it is in.
 
+mod artefacts;
 mod names;
 mod ops;
 mod prose;
 mod types;
 
 use std::error::Error;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 
 use thiserror::Error;
 
+use self::artefacts::Artefacts;
 use crate::model::DocumentError;
 use crate::openapi::Misfit;
 use crate::overlay::OverlayError;
@@ -263,9 +266,17 @@ impl Settings {
     /// and the header of each Rust file states where the others are. One
     /// argument buys all four in the arrangement they have to be in.
     ///
-    /// Every Rust file is handed to `rustfmt` after it is written, so what
+    /// **A bless that is refused writes nothing.** Every artefact is built in
+    /// memory first, and every Rust file is handed to `rustfmt` there, so what
     /// lands in the tree is what `cargo fmt --check` expects and the bless step
-    /// stays one command.
+    /// stays one command. The first file is written only after the document,
+    /// every emitter, the blob's round trip and `rustfmt` have all said yes. A
+    /// refusal at any of them leaves the committed artefacts as they were, which
+    /// is what keeps a vendor revision that the generator refuses from leaving
+    /// the new types beside the old wrappers. Each file is then written beside
+    /// its destination and renamed over it, so a disk that fills part-way is
+    /// stopped before any file is replaced, and a reader sees the old file or
+    /// the new one.
     pub fn write_to(&self, crate_dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, GenerateError> {
         let dir = crate_dir.as_ref();
         let corrected = self.correct()?;
@@ -290,22 +301,24 @@ impl Settings {
             &header,
             &self.replacements,
         )?;
-
-        write_bytes(&spec, document.as_bytes())?;
-        write_rust(&types, &source)?;
-        write_rust(
+        let types_source = formatted(&types, &source)?;
+        let ops_source = formatted(
             &ops,
             &ops::emit(&corrected.api, &corrected.model, &header, &names)?,
         )?;
-        write_model(&model, &corrected.model)?;
 
-        let mut written = vec![spec, types, ops, model];
+        let mut artefacts = Artefacts::new();
+        artefacts.add(spec, document);
+        artefacts.add(types, types_source);
+        artefacts.add(ops, ops_source);
+        artefacts.add(model, blob(&corrected.model)?);
         if let Some(page) = page {
-            let counted = format!("{}{}", self.summary_header(), corrected.model.summary());
-            write_bytes(&page, counted.as_bytes())?;
-            written.push(page);
+            artefacts.add(
+                page,
+                format!("{}{}", self.summary_header(), corrected.model.summary()),
+            );
         }
-        Ok(written)
+        artefacts.write()
     }
 
     /// Every layer, laid over the document in order, in the three views the
@@ -486,69 +499,83 @@ fn read(path: &Path) -> Result<String, GenerateError> {
     })
 }
 
-/// Write a file, creating the directory it goes in if it is missing.
-fn write_bytes(path: &Path, contents: &[u8]) -> Result<(), GenerateError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| GenerateError::Write {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-    std::fs::write(path, contents).map_err(|source| GenerateError::Write {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-/// Write the reduction a binary loads, after reading it straight back.
+/// The reduction a binary loads, after reading it straight back.
 ///
 /// `model` is the one [`Document::load`] a bless step makes — the same value
 /// the generated types and wrappers were emitted from — so encoding it is the
 /// only way the blob and the document can come apart. The read-back proves they
 /// have not: what a binary will deserialise is what this step reduced.
-fn write_model(path: &Path, model: &Document) -> Result<(), GenerateError> {
+fn blob(model: &Document) -> Result<Vec<u8>, GenerateError> {
     let blob = model.to_blob().map_err(GenerateError::Blob)?;
     let read_back = Document::from_blob(&blob).map_err(GenerateError::Blob)?;
     if &read_back != model {
         return Err(GenerateError::RoundTrip);
     }
-    write_bytes(path, &blob)
+    Ok(blob)
 }
 
-fn write_rust(path: &Path, source: &str) -> Result<(), GenerateError> {
-    write_bytes(path, source.as_bytes())?;
-    rustfmt(path)
-}
-
-/// Hand a written file to `rustfmt`.
+/// `source`, as `rustfmt` lays it out for the file at `path`.
 ///
-/// Formatting the file on disk rather than piping the source through keeps the
-/// result identical to what an adopter's own `cargo fmt` would produce, which
-/// is the only reason a generated file can sit under `cargo fmt --check` at
-/// all.
-fn rustfmt(path: &Path) -> Result<(), GenerateError> {
-    let status = std::process::Command::new("rustfmt")
-        .arg("--edition")
-        .arg("2024")
-        .arg(path)
-        .status()
-        .map_err(|source| {
-            if source.kind() == io::ErrorKind::NotFound {
-                GenerateError::RustfmtMissing
-            } else {
-                GenerateError::RustfmtSpawn {
-                    path: path.to_path_buf(),
-                    source,
-                }
+/// The source goes through standard input, so that nothing is written before
+/// every step has passed. `rustfmt` reads its configuration from the directory
+/// it runs in and the ones above it when it is given no file, as it does from
+/// the directory of a file it is given, so it runs in the nearest directory of
+/// `path` that exists: the result is what an adopter's own `cargo fmt` would
+/// produce for the file once it is there, which is the only reason a generated
+/// file can sit under `cargo fmt --check` at all.
+fn formatted(path: &Path, source: &str) -> Result<String, GenerateError> {
+    let output = rustfmt(config_home(path), source).map_err(|source| {
+        if source.kind() == io::ErrorKind::NotFound {
+            GenerateError::RustfmtMissing
+        } else {
+            GenerateError::RustfmtSpawn {
+                path: path.to_path_buf(),
+                source,
             }
-        })?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(GenerateError::RustfmtFailed {
-            path: path.to_path_buf(),
-        })
+        }
+    })?;
+    let refused = || GenerateError::RustfmtFailed {
+        path: path.to_path_buf(),
+    };
+    if !output.status.success() {
+        return Err(refused());
     }
+    String::from_utf8(output.stdout).map_err(|_| refused())
+}
+
+/// The nearest directory above `path` that exists.
+fn config_home(path: &Path) -> &Path {
+    path.ancestors()
+        .skip(1)
+        .find(|ancestor| ancestor.is_dir())
+        .unwrap_or(Path::new("."))
+}
+
+/// Run `rustfmt` over `source` in `home`, and answer with what it printed.
+///
+/// `rustfmt` says what is wrong with a source on standard error, which is the
+/// bless step's own, so the person who reads the refusal reads the cause above it.
+fn rustfmt(home: &Path, source: &str) -> io::Result<Output> {
+    let mut child = Command::new("rustfmt")
+        .args(["--edition", "2024", "--emit", "stdout"])
+        .current_dir(home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let mut input = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("rustfmt has no standard input"))?;
+    // Fed from a thread of its own, so that a source larger than a pipe cannot
+    // wait for output that waits for the rest of the input.
+    std::thread::scope(|scope| {
+        let feeding = scope.spawn(move || input.write_all(source.as_bytes()));
+        let output = child.wait_with_output();
+        feeding
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+        output
+    })
 }
 
 /// Why a bless step stopped.
@@ -570,14 +597,17 @@ pub enum GenerateError {
         #[source]
         source: io::Error,
     },
-    /// A generated file, or a directory it goes in, could not be written.
+    /// A generated file, or a directory it goes in, could not be written, or the
+    /// file written beside it could not be put in its place. Nothing is placed
+    /// before every file is written, and what was written beside is removed.
     #[error("cannot write {path}")]
     Write {
         /// The file the generator was writing, or the directory above it that
         /// it was making: under the directory given to [`Settings::write_to`],
         /// or where [`Settings::summary_page`] points.
         path: PathBuf,
-        /// The error the operating system returned.
+        /// The error the operating system returned, or the one this crate builds
+        /// for a destination that is a directory.
         #[source]
         source: io::Error,
     },
@@ -731,16 +761,19 @@ pub enum GenerateError {
     /// No `rustfmt` executable was found on `PATH`.
     #[error("rustfmt is not on PATH, and a bless step formats every Rust file it writes")]
     RustfmtMissing,
-    /// `rustfmt` was found and could not be started.
+    /// `rustfmt` was found and could not be run: it did not start, or its input
+    /// or its output could not be passed.
     #[error("cannot run rustfmt on {path}")]
     RustfmtSpawn {
         /// The generated file `rustfmt` was to format.
         path: PathBuf,
-        /// The error the operating system returned.
+        /// The error the operating system returned, or the one this crate builds
+        /// when it cannot take the standard input of the process.
         #[source]
         source: io::Error,
     },
-    /// `rustfmt` ran and exited with a failure.
+    /// `rustfmt` ran and exited with a failure, or printed text that is not
+    /// UTF-8.
     #[error("rustfmt rejected the generated {path}")]
     RustfmtFailed {
         /// The generated file `rustfmt` was to format.

@@ -321,8 +321,29 @@ the same choice for a caller who reduces a document without generating from it.
 
 Write the artefacts under `crate_dir` and answer with their paths: the four of
 the table above, in that order, then the summary page if you asked for one.
-Directories are created as needed. Each Rust file is handed to `rustfmt` after
-it is written, so what lands in the tree is what `cargo fmt --check` expects.
+Directories are created as needed. Every Rust file goes through `rustfmt`, so
+what lands in the tree is what `cargo fmt --check` expects.
+
+**A bless that is refused writes nothing.** Every artefact is built in memory
+first, and `rustfmt` formats the Rust there, in the nearest directory that
+exists above the file, which is where it reads `rustfmt.toml` from. The first
+file is written only after the document, both emitters, the blob's round trip
+and `rustfmt` have all said yes. A vendor revision that the generator refuses
+therefore leaves the committed artefacts as they were, byte for byte, and not a
+new `types.rs` beside the old `ops.rs` and the old blob.
+
+Each file is then written beside its destination as `<name>.bless-tmp`, flushed
+to the disk, and renamed over the destination once every file is written. A disk
+that fills, or a path that cannot be made, stops the bless before any file is
+replaced, and the files written beside are removed, and so does a destination
+that is a directory. A directory that the bless made for a file stays, empty,
+when the bless stops before the renames. A file at a destination is replaced and not written
+through, so a symlink there becomes a file. A rename that fails all the same,
+after another succeeded, leaves the files already renamed: the first pass has
+shown that a file can be written there, so the file system refused it. The
+renames are one step each and not one step together, and the directories are not
+flushed after them, so a power loss between two of them leaves some files new
+and the rest old. Run the bless again and it writes the rest.
 
 The answer is what was written, so a run that asked for no page reports four
 paths and a script that copies or checks the answer copies or checks four files.
@@ -419,15 +440,96 @@ with `generate` and compiling typify. `--workspace` still selects it.
 `write_to` fills `src/` and `spec/` of a crate you own; it never writes a
 `Cargo.toml` or a `lib.rs`. Those are yours, and they are short. The example's
 is `examples/toy/api-generated`, whose hand-written half is two files: a
-`lib.rs` declaring `pub mod ops; pub mod types;`, and a `client.rs` holding the
-newtype the generated `impl` block hangs off — a generated method on a foreign
-type would not compile, so the handle has to live beside what is generated for
-it.
+`lib.rs`, and a `client.rs` holding the newtype the generated `impl` block hangs
+off — a generated method on a foreign type would not compile, so the handle has
+to live beside what is generated for it.
 
-Its dependencies are the runtime crate with `default-features = false`, `serde`,
-`http`, and whatever crate owns the types you passed to `replace` — which has to
-sit *below* it, because the generated source names it. Nothing about a generator
-reaches it.
+### The crate root
+
+A root that declares `pub mod ops; pub mod types;` and nothing else does not
+compile. `src/ops.rs` names five items of the crate root:
+
+| Item | What the generated code uses it for |
+|---|---|
+| `Api` | the handle every wrapper is a method of, `impl Api { pub fn get_voucher(&self, …) }` |
+| `Call` | what a wrapper returns, in `Result<Call<'_, T>, Error>` |
+| `Error` | the error of a wrapper |
+| `NoContent` | the answer of an operation that has no JSON body |
+| `to_json` | the body argument of a wrapper as JSON, naming the operation it is for |
+
+`Call`, `Error`, `NoContent` and `to_json` are `typed_openapi::client`'s, and the
+root re-exports them. `Api` is yours, a newtype over
+`typed_openapi::client::Client`, and every wrapper calls one method of it,
+`Api::call<T>(&self, op: OperationId, values: Values) -> Result<Call<'_, T>,
+Error>`, where `OperationId` is `ops::OperationId` and `Values` is
+`typed_openapi::Values`. This root compiles, and it is the smallest one.
+`Api::new` pairs the blob with the generated inventory, so that `call` can take
+the operation at the position of its `OperationId`:
+
+```rust
+pub mod ops;
+pub mod types;
+
+use typed_openapi::client::Client;
+pub use typed_openapi::client::{Call, Error, NoContent, to_json};
+use typed_openapi::{Document, Values};
+
+use crate::ops::{OPERATIONS, OperationId};
+
+const MODEL: &[u8] = include_bytes!("model.postcard");
+
+pub struct Api(Client);
+
+impl Api {
+    pub fn new() -> Result<Self, Error> {
+        let client = Client::over(Document::from_blob(MODEL)?);
+        client.document().matches(OPERATIONS)?;
+        Ok(Self(client))
+    }
+
+    pub fn call<T>(&self, op: OperationId, values: Values) -> Result<Call<'_, T>, Error> {
+        let operation = &self.0.document().operations()[op as usize];
+        self.0.call(operation, values)
+    }
+}
+```
+
+`examples/toy/api-generated/src/client.rs` is the same handle with the
+embedded document and summary, `with_base` and the accessors an application
+wants; copy it rather than this.
+
+### The dependencies
+
+The generated code names these crates, so the crate that holds it declares each
+one it uses:
+
+```toml
+[dependencies]
+# What the wrappers call: `Values`, `Part`, and the regex engine behind a
+# `pattern`. No clap, and no generator.
+typed-openapi = { version = "0.1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+# `OperationId::check_body` takes a `serde_json::Value`, and a schema that states
+# no shape is one.
+serde_json = "1"
+# `format: date-time` and `format: date`.
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
+# `format: uuid`.
+uuid = { version = "1", features = ["serde"] }
+
+[features]
+# `ops.rs` names this feature in a `cfg`, so a crate that does not declare it
+# gets an `unexpected_cfgs` warning. Forwarding it is what turns the builders on.
+builder = ["typed-openapi/builder"]
+```
+
+`chrono` and `uuid` are needed only where the document states those formats; a
+build without them says `cannot find chrono in the list of imported crates`, and
+the format it came from is the one in `types.rs`. `serde_json` is needed whether
+or not any schema is open, because `check_body` names it. Add whatever crate
+owns the types you passed to `replace`, which has to sit *below* the generated
+crate, because the generated source names it, and `http` if your handle names a
+`Uri`, as the example's does. Nothing about a generator reaches this crate.
 
 Make it a crate of its own rather than a module. An edit to your hand-written
 code then recompiles your lines and not the generated volume.
@@ -438,7 +540,7 @@ code then recompiles your lines and not the generated volume.
 generated wrapper:
 
 ```rust
-let voucher = api.update_voucher().id(5).body(&draft).call()?.send(&client)?;
+let voucher = api.update_voucher_builder().id(5).body(&draft).call()?.send(&client)?;
 ```
 
 A missing required argument is a compile error, not a wrong request.
@@ -452,16 +554,18 @@ builder = ["typed-openapi/builder"]
 
 Three things are worth knowing:
 
-- **Flipping it never regenerates.** The generated `ops.rs` carries the
-  attributes under `cfg_attr` in every build, so the committed file is the same
+- **Flipping it never regenerates.** The generated `ops.rs` carries a second
+  `impl` block under `#[cfg(feature = "builder")]` in every build, with one
+  `<op>_builder()` method beside each wrapper, so the committed file is the same
   bytes with the feature on and off, and the feature flag is the whole
-  difference.
+  difference. The positional wrapper stays, and means the same thing in both.
 - **You add no dependency.** `bon` is named through `typed_openapi::bon`, so the
   proc-macro that expands the attribute is the version the generator emitted
   syntax for.
-- **It costs compile time.** Turning it on puts two proc-macro crates in the
-  dependency graph of the crate that holds the generated code: TBD — measured in
-  [builders.md](builders.md).
+- **It costs build time.** Turning it on adds crates to the dependency graph of
+  the crate that holds the generated code, and a build that leaves the feature
+  off resolves none of them. [builders.md](builders.md) has the table and how it
+  was measured.
 
 ## Requirements and limits
 
@@ -569,6 +673,26 @@ Three things are worth knowing:
   keeps its own `required` unless it declares the property read-only itself: where
   it declares the property without `readOnly` and requires it, the composed type
   requires it too.
+- **`nullable: true` makes the type an `Option`.** It is how an OpenAPI 3.0
+  document says "or `null`", and the generated type reads the `null` the vendor
+  sends. A property that the schema requires and calls nullable is an `Option`
+  whose key has to be there. An optional one is an `Option` too, and so is an
+  optional array, map or scalar with a default, which without the keyword is a
+  `Vec`, a map or a value that takes its default. Every shape that states it is
+  read: a scalar, an enum, an
+  object stated inline, an array and its items, a composition, and a format you
+  own through `replace` (`Option<money::Money>`). A schema that holds anything
+  admits `null` already and stays `serde_json::Value`. A component that is
+  nullable is a newtype over an `Option` of what it would be, because every use
+  of it takes `null`: `Maybe(Option<String>)` for a string, and
+  `Owner(Option<OwnerInner>)` for a struct, with the fields, or the `pattern`
+  and its `FromStr`, on `OwnerInner`. A response that is nullable makes the
+  wrapper answer an `Option`, where `None` is the `null`. The keyword is not
+  read beside a `$ref`: OpenAPI 3.0.3 says that properties added to a Reference
+  Object "SHALL be ignored", so `{ $ref: X, nullable: true }` is `X`. The
+  spelling that carries it is `allOf` of the one reference, with
+  `nullable: true` beside it, and an Overlay writes that where the vendor did
+  not.
 - **A body the document leaves optional is an `Option` argument.** A body with
   `required: true` is an argument of its type: `&T` for a JSON body, `Vec<u8>`
   for one sent verbatim and `Vec<Part>` for a multipart body. A body without it

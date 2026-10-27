@@ -15,10 +15,12 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as _;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use quote::ToTokens as _;
 use serde_json::json;
 use typed_openapi::generate::{GenerateError, Settings};
 use typed_openapi::overlay::{self, OverlayError, Place};
@@ -5283,5 +5285,499 @@ fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
     assert!(
         types.contains("pub t: ::std::option::Option<Thing>"),
         "the component named by the last segment:\n{types}"
+    );
+}
+
+// ------------------------------------------- a refused bless writes nothing
+
+/// The vendor's document as the first bless saw it: one operation, one type.
+///
+/// The revision that [`REVISION`] adds is refused when its `201` states `Thing`,
+/// for a reason that is the generator's own: `getOther` has two success responses
+/// that state two schemas, and the wrapper cannot answer with both. The refusal
+/// comes from the step that writes `ops.rs`, after the step that writes
+/// `types.rs`, so a bless that wrote each file as it went would have replaced
+/// `types.rs` by then. When its `201` states `Other`, as its `200` does, the
+/// revision blesses.
+const THINGS: &str = r##"
+openapi: 3.0.3
+info: { title: Things, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /things/{id}:
+    get:
+      operationId: getThing
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Thing" }
+  # PATHS
+components:
+  schemas:
+    Thing: { type: object, properties: { a: { type: string } } }
+    # SCHEMAS
+"##;
+
+/// What the vendor adds in the next revision: a schema, and an operation whose
+/// `201` is `RESPONSE`.
+const REVISION: &str = r##"
+  /others/{id}:
+    get:
+      operationId: getOther
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Other" }
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RESPONSE" }
+"##;
+
+/// [`THINGS`] with [`REVISION`] in it, whose `201` states `response`: `Other` is
+/// the schema the `200` states too, and `Thing` is another.
+fn things(revised: bool, response: &str) -> String {
+    if !revised {
+        return THINGS.to_owned();
+    }
+    THINGS
+        .replace("  # PATHS\n", &REVISION.replace("RESPONSE", response))
+        .replace(
+            "    # SCHEMAS",
+            "    Other: { type: object, properties: { b: { type: string } } }",
+        )
+}
+
+/// Every file under `dir`, by path, with what it holds.
+fn tree(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut found = BTreeMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).expect("a directory the bless made") {
+            let path = entry.expect("an entry of that directory").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let held = std::fs::read(&path).expect("a file the bless made");
+                found.insert(path, held);
+            }
+        }
+    }
+    found
+}
+
+/// The files that one of the two trees lacks or that hold other bytes in them.
+fn differing(
+    before: &BTreeMap<PathBuf, Vec<u8>>,
+    after: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Vec<String> {
+    before
+        .keys()
+        .chain(after.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|path| before.get(*path) != after.get(*path))
+        .map(|path| file_name(path))
+        .collect()
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .expect("a file has a name")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// A bless that is refused writes nothing: the artefacts of the last bless are
+/// what they were, byte for byte, and no file is left beside them.
+///
+/// A vendor revision is the case that matters. The adoption has committed the
+/// last bless, the vendor publishes a revision the generator cannot write
+/// wrappers for, and the bless stops half-way. A tree that holds the new
+/// `types.rs` beside the old `ops.rs` and the old blob is one that `cargo build`
+/// takes, and the binary then describes an API that the code does not call.
+///
+/// The control is the same revision with its two answers agreeing: it blesses, and
+/// it changes every file, so the refused one is unchanged for the refusal and not
+/// because there was nothing to write.
+#[test]
+fn a_bless_the_document_refuses_leaves_the_committed_artefacts_as_they_were() {
+    let dir = out("refused-bless");
+    let vendor = out("refused-bless-vendor");
+    let document = wrote(&vendor, "things.yaml", &things(false, ""));
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the first revision blesses");
+    let committed = tree(&dir);
+    assert_eq!(
+        committed.len(),
+        4,
+        "the four artefacts: {:?}",
+        committed.keys()
+    );
+
+    wrote(&vendor, "things.yaml", &things(true, "Thing"));
+    let error = Settings::new(&document)
+        .write_to(&dir)
+        .expect_err("the answers of `getOther` disagree");
+    assert!(
+        matches!(&error, GenerateError::Operation { op, source }
+            if op == "getOther" && matches!(&**source, GenerateError::Unsupported(_))),
+        "{error:?}"
+    );
+    assert_eq!(
+        differing(&committed, &tree(&dir)),
+        Vec::<String>::new(),
+        "a refused bless changed these"
+    );
+
+    wrote(&vendor, "things.yaml", &things(true, "Other"));
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the revision with one answer blesses");
+    assert_eq!(
+        differing(&committed, &tree(&dir)),
+        [
+            "things.overlaid.yaml",
+            "model.postcard",
+            "ops.rs",
+            "types.rs"
+        ],
+        "the revision changes every artefact"
+    );
+}
+
+/// A bless that the file system stops places nothing either. Every artefact is
+/// written beside its destination before the first is put in place, so the last
+/// one failing leaves the first four where they were, and removes what was
+/// written beside them.
+///
+/// A file stands where the summary page's directory would be made, which is the
+/// last artefact and the only one that fails.
+#[test]
+fn a_bless_the_file_system_stops_places_no_artefact() {
+    let dir = out("unplaced-bless");
+    let vendor = out("unplaced-bless-vendor");
+    let document = wrote(&vendor, "things.yaml", &things(false, ""));
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the first revision blesses");
+    std::fs::write(dir.join("notes"), "a file").expect("a file where a directory would go");
+    let committed = tree(&dir);
+
+    wrote(&vendor, "things.yaml", &things(true, "Other"));
+    let error = Settings::new(&document)
+        .summary_page("notes/page.md")
+        .write_to(&dir)
+        .expect_err("`notes` is no directory");
+    assert!(
+        matches!(&error, GenerateError::Write { path, .. } if path.ends_with("notes")),
+        "{error:?}"
+    );
+    assert_eq!(
+        differing(&committed, &tree(&dir)),
+        Vec::<String>::new(),
+        "a stopped bless placed these"
+    );
+}
+
+/// A destination that is a directory is refused before any file is replaced,
+/// where the three artefacts in front of it would have been placed already.
+///
+/// A directory stands where the blob goes, which is the fourth artefact.
+#[test]
+fn a_bless_whose_destination_is_a_directory_places_no_artefact() {
+    let dir = out("directory-bless");
+    let vendor = out("directory-bless-vendor");
+    let document = wrote(&vendor, "things.yaml", &things(false, ""));
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the first revision blesses");
+    let model = dir.join("src/model.postcard");
+    std::fs::remove_file(&model).expect("the blob of the first bless");
+    std::fs::create_dir(&model).expect("a directory where the blob goes");
+    std::fs::write(model.join("kept"), "a file in it").expect("a file in that directory");
+    let committed = tree(&dir);
+
+    wrote(&vendor, "things.yaml", &things(true, "Other"));
+    let error = Settings::new(&document)
+        .write_to(&dir)
+        .expect_err("a directory stands where the blob goes");
+    assert!(
+        matches!(&error, GenerateError::Write { path, .. } if path.ends_with("model.postcard")),
+        "{error:?}"
+    );
+    assert_eq!(
+        differing(&committed, &tree(&dir)),
+        Vec::<String>::new(),
+        "a bless that a directory stopped placed these"
+    );
+}
+
+/// A bless that `rustfmt` refuses writes nothing: the Rust is formatted in
+/// memory, so the step that can still fail after every emitter has passed comes
+/// before the first file.
+///
+/// The refusal is the adoption's own: a `rustfmt.toml` that `rustfmt` cannot
+/// parse, which is in the directory the files go in and which `rustfmt` reads
+/// from where the file will stand.
+#[test]
+fn a_bless_that_rustfmt_refuses_places_no_artefact() {
+    let dir = out("unformatted-bless");
+    let vendor = out("unformatted-bless-vendor");
+    let document = wrote(&vendor, "things.yaml", &things(false, ""));
+    Settings::new(&document)
+        .write_to(&dir)
+        .expect("the first revision blesses");
+    std::fs::write(dir.join("rustfmt.toml"), "max_width = \"wide\"\n")
+        .expect("a configuration that rustfmt cannot read");
+    let committed = tree(&dir);
+
+    wrote(&vendor, "things.yaml", &things(true, "Other"));
+    let error = Settings::new(&document)
+        .write_to(&dir)
+        .expect_err("rustfmt cannot read its configuration");
+    assert!(
+        matches!(&error, GenerateError::RustfmtFailed { path } if path.ends_with("types.rs")),
+        "{error:?}"
+    );
+    assert_eq!(
+        differing(&committed, &tree(&dir)),
+        Vec::<String>::new(),
+        "a bless that rustfmt refused changed these"
+    );
+}
+
+// ----------------------------------------------- a nullable schema admits null
+
+/// The vendor's own words for "or `null`": `nullable: true`, on every shape a
+/// schema has. `note` is the input of the probe `A4/docs/shapes.yaml` behind
+/// F-17, a property that is required and nullable, and the rest are the shapes
+/// sevdesk's document states it on.
+const NULLABLE: &str = r##"
+openapi: 3.0.3
+info: { title: Nullable, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /holders/{id}:
+    put:
+      operationId: putHolder
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Holder" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                nullable: true
+                properties:
+                  answer: { type: string }
+components:
+  schemas:
+    Holder:
+      type: object
+      required:
+        - note
+        - count
+        - flag
+        - kind
+        - address
+        - owner
+        - tags
+        - when
+        - money
+        - anything
+        - plain
+        - denied
+        - beside
+        - nullable
+      properties:
+        note: { type: string, nullable: true, description: A required nullable string }
+        count: { type: integer, nullable: true }
+        flag: { type: boolean, nullable: true }
+        kind: { type: string, enum: [a, b], nullable: true }
+        address:
+          type: object
+          nullable: true
+          properties:
+            street: { type: string }
+        owner: { allOf: [{ $ref: "#/components/schemas/Owner" }], nullable: true }
+        tags:
+          type: array
+          nullable: true
+          items: { type: string, nullable: true }
+        when: { type: string, format: date-time, nullable: true }
+        money: { type: string, format: money, nullable: true }
+        anything: { nullable: true }
+        plain: { type: string }
+        denied: { type: string, nullable: false }
+        beside: { $ref: "#/components/schemas/Owner", nullable: true }
+        nullable: { type: boolean }
+        maybe: { type: string, nullable: true }
+        list: { type: array, nullable: true, items: { type: string } }
+        table: { type: object, nullable: true, additionalProperties: { type: string } }
+        ratio: { type: integer, nullable: true, default: 3 }
+        plain_list: { type: array, items: { type: string } }
+        plain_table: { type: object, additionalProperties: { type: string } }
+        plain_ratio: { type: integer, default: 3 }
+    Owner:
+      type: object
+      properties:
+        name: { type: string }
+    Maybe:
+      type: string
+      nullable: true
+"##;
+
+/// The types and the wrappers the bless step writes for [`NULLABLE`], in a
+/// directory named for the test that reads them: a test is a process of its own
+/// under nextest and a thread of a shared one under `cargo test`, and neither may
+/// empty the directory another is reading.
+fn nullable(name: &str) -> (String, String) {
+    let dir = out(name);
+    let document = wrote(&dir, "nullable.yaml", NULLABLE);
+    Settings::new(document)
+        .replace("money", "crate::Money")
+        .write_to(&dir)
+        .expect("the document blesses");
+    (
+        read(&dir.join("src/types.rs")),
+        read(&dir.join("src/ops.rs")),
+    )
+}
+
+/// The type a generated struct gives a field, as its tokens print with no space
+/// and no trailing comma, which `rustfmt` writes in a list of arguments that runs
+/// over several lines.
+fn field_type(types: &str, name: &str, field: &str) -> String {
+    let file: syn::File = syn::parse_str(types).expect("the generated types parse");
+    let found = file.items.iter().find_map(|item| {
+        if let syn::Item::Struct(found) = item
+            && found.ident == name
+        {
+            Some(found)
+        } else {
+            None
+        }
+    });
+    found
+        .expect("the struct is generated")
+        .fields
+        .iter()
+        .find(|candidate| candidate.ident.as_ref().is_some_and(|ident| ident == field))
+        .expect("the field is generated")
+        .ty
+        .to_token_stream()
+        .to_string()
+        .replace(' ', "")
+        .replace(",>", ">")
+}
+
+/// A field and the type the bless step gives it.
+const NULLABLE_FIELDS: [(&str, &str); 21] = [
+    ("note", "::std::option::Option<::std::string::String>"),
+    ("count", "::std::option::Option<i64>"),
+    ("flag", "::std::option::Option<bool>"),
+    ("kind", "::std::option::Option<HolderKind>"),
+    ("address", "::std::option::Option<HolderAddress>"),
+    ("owner", "::std::option::Option<Owner>"),
+    (
+        "tags",
+        "::std::option::Option<::std::vec::Vec<::std::option::Option<::std::string::String>>>",
+    ),
+    (
+        "when",
+        "::std::option::Option<::chrono::DateTime<::chrono::offset::Utc>>",
+    ),
+    ("money", "::std::option::Option<crate::Money>"),
+    // Not required, so an `Option` already, and not an `Option` of one.
+    ("maybe", "::std::option::Option<::std::string::String>"),
+    // Not required. Without the word the same three are a `Vec`, a map and an
+    // integer that takes its default, and with it each one is an `Option`.
+    (
+        "list",
+        "::std::option::Option<::std::vec::Vec<::std::string::String>>",
+    ),
+    (
+        "table",
+        "::std::option::Option<::std::collections::HashMap<::std::string::String,::std::string::String>>",
+    ),
+    ("ratio", "::std::option::Option<i64>"),
+    ("plain_list", "::std::vec::Vec<::std::string::String>"),
+    (
+        "plain_table",
+        "::std::collections::HashMap<::std::string::String,::std::string::String>",
+    ),
+    ("plain_ratio", "i64"),
+    // What admits `null` already stays what it was.
+    ("anything", "::serde_json::Value"),
+    // What says nothing about `null` is not an `Option`.
+    ("plain", "::std::string::String"),
+    ("denied", "::std::string::String"),
+    // OpenAPI 3.0.3: any properties beside a `$ref` are ignored.
+    ("beside", "Owner"),
+    ("nullable", "bool"),
+];
+
+/// F-17. `nullable: true` is how a vendor says "or `null`", and typify reads it
+/// as a keyword it does not know, so the generator says it in a spelling that
+/// typify turns into an `Option`. Every shape that states it is an `Option` of
+/// what the schema describes, and a required one stays required.
+#[test]
+fn a_nullable_schema_is_an_option_wherever_the_type_is_written() {
+    let (types, _) = nullable("nullable-fields");
+    for (field, said) in NULLABLE_FIELDS {
+        assert_eq!(field_type(&types, "Holder", field), said, "`{field}`");
+    }
+}
+
+/// A required, nullable property is a key that must be there, and may hold
+/// `null`. typify writes the `Option` so that a missing key is still refused.
+#[test]
+fn a_required_nullable_property_is_still_a_key_that_must_be_there() {
+    let (types, _) = nullable("nullable-required");
+    assert!(
+        types.contains(
+            "#[serde(deserialize_with = \"::std::option::Option::deserialize\")]\n    pub note:"
+        ),
+        "{types}"
+    );
+    assert!(
+        types.contains(
+            "#[serde(skip_serializing_if = \"::std::option::Option::is_none\")]\n    pub maybe:"
+        ),
+        "{types}"
+    );
+}
+
+/// A schema that a component names and that is nullable is a newtype over an
+/// `Option`, which is the way typify spells a named type that is not a struct,
+/// and every use of it takes `null`. A nullable response is an `Option` too.
+#[test]
+fn a_named_nullable_schema_and_a_nullable_answer_are_options() {
+    let (types, ops) = nullable("nullable-named");
+    assert!(
+        types.contains("pub struct Maybe(pub ::std::option::Option<::std::string::String>);"),
+        "{types}"
+    );
+    assert!(
+        ops.contains("Call<'_, ::std::option::Option<crate::types::PutHolderResponse>>"),
+        "{ops}"
     );
 }

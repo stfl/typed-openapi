@@ -18,6 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::error::ErrorKind;
+use quote::ToTokens as _;
 use serde_json::{Value, json};
 use typed_openapi::generate::Settings;
 use typed_openapi::model::{Body, Field, Operation};
@@ -1030,6 +1031,111 @@ fn every_spelling_of_read_only_is_optional_in_the_type() {
         );
         let pet = struct_of(&types, "Pet");
         assert!(!optional(field_type(pet, "id")), "{id}:\n{pet}");
+    }
+}
+
+/// Whether the type refuses a body that leaves out the key of `field` in the
+/// struct `name`. The type of the field is an `Option` whether or not its key
+/// may be missing. typify gives an `Option` whose key must be there a
+/// `deserialize_with`, which asks serde for the key, and one whose key may be
+/// missing none, so serde reads the missing key as `None`. The attributes are
+/// the ones `syn` parses, so a `#[serde(..)]` that `rustfmt` wraps over several
+/// lines is read whole.
+fn requires_the_key(types: &str, name: &str, field: &str) -> bool {
+    let file: syn::File = syn::parse_str(types).expect("the generated types parse");
+    let found = file.items.iter().find_map(|item| {
+        if let syn::Item::Struct(found) = item
+            && found.ident == name
+        {
+            Some(found)
+        } else {
+            None
+        }
+    });
+    found
+        .expect("the struct is generated")
+        .fields
+        .iter()
+        .find(|candidate| candidate.ident.as_ref().is_some_and(|ident| ident == field))
+        .expect("the field is generated")
+        .attrs
+        .iter()
+        .any(|attr| {
+            attr.path().is_ident("serde")
+                && attr
+                    .to_token_stream()
+                    .to_string()
+                    .contains("deserialize_with")
+        })
+}
+
+/// The ways a property is nullable and the API sets it, one for each of the four
+/// of `SPELLINGS`. A `$ref` erases the word beside it, and `allOf` of the one
+/// reference is the spelling that keeps it, so the wrapper is where `nullable`
+/// and the flag stand together beside a reference.
+const NULLABLE_SPELLINGS: [(&str, &str, &str); 4] = [
+    (
+        "on the property",
+        "{ type: integer, readOnly: true, nullable: true }",
+        "",
+    ),
+    (
+        "on the schema a `$ref` leads to",
+        "{ $ref: '#/components/schemas/Id' }",
+        "    Id: { type: integer, readOnly: true, nullable: true }\n",
+    ),
+    (
+        "beside a wrapper of one element",
+        "{ allOf: [{ $ref: '#/components/schemas/Id' }], readOnly: true, nullable: true }",
+        "    Id: { type: integer }\n",
+    ),
+    (
+        "on the schema inside a wrapper",
+        "{ allOf: [{ $ref: '#/components/schemas/Id' }], nullable: true }",
+        "    Id: { type: integer, readOnly: true }\n",
+    ),
+];
+
+/// A property the API sets and that admits `null` is an `Option` the request body
+/// does not require, whichever way the document spells it: the flag is gone from
+/// the command line exactly where the type stops requiring the key, and `null`
+/// does not bring the requirement back.
+#[test]
+fn a_nullable_property_the_api_sets_is_not_required_of_the_type_a_request_reaches() {
+    for (label, id, extra) in NULLABLE_SPELLINGS {
+        let doc = loaded(&pet_with(id, extra));
+        assert_eq!(
+            operation(&doc, "createPet").body().read_only(),
+            &["id"],
+            "{label}"
+        );
+        let types = types_of("readonly-nullable", &pet_with(id, extra));
+        let pet = struct_of(&types, "Pet");
+        assert!(optional(field_type(pet, "id")), "{label}:\n{pet}");
+        assert!(!requires_the_key(&types, "Pet", "id"), "{label}:\n{pet}");
+    }
+}
+
+/// The control of the test above: a property that admits `null` and that the API
+/// does not set keeps its flag and is an `Option` whose key must be there, so
+/// `requires_the_key` tells a required `Option` from an optional one and the flag
+/// is held in both directions.
+#[test]
+fn a_nullable_property_the_api_does_not_set_keeps_its_flag_and_is_a_key_that_must_be_there() {
+    for id in [
+        "{ type: integer, nullable: true }",
+        "{ allOf: [{ $ref: '#/components/schemas/Id' }], readOnly: false, nullable: true }",
+        "{ allOf: [{ $ref: '#/components/schemas/Id' }], nullable: true }",
+    ] {
+        let text = pet_with(id, "    Id: { type: integer }\n");
+        let doc = loaded(&text);
+        let body = operation(&doc, "createPet").body();
+        assert_eq!(names(body.fields()), ["id", "name"], "{id}");
+        assert!(body.read_only().is_empty(), "{id}");
+        let types = types_of("readonly-nullable-control", &text);
+        let pet = struct_of(&types, "Pet");
+        assert!(optional(field_type(pet, "id")), "{id}:\n{pet}");
+        assert!(requires_the_key(&types, "Pet", "id"), "{id}:\n{pet}");
     }
 }
 

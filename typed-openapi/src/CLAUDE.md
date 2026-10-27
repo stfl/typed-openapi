@@ -1062,6 +1062,38 @@ closed: reading it as open would refuse nothing, and the refusal of an
 undeclared property is the point. `false` stays what typify closes with
 `deny_unknown_fields`.
 
+**`nullable: true` is said as a schema that admits `null` before typify reads
+it.** typify reads `nullable` as a keyword it does not know, so a property that
+the document requires and calls nullable would be a field of a plain type, and the
+vendor's own `null` would fail to decode. `AdmitsNull` in
+`src/generate/types.rs` is a `schemars` visitor, run by `admit_null` over the
+named and the inline schemas after `set_by_the_api`. It widens a schema of one
+`type` in place (`type: [T, null]`, which typify reads as an `Option` and names
+as it named `T`), and it puts any other schema in an `anyOf` beside
+`{type: null}`, with its title, description, default and `readOnly` left
+outside. The order matters: `NotRequired` reads a property as `read_only_of`
+does, and `read_only_of` reads an `allOf` of one element, which is the spelling
+that carries `nullable` beside a reference and which `AdmitsNull` puts in an
+`anyOf`. A property that the API sets and that admits `null` is an `Option` that
+a request does not require, in every spelling, and `tests/readonly.rs` holds
+it. `AdmitsNull` walks the schema and not the JSON, so a `default` or an
+`example` that holds the same word is not changed, and a property called
+`nullable` is a property. A schema that admits `null` already (the type `null`,
+a list of types that holds it, a schema that holds anything) is not wrapped, so
+no type is an `Option` of an `Option`. `reference_to` keeps the word when it
+puts a format the adopter owns behind a reference, because the type the adopter
+owns says nothing about `null`. `nullable` beside a `$ref` is dropped by the
+object model with every other property beside a reference, as OpenAPI 3.0.3
+says, so the generator never sees it, and `allOf` of the one reference is the
+spelling that carries it. A named schema that is nullable is a newtype over an
+`Option`, as typify writes any named type that is not a struct, and a nullable
+response is an `Option` answer. `tests/generate.rs` holds each shape that a
+document can state. The tests of `src/generate/types.rs` hold the lists of types,
+which no document can state: the list without `null` is a row of the table that
+says `nullable` as a schema that admits `null`, and the list that holds `null` is
+a row of the table of schemas that admit it already. Both tables hold rows that a
+document states too.
+
 **Every YAML text is read by one function, and no type of a 0.x crate is in a
 public error.** `read` in `src/overlay.rs` is the function every document and
 every Overlay goes through, into a `serde_json::Value`, before anything else looks at it. That
@@ -1291,6 +1323,32 @@ adopter takes it on, and one that quotes no count is handed no file. Its path is
 theirs for the reason the other four's is not: those name each other by relative
 path, and nothing the generator writes reads the page. `examples/toy` opts in
 because it quotes counts, which is also what keeps the claim from rotting.
+
+**A bless that is refused writes nothing.** `Settings::write_to` builds every
+artefact in memory and writes none of them until the document, both emitters,
+the blob's round trip and `rustfmt` have all said yes, so a vendor revision that
+the generator refuses cannot leave the new `types.rs` beside the old `ops.rs`
+and the old blob. `Artefacts` in `src/generate/artefacts.rs` is the one place a
+generated file is written: each artefact is written beside its destination and
+flushed to the disk, and only when every one is written is each renamed over its
+destination. What is still beside when the bless stops is removed. The
+directories that hold the files (`spec/`, `src/` and the page's) are not flushed
+after the renames and the renames are one step each, so a power loss between two
+leaves some files new and the rest old; a directory that the first pass made
+stays, empty, when the bless stops before the renames. A step that can refuse
+goes before `Artefacts::write`, and a new artefact is added to `Artefacts` and is
+not written by a call of its own. `rustfmt` takes the source through standard input,
+in the nearest directory above the file that exists, because it reads its
+configuration from where it runs when it is given no file, and that is the
+configuration it reads for the file once the file is there. A destination that
+is a directory is refused in that first pass. A rename that fails all the same,
+after another succeeded, leaves the files already renamed, and the file system
+is what refused it. `tests/generate.rs` holds the tree byte for byte after a
+refusal of the document, after a `rustfmt` that refuses, after a destination
+that is a directory and after a write that failed. The first of them uses a
+document that is refused while `ops.rs` is emitted, the step after `types.rs`,
+so that the refusal comes after output that a bless which wrote as it went would
+already have replaced.
 
 **A named schema carrying a replaced format is a newtype over the adopter's
 type, whatever it is called.** typify decides it the other way — it declines to
