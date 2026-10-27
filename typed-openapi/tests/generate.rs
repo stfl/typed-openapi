@@ -4506,7 +4506,7 @@ fn reason_of(error: &GenerateError, op: &str) -> String {
 
 /// Success responses whose JSON bodies disagree, the words of the refusal that
 /// names each body, and a label.
-const DISAGREEING: [(&str, &str, &[&str]); 5] = [
+const DISAGREEING: [(&str, &str, &[&str]); 6] = [
     (
         "two named schemas, in two responses",
         r##"{ "200": { $ref: "#/components/responses/ThingResponse" },
@@ -4544,6 +4544,17 @@ const DISAGREEING: [(&str, &str, &[&str]); 5] = [
         &[
             "`200` under `application/json` is `#/components/schemas/Thing`",
             "`200` under `application/vnd.x+json` is `#/components/schemas/Other`",
+        ],
+    ),
+    (
+        "the third media type of one response",
+        r##"{ "200": { description: OK, content: {
+                application/json: { schema: { $ref: "#/components/schemas/Thing" } },
+                "application/vnd.x+json": { schema: { $ref: "#/components/schemas/Thing" } },
+                application/hal+json: { schema: { $ref: "#/components/schemas/Other" } } } } }"##,
+        &[
+            "`200` under `application/json` is `#/components/schemas/Thing`",
+            "`200` under `application/hal+json` is `#/components/schemas/Other`",
         ],
     ),
     (
