@@ -1088,8 +1088,11 @@ says, so the generator never sees it, and `allOf` of the one reference is the
 spelling that carries it. A named schema that is nullable is a newtype over an
 `Option`, as typify writes any named type that is not a struct, and a nullable
 response is an `Option` answer. `tests/generate.rs` holds each shape that a
-document can state, and the table in `src/generate/types.rs` holds the lists of
-types that no document can state, beside rows that a document states too.
+document can state. The tests of `src/generate/types.rs` hold the lists of types,
+which no document can state: the list without `null` is a row of the table that
+says `nullable` as a schema that admits `null`, and the list that holds `null` is
+a row of the table of schemas that admit it already. Both tables hold rows that a
+document states too.
 
 **Every YAML text is read by one function, and no type of a 0.x crate is in a
 public error.** `read` in `src/overlay.rs` is the function every document and
@@ -1329,12 +1332,12 @@ and the old blob. `Artefacts` in `src/generate/artefacts.rs` is the one place a
 generated file is written: each artefact is written beside its destination and
 flushed to the disk, and only when every one is written is each renamed over its
 destination. What is still beside when the bless stops is removed. The
-directory is not flushed after the renames and the renames are one step each, so
-a power loss between two leaves some files new and the rest old; a directory
-that the first pass made stays, empty, when the bless stops there. A step that
-can refuse goes before
-`Artefacts::write`, and a new artefact is added to `Artefacts` and is not
-written by a call of its own. `rustfmt` takes the source through standard input,
+directories that hold the files (`spec/`, `src/` and the page's) are not flushed
+after the renames and the renames are one step each, so a power loss between two
+leaves some files new and the rest old; a directory that the first pass made
+stays, empty, when the bless stops before the renames. A step that can refuse
+goes before `Artefacts::write`, and a new artefact is added to `Artefacts` and is
+not written by a call of its own. `rustfmt` takes the source through standard input,
 in the nearest directory above the file that exists, because it reads its
 configuration from where it runs when it is given no file, and that is the
 configuration it reads for the file once the file is there. A destination that

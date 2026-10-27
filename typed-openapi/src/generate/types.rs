@@ -1084,9 +1084,10 @@ mod tests {
     /// typify turns into an `Option`.
     ///
     /// A document states most of these rows, and `tests/generate.rs` holds them
-    /// through the bless. The table also holds the lists of types, which no
-    /// document can state: `openapiv3` reads one `type`, so a list of types with
-    /// `null` in it or without is a schema that only a hand-built value builds.
+    /// through the bless. The table also holds a list of types without `null`,
+    /// which no document can state: `openapiv3` reads one `type`, so a list of
+    /// types is a schema that only a hand-built value builds. The list that holds
+    /// `null` is a row of `a_schema_that_admits_null_already_is_not_said_twice`.
     #[test]
     fn nullable_is_said_as_a_schema_that_admits_null() {
         let reference = json!({ "$ref": "#/definitions/Thing" });

@@ -22,9 +22,9 @@
 //! it has shown that a file can be written there, so what refuses it is the
 //! file system.
 //!
-//! The renames are one step each and not one step together, and the directory
-//! that holds them is not flushed. A power loss between two of them, or before
-//! the disk has the directory, leaves some files new and the rest old, and the
+//! The renames are one step each and not one step together, and the directories
+//! that hold them are not flushed. A power loss between two of them, or before
+//! the disk has the directories, leaves some files new and the rest old, and the
 //! bless run again writes the rest. Making the directories the first pass needs
 //! is not undone: a bless that stops there leaves them, empty. The mode of a
 //! destination is not copied to the file that replaces it, and a symlink there

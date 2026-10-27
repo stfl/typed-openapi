@@ -5292,11 +5292,13 @@ fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
 
 /// The vendor's document as the first bless saw it: one operation, one type.
 ///
-/// The revision that [`REVISION`] adds is refused for a reason that is the
-/// generator's own: `getOther` has two success responses that state two schemas,
-/// and the wrapper cannot answer with both. The refusal comes from the step that
-/// writes `ops.rs`, after the step that writes `types.rs`, so a bless that wrote
-/// each file as it went would have replaced `types.rs` by then.
+/// The revision that [`REVISION`] adds is refused when its `201` states `Thing`,
+/// for a reason that is the generator's own: `getOther` has two success responses
+/// that state two schemas, and the wrapper cannot answer with both. The refusal
+/// comes from the step that writes `ops.rs`, after the step that writes
+/// `types.rs`, so a bless that wrote each file as it went would have replaced
+/// `types.rs` by then. When its `201` states `Other`, as its `200` does, the
+/// revision blesses.
 const THINGS: &str = r##"
 openapi: 3.0.3
 info: { title: Things, version: "1.0" }

@@ -1506,7 +1506,7 @@ the crate follows [Semantic Versioning][semver].
     is refused before any file is placed, and one that a file written beside it
     could not be renamed to.
   - A directory that the bless made for a file stays, empty, when the bless
-    stops after it. The renames are one step each and not one step together, so
+    stops before the renames. The renames are one step each and not one step together, so
     a power loss between two of them leaves some files new and the rest old.
     Repair: run the bless again.
 

@@ -85,8 +85,9 @@ agent changing the code.
 
 `just gate` stops at `blessed` while a bless output is uncommitted: commit the
 bless, then gate the commit. Run `just fmt` first, because a fmt diff stops the
-gate at its first step. Edit nothing in the worktree while a gate runs: its
-`package` recipe sees a dirty tree and the run is void.
+gate at its first step. Edit nothing in the worktree while a gate runs: each
+recipe reads the files as they are when it reaches them, so after an edit the
+result is the result of no commit.
 
 Clippy reaches test code, and a `just check` that ran before the last edit does
 not see what that edit adds. Run `cargo clippy --workspace --all-features
@@ -94,12 +95,14 @@ not see what that edit adds. Run `cargo clippy --workspace --all-features
 amend; the gate's `check` also runs `cargo doc` with warnings denied. The
 thresholds are in `clippy.toml` and the denied lints in the lint block of
 `Cargo.toml`. Four fixes are not plain from the message: a case table that trips
-`too_many_lines` goes into a module `const` or a `fn` that returns it; a `mod
-tests` in `src/` denies `unwrap_used` and `expect_used`, so it writes `let … else
-{ panic!(..) }`; a long string is built with `write!(s, ..)` after `use
-std::fmt::Write as _`, because `format_push_string` is denied; and
-`string_slice` and `indexing_slicing` are answered by `split_once`,
-`strip_prefix` and `<[T; N]>::try_from`.
+`too_many_lines` goes into a module `const` or a `fn` that returns it;
+`unwrap_used` and `expect_used` reach every target, a test module and a file of
+`tests/` included, and a test answers them with `let … else { panic!(..) }` or
+with `#[expect(clippy::expect_used, reason = ..)]` (the `unwrap_used` form is the
+same) on the module or, as `#![expect(..)]`, on the file; a long string is built
+with `write!(s, ..)` after `use std::fmt::Write as _`, because
+`format_push_string` is denied; and `string_slice` and `indexing_slicing` are
+answered by `split_once`, `strip_prefix` and `<[T; N]>::try_from`.
 
 The `warning[duplicate]` lines of `cargo-deny` in a green gate are bans and not
 compiler warnings: grep the log for `^warning:` and `^error`.
@@ -109,15 +112,31 @@ takes with it (`#[from]` gives a `From`).
 
 `rustfmt.toml` sets `format_code_in_doc_comments = true`. A test directory under
 `target/tmp` inherits it, because the nearest `rustfmt.toml` wins and nothing
-merges, and the tarball that the `package` recipe tests has no `rustfmt.toml`: a
-test that needs a setting writes its own.
+merges. What decides is where the target directory is: the tests of the tarball
+that the `package` recipe unpacks write under the same `<target>/tmp`, so they
+read the repository's `rustfmt.toml` too, and a target directory outside the
+repository (`CARGO_TARGET_DIR`) has none above it. A test that needs a setting
+writes its own.
 
 A test is a process of its own under nextest and a thread of a shared one under
 `cargo test`, so each test that calls `out(name)` takes a directory name of its
-own, and no `LazyLock` is shared by both. A new `[[test]]` target with
+own. A `LazyLock` in a test file is built once per test under nextest and once
+per target under `cargo test`: it holds a value that both counts leave the same,
+never a directory that a test writes. A new `[[test]]` target with
 `required-features` runs in the `package` recipe at once.
 `typed-openapi/tests/fixtures/shapes.json` is the library's own fixture for
 `fits` and a copy of no toy file.
+
+A test or a task that reads `env!("CARGO_MANIFEST_DIR")` works on the tree that
+its binary is built from: `examples/toy/xtask` blesses that tree, and
+`tests/generate.rs`, `tests/hostile.rs`, `tests/layout.rs` and
+`examples/toy/cli/tests/feature_gate.rs` read it. Cargo takes a tree as built when its files are not newer than the last
+build in the target directory, so a scratch copy of the tree that shares the
+worktree's target directory can run in place of the worktree, and the worktree in
+place of the copy. Touching the files of a copy does not part them: cargo builds
+the copy, and the older files of the worktree count as built, so the worktree
+runs the copy's binary. Only a target directory of its own for each copy keeps
+the copy and the worktree apart.
 
 ## Toolchain
 

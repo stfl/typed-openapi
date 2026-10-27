@@ -337,11 +337,11 @@ to the disk, and renamed over the destination once every file is written. A disk
 that fills, or a path that cannot be made, stops the bless before any file is
 replaced, and the files written beside are removed, and so does a destination
 that is a directory. A directory that the bless made for a file stays, empty,
-when the bless stops. A file at a destination is replaced and not written
+when the bless stops before the renames. A file at a destination is replaced and not written
 through, so a symlink there becomes a file. A rename that fails all the same,
 after another succeeded, leaves the files already renamed: the first pass has
 shown that a file can be written there, so the file system refused it. The
-renames are one step each and not one step together, and the directory is not
+renames are one step each and not one step together, and the directories are not
 flushed after them, so a power loss between two of them leaves some files new
 and the rest old. Run the bless again and it writes the rest.
 
