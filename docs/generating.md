@@ -48,7 +48,7 @@ on neither style nor any lint your crate turns on, and the exemption travels
 with the file it exempts rather than with a wrapping module. `warnings` is in
 the block, so `clippy::nursery`, `missing_docs` and `unused_qualifications` at
 `warn`, with `-D warnings` over them, do not fail on a file you did not write. A
-lint that your crate sets to `deny` by name is yours to relax.
+lint outside the named groups that your crate sets to `deny` remains yours to relax.
 
 ### The blob's stamp
 
@@ -375,9 +375,10 @@ in advance:
 | `Unsupported` | the document declares something the generator has no Rust spelling for, or a type given to `Settings::replace` is no Rust path |
 | `OneType` | two schemas are one Rust name: two the document declares, a schema stated inline that takes a name another has, or a schema that is the name typify derives for one nested in another (`Foo.bar` is `FooBar`) |
 | `DuplicateIdentifier` | two items of `ops.rs` that one name would define twice: see [Two items of the generated code never share a name](#requirements-and-limits) |
-| `DuplicateField` | two properties of one object that are one field in Rust, such as `fooBar` and `foo_bar` |
-| `Panicked` | typify panicked while it converted a schema, and the message names the schema |
-| `CyclicAllOf` | schemas that are made of each other through `allOf`, which typify cannot convert |
+| `DuplicateField` | two fields share a Rust name: properties such as `fooBar` and `foo_bar`, or a property and the map typify adds for `additionalProperties` |
+| `EnumVariants` | string enum values become one Rust variant; the message names the values and variant |
+| `Panicked` | typify panicked during conversion or token emission; the message names the failing trial or inline site |
+| `CyclicAllOf` | a merge reaches a loop of composition or carried merges; see the limits below |
 | `RustfmtMissing` | `rustfmt` is not on `PATH` |
 
 Every Overlay is applied with `ErrorOnZeroMatch`. A correction whose target the
@@ -476,9 +477,8 @@ root re-exports them. `Api` is yours, a newtype over
 Error>`, where `OperationId` is `ops::OperationId` and `Values` is
 `typed_openapi::Values`. This root compiles, and it is the smallest one.
 The wrappers are methods of `Api`, so an operation that a method of `Api` is
-called after would define it twice. The generator reserves the two that the
-example's handle has, `call` and `document`, and refuses an operation called
-either (`GenerateError::DuplicateIdentifier`). A method of your own handle that
+called after would define it twice. The generator reserves `new`, `call` and
+`document`, and refuses an operation called any of these (`GenerateError::DuplicateIdentifier`). A method of your own handle that
 is called after an operation is yours to find.
 `Api::new` pairs the blob with the generated inventory, so that `call` can take
 the operation at the position of its `OperationId`:
@@ -535,8 +535,7 @@ chrono = { version = "0.4", default-features = false, features = ["serde"] }
 uuid = { version = "1", features = ["serde"] }
 
 [features]
-# `ops.rs` names this feature in a `cfg`, so a crate that does not declare it
-# gets an `unexpected_cfgs` warning. Forwarding it is what turns the builders on.
+# Forward this feature to turn on the builders declared by `ops.rs`.
 builder = ["typed-openapi/builder"]
 ```
 
@@ -739,12 +738,13 @@ Three things are worth knowing:
 - **Two items of the generated code never share a name.** typify and `syn`
   accept a file that defines one name twice, and your compiler does not, so the
   bless step asks first and refuses by the two items. In `ops.rs` the names are
-  the wrappers, the `_builder` method beside each, the two methods of the handle,
+  the wrappers, the `_builder` method beside each, the reserved handle methods
+  `new`, `call` and `document`,
   the variants of `OperationId`, and, for each operation, the methods that `bon`
   derives for its builder: a setter for each argument, a second setter named
   `maybe_…` for each argument that is optional, and `call`, which ends the
   builder. So `listThings` beside `list_things` is refused, and so are an
-  operation called `<x>Builder` beside `<x>`, one called `call` or `document`,
+  operation called `<x>Builder` beside `<x>`, one called `new`, `call` or `document`,
   and a parameter called `call` or `maybe_<x>` beside an optional parameter `<x>`
   (`GenerateError::DuplicateIdentifier`, naming both). In `types.rs` they are the
   types: a schema called `FooBar` beside a schema nested in `Foo` (`OneType`), and
@@ -753,7 +753,8 @@ Three things are worth knowing:
   refused before that, by the load, naming the method and the path of both
   (`LoadError::DuplicateOperationId`). Repair: an Overlay that corrects one of
   the two. A parameter's name is its wire key, so for a parameter the Overlay
-  removes one of them.
+  removes one of them. These checks apply whether or not `builder` is enabled;
+  setter and `_builder` collisions cause compile errors when that feature is on.
 - **The generated code names every standard item by its full path.** A schema may
   be called `Ok`, `Err`, `Some`, `None`, `String`, `Vec`, `Option`, `Result`,
   `Box` or `Default`, and the code means the standard item all the same:
@@ -761,25 +762,36 @@ Three things are worth knowing:
   `TryFrom<::std::string::String>` in `types.rs`, and `::std::result::Result`,
   `::std::option::Option` and `::std::vec::Vec` in `ops.rs`. `tests/hostile.rs`
   builds the output of a document that has all ten, with the `builder` feature on
-  and off, under `-D warnings` and the lints named above.
-- **What typify cannot build is refused by name, and the process does not end.**
-  typify panics on a shape it has no type for. Enum values that become one
-  variant name (`active` and `ACTIVE`, `a-b` and `a_b`, `+` and `-`) and a
-  `$ref` that leads nowhere are two, and the bless step catches the panic and
-  refuses the schema it was converting (`GenerateError::Panicked`; the message
-  is typify's, and it names the values). Schemas that are made of each other
-  through `allOf` are a stack overflow in typify, which nothing catches, so the
-  bless step finds the cycle first and refuses it by the schemas that make it
-  (`GenerateError::CyclicAllOf`). A reference in an `allOf` of two or more
-  members, or of one beside other keywords, that leads back to the schema is a
-  merge, at any depth of `allOf`, `anyOf` and `oneOf`. A loop that is no merge is
-  a recursive type, and typify writes it: a property that points back, a `oneOf`
-  that does, a list of the schema, a sentence beside a reference (`allOf` of the
-  schema and `{description: …}`), and `allOf` wrappers of one member. A property
-  or the items of a list whose own `allOf` adds keywords and names the schema
-  that holds it overflows in typify too, and the bless step does not find it:
-  break it in an Overlay. Repair for the others: an Overlay that removes or
-  renames one of the values, or breaks the cycle.
+  and off with `cargo check`, then runs doctests with the feature on, under
+  `-D warnings`, `missing_docs` and `unused_qualifications`. This test runs no clippy.
+- **Enum values and merge loops are checked before typify runs.** String enum
+  values that become one variant after typify's two naming passes (`active` and
+  `ACTIVE`, `a-b` and `a_b`, `+` and `-`) are `GenerateError::EnumVariants`, naming
+  the values and their variant. Repair: rename or remove a value in an Overlay.
+  Other panics during conversion and token emission become `GenerateError::Panicked`
+  when the bless uses `panic = "unwind"` (the default). The message names every
+  schema in the smallest reference-closed trial that panics, in document order,
+  or the inline request body or response. The process's panic hook runs for each
+  caught panic; diagnosis can print a named trial's panic text more than once.
+  Repair: correct the shape named in the cause.
+
+  An `allOf` merge that reaches a loop is `GenerateError::CyclicAllOf`, checked
+  after the nullable, open-map and request-required rewrites. The walk follows
+  references through top-level `allOf`, `anyOf` and `oneOf`, and merges carried
+  inside inline properties, items and `additionalProperties`. This includes a
+  merge that leads into a loop of wrappers or `oneOf`s, and a property, item or
+  map whose merge names its own containing schema. The refusal names the schemas
+  on the loop and the merge's place when inline. Repair: break the loop in an Overlay.
+
+  Plain recursive property and item references pass. Loops of wrappers or
+  `oneOf`s pass when no merge reaches them. A wrapper with one reference and only
+  `title`, `description` or `type: object`, including the property description
+  idiom `allOf: [{$ref: Node}, {description: …}]`, is not carried as a merge.
+  A multi-member `allOf` still starts reference resolution: a description-only
+  second member is refused when its composition reaches a loop. Other keywords
+  count as a merge. This is conservative: a named object merged with a named
+  array whose items merge that object is refused, although typify converts it.
+  Repair for this shape too: an Overlay that breaks the loop.
 - **One wire name gets one argument.** A parameter is identified by its name and
   its place, so a document may use `ref` in the path and again in the query, and
   an operation may override a parameter of its path item. The override is one

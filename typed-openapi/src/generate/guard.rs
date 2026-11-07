@@ -1,20 +1,8 @@
-//! typify's panics, as refusals that name the schema.
+//! Panics of typify become refusals when the process unwinds.
 //!
-//! typify panics where it has no type to write for a shape, and the shapes are
-//! the vendor's: enum values that become one variant name (`active` and
-//! `ACTIVE`), a `$ref` that leads nowhere. A panic ends a bless step with exit 101
-//! and a line of typify's own source, after the reduction has accepted the
-//! document, so it names no schema and no repair. [`GenerateError::Panicked`] is
-//! the same event with the schema in it.
-//!
-//! The rule typify applies is its own and is not public (`sanitize` is private to
-//! `typify-impl`), and a copy of it here would be the second spelling of a rule
-//! that [`names`](super::names) exists to keep this crate from owning. So the
-//! generator asks typify: it converts, and where typify panics it converts again,
-//! one schema at a time, to find the schema.
-//!
-//! A stack overflow is not a panic, and nothing here sees it:
-//! [`cycles`](super::cycles) finds the one shape of the document that causes it.
+//! A named-schema trial holds a schema and every reference it reaches. The
+//! smallest trial that panics is named in document order; it can hold several
+//! mutually dependent schemas. Stack overflows are checked by `cycles` first.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{self, AssertUnwindSafe};
@@ -69,29 +57,16 @@ pub(super) fn add_ref_types(
 ) -> Result<(), GenerateError> {
     let kept = definitions.clone();
     converted(
-        || {
-            culprit(settings, &kept).map_or_else(
-                || "a schema of the document".to_owned(),
-                |name| format!("the schema `{name}`"),
-            )
-        },
+        || trial_name(settings, &kept),
         || space.add_ref_types(definitions),
     )
 }
 
-/// The first schema that typify panics on when it is converted with every schema it
-/// refers to, among the schemas that refer to the fewest.
-///
-/// Each trial is a space of its own that holds one schema and what it refers to,
-/// at any depth, because typify reads what a reference leads to (an `allOf` merges
-/// the schemas of its members) and nothing else of the document. The trial of a
-/// schema that refers to one that panics panics too, so the schemas are tried by
-/// the number of schemas in the trial, fewest first, and the one that panics first
-/// is the one that holds the cause. Equal numbers keep the document's order.
+/// The smallest reference-closed trial that panics, in document order.
 fn culprit<'d>(
     settings: &TypeSpaceSettings,
     definitions: &'d [(String, Schema)],
-) -> Option<&'d str> {
+) -> Option<Vec<&'d str>> {
     let named: BTreeMap<&str, &Schema> = definitions
         .iter()
         .map(|(name, schema)| (name.as_str(), schema))
@@ -109,9 +84,21 @@ fn culprit<'d>(
                     .get(member)
                     .map(|schema| ((*member).to_owned(), (*schema).clone()))
             });
-            caught(|| TypeSpace::new(settings).add_ref_types(held)).is_err()
+            caught(|| {
+                let mut trial = TypeSpace::new(settings);
+                trial.add_ref_types(held)?;
+                let _ = trial.to_stream();
+                Ok::<_, typify::Error>(())
+            })
+            .is_err()
         })
-        .map(|(name, _)| name)
+        .map(|(_, members)| {
+            definitions
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .filter(|name| members.contains(name))
+                .collect()
+        })
 }
 
 /// `name` and every schema that it refers to, at any depth, as names of the
@@ -135,4 +122,62 @@ fn closure<'d>(name: &'d str, named: &BTreeMap<&'d str, &Schema>) -> Vec<&'d str
         }
     }
     members
+}
+
+fn trial_name(settings: &TypeSpaceSettings, definitions: &[(String, Schema)]) -> String {
+    culprit(settings, definitions).map_or_else(
+        || "a schema of the document".to_owned(),
+        |names| {
+            let plural = if names.len() > 1 { "schemas" } else { "schema" };
+            let names = names
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("the {plural} {names}")
+        },
+    )
+}
+
+pub(super) fn stream(
+    settings: &TypeSpaceSettings,
+    space: &TypeSpace,
+    definitions: &[(String, Schema)],
+    inline: &[(String, Schema)],
+) -> Result<proc_macro2::TokenStream, GenerateError> {
+    caught(|| space.to_stream()).map_err(|message| GenerateError::Panicked {
+        schema: stream_trial(settings, definitions, inline),
+        message: message.into(),
+    })
+}
+
+fn stream_trial(
+    settings: &TypeSpaceSettings,
+    definitions: &[(String, Schema)],
+    inline: &[(String, Schema)],
+) -> String {
+    if culprit(settings, definitions).is_some() {
+        return trial_name(settings, definitions);
+    }
+    inline
+        .iter()
+        .find_map(|(name, schema)| {
+            inline_panics(settings, definitions, schema).then(|| name.clone())
+        })
+        .unwrap_or_else(|| "a schema of the document".to_owned())
+}
+
+fn inline_panics(
+    settings: &TypeSpaceSettings,
+    definitions: &[(String, Schema)],
+    schema: &Schema,
+) -> bool {
+    caught(|| {
+        let mut trial = TypeSpace::new(settings);
+        trial.add_ref_types(definitions.iter().cloned())?;
+        trial.add_type(schema)?;
+        let _ = trial.to_stream();
+        Ok::<_, typify::Error>(())
+    })
+    .is_err()
 }

@@ -270,7 +270,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/glaze_recipe'
   # An optional parameter whose name starts with a digit, which has a flag and no
-  # spelling as a Rust identifier until a `_` stands in front of it, and two
+  # spelling as a Rust identifier until an `x` stands in front of it, and two
   # parameters that name schemas that are called after standard items.
   /payments:
     get:

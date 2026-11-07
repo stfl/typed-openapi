@@ -207,24 +207,36 @@ pub(super) fn emit(
 
     let mut definitions = schemas(definitions)?;
     let mut stated = inline(stated)?;
-    // Before typify reads a schema, because a cycle of `allOf` is a stack
-    // overflow in it, and nothing catches that.
-    super::cycles::check(&definitions)?;
     set_by_the_api(api, model, &mut definitions, &mut stated);
     admit_null(&mut definitions, &mut stated);
+    // Preflight reads the same rewrites as typify, including nullable wrappers.
+    super::cycles::check(&definitions, &stated)?;
+    super::enums::check(
+        definitions
+            .iter()
+            .map(|(name, schema)| (format!("the schema `{name}`"), schema))
+            .chain(
+                stated
+                    .iter()
+                    .map(|inline| (inline.described(), &inline.schema)),
+            ),
+    )?;
 
     let mut space = TypeSpace::new(&settings);
-    super::guard::add_ref_types(&settings, &mut space, definitions)?;
+    super::guard::add_ref_types(&settings, &mut space, definitions.clone())?;
+    let inline_trials: Vec<_> = stated
+        .iter()
+        .map(|inline| (inline.described(), inline.schema.clone()))
+        .collect();
     let names = Names::read(&mut space, declared.iter().map(String::as_str), stated)?;
+    let tokens = super::guard::stream(&settings, &space, &definitions, &inline_trials)?;
 
     // A description is the vendor's prose, and a type's doc, a field's and a
     // variant's are where it lands.
     let mut file: syn::File =
-        syn::parse2(super::prose::written(space.to_stream())).map_err(|source| {
-            GenerateError::NotRust {
-                file: "types.rs",
-                source,
-            }
+        syn::parse2(super::prose::written(tokens)).map_err(|source| GenerateError::NotRust {
+            file: "types.rs",
+            source,
         })?;
     ThroughThisCrate.visit_file_mut(&mut file);
     StandardItems.visit_file_mut(&mut file);
@@ -266,11 +278,7 @@ fn promises(file: &syn::File, paths: &[RustPath]) -> Result<Vec<syn::Item>, Gene
     let mut asked = BTreeSet::new();
     let mut promises = Vec::new();
     for RustPath { format, rust, path } in paths {
-        let ty = syn::Type::Path(syn::TypePath {
-            attrs: Vec::new(),
-            qself: None,
-            path: path.clone(),
-        });
+        let ty = syn::Type::Path(path.clone());
         let spelling = quote!(#ty).to_string();
         if !wrapped.contains(&spelling) || !asked.insert(spelling) {
             continue;
@@ -311,16 +319,16 @@ struct RustPath {
     /// The text the adopter wrote.
     rust: String,
     /// That text as a path.
-    path: syn::Path,
+    path: syn::TypePath,
 }
 
 /// Every type that [`Settings::replace`] named, read as a path, and the refusal of
 /// the first that is none.
 ///
-/// typify takes the text as a path (`syn::Path`) and panics inside its conversion
+/// typify takes the text as a path (`syn::TypePath`) and panics inside its conversion
 /// when it is not one. So each is read here first, which also names the format and
 /// the text that the adopter wrote, and every one is read whether or not the
-/// document states its format, because typify is given each of them.
+/// document states its format, including later replacements of the same format that `owned` skips.
 ///
 /// [`Settings::replace`]: super::Settings::replace
 fn rust_paths(replacements: &[(String, String)]) -> Result<Vec<RustPath>, GenerateError> {
@@ -467,7 +475,7 @@ impl VisitMut for ThroughThisCrate {
 /// Only the places where typify writes the standard item are rewritten. A bare
 /// name in a type position is a schema of the document where a field or a variant
 /// holds it, so the one type position that is the standard item's, the `String` of
-/// the `TryFrom` impl that wraps a type the adopter owns, is found by the shape of
+/// a generated newtype's `TryFrom` impl, is found by the shape of
 /// the impl that typify writes it in, and its `Self` type is left alone. A release
 /// of typify that writes another one fails the compile test of `tests/hostile.rs`
 /// under the schema that has its name.
@@ -544,7 +552,7 @@ impl VisitMut for StandardItems {
 }
 
 /// Whether `item` is `impl ::std::convert::TryFrom<String> for …`, the impl that
-/// typify writes for a type that it wraps around one the adopter owns.
+/// typify writes for a generated newtype.
 fn try_from_a_string(item: &syn::ItemImpl) -> bool {
     let Some((path, _)) = &item.trait_ else {
         return false;

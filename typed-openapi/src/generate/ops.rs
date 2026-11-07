@@ -567,7 +567,7 @@ impl Signature {
     /// `carries` says what the argument is in the document's own terms, because
     /// that is the half the reader is missing: the identifier is in front of
     /// them and the thing it stands for is not. `led_by_digit` says the word got
-    /// its `_` because the document's own started with a digit, which is the other
+    /// its `x` because the document's own started with a digit, which is the other
     /// reason an argument is spelled in a way nobody wrote.
     ///
     /// Every argument comes through here rather than through [`Signature::bind`],
@@ -829,10 +829,8 @@ fn add_param(
 ///
 /// The letter is `x` because that is what typify puts in front of a name that
 /// starts with a digit, so the property `3ds` of a body and the parameter `3ds`
-/// are `x3ds` alike. It is not `_`: `bon` takes a leading `_` off a member name
-/// ("the builder API should not expose that knowledge") and panics on a name that
-/// then starts with a digit, with `#[builder(name = …)]` too, so `_3ds` is no
-/// argument of a wrapper that has a builder.
+/// are `x3ds` alike. `bon` removes a leading `_` and panics on `_3ds` alone;
+/// an explicit builder name such as `param_3ds` also compiles.
 fn spelled_with_a_digit(word: String) -> (String, bool) {
     if word.starts_with(|first: char| first.is_ascii_digit()) {
         (format!("x{word}"), true)

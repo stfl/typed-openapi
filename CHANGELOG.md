@@ -1532,13 +1532,16 @@ the crate follows [Semantic Versioning][semver].
     whose `operationId`s are one wrapper (`listThings` and `list_things`) or one
     variant of `OperationId` (`a1` and `a_1`); an operation called `<x>Builder`
     beside `<x>`, because the second is the name of the `_builder` method of the
-    first; an operation called `call` or `document`, the two methods that the
-    handle of your crate has; and, for the `builder` feature, a parameter called
+    first; an operation called `new`, `call` or `document`, the reserved handle
+    methods; and a parameter called
     `call` (the method that ends a `bon` builder) and a parameter that is
     `maybe_<x>` beside an optional parameter `<x>`, because `bon` gives the
-    second a setter by that name.
-  - `GenerateError::DuplicateField { ty, field }`: two properties of one object
-    that are one field in Rust, such as `fooBar` and `foo_bar`. typify does not
+    second a setter by that name. The checks apply without `builder` too;
+    setter and `_builder` collisions cause compile errors with that feature on.
+    Repair for an operation called `new`: change its `operationId` in an Overlay.
+  - `GenerateError::DuplicateField { ty, field }`: two fields of one object
+    share a Rust name, such as properties `fooBar` and `foo_bar`, or a property
+    `extra` beside the map typify adds for `additionalProperties`. typify does not
     make them two, and `ty` is the type that holds them, which can be an enum
     whose variant is an object.
   - `GenerateError::OneType`, which refused two schemas of one Rust name, also
@@ -1548,39 +1551,41 @@ the crate follows [Semantic Versioning][semver].
     names its type.
 - **A panic of typify, a replaced type that is no path, and a cycle of `allOf`
   are refused by name.** Each ended the bless step without a refusal.
-  - Enum values that become one variant name, such as `active` and `ACTIVE`,
-    `a-b` and `a_b`, or `+` and `-`, made typify panic, and the bless exited with
-    101 and a line of typify's source. Any panic of typify is
-    `GenerateError::Panicked { schema, message }`: `schema` names the schema
-    that was being converted (the one the document declares, or the request body
-    or the response that an operation states inline), and `message` is what
-    typify said, which names the values. The process's panic hook prints that
-    text on standard error twice before the refusal, because the search for the
-    schema converts it again. Repair: an Overlay that removes or renames one of
-    the values, or the shape that the message names.
-  - A type given to `Settings::replace` that is no Rust path (`not a path`,
-    `cents::`, `&str`) made typify panic with a message about its own source. It
-    is `GenerateError::Unsupported`: `` `cents::`, named for `format: money`,
-    is not a Rust path ``. Every type is read whether or not the document states
-    its format. Repair: a path, such as `cents::Cents`, `::cents::Cents` or
-    `crate::cents::Cents`.
-  - Schemas that are made of each other through `allOf` (`Left` is `allOf` of
-    `Right` and a property, and `Right` of `Left` and another) made the process
-    die of a stack overflow in typify, on a document that the load accepts. It is
-    `GenerateError::CyclicAllOf { schemas }`, which names the schemas of the cycle
-    in the order that `allOf` leads from one to the next. A cycle is refused where
-    a reference stands in an `allOf` that is not a bare wrapper of one member, at
-    any depth of `allOf`, `anyOf` and `oneOf`. Loops that are no merge are not
-    refused: a property that points back, a `oneOf` that does, a list of the
-    schema, a sentence beside a reference (`allOf` of the schema and
-    `{description: …}`), and `allOf` wrappers of one member that name each other.
-    A property or the items of a list whose own `allOf` adds keywords and names
-    the schema that holds it still overflows in typify, and is not found
-    (`typed-openapi/src/CLAUDE.md`). Repair: an Overlay that breaks the cycle.
+  - String enum values that become one Rust variant after typify's two naming
+    passes (`active` / `ACTIVE`, `a-b` / `a_b`, `+` / `-`) are checked before
+    typify runs. `GenerateError::EnumVariants { schema, values, variant }` names
+    their schema, the values and their variant. Repair: remove or rename a value
+    in an Overlay. This refusal also works with `panic = "abort"`.
+  - Other panics of typify, including token emission, become
+    `GenerateError::Panicked { schema, message }` with `panic = "unwind"` (the
+    default). The name is every schema of the smallest failing reference-closed
+    trial, in document order, or the inline body or response. The process's panic
+    hook runs for each caught panic, so diagnosis can print the text repeatedly.
+    Repair: correct the shape named in the cause.
+  - A type given to `Settings::replace` is checked as `syn::TypePath`, as typify
+    reads it. `not a path`, `cents::` and `&str` are `GenerateError::Unsupported`
+    naming the format and text. Every replacement is checked, including a later
+    replacement of the same format that conversion skips. Qualified paths such
+    as `<String as ::std::ops::Deref>::Target` are accepted. Repair for invalid
+    text: supply a type path such as `cents::Cents`.
+  - `GenerateError::CyclicAllOf { schemas, merge }` refuses a merge that reaches
+    a loop through composition or through merges carried in inline properties,
+    list items or maps, before typify's merge can overflow. This includes a merge
+    into a loop of wrappers or `oneOf`s, and a property, item or map whose merge
+    names its containing schema. The refusal names the schemas on the loop and
+    the place of an inline merge. Plain recursive property and item references,
+    and loops of wrappers or `oneOf`s reached by no merge, pass. A single
+    reference with only a title, description or `type: object` is no merge,
+    including `allOf: [{$ref: Node}, {description: …}]` in a property. Other
+    keywords count as a merge. A multi-member `allOf` starts reference resolution
+    even with a description-only second member and is refused if its composition
+    reaches a loop; the property description idiom is not carried as a merge.
+    The check conservatively refuses a named object
+    merged with a named array whose items merge that object, although typify
+    converts it. Repair for every refused loop: an Overlay that breaks it.
 - **Generated code names every standard item by its full path, and allows every
-  warning.** A schema called `Ok`, `Err`, `Some`, `None`, `String`, `Vec`,
-  `Option`, `Result`, `Box` or `Default` made the generated file mean something
-  else, or not compile: `Ok(Self(value))` built the newtype `Ok`, and `impl
+  warning.** Schemas called `Ok`, `Err`, `Some`, `None`, `String` or `Default`
+  could change the generated file's meaning or stop compilation: `Ok(Self(value))` built the newtype `Ok`, and `impl
   TryFrom<String>` took the `String` of the document. `types.rs` writes
   `::std::result::Result::Ok(…)`, `::std::result::Result::Err(…)`,
   `::std::default::Default::default()` and `TryFrom<::std::string::String>`

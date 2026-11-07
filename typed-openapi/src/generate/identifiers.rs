@@ -10,9 +10,8 @@
 //! # The three namespaces
 //!
 //! - The methods of the handle: the wrapper of each operation, the `_builder`
-//!   method beside it, and the two methods that the handle has of its own, `call`
-//!   and `document`. A handle is the adopter's, so the generator knows the two that
-//!   `docs/generating.md` says it has, and no others.
+//!   method beside it, and the reserved handle methods `new`, `call` and `document`.
+//!   Additional methods of an adopter's handle are the adopter's to check.
 //! - The variants of `OperationId`.
 //! - The methods of one operation's builder, which `bon` writes: a setter for each
 //!   argument, a second setter named `maybe_…` for each argument that is optional,
@@ -30,9 +29,8 @@ use std::collections::btree_map::Entry;
 
 use super::GenerateError;
 
-/// The methods of the handle that the generated code does not write: the one every
-/// wrapper calls, and the one that gives the document back.
-const HANDLE: [&str; 2] = ["call", "document"];
+/// The reserved methods of the adopter's handle.
+const HANDLE: [&str; 3] = ["new", "call", "document"];
 
 /// What one operation contributes to the three namespaces.
 pub(super) struct Operation<'a> {

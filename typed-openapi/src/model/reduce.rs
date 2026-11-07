@@ -160,15 +160,15 @@ pub enum LoadError {
     DuplicateOperationId {
         /// The `operationId` the two operations share.
         id: String,
-        /// The method of the operation that comes first in the document,
+        /// The method encountered first by the path-item iterator,
         /// lowercase, as the path item spells it.
         first_method: String,
-        /// The path template that holds the operation that comes first.
+        /// The path template that holds the first encountered operation.
         first_path: String,
-        /// The method of the later operation, lowercase, as the path item spells
+        /// The method encountered later, lowercase, as the path item spells
         /// it.
         second_method: String,
-        /// The path template that holds the later operation.
+        /// The path template that holds the later encountered operation.
         second_path: String,
     },
     /// A `servers` on a path item or on an operation. A request goes to

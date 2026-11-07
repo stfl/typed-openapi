@@ -876,50 +876,47 @@ fields of every struct and every struct variant, which typify hands back as Rust
 spells them and not as the document does, so `DuplicateField` names the type and
 the field and cannot name the properties. `src/generate/identifiers.rs` asks the
 three namespaces of `ops.rs`: the methods of the handle (the wrapper and the
-`_builder` method of each operation, and `call` and `document`, which the handle
-in `docs/generating.md` has), the variants of `OperationId`, and the methods of
+`_builder` method of each operation, and the reserved handle methods `new`,
+`call` and `document`), the variants of `OperationId`, and the methods of
 one operation's builder, which `bon` derives (a setter for each argument,
 `maybe_<x>` for each argument that is an `Option`, and `call`, which ends the
 builder). `signature_of` runs once for an operation and the wrapper, the builder
 and the check read that one `Signature`, and its `Member` is what `bon` sees of an
 argument: a list is a `Vec` and is required, and a body or a parameter that the
 document leaves optional is an `Option`. A method of the adopter's handle beyond
-those two is the adopter's to find. A duplicate `operationId` is asked earlier, by
+those three is the adopter's to find. A duplicate `operationId` is asked earlier, by
 the reduction, and a blob is not checked for one, because no binary is stopped by
 it: the command line mounts operations by `<group> <command>`, which `check`
 holds apart, `Document::get` answers with the first, and a generated inventory
 that does not list the same ids fails `Api::new`.
 
-**typify is asked, and its panics are refusals; its stack overflow is found in
-the document.** `src/generate/guard.rs` runs the conversions that can panic under
-`catch_unwind`, `add_ref_types` for the schemas of the document and
-`add_type_with_name` for each one an operation states inline, and a panic is
-`GenerateError::Panicked` with the text typify panicked with. typify converts the
-whole set in one call, so a panic does not say which schema it was converting:
-`culprit` converts the schemas again, each with only what it refers to, the one
-that refers to the fewest first, and names the first that panics. The rule that
-typify applies to enum values (`sanitize`) is private to it, and a copy of it here
-would be the second spelling of a rule that `names.rs` exists to keep this crate
-from owning, so the generator asks typify: enum values that become one variant
-name and a `$ref` that leads nowhere are found the same way as any other panic. A
-type given to `Settings::replace` is read as the `syn::Path` that typify reads it
-as (`rust_paths`, before any schema), because typify panics on one that is none
-with a message about its own source.
+**Enum names and merge loops are checked before typify runs.** `src/generate/enums.rs`
+copies typify's two passes for string enum variants. Its corpus test compares
+conversion with typify itself. `EnumVariants` names the schema, values and Rust
+variant, with an Overlay as repair. Other panics during conversion and token
+emission are caught in `guard.rs` when the process unwinds. `culprit` names every
+schema in the smallest reference-closed trial that panics, in document order.
+An inline conversion names its own body or response. The process's panic hook
+runs on each panic, including diagnostic trials. `rust_paths` parses every
+replacement as `syn::TypePath`, including later entries of one format that
+`owned` skips.
 
-A cycle of `allOf` is a stack overflow in typify, which no `catch_unwind` sees:
-`merge::try_merge_schema` follows each `$ref` of an `allOf` to the schema it names
-and merges, and its own `TODO` says it has no mitigation for a cycle. So
-`src/generate/cycles.rs` reads the cycle off the schemas before typify runs. A
-`$ref` in the composition of a schema (its `allOf`, `anyOf` and `oneOf`, at any
-depth) is an edge, and it is a merge where an `allOf` that is not a bare wrapper
-of one member stands above it; a cycle with a merge in it is refused, named by its
-schemas. Each row of `CYCLES` in `tests/generate.rs` is a shape that overflowed
-typify 0.8 run on its schemas alone, and `a_loop_that_is_no_merge_generates` holds
-the ones that converted. A property or the items of a list whose own `allOf`
-adds keywords and names the schema that holds it also overflows, because the merged
-type holds the same property again, and nothing finds it. An `allOf` of the schema
-and `{description: …}` in a property converts, so a property is no edge, and
-reading one would refuse a document that typify serves.
+`cycles.rs` reads the schemas after the open-map, request-required and nullable
+rewrites, as typify receives them. Each merge is a start for an iterative DFS
+through top-level composition references and merges carried inside inline
+properties, items and maps. Any reachable loop is refused, including a loop of
+wrappers or `oneOf`s that a merge leads into. Named schemas on the loop are listed
+in document order, and an inline merge's place is named too. Plain recursive
+property and item references pass. Wrappers with one reference and only a title,
+description or `type: object` are no merge; the measured rows in
+`a_loop_that_is_no_merge_generates` hold these exemptions. Other keywords count
+as a merge. A multi-member `allOf` starts reference resolution even if its second
+member is only a description, and is refused if it reaches a composition loop.
+The property description idiom is not carried back as a merge.
+The conservative refusal includes a named object merged with a
+named array whose items merge that object, which typify converts. The variant
+doc, module doc, generating guide and CHANGELOG name this shape and its repair:
+an Overlay that breaks the loop. No known overflow stays as an unchecked limit.
 
 **The generated code names every standard item by its full path.** A schema may be
 called `Ok`, `Err`, `Some`, `None`, `String` or `Default`. A newtype `Ok` is a
@@ -940,16 +937,16 @@ holds it to the text, because no schema can be called what `ops.rs` names, so no
 compile would fail.
 
 **`tests/hostile.rs` compiles the generated code, and a bless that succeeds is
-compiled.** `compiles` makes the bless output a crate (a manifest, the smallest
-root of `docs/generating.md`, the owned type and the lockfile) and runs `cargo
+compiled.** `compiles` makes the bless output a crate (a manifest, a
+root with the reserved handle methods, the owned type and the lockfile) and runs `cargo
 check` without `builder` and with it, then `cargo test --doc`, offline, in one
 target directory under `<target>/tmp` that every test of the file shares. The
 lockfile is the workspace's, beside the manifest in a checkout, and the package's
 own in the tarball that `just package` unpacks, which carries it. The manifest
 sets `warnings = "deny"` over `missing_docs` and `unused_qualifications`, so the
 `#![allow(warnings)]` of the generated files is what keeps them clean. It covers
-the lints that are at `warn` and not one that the crate sets to `deny` by name,
-which is the adopter's to relax. `COLLISIONS` is the table of F-12: a bless that
+the lints at `warn`, including a named `deny` inside an explicitly allowed group.
+A named `deny` outside those groups remains the adopter's to relax. `COLLISIONS` is the table of F-12: a bless that
 succeeds over a document of it is compiled, and the test fails with the compiler's
 words, so a refusal that is removed shows as the error it prevented.
 
@@ -957,10 +954,9 @@ words, so a refusal that is removed shows as the error it prevented.
 name is the parameter's wire key, so an Overlay could only remove it, and the
 command line gives it a flag. `spelled_with_a_digit` in `src/generate/ops.rs`
 prefixes the argument with `x`, as typify does a property that starts with a digit,
-and `Signature::argument` says which wire key it sends. The prefix is not `_`:
-`bon` takes a leading `_` off a member name and panics on a name that then starts
-with a digit, `#[builder(name = …)]` included (measured in `bon-macros` 3.10.1),
-so no `_3ds` is an argument of a wrapper that has a builder. An `operationId` that
+and `Signature::argument` says which wire key it sends. `bon` removes a leading
+`_` and panics on `_3ds` alone; `#[builder(name = param_3ds)]` compiles. `x3ds`
+is chosen so the argument and setter have one spelling, also shared by typify. An `operationId` that
 starts with a digit is refused.
 
 **One request builder serves both consumers.** A CLI reaches it through `tree`,

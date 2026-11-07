@@ -1469,8 +1469,8 @@ fn every_awkward_name_comes_back_off_the_blob_as_it_went_in() {
 
 // ------------------------------------------------ the generated code compiles
 
-/// The crate root that the generated files are compiled under: the smallest one
-/// that `docs/generating.md` gives, with a sentence on every public item, because
+/// A crate root with the reserved handle methods and a sentence on every public
+/// item, because
 /// the crate is built under the strictest lint set an adopter can configure and
 /// its own lines are no exception.
 const ROOT: &str = r#"//! The crate that holds the generated files of the hostile document.
@@ -1615,9 +1615,8 @@ fn compiles(dir: &Path) -> Result<(), String> {
 
 /// The control document, blessed with the adopter's type, is a crate that
 /// compiles with and without `builder`, under `-D warnings` over the lints that
-/// an adopter would add, and whose doctests run. Nothing in the suite compiled
-/// generated code for any document but the toy before this (F-69), so a compile
-/// failure here is the failure of every shape the fixture holds: a description
+/// an adopter would add, and whose doctests run. A compile
+/// failure here is the failure of a shape the fixture holds: a description
 /// that hides a code block (F-2), a schema named after a standard item (F-12), a
 /// parameter whose name starts with a digit (F-48) and the lints (F-49).
 #[test]
@@ -1656,11 +1655,9 @@ struct Collision {
     says: &'static str,
 }
 
-/// Two operations of one `operationId`, and the three pairs that one Rust name
-/// reaches from the other side: a wrapper beside a wrapper, a wrapper beside the
-/// `_builder` method of another operation, and a wrapper beside a method of the
-/// handle.
-const COLLISIONS: [Collision; 11] = [
+/// Collisions among operation ids, wrappers, builder methods, reserved handle
+/// methods, variants, setters, nested types and fields.
+const COLLISIONS: [Collision; 13] = [
     Collision {
         label: "two operations of one operationId (probes/A3a, `same`)",
         document: (
@@ -1701,6 +1698,16 @@ const COLLISIONS: [Collision; 11] = [
         says: "`get_report_builder` would be defined twice in the generated ops.rs, as the \
                `_builder` method of `getReport` and as the wrapper of `getReportBuilder`; correct \
                one of them in an Overlay",
+    },
+    Collision {
+        label: "an operation called `new`, the handle's own method (probes/A7, `apimethod`)",
+        document: (
+            "  /constructors: { post: { operationId: new, responses: { '200': { description: OK } } } }\n",
+            "",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateIdentifier { name, .. } if name == "new"),
+        says: "`new` would be defined twice in the generated ops.rs, as the handle's own `new` \
+               and as the wrapper of `new`; correct one of them in an Overlay",
     },
     Collision {
         label: "an operation called `call`, the handle's own method (probes/A7, `apimethod`)",
@@ -1778,7 +1785,7 @@ const COLLISIONS: [Collision; 11] = [
         ),
         variant: |error| matches!(error, GenerateError::DuplicateField { ty, field } if ty == "Thing" && field == "foo_bar"),
         says: "the type `Thing` would declare the field `foo_bar` twice, because two of its \
-               properties are one name in Rust; correct one of them in an Overlay",
+               fields are one name in Rust; correct one of them in an Overlay",
     },
     Collision {
         label: "two properties that are one field of an object that a oneOf holds",
@@ -1790,7 +1797,16 @@ const COLLISIONS: [Collision; 11] = [
         ),
         variant: |error| matches!(error, GenerateError::DuplicateField { ty, field } if ty == "Either" && field == "foo_bar"),
         says: "the type `Either` would declare the field `foo_bar` twice, because two of its \
-               properties are one name in Rust; correct one of them in an Overlay",
+               fields are one name in Rust; correct one of them in an Overlay",
+    },
+    Collision {
+        label: "property beside additionalProperties map",
+        document: (
+            "  /things: { get: { operationId: listThings, responses: { '200': { description: OK } } } }\n",
+            "    Whole: { type: object, properties: { extra: {type: string} }, additionalProperties: true }\n",
+        ),
+        variant: |error| matches!(error, GenerateError::DuplicateField { ty, field } if ty == "Whole" && field == "extra"),
+        says: "the type `Whole` would declare the field `extra` twice, because two of its fields are one name in Rust; correct one of them in an Overlay",
     },
 ];
 

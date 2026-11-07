@@ -1564,7 +1564,7 @@ fn an_operation_that_cannot_be_spelled_names_itself() {
 /// three-domain-secure flag) has a flag on the command line, and a Rust
 /// identifier does not start with a digit. The parameter's name is its wire key,
 /// so an Overlay cannot rename it and could only remove it: the generator puts
-/// `_` in front of the word instead, and the wrapper says which wire key the
+/// `x` in front of the word, and the wrapper says which wire key the
 /// argument sends.
 #[test]
 fn a_parameter_whose_name_starts_with_a_digit_gets_a_prefixed_identifier_and_keeps_its_wire_key() {
@@ -1630,7 +1630,7 @@ fn a_prefixed_identifier_that_is_spent_moves_aside_and_says_both_reasons() {
 /// An adopter's lint set can be as strict as they like (`clippy::nursery`,
 /// `missing_docs`, `unused_qualifications`, then `-D warnings`), and none of it
 /// is aimed at a file they did not write. The exemption is the same block in both
-/// files, it names `warnings` beside the groups it has always named, and its
+/// files, it names `warnings` beside the lint groups, and its
 /// reason says that the crate holding the file does not grade it.
 #[test]
 fn both_generated_files_allow_every_warning_and_say_why() {
@@ -1757,7 +1757,7 @@ fn the_generated_code_names_every_standard_item_by_its_full_path() {
     }
 
     // The one type position that is the standard item's: the `String` of the
-    // `TryFrom` that wraps a type the adopter owns. A schema called `String` is a
+    // `TryFrom` of a generated newtype. A schema called `String` is a
     // newtype that derefs to the standard one, so the impl for the bare word still
     // compiles, and it converts from the schema where it says it converts from a
     // string. No compile can tell, so the text does.
@@ -6043,6 +6043,7 @@ fn a_replacement_that_is_a_rust_path_generates() {
         ("rooted", "::cents::Cents"),
         ("crate", "crate::cents::Cents"),
         ("arguments", "std::vec::Vec<u8>"),
+        ("qualified", "<String as ::std::ops::Deref>::Target"),
     ] {
         let dir = out(&format!("replace-good-{label}"));
         Settings::new(wrote(&dir, "document.yaml", OWNED))
@@ -6061,10 +6062,8 @@ const ENUMS_THAT_COLLIDE: [(&str, &str, &str); 3] = [
     ("symbols", "['+', '-']", "-"),
 ];
 
-/// typify's panic is not a refusal, and it names no schema: the process ends with
-/// exit 101 and a line of typify's own source. The generator catches it and says
-/// which schema was being converted, whether the enum is the schema, a property of
-/// it, or stated inline by an operation, and the cause is what typify said.
+/// The preflight names the enum's schema, colliding values and Rust variant
+/// before typify can panic, including schemas nested in other schemas.
 #[test]
 fn enum_values_that_become_one_rust_name_are_refused_naming_the_schema() {
     for (label, values, second) in ENUMS_THAT_COLLIDE {
@@ -6088,13 +6087,20 @@ fn enum_values_that_become_one_rust_name_are_refused_naming_the_schema() {
                 .write_to(&dir)
                 .expect_err("two values are one variant");
             assert!(
-                matches!(&failure, GenerateError::Panicked { schema, .. } if schema == said),
+                matches!(&failure, GenerateError::EnumVariants { schema, .. } if schema == said),
                 "{label}, {place}: {failure:?}"
             );
-            assert_eq!(
-                failure.to_string(),
-                format!("typify panicked while it built the Rust type of {said}"),
-                "{label}, {place}"
+            assert!(
+                failure
+                    .to_string()
+                    .starts_with(&format!("string enum in {said} has values")),
+                "{failure}"
+            );
+            assert!(
+                failure
+                    .to_string()
+                    .ends_with("rename a value in an Overlay"),
+                "{failure}"
             );
             assert!(
                 reported(&failure).contains(second),
@@ -6134,7 +6140,7 @@ paths:
         .expect_err("two values are one variant");
 
     assert!(
-        matches!(&failure, GenerateError::Panicked { schema, .. }
+        matches!(&failure, GenerateError::EnumVariants { schema, .. }
             if schema == "the request body stated inline by `createThing`"),
         "{failure:?}"
     );
@@ -6173,19 +6179,17 @@ fn any_other_panic_of_typify_is_a_refusal_naming_the_schema_too() {
 
 /// typify converts the whole set in one call, so a panic does not say which schema
 /// it was converting. The generator converts again, each schema with what it
-/// refers to, the one that refers to the fewest first, so that the schema that
-/// holds the cause is named and not one that refers to it, wherever the document
-/// puts them.
+/// refers to, fewest first. The whole smallest failing trial is named in document
+/// order; a leaf that refers to nothing is named alone.
 #[test]
 fn the_schema_that_holds_the_cause_is_named_and_not_the_one_that_refers_to_it() {
-    // `Outer` stands first and holds a reference to `Inner`, whose enum is the
-    // cause: the conversion of `Outer` panics too, because it takes `Inner` in.
+    // `Outer` stands first; `Inner` holds the invalid union default.
     const OUTER_FIRST: &str = "    Outer: { type: object, properties: { inner: { $ref: \
-        '#/components/schemas/Inner' } } }\n    Inner: { type: string, enum: [active, ACTIVE] }\n";
+        '#/components/schemas/Inner' } } }\n    Inner: { type: object, properties: { either: { oneOf: [{ type: string }, { type: integer }], default: [1] } } }\n";
     let dir = out("panic-leaf");
     let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(OUTER_FIRST)))
         .write_to(&dir)
-        .expect_err("two values are one variant");
+        .expect_err("the default has no union variant");
 
     assert!(
         matches!(&failure, GenerateError::Panicked { schema, .. } if schema == "the schema `Inner`"),
@@ -6194,9 +6198,8 @@ fn the_schema_that_holds_the_cause_is_named_and_not_the_one_that_refers_to_it() 
 }
 
 /// Every refusal of the cycle test names the schemas that make the cycle, in the
-/// order `allOf` leads from one to the next, starting with the one that comes
-/// first in the document. `Tail` leads into a cycle and is not part of it.
-const CYCLES: [(&str, &str, &[&str]); 8] = [
+/// order of the document. `Tail` leads into a cycle and is not part of it.
+const CYCLES: [(&str, &str, &[&str]); 18] = [
     (
         "the pair of SEV-282's review",
         "    Left:  { allOf: [{ $ref: '#/components/schemas/Right' }, { properties: { id: { type: \
@@ -6253,6 +6256,59 @@ const CYCLES: [(&str, &str, &[&str]); 8] = [
          string } } }] }\n",
         &["A", "B"],
     ),
+    (
+        "merge into wrappers",
+        "    C: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] }\n    A: { allOf: [{ $ref: '#/components/schemas/B' }] }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "merge into self wrapper",
+        "    C: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] }\n    A: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+        &["A"],
+    ),
+    (
+        "merge into oneOfs",
+        "    C: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] }\n    A: { oneOf: [{ $ref: '#/components/schemas/B' }, { type: string }] }\n    B: { oneOf: [{ $ref: '#/components/schemas/A' }, { type: integer }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "property carries merge",
+        "    A: { type: object, properties: { p: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] } } }\n",
+        &["A"],
+    ),
+    (
+        "items carry merge",
+        "    A: { type: array, items: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] } }\n",
+        &["A"],
+    ),
+    (
+        "map carries merge",
+        "    A: { type: object, additionalProperties: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] } }\n",
+        &["A"],
+    ),
+    (
+        "nullable wrapper reaches merge",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }], nullable: true }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "a list of the schema",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { type: object, properties: { x: \
+             { type: string } } }] }\n    B: { type: array, items: { allOf: [{ $ref: \
+             '#/components/schemas/A' }, { type: object, properties: { z: { type: string } } \
+             }] } }\n",
+        &["A", "B"],
+    ),
+    (
+        "type object member",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }, {type: object}] }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+        &["A", "B"],
+    ),
+    (
+        "description member into a composition loop",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }, {description: desc}] }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+        &["A", "B"],
+    ),
 ];
 
 /// typify merges the members of an `allOf` by following each `$ref` to the schema
@@ -6264,11 +6320,15 @@ const CYCLES: [(&str, &str, &[&str]); 8] = [
 fn a_cycle_of_allof_among_named_schemas_is_refused_naming_the_schemas() {
     for (at, (label, schemas, cycle)) in CYCLES.iter().enumerate() {
         let dir = out(&format!("cycle-{at}"));
-        let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
+        let mut doc = with_schemas(schemas);
+        if at == 0 {
+            doc = doc.replace("      responses:", "      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Left' } } } }\n      responses:");
+        }
+        let failure = Settings::new(wrote(&dir, "document.yaml", &doc))
             .write_to(&dir)
-            .expect_err("a cycle of allOf has no finite type");
+            .expect_err("a merge reaches a cycle");
         assert!(
-            matches!(&failure, GenerateError::CyclicAllOf { schemas } if schemas == cycle),
+            matches!(&failure, GenerateError::CyclicAllOf { schemas, .. } if schemas == cycle),
             "{label}: {failure:?}"
         );
         assert_nothing_written(&dir, label);
@@ -6288,16 +6348,16 @@ fn the_refusal_of_a_cycle_of_allof_says_what_leads_to_what() {
     };
     assert_eq!(
         refused("cycle-words-pair", 0),
-        "the schemas `Left` and `Right` are made of each other through `allOf`; break the cycle \
+        "an `allOf` merge reaches a cycle through the schemas `Left` and `Right`; break the cycle \
          in an Overlay"
     );
     assert_eq!(
         refused("cycle-words-one", 1),
-        "the schema `Mirror` is made of itself through `allOf`; break the cycle in an Overlay"
+        "an `allOf` merge reaches a cycle through the schema `Mirror`; break the cycle in an Overlay"
     );
     assert_eq!(
         refused("cycle-words-three", 2),
-        "the schemas `A`, `B` and `C` are made of each other through `allOf`; break the cycle in \
+        "an `allOf` merge reaches a cycle through the schemas `A`, `B` and `C`; break the cycle in \
          an Overlay"
     );
 }
@@ -6322,13 +6382,6 @@ fn a_loop_that_is_no_merge_generates() {
              oneOf: [{ $ref: '#/components/schemas/A' }, { type: integer }] }\n",
         ),
         (
-            "a list of the schema",
-            "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { type: object, properties: { x: \
-             { type: string } } }] }\n    B: { type: array, items: { allOf: [{ $ref: \
-             '#/components/schemas/A' }, { type: object, properties: { z: { type: string } } \
-             }] } }\n",
-        ),
-        (
             "a sentence beside the reference",
             "    Node: { type: object, properties: { parent: { allOf: [{ $ref: \
              '#/components/schemas/Node' }, { description: the parent }] }, name: { type: string \
@@ -6339,10 +6392,169 @@ fn a_loop_that_is_no_merge_generates() {
             "    A: { allOf: [{ $ref: '#/components/schemas/B' }] }\n    B: { allOf: [{ $ref: \
              '#/components/schemas/A' }] }\n",
         ),
+        (
+            "type object on one wrapper",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }], type: object }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+        ),
+        (
+            "type object on both wrappers",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }], type: object }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }], type: object }\n",
+        ),
+        (
+            "title on wrapper",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }], title: A }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+        ),
+        (
+            "description on wrapper",
+            "    A: { allOf: [{ $ref: '#/components/schemas/B' }], description: A }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+        ),
+        (
+            "merge into property loop",
+            "    C: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] }\n    A: { type: object, properties: { next: { $ref: '#/components/schemas/A' } } }\n",
+        ),
     ] {
+        typify_generates(schemas);
         let dir = out(&format!("loop-{}", label.replace(' ', "-")));
         Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
             .write_to(&dir)
             .unwrap_or_else(|error| panic!("{label}: typify converts it: {error:?}"));
     }
+}
+
+#[test]
+fn a_panic_while_typify_writes_tokens_names_the_trial() {
+    let dir = out("panic-tokens");
+    let doc = with_schemas(
+        "    Outer: { type: object, properties: { inner: { $ref: '#/components/schemas/Inner' } } }\n    Inner: { type: object, properties: { back: { $ref: '#/components/schemas/Outer' }, either: { oneOf: [{type: string}, {type: integer}], default: [1] } } }\n",
+    );
+    let failure = Settings::new(wrote(&dir, "document.yaml", &doc))
+        .write_to(&dir)
+        .expect_err("the default has no union variant");
+    assert!(
+        matches!(&failure, GenerateError::Panicked { schema, .. }
+        if schema == "the schemas `Outer`, `Inner`"),
+        "{failure:?}"
+    );
+    assert_nothing_written(&dir, "token panic");
+}
+
+#[test]
+fn an_inline_merge_reaching_a_composition_loop_names_its_site() {
+    for (label, place) in [("body", "requestBody"), ("response", "responses")] {
+        let schemas = "    A: { allOf: [{ $ref: '#/components/schemas/B' }] }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n";
+        let inline = "{ allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] }";
+        let doc = if place == "requestBody" {
+            with_schemas(schemas).replace("      responses:", &format!("      requestBody: {{ content: {{ application/json: {{ schema: {inline} }} }} }}\n      responses:"))
+        } else {
+            with_schemas(schemas).replace(
+                "{ description: OK }",
+                &format!(
+                    "{{ description: OK, content: {{ application/json: {{ schema: {inline} }} }} }}"
+                ),
+            )
+        };
+        let dir = out(&format!("cycle-inline-{label}"));
+        let failure = Settings::new(wrote(&dir, "document.yaml", &doc))
+            .write_to(&dir)
+            .expect_err("merge reaches loop");
+        assert!(
+            matches!(&failure, GenerateError::CyclicAllOf { schemas, merge: Some(site) }
+            if schemas == &["A", "B"] && site.contains("listThings") && site.contains(if label == "body" { "request body" } else { "response" })),
+            "{failure:?}"
+        );
+        assert!(
+            failure
+                .to_string()
+                .contains("break the cycle in an Overlay"),
+            "{failure}"
+        );
+        assert_nothing_written(&dir, label);
+    }
+}
+
+fn typify_generates(schemas: &str) {
+    let value: serde_json::Value = serde_saphyr::from_str(&with_schemas(schemas)).expect("YAML");
+    let definitions: Vec<_> = value["components"]["schemas"]
+        .as_object()
+        .expect("schemas")
+        .iter()
+        .map(|(name, schema)| {
+            let schema = serde_json::to_string(schema)
+                .expect("JSON")
+                .replace("#/components/schemas/", "#/definitions/");
+            (
+                name.clone(),
+                serde_json::from_str::<schemars::schema::Schema>(&schema).expect("schema"),
+            )
+        })
+        .collect();
+    let mut space = typify::TypeSpace::default();
+    space
+        .add_ref_types(definitions)
+        .expect("typify reads this loop");
+    let _ = space.to_stream();
+}
+
+#[test]
+fn token_emission_panics_in_inline_schemas_name_the_site() {
+    for (label, content, said) in [
+        (
+            "body",
+            "requestBody: { content: { application/json: { schema: { type: object, properties: { either: { oneOf: [{type: string}, {type: integer}], default: [1] } } } } } }",
+            "request body",
+        ),
+        (
+            "response",
+            "responses: { '200': { description: OK, content: { application/json: { schema: { type: object, properties: { either: { oneOf: [{type: string}, {type: integer}], default: [1] } } } } } } }",
+            "response",
+        ),
+    ] {
+        let doc = if label == "body" {
+            with_schemas("    Stable: { type: string }\n").replace(
+                "      responses:",
+                &format!("      {content}\n      responses:"),
+            )
+        } else {
+            with_schemas("    Stable: { type: string }\n").replace(
+                "      responses:\n        \"200\": { description: OK }",
+                &format!("      {content}"),
+            )
+        };
+        let dir = out(&format!("panic-token-{label}"));
+        let failure = Settings::new(wrote(&dir, "document.yaml", &doc))
+            .write_to(&dir)
+            .expect_err("invalid union default");
+        assert!(
+            matches!(&failure, GenerateError::Panicked { schema, .. } if schema.contains(said) && schema.contains("listThings")),
+            "{failure:?}"
+        );
+        assert_nothing_written(&dir, label);
+    }
+}
+
+#[test]
+fn a_long_composition_chain_into_a_loop_is_refused_without_a_call_per_hop() {
+    let mut schemas = String::new();
+    for at in 0..1024 {
+        let next = (at + 1) % 1024;
+        let added = if at == 0 {
+            ", { properties: { x: { type: string } } }"
+        } else {
+            ""
+        };
+        writeln!(
+            schemas,
+            "    N{at}: {{ allOf: [{{ $ref: '#/components/schemas/N{next}' }}{added}] }}"
+        )
+        .expect("text");
+    }
+    let dir = out("cycle-long-chain");
+    let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(&schemas)))
+        .write_to(&dir)
+        .expect_err("merge reaches loop");
+    assert!(
+        matches!(&failure, GenerateError::CyclicAllOf { schemas, .. } if schemas.len() == 1024 && schemas.first().is_some_and(|name| name == "N0")),
+        "{failure:?}"
+    );
+    assert_nothing_written(&dir, "long cycle");
 }

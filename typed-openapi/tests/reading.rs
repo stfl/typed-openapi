@@ -614,8 +614,7 @@ fn an_operation_with_no_operation_id_is_refused_and_an_overlay_that_adds_one_men
 // ------------------------------------------------------------------ F-12
 
 /// Two operations of one `operationId`: `listThings` on `get /things` and on
-/// `get /v2/things`, which is the document of `probes/A3a` that blessed and
-/// wrote two `pub fn same(&self)`.
+/// `get /v2/things`, as in `probes/A3a`.
 const TWINS: &str = "paths:\n  /things:\n    get: { operationId: listThings, responses: { '200': { \
      description: OK } } }\n  /v2/things:\n    get: { operationId: listThings, responses: { \
      '200': { description: OK } } }\n";
