@@ -229,6 +229,7 @@ pub(super) fn emit(
         .map(|inline| (inline.described(), inline.schema.clone()))
         .collect();
     let names = Names::read(&mut space, declared.iter().map(String::as_str), stated)?;
+    super::names::fields(&space)?;
     let tokens = super::guard::stream(&settings, &space, &definitions, &inline_trials)?;
 
     // A description is the vendor's prose, and a type's doc, a field's and a

@@ -46,7 +46,8 @@ struct Emitted {
     /// describe different requests.
     builder_method: TokenStream,
     /// The name of the wrapper, and of the method that starts its builder.
-    names: (Ident, Ident),
+    wrapper_name: Ident,
+    builder_name: Ident,
     /// The arguments of the wrapper, which `bon` makes setters of.
     members: Vec<Member>,
 }
@@ -131,7 +132,8 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
                     body: json_body_type(op, operation, components, names)?,
                     method: wrapper(op, &plain, &signature, &response)?,
                     builder_method: builder_wrapper(&plain, &signature, &response)?,
-                    names: (plain.clone(), format_ident!("{plain}_builder")),
+                    wrapper_name: plain.clone(),
+                    builder_name: format_ident!("{plain}_builder"),
                     members: signature.members,
                 })
             };
@@ -389,8 +391,8 @@ fn check_identifiers(ops: &[Emitted]) -> Result<(), GenerateError> {
         .map(|op| identifiers::Operation {
             id: &op.id,
             variant: op.variant.to_string(),
-            wrapper: op.names.0.to_string(),
-            builder: op.names.1.to_string(),
+            wrapper: op.wrapper_name.to_string(),
+            builder: op.builder_name.to_string(),
             members: op.members.clone(),
         })
         .collect();

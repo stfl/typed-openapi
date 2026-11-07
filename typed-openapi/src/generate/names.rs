@@ -406,7 +406,7 @@ impl Names {
             };
         }
         nested(space, &roots, &mut claimed)?;
-        fields(space).map(|()| names)
+        Ok(names)
     }
 
     /// The type `schema` became, as a wrapper spells it.
@@ -541,7 +541,7 @@ fn held_by(ty: &Type<'_>) -> Vec<TypeId> {
 /// names as Rust spells them and not the properties, so the refusal names the
 /// type and the field. A struct that a `oneOf` holds is asked too, because each of
 /// its variants that is an object is a struct of its own.
-fn fields(space: &TypeSpace) -> Result<(), GenerateError> {
+pub(super) fn fields(space: &TypeSpace) -> Result<(), GenerateError> {
     for ty in space.iter_types() {
         for declared in field_lists(&ty) {
             once(&ty, &declared)?;
