@@ -325,7 +325,7 @@ pub struct Cents(i64);
 
 /// A string outside the non-negative `i64` range of [`Cents`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("`{raw}` is not a non-negative i64 count of cents")]
+#[error("expected a non-negative i64 count of cents")]
 pub struct CentsError {
     raw: String,
 }
@@ -366,6 +366,24 @@ impl<'de> Deserialize<'de> for Cents {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cents_errors_have_a_bounded_message_for_large_rejected_values() {
+        for digits in [1_048_576, 32] {
+            let raw = "9".repeat(digits);
+            let Err(error) = raw.parse::<Cents>() else {
+                panic!("an oversized count must be refused");
+            };
+            assert!(matches!(error, CentsError { .. }));
+            let message = error.to_string();
+            assert!(
+                message.len() <= 64,
+                "diagnostic is {} bytes for {digits} input bytes",
+                message.len()
+            );
+            assert_eq!(message, "expected a non-negative i64 count of cents");
+        }
+    }
 
     fn money(raw: &str) -> Money {
         raw.parse()
