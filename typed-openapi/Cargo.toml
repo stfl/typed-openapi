@@ -57,6 +57,10 @@ name = "errors"
 required-features = ["generate", "clap"]
 
 [[test]]
+name = "file_input"
+required-features = ["document", "clap"]
+
+[[test]]
 name = "generate"
 required-features = ["generate"]
 
