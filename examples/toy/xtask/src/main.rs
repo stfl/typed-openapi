@@ -34,6 +34,7 @@ fn main() -> ExitCode {
         // stands for it. `Voucher.currency` beside it takes the other route: a
         // named schema, and the newtype the generator writes.
         .replace("money", "money::Money")
+        .replace("cents", "money::Cents")
         // This adoption states counts in its prose, so it asks for the page
         // those counts are measured off; an adoption that states none asks for
         // nothing and gets no file. Beside the blob because that is where

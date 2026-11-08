@@ -21,16 +21,73 @@ const _: () = {
         prints_to_a_string::<money::Money>();
     }
 };
+///`Settings::replace("cents", "money::Cents")` promises that this type parses from a string and prints to one, and the newtype above is written in terms of both.
+const _: () = {
+    fn parses_from_a_string<T: ::std::str::FromStr>() {}
+    fn prints_to_a_string<T: ::std::fmt::Display>() {}
+    fn a_type_named_by_settings_replace() {
+        parses_from_a_string::<money::Cents>();
+        prints_to_a_string::<money::Cents>();
+    }
+};
 ///`Address`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
 pub struct Address {
     pub city: ::std::string::String,
     pub street: ::std::string::String,
 }
+///`Cents`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(transparent)]
+pub struct Cents(pub money::Cents);
+impl ::std::ops::Deref for Cents {
+    type Target = money::Cents;
+    fn deref(&self) -> &money::Cents {
+        &self.0
+    }
+}
+impl ::std::convert::From<Cents> for money::Cents {
+    fn from(value: Cents) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<money::Cents> for Cents {
+    fn from(value: money::Cents) -> Self {
+        Self(value)
+    }
+}
+impl ::std::fmt::Display for Cents {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl ::std::str::FromStr for Cents {
+    type Err = <money::Cents as ::std::str::FromStr>::Err;
+    fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
+        ::std::result::Result::Ok(Self(value.parse()?))
+    }
+}
+impl ::std::convert::TryFrom<&str> for Cents {
+    type Error = <money::Cents as ::std::str::FromStr>::Err;
+    fn try_from(value: &str) -> ::std::result::Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for Cents {
+    type Error = <money::Cents as ::std::str::FromStr>::Err;
+    fn try_from(value: ::std::string::String) -> ::std::result::Result<Self, Self::Error> {
+        value.parse()
+    }
+}
 ///`Contact`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
 pub struct Contact {
     pub address: Address,
+    #[serde(
+        rename = "creditLimit",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub credit_limit: ::std::option::Option<Cents>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub id: ::std::option::Option<i64>,
     pub name: ::std::string::String,

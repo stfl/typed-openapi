@@ -11,6 +11,11 @@ the crate follows [Semantic Versioning][semver].
 
 ### Added
 
+- The toy adds optional `Contact.creditLimit` as a generated `Cents` wrapper
+  over an owned `i64` count. Add `credit_limit: None` to contact literals.
+  Values beyond that count fail to decode; choose a wider owned type to accept
+  them. A guard keeps this narrower type off parameter and flat-body flags.
+
 - **A stamp on the model blob, and `Document::MODEL_LAYOUT`.** `to_blob` writes
   a header before the encoding: a magic of 8 bytes, the layout number as a
   `u32`, and the version of typed-openapi that wrote it. `MODEL_LAYOUT` is the

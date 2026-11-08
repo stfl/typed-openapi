@@ -262,6 +262,11 @@ whose format is replaced hands the whole reading to your `FromStr`: the
 document's `pattern` reaches the command line, and nothing re-runs it inside the
 wrapper. The two can therefore disagree, and only a test holds them together —
 see [owning the type yourself](overlay.md#owning-the-type-yourself).
+A narrower type can instead be guarded against reaching any flag. The toy
+replaces `cents` with `money::Cents` and guards it with `Operation::carrying`.
+Its generated `Cents` newtype delegates to the owned `i64` count. A response
+with more digits than that count can hold fails to decode, even when its value
+meets the document's pattern; the adopter accepts this cost.
 
 It is the route for a type that needs *behaviour*, or one the document cannot
 describe — a fixed-point decimal, say. A rule needs no Rust at all: name the
