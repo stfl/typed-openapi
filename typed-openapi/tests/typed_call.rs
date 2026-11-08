@@ -219,7 +219,9 @@ fn a_call_sends_the_request_it_planned() {
     let call = client
         .call::<Thing>(doc.get("deleteThing").expect("the write"), id(5))
         .expect("values");
-    let recorder = Recorder::new().answering(StatusCode::OK, &json!({"id": 5}));
+    let recorder = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &json!({"id": 5}));
 
     let planned = call.plan(&Answers::new().commit()).expect("a plan");
     assert!(matches!(planned.plan(), Plan::Send(_)));
@@ -260,7 +262,9 @@ fn a_planned_read_is_sent_without_an_answer() {
     let call = client
         .call::<Thing>(doc.get("getThing").expect("the read"), id(5))
         .expect("values");
-    let recorder = Recorder::new().answering(StatusCode::OK, &json!({"id": 5}));
+    let recorder = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &json!({"id": 5}));
 
     let answer = call
         .plan(&Answers::new())
@@ -297,7 +301,9 @@ fn an_async_client_sends_the_request_that_was_planned() {
     let client = client();
     let doc = client.document();
     let op = doc.get("deleteThing").expect("the write");
-    let recorder = Recorder::new().answering(StatusCode::OK, &json!({"id": 5}));
+    let recorder = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &json!({"id": 5}));
 
     let planned = client
         .call::<Thing>(op, id(5))
@@ -366,8 +372,9 @@ fn a_status_names_the_operation_and_the_status_and_prints_no_body() {
     let client = client();
     let doc = client.document();
     let body = "upstream said: IBAN AT61 1904 3002 3457 3201, token=abc";
-    let recorder =
-        Recorder::new().answering(StatusCode::INTERNAL_SERVER_ERROR, &json!({ "error": body }));
+    let recorder = Recorder::new()
+        .strict()
+        .answering(StatusCode::INTERNAL_SERVER_ERROR, &json!({ "error": body }));
 
     let error = client
         .call::<Thing>(doc.get("getThing").expect("the read"), id(5))
@@ -401,7 +408,9 @@ fn a_status_names_the_operation_and_the_status_and_prints_no_body() {
 fn an_async_status_names_the_operation_too() {
     let client = client();
     let doc = client.document();
-    let recorder = Recorder::new().answering(StatusCode::NOT_FOUND, &json!({"error": "no"}));
+    let recorder = Recorder::new()
+        .strict()
+        .answering(StatusCode::NOT_FOUND, &json!({"error": "no"}));
 
     let error = block_on(
         client
@@ -443,7 +452,7 @@ fn a_status_says_the_same_whatever_the_body_holds() {
         .map(|body| {
             let mut response = http::Response::new(body);
             *response.status_mut() = StatusCode::BAD_GATEWAY;
-            let recorder = Recorder::new().answering_with(response);
+            let recorder = Recorder::new().strict().answering_with(response);
             client
                 .call::<Thing>(doc.get("getThing").expect("the read"), id(5))
                 .expect("values")
@@ -492,9 +501,17 @@ fn a_call_to_an_option_answers_none_for_a_204_and_some_for_a_body() {
 
     let mut empty = http::Response::new(Vec::new());
     *empty.status_mut() = StatusCode::NO_CONTENT;
-    let none = call().send(&Recorder::new().answering_with(empty));
-    let some = call().send(&Recorder::new().answering(StatusCode::OK, &json!({"id": 5})));
-    let wrong = call().send(&Recorder::new().answering(StatusCode::OK, &json!({"id": "x"})));
+    let none = call().send(&Recorder::new().strict().answering_with(empty));
+    let some = call().send(
+        &Recorder::new()
+            .strict()
+            .answering(StatusCode::OK, &json!({"id": 5})),
+    );
+    let wrong = call().send(
+        &Recorder::new()
+            .strict()
+            .answering(StatusCode::OK, &json!({"id": "x"})),
+    );
 
     assert_eq!(none.expect("a 204 is no body"), None);
     assert_eq!(some.expect("a 200 has one"), Some(Thing { id: 5 }));
@@ -523,11 +540,12 @@ fn a_planned_call_to_an_option_tells_a_204_from_a_dry_run() {
     let no_body = call()
         .plan(&confirmed)
         .expect("a plan")
-        .send(&Recorder::new().answering_with(empty));
-    let body = call()
-        .plan(&confirmed)
-        .expect("a plan")
-        .send(&Recorder::new().answering(StatusCode::OK, &json!({"id": 5})));
+        .send(&Recorder::new().strict().answering_with(empty));
+    let body = call().plan(&confirmed).expect("a plan").send(
+        &Recorder::new()
+            .strict()
+            .answering(StatusCode::OK, &json!({"id": 5})),
+    );
     let dry_run = call()
         .plan(&Answers::new())
         .expect("a plan")
@@ -550,7 +568,11 @@ fn no_content_takes_an_empty_body_or_any_json_and_a_body_that_is_not_json_is_a_d
         client
             .call::<NoContent>(doc.get("getThing").expect("the read"), id(5))
             .expect("values")
-            .send(&Recorder::new().answering_with(http::Response::new(body.to_vec())))
+            .send(
+                &Recorder::new()
+                    .strict()
+                    .answering_with(http::Response::new(body.to_vec())),
+            )
     };
 
     for body in [&b""[..], b"42", br#"{"a":1}"#, b"null"] {
@@ -580,15 +602,28 @@ fn an_async_planned_call_names_the_operation_of_its_failure() {
             .expect("a plan")
     };
 
-    let status = block_on(planned().send_async(
-        &Recorder::new().answering(StatusCode::SERVICE_UNAVAILABLE, &json!({"error": "no"})),
-    ))
+    let status = block_on(
+        planned().send_async(
+            &Recorder::new()
+                .strict()
+                .answering(StatusCode::SERVICE_UNAVAILABLE, &json!({"error": "no"})),
+        ),
+    )
     .expect_err("a 503 is not a success");
-    let transport =
-        block_on(planned().send_async(&Recorder::new().failing(Reach::NeverAnswered, "timed out")))
-            .expect_err("the client fails");
+    let transport = block_on(
+        planned().send_async(
+            &Recorder::new()
+                .strict()
+                .failing(Reach::NeverAnswered, "timed out"),
+        ),
+    )
+    .expect_err("the client fails");
     let decode = block_on(
-        planned().send_async(&Recorder::new().answering(StatusCode::OK, &json!({"id": "x"}))),
+        planned().send_async(
+            &Recorder::new()
+                .strict()
+                .answering(StatusCode::OK, &json!({"id": "x"})),
+        ),
     )
     .expect_err("the body is not a `Thing`");
 
@@ -618,7 +653,9 @@ fn failure_as<T: std::fmt::Debug + serde::de::DeserializeOwned>(
 ) -> ClientError {
     let client = client();
     let doc = client.document();
-    let recorder = Recorder::new().answering_with(http::Response::new(body.as_ref().to_vec()));
+    let recorder = Recorder::new()
+        .strict()
+        .answering_with(http::Response::new(body.as_ref().to_vec()));
 
     client
         .call::<T>(doc.get("getThing").expect("the read"), id(5))
@@ -649,7 +686,9 @@ fn chain(error: &(dyn std::error::Error + 'static)) -> String {
 fn a_decode_names_the_operation_and_keeps_the_text() {
     let client = client();
     let doc = client.document();
-    let recorder = Recorder::new().answering(StatusCode::OK, &json!({"id": "x"}));
+    let recorder = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &json!({"id": "x"}));
 
     let error = client
         .call::<Thing>(doc.get("getThing").expect("the read"), id(5))
@@ -954,7 +993,11 @@ fn a_decode_column_in_the_text_of_the_body_can_point_earlier_than_the_place() {
 fn an_empty_body_is_read_as_null() {
     let client = client();
     let doc = client.document();
-    let empty = || Recorder::new().answering_with(http::Response::new(Vec::new()));
+    let empty = || {
+        Recorder::new()
+            .strict()
+            .answering_with(http::Response::new(Vec::new()))
+    };
 
     let none = client
         .call::<NoContent>(doc.get("getThing").expect("the read"), id(5))
@@ -1170,7 +1213,9 @@ fn a_transport_failure_names_the_operation_and_carries_the_clients_error() {
     let client = client();
     let doc = client.document();
     let op = doc.get("getThing").expect("the read");
-    let recorder = Recorder::new().failing(Reach::NeverLeft, "connection refused");
+    let recorder = Recorder::new()
+        .strict()
+        .failing(Reach::NeverLeft, "connection refused");
 
     let plain = client
         .call::<Thing>(op, id(5))
@@ -1182,7 +1227,11 @@ fn a_transport_failure_names_the_operation_and_carries_the_clients_error() {
         .expect("values")
         .plan(&Answers::new())
         .expect("a plan")
-        .send(&Recorder::new().failing(Reach::NeverAnswered, "timed out"))
+        .send(
+            &Recorder::new()
+                .strict()
+                .failing(Reach::NeverAnswered, "timed out"),
+        )
         .expect_err("the client fails");
 
     for (error, reach) in [(&plain, Reach::NeverLeft), (&planned, Reach::NeverAnswered)] {
@@ -1243,4 +1292,90 @@ fn a_refused_value_is_the_values_own_error() {
     );
     assert_eq!(error.to_string(), "getThing: `id` is required");
     assert!(error.body().is_none());
+}
+
+#[test]
+fn a_bodiless_201_decodes_as_no_content_through_the_recorder() {
+    let client = client();
+    let recorder = Recorder::new().strict().answering_with(
+        http::Response::builder()
+            .status(StatusCode::CREATED)
+            .body(Vec::new())
+            .expect("a 201 response"),
+    );
+    let answer = client
+        .call::<NoContent>(
+            client.document().get("createThing").expect("the write"),
+            Values::new().json(json!({"name": "Ada"})),
+        )
+        .expect("a body")
+        .send(&recorder)
+        .expect("an empty success");
+    assert_eq!(answer, NoContent);
+    assert_eq!(only(&recorder).method(), "POST");
+}
+
+#[test]
+fn a_damaged_blob_becomes_the_clients_document_error() {
+    let open = || -> Result<Client, ClientError> { Ok(Client::over(Document::from_blob(&[])?)) };
+    let error = open().expect_err("an empty blob has no stamp");
+    assert!(
+        matches!(
+            &error,
+            ClientError::Document(typed_openapi::DocumentError::Unstamped { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "the document does not load");
+    assert!(error.source().is_some());
+    assert!(error.body().is_none());
+}
+
+#[test]
+fn an_operation_past_the_inventory_becomes_the_clients_drift_error() {
+    let doc = document();
+    let rows: Vec<(&str, &str, &str)> = doc
+        .operations()
+        .iter()
+        .map(|op| (op.id(), op.method().as_str(), op.path()))
+        .collect();
+    let missing_last = rows.get(..rows.len() - 1).expect("a nonempty inventory");
+    let open = || -> Result<(), ClientError> { Ok(doc.matches(missing_last)?) };
+    let error = open().expect_err("the document has one extra operation");
+    assert!(
+        matches!(&error, ClientError::Drift(drift)
+        if drift.position == missing_last.len()
+        && drift.expected == "nothing after it"
+        && drift.found.as_deref() == Some("createThing")),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("createThing"));
+    assert!(error.body().is_none());
+}
+
+#[test]
+fn a_refused_base_becomes_the_clients_request_error() {
+    let client = client().with_base(
+        "http://user:secret@things.example.test"
+            .parse()
+            .expect("a URI"),
+    );
+    let recorder = Recorder::new().strict();
+    let error = client
+        .call::<Thing>(client.document().get("getThing").expect("the read"), id(5))
+        .expect("values")
+        .send(&recorder)
+        .expect_err("userinfo is refused");
+    assert!(
+        matches!(
+            &error,
+            ClientError::Request(typed_openapi::RequestError::Base(
+                typed_openapi::BaseUrlError::Userinfo
+            ))
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("userinfo"));
+    assert!(error.body().is_none());
+    assert!(recorder.take().is_empty());
 }

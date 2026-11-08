@@ -1,6 +1,6 @@
 //! The half of the drift story that happens before anything is compiled.
 //!
-//! Three of the Overlay's actions are written as assertions about what the
+//! Six of the Overlay's actions are written as assertions about what the
 //! vendor currently says. Applied with `ErrorOnZeroMatch`, a vendor revision
 //! that changes the thing being corrected fails here — at bless time — instead
 //! of being silently overwritten with a correction that no longer fits.
@@ -164,4 +164,46 @@ fn adding_or_removing_an_unrelated_field_passes_the_bless() {
         "",
     );
     assert!(Document::load(&removed, OVERLAYS).is_ok());
+}
+
+#[test]
+fn moving_the_writing_get_to_post_fails_the_bless() {
+    let error = bless(&mutated(
+        "  /vouchers/{id}/render:\n    get:\n",
+        "  /vouchers/{id}/render:\n    post:\n",
+    ))
+    .expect_err("the writing-GET correction no longer applies");
+    assert!(
+        matches!(&error, typed_openapi::overlay::OverlayError::Apply(_)),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("does not apply"), "{error}");
+}
+
+#[test]
+fn moving_the_email_operation_to_put_fails_the_bless() {
+    let error = bless(&mutated(
+        "  /vouchers/{id}/send-by-email:\n    post:\n",
+        "  /vouchers/{id}/send-by-email:\n    put:\n",
+    ))
+    .expect_err("the email gate no longer names a POST");
+    assert!(
+        matches!(&error, typed_openapi::overlay::OverlayError::Apply(_)),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("does not apply"), "{error}");
+}
+
+#[test]
+fn retyping_the_guarded_credit_limit_fails_the_bless() {
+    let error = bless(&mutated(
+        "          format: cents\n",
+        "          format: int64\n",
+    ))
+    .expect_err("the cents correction no longer applies");
+    assert!(
+        matches!(&error, typed_openapi::overlay::OverlayError::Apply(_)),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("does not apply"), "{error}");
 }

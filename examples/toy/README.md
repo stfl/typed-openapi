@@ -121,7 +121,7 @@ third layer this adoption has no need of.
 | serves a `GET` that stores a PDF | `x-cli-writes: true`, in `spec/cli.yaml` | `vouchers render` is behind `--commit` |
 | serves one upload under a media type nothing here assembles | left alone, and both uploads work | `--raw-body` for the `application/pdf` one, `--file` / `--field` for the multipart one |
 
-The **tripwire** actions in both layers state what the vendor currently says
+The six **tripwire** actions in both layers state what the vendor currently says
 in their JSONPaths, so under
 `ErrorOnZeroMatch` a vendor revision that moves the thing being corrected fails
 the bless step instead of being silently overwritten, naming the layer it is

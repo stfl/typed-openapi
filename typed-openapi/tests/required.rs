@@ -93,6 +93,10 @@ fn a_required_key_nothing_declares_is_refused_and_named_where_it_stands() {
          \x20     period: { type: string, description: The period it is booked into. }\n";
 
     let refused = loaded(LEDGER).expect_err("`period` is declared nowhere");
+    assert!(
+        matches!(&refused, typed_openapi::LoadError::Phantom(_)),
+        "{refused:?}"
+    );
     assert_eq!(
         refused.to_string(),
         "the document requires keys that nothing declares; declare each key in an \
@@ -672,6 +676,10 @@ fn the_committed_fixture_reduces_and_the_same_fixture_with_a_phantom_does_not() 
     assert_ne!(stripped, TOY, "the fixture still declares `city`");
     let refused = Document::load(&stripped, OVERLAYS)
         .expect_err("`Address` still requires the key that was taken out");
+    assert!(
+        matches!(&refused, typed_openapi::LoadError::Phantom(_)),
+        "{refused:?}"
+    );
     assert!(
         refused
             .to_string()

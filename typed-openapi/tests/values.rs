@@ -1597,3 +1597,52 @@ fn a_body_flag_is_sent_as_it_was_parsed() {
     let request = sent(&doc, &["n", "create", "--sum", "9007199254740992"]);
     assert_eq!(request.body().as_slice(), br#"{"sum":9007199254740992.0}"#);
 }
+
+#[test]
+fn every_body_refusal_names_its_operation_and_kind() {
+    let doc = Document::load(include_str!("fixtures/toy.yaml"), &[]).expect("the toy loads");
+    let create = doc.get("createVoucher").expect("a JSON body");
+    let missing = Invocation::new(create, Values::new()).expect_err("a body is required");
+    assert!(
+        matches!(&missing, ValueError::MissingBody { op } if op == "createVoucher"),
+        "{missing:?}"
+    );
+    assert_eq!(
+        missing.to_string(),
+        "createVoucher: a request body is required"
+    );
+
+    let read = doc.get("listVouchers").expect("a bodiless read");
+    let unexpected =
+        Invocation::new(read, Values::new().raw(vec![1])).expect_err("the read takes no body");
+    assert!(
+        matches!(&unexpected, ValueError::UnexpectedBody { op } if op == "listVouchers"),
+        "{unexpected:?}"
+    );
+    assert_eq!(
+        unexpected.to_string(),
+        "listVouchers: takes no request body"
+    );
+
+    for (id, values, kind) in [
+        ("createVoucher", Values::new().raw(vec![1]), "JSON"),
+        ("createContact", Values::new().multipart(vec![]), "JSON"),
+        (
+            "uploadDocument",
+            Values::new().json(serde_json::json!({})),
+            "application/pdf",
+        ),
+        (
+            "uploadDocumentMultipart",
+            Values::new().raw(vec![1]),
+            "multipart/form-data",
+        ),
+    ] {
+        let error = Invocation::new(doc.get(id).expect(id), values).expect_err("another body kind");
+        assert!(
+            matches!(&error, ValueError::WrongBodyKind { op, expected } if op == id && expected == kind),
+            "{error:?}"
+        );
+        assert_eq!(error.to_string(), format!("{id}: expects a {kind} body"));
+    }
+}

@@ -69,7 +69,7 @@ fn every_count_the_readme_states_is_the_reductions_own() {
 /// The gates are named in the prose as well as counted, and the words are the
 /// document's. A gate an Overlay renames stops being on the page.
 #[test]
-fn every_gate_the_readme_names_is_one_the_document_names() {
+fn every_gate_the_document_names_is_named_in_the_readme() {
     let summary = summary();
     for gate in summary.gates().keys() {
         let named = format!("`--{gate}`");

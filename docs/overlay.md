@@ -51,10 +51,11 @@ actions:
 ```
 
 The `overlay` field has to match `1.1.x`. A document declaring `1.0.0` is
-refused before any action runs:
+refused before any action runs. In the examples, `/checkout` stands for the
+checkout's absolute path:
 
 ```
-bless: cannot use spec/corrections.yaml
+bless: cannot use /checkout/examples/toy/spec/corrections.yaml
   caused by: the Overlay document is valid YAML or JSON but not an Overlay 1.1 document
   caused by: overlay: invalid value: string "1.0.0", expected `1.1.<patch>` semver (Overlay v1.1)
 ```
@@ -200,7 +201,7 @@ pointing an amount's rule at a schema that is no longer a string. The filter
 form fails instead, and names itself:
 
 ```
-bless: cannot use spec/corrections.yaml
+bless: cannot use /checkout/examples/toy/spec/corrections.yaml
   caused by: the Overlay does not apply
   caused by: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
 ```

@@ -272,18 +272,12 @@ fn every_retype_still_corrects_something() {
 #[test]
 fn every_undeclared_property_is_still_undeclared() {
     for (schema, property) in rows().undeclared {
-        let declared = |document: &str| {
-            document
-                .split(&format!("{schema}:"))
-                .nth(1)
-                .is_some_and(|rest| rest.contains(&format!("{property}:")))
-        };
         assert!(
-            !declared(VENDOR),
+            !declared(VENDOR, schema, property),
             "`{schema}.{property}` is listed as undeclared but the vendor now declares it"
         );
         assert!(
-            declared(api::DOCUMENT),
+            declared(api::DOCUMENT, schema, property),
             "`{schema}.{property}` is listed as undeclared but the Overlay no longer adds it"
         );
     }
@@ -399,4 +393,25 @@ fn the_vendor_layer_says_nothing_about_a_command_line() {
         "`spec/cli.yaml` no longer carries the marker the gate reads, so either \
          the gate is uncorrected or this check can no longer see it"
     );
+}
+
+fn declared(document: &str, schema: &str, property: &str) -> bool {
+    properties(&json(document)).contains_key(&(schema.to_owned(), property.to_owned()))
+}
+
+#[test]
+fn an_undeclared_property_on_another_schema_does_not_count_as_declared() {
+    let mut document = json(VENDOR);
+    document
+        .pointer_mut("/components/schemas/Contact/properties")
+        .expect("Contact properties")
+        .as_object_mut()
+        .expect("a property map")
+        .insert(
+            "internal_ref".to_owned(),
+            serde_json::json!({"type": "string"}),
+        );
+    let text = document.to_string();
+    assert!(declared(&text, "Contact", "internal_ref"));
+    assert!(!declared(&text, "Voucher", "internal_ref"));
 }
