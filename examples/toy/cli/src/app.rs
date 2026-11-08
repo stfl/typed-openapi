@@ -1,8 +1,8 @@
 //! The command tree, and which module runs each command in it.
 //!
 //! `run` is generic over the HTTP client and hands back an [`Output`] rather
-//! than printing it, so every test in `tests/` drives the real thing with a
-//! recording client and no socket.
+//! than printing it. Callers can supply a recording client and inspect the
+//! returned streams.
 
 use api::Api;
 use clap::{Arg, ArgMatches, Command, value_parser};

@@ -5,10 +5,11 @@ document that is wrong in six ways, two Overlay layers that correct it, a bless
 step, and two CLIs over the result. It is built, linted and tested with the library on
 every push, so it cannot rot into an example that no longer compiles.
 
-The Toy Accounting API is invented, and nothing here reaches the network: the
-default server is `http://localhost:9999`, every write is a dry run until
-`--commit`, and the tests drive the real commands through a recording client
-with no socket.
+The Toy Accounting API is invented. The default server is
+`http://localhost:9999`, and every write is a dry run until `--commit`.
+Recorder-based command tests use no socket. The adapter tests use a local
+HTTP server. The root CLI test runs the example process through a local HTTP
+proxy and checks its exit code, stdout and stderr.
 
 ## Try it
 
@@ -70,8 +71,8 @@ error: the following required arguments were not provided:
   --enshrine
 ```
 
-That one is a `GET`. HTTP cannot say "this GET writes", so the Overlay does,
-with `x-cli-writes` — and the gate treats it like any `POST`.
+The earlier `vouchers render` operation is a `GET` that writes. The Overlay
+marks it with `x-cli-writes`, and the gate treats it like any `POST`.
 
 ## How big this API is
 
@@ -137,7 +138,7 @@ a real difference with no row fails.
 | crate | written by | holds |
 |---|---|---|
 | [`money`](money) | the adopter | one type: a fixed-point amount, which the generated code wraps |
-| [`api-generated`](api-generated) | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
+| [`api-generated`](api-generated) | `just bless`, except `client.rs` and `lib.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
 | [`api`](api) | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
 | [`cli`](cli) | the adopter | the `toy` binary, and `examples/root.rs` beside it |
 | [`xtask`](xtask) | the adopter | the bless step — the generator itself ships in `typed-openapi` |
@@ -151,8 +152,8 @@ whichever crate you are curious about, at the moment you ask.
 The split is about what recompiles, and about what can name what. An edit to
 `api` rebuilds the adopter's own lines and not the generated volume beneath
 them; `money` sits below `api-generated` because the generated source names it,
-and `api-generated`'s whole dependency list is `serde`, `http`, `money` and the
-library — nothing about a generator reaches it.
+and `api-generated`'s whole dependency list is `serde`, `serde_json`, `http`,
+`money` and the library — nothing about a generator reaches it.
 
 One type here is hand-written, and it is the one no OpenAPI document can
 describe. OpenAPI has no fixed-point decimal, so [`money`](money/src/lib.rs)
@@ -222,6 +223,7 @@ Settings::new(adoption.join("spec/toy.yaml"))
     .overlay(adoption.join("spec/corrections.yaml"))
     .overlay(adoption.join("spec/cli.yaml"))
     .replace("money", "money::Money")
+    .summary_page("src/summary.md")
     .write_to(adoption.join("api-generated"))
 ```
 

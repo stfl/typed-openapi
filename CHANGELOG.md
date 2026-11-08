@@ -121,6 +121,19 @@ the crate follows [Semantic Versioning][semver].
 
 ### Changed
 
+- **The toy adapters return redirects to the caller.** ureq uses
+  `max_redirects(0)` and reqwest uses `redirect::Policy::none()`. A confirmed
+  write that receives a 303 reports that response. Repair for copied adapters:
+  copy these settings. Construct the example's reqwest adapter with
+  `Reqwest::new()?`; its inner client is private.
+- **The day-one CLI fails on a non-2xx response.** The `root` example writes
+  the status and response body to stderr and exits 1. Successful responses
+  use the same JSON formatting as the `toy` binary. Repair for scripts that
+  copy the example: check its exit code and read stderr on failure.
+- **The toy CLI can build without an HTTP adapter.** `Ureq` requires
+  `ureq-client`, as do the `toy` binary and the `root` example. Repair for
+  code that imports `Ureq`: enable that feature.
+
 - **Every adopter blesses again after the upgrade.** A blob written by 0.0.2
   has no stamp, so `Document::from_blob` returns `DocumentError::Unstamped` and
   the generated `Api::new()` fails with it. Repair: run your bless step and
@@ -1633,6 +1646,11 @@ the crate follows [Semantic Versioning][semver].
   - `kebab`, at the root and in `names`
 
 ### Security
+
+- **The example requires tokio 1.53.3 or later.** Its locked dependency fixes
+  [RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386).
+  Repair for a copied example: update the tokio requirement and run
+  `cargo update -p tokio`.
 
 - **The dependency tree holds no RUSTSEC advisory.** `unsafe-libyaml`
   (RUSTSEC-2024-0449, unmaintained) leaves it with `serde_yaml_ng`.

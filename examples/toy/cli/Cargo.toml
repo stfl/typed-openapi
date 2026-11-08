@@ -8,6 +8,19 @@ description = "The toy accounting CLI: every operation from the document, plus h
 [[bin]]
 name = "toy"
 path = "src/main.rs"
+required-features = ["ureq-client"]
+
+[[example]]
+name = "root"
+required-features = ["ureq-client"]
+
+[[test]]
+name = "http"
+required-features = ["ureq-client"]
+
+[[test]]
+name = "root"
+required-features = ["ureq-client"]
 
 [features]
 default = ["ureq-client"]
@@ -42,6 +55,8 @@ thiserror = { workspace = true }
 ureq = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Runs the async adapter against the local HTTP fixture server.
+tokio = { version = "1.53.3", features = ["rt", "net", "time"] }
 # `Document::load`, which the e2e case for a free-text path parameter needs: the
 # toy's document has none, and its binary starts from the blob.
 typed-openapi = { path = "../../../typed-openapi", features = ["document"] }

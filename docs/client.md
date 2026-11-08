@@ -83,6 +83,12 @@ failed first would leave it nothing to carry. ureq turns a 4xx into an error and
 discards the body unless it is built with `http_status_as_error(false)`, which
 is why the example's adapter sets it.
 
+**An adapter must not follow redirects.** The caller receives the original
+3xx status, headers and body. The ureq adapter sets `max_redirects(0)`, and
+`Reqwest::new()` builds its client with `redirect::Policy::none()`. A confirmed
+write that returns a 303 reaches the command tree as `Outcome::Sent`; it sends
+no request to the redirect target.
+
 **A credential is set in the adapter.** The request that `Invocation::request`
 builds carries no `Authorization` header, whatever the document declares: a
 header parameter named `Authorization`, `Accept` or `Content-Type` is dropped

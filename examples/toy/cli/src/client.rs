@@ -2,7 +2,9 @@
 //!
 //! Both are the whole adapter. The seam is `http::Request<Vec<u8>>` in,
 //! `http::Response<Vec<u8>>` out, so there is nothing else to write.
+//! Status codes stay responses, and redirects are returned to the caller.
 
+#[cfg(any(feature = "ureq-client", feature = "reqwest-client"))]
 use typed_openapi::transport::{HttpRequest, HttpResponse};
 
 /// ureq 3, the client this binary ships with.
@@ -10,27 +12,32 @@ use typed_openapi::transport::{HttpRequest, HttpResponse};
 /// `http_status_as_error(false)` is load-bearing: ureq otherwise turns a 4xx
 /// into an error and throws the body away, and the body is what an agent needs.
 /// The status belongs to `api`, which maps it into [`api::Error::Status`].
+#[cfg(feature = "ureq-client")]
 #[derive(Debug)]
 pub struct Ureq(ureq::Agent);
 
+#[cfg(feature = "ureq-client")]
 impl Default for Ureq {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "ureq-client")]
 impl Ureq {
     #[must_use]
     pub fn new() -> Self {
         Self(
             ureq::Agent::config_builder()
                 .http_status_as_error(false)
+                .max_redirects(0)
                 .build()
                 .into(),
         )
     }
 }
 
+#[cfg(feature = "ureq-client")]
 impl typed_openapi::SyncClient for Ureq {
     type Error = ureq::Error;
 
@@ -48,8 +55,19 @@ impl typed_openapi::SyncClient for Ureq {
 /// `reqwest::Client` are both foreign to this crate. A crate that owns either
 /// one writes `impl AsyncClient for reqwest::Client` directly.
 #[cfg(feature = "reqwest-client")]
-#[derive(Debug, Default)]
-pub struct Reqwest(pub reqwest::Client);
+#[derive(Debug)]
+pub struct Reqwest(reqwest::Client);
+
+#[cfg(feature = "reqwest-client")]
+impl Reqwest {
+    /// Builds a client that returns redirects to the caller.
+    pub fn new() -> Result<Self, reqwest::Error> {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map(Self)
+    }
+}
 
 #[cfg(feature = "reqwest-client")]
 impl typed_openapi::AsyncClient for Reqwest {
