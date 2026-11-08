@@ -1647,6 +1647,11 @@ the crate follows [Semantic Versioning][semver].
 
 ### Security
 
+- **The example requires tokio 1.53.3 or later.** Its locked dependency fixes
+  [RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386).
+  Repair for a copied example: update the tokio requirement and run
+  `cargo update -p tokio`.
+
 - **The dependency tree holds no RUSTSEC advisory.** `unsafe-libyaml`
   (RUSTSEC-2024-0449, unmaintained) leaves it with `serde_yaml_ng`.
 - **A description in the vendor's document cannot run code in

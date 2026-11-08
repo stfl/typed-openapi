@@ -56,7 +56,7 @@ ureq = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Runs the async adapter against the local HTTP fixture server.
-tokio = { version = "1", features = ["rt", "net", "time"] }
+tokio = { version = "1.53.3", features = ["rt", "net", "time"] }
 # `Document::load`, which the e2e case for a free-text path parameter needs: the
 # toy's document has none, and its binary starts from the blob.
 typed-openapi = { path = "../../../typed-openapi", features = ["document"] }
