@@ -1569,10 +1569,13 @@ the crate follows [Semantic Versioning][semver].
     as `<String as ::std::ops::Deref>::Target` are accepted. Repair for invalid
     text: supply a type path such as `cents::Cents`.
   - `GenerateError::CyclicAllOf { schemas, merge }` refuses a merge that reaches
-    a loop through composition or through merges carried in inline properties,
-    list items or maps, before typify's merge can overflow. This includes a merge
+    a loop through composition, negation, shared container schemas or merges
+    carried in inline properties, list items or maps, before typify's merge can overflow. This includes a merge
     into a loop of wrappers or `oneOf`s, and a property, item or map whose merge
-    names its containing schema. The refusal names the schemas on the loop and
+    names its containing schema. Shared properties, list items and maps are
+    checked as operand sets, as are a property against another operand's map and
+    double negation. Recursion that no other operand constrains passes.
+    The refusal names the schemas on the loop and
     the place of an inline merge. Plain recursive property and item references,
     and loops of wrappers or `oneOf`s reached by no merge, pass. A single
     reference with only a title, description or `type: object` is no merge,
@@ -1580,9 +1583,11 @@ the crate follows [Semantic Versioning][semver].
     keywords count as a merge. A multi-member `allOf` starts reference resolution
     even with a description-only second member and is refused if its composition
     reaches a loop; the property description idiom is not carried as a merge.
-    The check conservatively refuses a named object
-    merged with a named array whose items merge that object, although typify
-    converts it. Repair for every refused loop: an Overlay that breaks it.
+    The check compares document identities rather than schema values. It
+    conservatively refuses an object merged with an array whose items merge that
+    object, and equal reference operands leading into a composition loop
+    (`allOf: [A, A]` with a recursive `oneOf` behind A). typify converts these
+    shapes. Repair for every refused loop: an Overlay that breaks it.
 - **Generated code names every standard item by its full path, and allows every
   warning.** Schemas called `Ok`, `Err`, `Some`, `None`, `String` or `Default`
   could change the generated file's meaning or stop compilation: `Ok(Self(value))` built the newtype `Ok`, and `impl

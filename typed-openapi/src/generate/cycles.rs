@@ -1,13 +1,16 @@
 //! Merge recursion, checked on the schemas typify receives.
 //!
-//! A merge follows references through top-level composition and carries merges
-//! inside inline properties, items and maps into its result. A loop reachable
-//! from a merge is refused before typify's `merge::try_merge_schema` can overflow.
-//! Ordinary property and item references remain named recursive types.
+//! A state holds the document nodes merged together. Transitions follow typify
+//! 0.8.0's merge calls: references, composition, negation, shared container
+//! schemas and merges carried into conversion. The iterative DFS retains
+//! finished states across starts. Ordinary property/item references are not
+//! followed unless another operand merges with them.
 //!
-//! The walk conservatively refuses a named object merged with a named array
-//! whose items merge that object, although typify converts it. Break the loop
-//! in an Overlay to repair this shape too.
+//! Conservative refusals include an object merged with an array whose items
+//! merge that object, and equal reference operands leading into a composition
+//! loop (for example `allOf: [A, A]` with a recursive `oneOf` behind A). typify
+//! converts these shapes. Operand identity is not value equality. Break the
+//! loop in an Overlay to repair either refusal.
 //!
 //! A singleton reference wrapper may have a title, description or `type: object`.
 //! The property description idiom is not carried as a merge. An `allOf` with
@@ -24,49 +27,120 @@ use super::GenerateError;
 use super::names::Inline;
 use super::types::DEFINITIONS;
 
+mod merge;
+#[cfg(test)]
+mod tests;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct NodeId(usize);
+
 struct Node<'a> {
     schema: &'a Schema,
     place: String,
     name: Option<&'a str>,
-    edges: Vec<usize>,
+    target: Option<NodeId>,
+    carries: Vec<NodeId>,
+}
+
+struct Schemas<'a> {
+    nodes: Vec<Node<'a>>,
+    positions: BTreeMap<*const Schema, NodeId>,
+}
+
+impl<'a> Schemas<'a> {
+    #[expect(clippy::indexing_slicing, reason = "only this arena mints NodeId")]
+    fn node(&self, id: NodeId) -> &Node<'a> {
+        &self.nodes[id.0]
+    }
+
+    fn id(&self, schema: &Schema) -> NodeId {
+        position(&self.positions, schema)
+    }
+
+    fn tree(&mut self, schema: &'a Schema, place: String, name: Option<&'a str>) {
+        let mut pending = vec![(schema, place, name)];
+        while let Some((schema, place, name)) = pending.pop() {
+            self.positions
+                .insert(std::ptr::from_ref(schema), NodeId(self.nodes.len()));
+            self.nodes.push(Node {
+                schema,
+                place: place.clone(),
+                name,
+                target: None,
+                carries: Vec::new(),
+            });
+            for (part, child) in children(schema).into_iter().rev() {
+                pending.push((child, format!("{place}.{part}"), None));
+            }
+        }
+    }
+
+    fn connect(&mut self, named: &BTreeMap<&str, NodeId>) {
+        for node in &mut self.nodes {
+            if let Schema::Object(object) = node.schema {
+                node.target = object
+                    .reference
+                    .as_deref()
+                    .and_then(|r| r.strip_prefix(DEFINITIONS))
+                    .and_then(|name| named.get(name))
+                    .copied();
+            }
+            node.carries = carried(node.schema, &self.positions);
+        }
+    }
+}
+
+fn position(positions: &BTreeMap<*const Schema, NodeId>, schema: &Schema) -> NodeId {
+    positions[&std::ptr::from_ref(schema)]
+}
+
+// Conversion of a merged result starts each carried inline merge. Reference
+// children remain named types; only inline trees are read.
+fn carried(schema: &Schema, positions: &BTreeMap<*const Schema, NodeId>) -> Vec<NodeId> {
+    let mut found = Vec::new();
+    let mut pending: Vec<_> = children(schema)
+        .into_iter()
+        .map(|(_, child)| child)
+        .collect();
+    while let Some(child) = pending.pop() {
+        if is_merge(child) {
+            found.push(position(positions, child));
+        }
+        pending.extend(children(child).into_iter().map(|(_, child)| child));
+    }
+    found
 }
 
 pub(super) fn check(
     definitions: &[(String, Schema)],
     inline: &[Inline<Schema>],
 ) -> Result<(), GenerateError> {
-    let mut nodes = Vec::new();
-    let mut positions = BTreeMap::new();
+    let mut graph = Schemas {
+        nodes: Vec::new(),
+        positions: BTreeMap::new(),
+    };
     let mut named = BTreeMap::new();
     for (name, schema) in definitions {
-        named.insert(name.as_str(), nodes.len());
-        tree(
-            &mut nodes,
-            &mut positions,
-            schema,
-            format!("the schema `{name}`"),
-            Some(name),
-        );
+        named.insert(name.as_str(), NodeId(graph.nodes.len()));
+        graph.tree(schema, format!("the schema `{name}`"), Some(name));
     }
     for inline in inline {
-        tree(
-            &mut nodes,
-            &mut positions,
-            &inline.schema,
-            inline.described(),
-            None,
-        );
+        graph.tree(&inline.schema, inline.described(), None);
     }
-    connect(&mut nodes, &positions, &named);
-    for (start, node) in nodes
+    graph.connect(&named);
+    // Finished states are shared by every start, including carried merges.
+    let mut finished = BTreeSet::new();
+    for (start, node) in graph
+        .nodes
         .iter()
         .enumerate()
         .filter(|(_, node)| starts_merge(node.schema))
     {
-        if let Some(path) = cycle(&nodes, start) {
+        if let Some(path) = cycle(&graph, NodeId(start), &mut finished) {
             let held: BTreeSet<_> = path
                 .iter()
-                .filter_map(|at| nodes.get(*at).and_then(|node| node.name))
+                .flat_map(merge::State::nodes)
+                .filter_map(|id| graph.node(id).name)
                 .collect();
             let schemas = definitions
                 .iter()
@@ -82,107 +156,50 @@ pub(super) fn check(
     Ok(())
 }
 
-fn connect(
-    nodes: &mut [Node<'_>],
-    positions: &BTreeMap<*const Schema, usize>,
-    named: &BTreeMap<&str, usize>,
-) {
-    for node in nodes {
-        let schema = node.schema;
-        let mut edges = Vec::new();
-        if let Schema::Object(object) = schema {
-            if let Some(target) = object
-                .reference
-                .as_deref()
-                .and_then(|r| r.strip_prefix(DEFINITIONS))
-                .and_then(|name| named.get(name))
-            {
-                edges.push(*target);
-            }
-            edges.extend(
-                composition(object)
-                    .into_iter()
-                    .filter_map(|member| positions.get(&std::ptr::from_ref(member)))
-                    .copied(),
-            );
-        }
-        // typify copies inline subschemas into the merged type, where each merge
-        // is converted again. A plain reference in a property is not followed.
-        let mut pending: Vec<_> = children(schema)
-            .into_iter()
-            .map(|(_, child)| child)
-            .collect();
-        while let Some(child) = pending.pop() {
-            if is_merge(child)
-                && let Some(target) = positions.get(&std::ptr::from_ref(child))
-            {
-                edges.push(*target);
-            }
-            pending.extend(children(child).into_iter().map(|(_, child)| child));
-        }
-        node.edges = edges;
-    }
+struct Frame {
+    state: merge::State,
+    next: std::vec::IntoIter<merge::State>,
 }
 
-fn tree<'a>(
-    nodes: &mut Vec<Node<'a>>,
-    positions: &mut BTreeMap<*const Schema, usize>,
-    schema: &'a Schema,
-    place: String,
-    name: Option<&'a str>,
-) {
-    let mut pending = vec![(schema, place, name)];
-    while let Some((schema, place, name)) = pending.pop() {
-        positions.insert(std::ptr::from_ref(schema), nodes.len());
-        nodes.push(Node {
-            schema,
-            place: place.clone(),
-            name,
-            edges: Vec::new(),
-        });
-        for (part, child) in children(schema).into_iter().rev() {
-            pending.push((child, format!("{place}.{part}"), None));
-        }
+/// An active merge state closes a loop; a finished state is never expanded again.
+fn cycle(
+    graph: &Schemas<'_>,
+    start: NodeId,
+    finished: &mut BTreeSet<merge::State>,
+) -> Option<Vec<merge::State>> {
+    let start = merge::State::start(start);
+    if finished.contains(&start) {
+        return None;
     }
-}
-
-/// Iterative DFS: an active node, rather than an already finished node, closes a loop.
-fn cycle(nodes: &[Node<'_>], start: usize) -> Option<Vec<usize>> {
-    let mut active = BTreeMap::from([(start, 0)]);
-    let mut finished = BTreeSet::new();
-    let mut path = vec![(start, 0)];
-    while let Some((at, edge)) = path.last_mut() {
-        let Some(next) = nodes.get(*at)?.edges.get(*edge).copied() else {
-            finished.insert(*at);
-            active.remove(at);
+    let mut active = BTreeMap::from([(start.clone(), 0)]);
+    let mut path = vec![Frame {
+        next: graph.transitions(&start).into_iter(),
+        state: start,
+    }];
+    while let Some(frame) = path.last_mut() {
+        let Some(next) = frame.next.next() else {
+            finished.insert(frame.state.clone());
+            active.remove(&frame.state);
             path.pop();
             continue;
         };
-        *edge += 1;
         if let Some(offset) = active.get(&next) {
-            return Some(path.iter().skip(*offset).map(|(at, _)| *at).collect());
+            return Some(
+                path.iter()
+                    .skip(*offset)
+                    .map(|frame| frame.state.clone())
+                    .collect(),
+            );
         }
         if !finished.contains(&next) {
-            active.insert(next, path.len());
-            path.push((next, 0));
+            active.insert(next.clone(), path.len());
+            path.push(Frame {
+                next: graph.transitions(&next).into_iter(),
+                state: next,
+            });
         }
     }
     None
-}
-
-fn composition(object: &SchemaObject) -> Vec<&Schema> {
-    object
-        .subschemas
-        .as_deref()
-        .into_iter()
-        .flat_map(|sub| {
-            sub.all_of
-                .iter()
-                .chain(&sub.any_of)
-                .chain(&sub.one_of)
-                .flatten()
-        })
-        .collect()
 }
 
 // A second member invokes typify's merge even if it only has a description.

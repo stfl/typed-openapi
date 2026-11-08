@@ -6199,7 +6199,7 @@ fn the_schema_that_holds_the_cause_is_named_and_not_the_one_that_refers_to_it() 
 
 /// Every refusal of the cycle test names the schemas that make the cycle, in the
 /// order of the document. `Tail` leads into a cycle and is not part of it.
-const CYCLES: [(&str, &str, &[&str]); 18] = [
+const CYCLES: [(&str, &str, &[&str]); 31] = [
     (
         "the pair of SEV-282's review",
         "    Left:  { allOf: [{ $ref: '#/components/schemas/Right' }, { properties: { id: { type: \
@@ -6309,6 +6309,84 @@ const CYCLES: [(&str, &str, &[&str]); 18] = [
         "    A: { allOf: [{ $ref: '#/components/schemas/B' }, {description: desc}] }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
         &["A", "B"],
     ),
+    // merge_so_object -> merge_schema on a property present in both operands.
+    (
+        "overlapping recursive properties",
+        "    C: { allOf: [{ $ref: '#/components/schemas/A' }, { $ref: '#/components/schemas/B' }] }\n    A: { type: object, properties: { next: { $ref: '#/components/schemas/A' } } }\n    B: { type: object, properties: { next: { $ref: '#/components/schemas/B' } } }\n",
+        &["A", "B"],
+    ),
+    // merge_so_object properties; try_merge_schema resolves a property pair.
+    (
+        "property self merge",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {type: object, properties: {next: {$ref: '#/components/schemas/C'}}}]}\n    A: {type: object, properties: {next: {$ref: '#/components/schemas/A'}}}\n",
+        &["C", "A"],
+    ),
+    // merge_so_array: two singleton items.
+    (
+        "recursive array pair",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: array, items: {$ref: '#/components/schemas/A'}}\n    B: {type: array, items: {$ref: '#/components/schemas/B'}}\n",
+        &["A", "B"],
+    ),
+    // merge_so_object -> merge_additional_properties.
+    (
+        "recursive map pair",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: object, additionalProperties: {$ref: '#/components/schemas/A'}}\n    B: {type: object, additionalProperties: {$ref: '#/components/schemas/B'}}\n",
+        &["A", "B"],
+    ),
+    // try_merge_with_subschemas followed by merge_so_object.
+    (
+        "property pair through allOf",
+        "    A: {allOf: [{$ref: '#/components/schemas/B'}, {type: object, properties: {p: {$ref: '#/components/schemas/A'}}}]}\n    B: {type: object, properties: {p: {$ref: '#/components/schemas/B'}}}\n",
+        &["A", "B"],
+    ),
+    // filter_prop -> merge_additional builds a deferred allOf.
+    (
+        "property against map",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: object, properties: {p: {$ref: '#/components/schemas/A'}}}\n    B: {type: object, additionalProperties: {$ref: '#/components/schemas/B'}}\n",
+        &["A", "B"],
+    ),
+    // try_merge_with_subschemas_not: double not -> try_merge_schema.
+    (
+        "double not self loop",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {type: object, properties: {x: {type: string}}}]}\n    A: {not: {not: {$ref: '#/components/schemas/A'}}}\n",
+        &["A"],
+    ),
+    // try_merge_with_subschemas_not: double not -> try_merge_schema.
+    (
+        "double not mutual loop",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {type: object, properties: {x: {type: string}}}]}\n    A: {not: {not: {$ref: '#/components/schemas/B'}}}\n    B: {not: {not: {$ref: '#/components/schemas/A'}}}\n",
+        &["A", "B"],
+    ),
+    // try_merge_with_subschemas -> try_merge_with_each_subschema (anyOf).
+    (
+        "merge into anyOfs",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {properties: {x: {type: string}}}]}\n    A: {anyOf: [{$ref: '#/components/schemas/B'}, {type: string}]}\n    B: {anyOf: [{$ref: '#/components/schemas/A'}, {type: integer}]}\n",
+        &["A", "B"],
+    ),
+    // try_merge_with_subschemas_not: not(anyOf) -> merge_schema_object.
+    (
+        "negated anyOf double not",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {properties: {x: {type: string}}}]}\n    A: {not: {anyOf: [{not: {$ref: '#/components/schemas/A'}}]}}\n",
+        &["A"],
+    ),
+    // try_merge_with_subschemas_not: not(allOf) -> try_merge_all.
+    (
+        "negated allOf",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {properties: {x: {type: string}}}]}\n    A: {not: {allOf: [{$ref: '#/components/schemas/B'}, {properties: {y: {type: string}}}]}}\n    B: {allOf: [{$ref: '#/components/schemas/B'}, {properties: {z: {type: string}}}]}\n",
+        &["B"],
+    ),
+    // try_merge_schema_object_not -> merge_schema_not on shared properties.
+    (
+        "negated property double not",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {not: {type: object, properties: {p: {not: {$ref: '#/components/schemas/C'}}}}}]}\n    A: {type: object, properties: {p: {$ref: '#/components/schemas/A'}}}\n",
+        &["C", "A"],
+    ),
+    // Same-value reference operands stay distinct; typify stops at their equality.
+    (
+        "equal reference operands into oneOf loop",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/A'}]}\n    A: {oneOf: [{$ref: '#/components/schemas/B'}, {type: string}]}\n    B: {oneOf: [{$ref: '#/components/schemas/A'}, {type: integer}]}\n",
+        &["A", "B"],
+    ),
 ];
 
 /// typify merges the members of an `allOf` by following each `$ref` to the schema
@@ -6362,6 +6440,67 @@ fn the_refusal_of_a_cycle_of_allof_says_what_leads_to_what() {
     );
 }
 
+const NO_MERGE: &[(&str, &str)] = &[
+    (
+        "a property that points back",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: \
+             string } } }] }\n    B: { type: object, properties: { y: { $ref: \
+             '#/components/schemas/A' } } }\n",
+    ),
+    (
+        "a oneOf that points back",
+        "    A: { oneOf: [{ $ref: '#/components/schemas/B' }, { type: string }] }\n    B: { \
+             oneOf: [{ $ref: '#/components/schemas/A' }, { type: integer }] }\n",
+    ),
+    (
+        "a sentence beside the reference",
+        "    Node: { type: object, properties: { parent: { allOf: [{ $ref: \
+             '#/components/schemas/Node' }, { description: the parent }] }, name: { type: string \
+             } } }\n",
+    ),
+    (
+        "wrappers of one element",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }] }\n    B: { allOf: [{ $ref: \
+             '#/components/schemas/A' }] }\n",
+    ),
+    (
+        "type object on one wrapper",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }], type: object }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+    ),
+    (
+        "type object on both wrappers",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }], type: object }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }], type: object }\n",
+    ),
+    (
+        "title on wrapper",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }], title: A }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+    ),
+    (
+        "description on wrapper",
+        "    A: { allOf: [{ $ref: '#/components/schemas/B' }], description: A }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
+    ),
+    (
+        "merge into property loop",
+        "    C: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] }\n    A: { type: object, properties: { next: { $ref: '#/components/schemas/A' } } }\n",
+    ),
+    (
+        "only one operand has recursive next",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: object, properties: {next: {$ref: '#/components/schemas/A'}}}\n    B: {type: object, properties: {x: {type: string}}}\n",
+    ),
+    (
+        "shared nonrecursive reference",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: object, properties: {next: {$ref: '#/components/schemas/N'}}}\n    B: {type: object, properties: {next: {$ref: '#/components/schemas/N'}}}\n    N: {type: string}\n",
+    ),
+    (
+        "false map ends recursive pair",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: object, additionalProperties: false}\n    B: {type: object, additionalProperties: {$ref: '#/components/schemas/B'}}\n",
+    ),
+    (
+        "an array that points back",
+        "    A: {type: array, items: {$ref: '#/components/schemas/A'}}\n",
+    ),
+];
+
 /// A reference that closes a loop is a recursive type where the loop does not run
 /// through a merge, and typify writes it: a property that points back, a `oneOf`
 /// that does, an array of the schema, and the idiom that puts a sentence beside a
@@ -6369,55 +6508,51 @@ fn the_refusal_of_a_cycle_of_allof_says_what_leads_to_what() {
 /// that name each other are no merge either.
 #[test]
 fn a_loop_that_is_no_merge_generates() {
-    for (label, schemas) in [
-        (
-            "a property that points back",
-            "    A: { allOf: [{ $ref: '#/components/schemas/B' }, { properties: { x: { type: \
-             string } } }] }\n    B: { type: object, properties: { y: { $ref: \
-             '#/components/schemas/A' } } }\n",
-        ),
-        (
-            "a oneOf that points back",
-            "    A: { oneOf: [{ $ref: '#/components/schemas/B' }, { type: string }] }\n    B: { \
-             oneOf: [{ $ref: '#/components/schemas/A' }, { type: integer }] }\n",
-        ),
-        (
-            "a sentence beside the reference",
-            "    Node: { type: object, properties: { parent: { allOf: [{ $ref: \
-             '#/components/schemas/Node' }, { description: the parent }] }, name: { type: string \
-             } } }\n",
-        ),
-        (
-            "wrappers of one element",
-            "    A: { allOf: [{ $ref: '#/components/schemas/B' }] }\n    B: { allOf: [{ $ref: \
-             '#/components/schemas/A' }] }\n",
-        ),
-        (
-            "type object on one wrapper",
-            "    A: { allOf: [{ $ref: '#/components/schemas/B' }], type: object }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
-        ),
-        (
-            "type object on both wrappers",
-            "    A: { allOf: [{ $ref: '#/components/schemas/B' }], type: object }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }], type: object }\n",
-        ),
-        (
-            "title on wrapper",
-            "    A: { allOf: [{ $ref: '#/components/schemas/B' }], title: A }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
-        ),
-        (
-            "description on wrapper",
-            "    A: { allOf: [{ $ref: '#/components/schemas/B' }], description: A }\n    B: { allOf: [{ $ref: '#/components/schemas/A' }] }\n",
-        ),
-        (
-            "merge into property loop",
-            "    C: { allOf: [{ $ref: '#/components/schemas/A' }, { properties: { x: { type: string } } }] }\n    A: { type: object, properties: { next: { $ref: '#/components/schemas/A' } } }\n",
-        ),
-    ] {
+    for (label, schemas) in NO_MERGE {
         typify_generates(schemas);
         let dir = out(&format!("loop-{}", label.replace(' ', "-")));
         Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
             .write_to(&dir)
             .unwrap_or_else(|error| panic!("{label}: typify converts it: {error:?}"));
+    }
+}
+
+#[test]
+fn conservative_merge_loops_convert_in_typify() {
+    // Object/array carry and equal reference operands, respectively.
+    for at in [15, 30] {
+        typify_generates(CYCLES[at].1);
+    }
+}
+
+#[test]
+fn a_single_not_reference_reaches_the_panic_guard_without_a_cycle_refusal() {
+    let dir = out("single-not");
+    let schemas = "    C: {allOf: [{$ref: '#/components/schemas/A'}, {properties: {x: {type: string}}}]}\n    A: {not: {$ref: '#/components/schemas/A'}}\n";
+    let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(schemas)))
+        .write_to(&dir)
+        .expect_err("typify cannot convert a single not reference");
+    assert!(
+        matches!(&failure, GenerateError::Panicked { schema, .. } if schema == "the schema `A`"),
+        "{failure:?}"
+    );
+    assert_nothing_written(&dir, "single not");
+}
+
+#[test]
+fn inline_merges_of_recursive_pairs_name_the_body_or_response() {
+    let schemas = "    A: {type: object, properties: {next: {$ref: '#/components/schemas/A'}}}\n    B: {type: object, properties: {next: {$ref: '#/components/schemas/B'}}}\n";
+    let merge = "{allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}";
+    for (label, doc, place) in [
+        ("body", with_schemas(schemas).replace("      responses:", &format!("      requestBody: {{content: {{application/json: {{schema: {merge}}}}}}}\n      responses:")), "request body"),
+        ("response", with_schemas(schemas).replace("{ description: OK }", &format!("{{description: OK, content: {{application/json: {{schema: {merge}}}}}}}")), "response"),
+    ] {
+        let dir = out(&format!("pair-inline-{label}"));
+        let failure = Settings::new(wrote(&dir, "document.yaml", &doc)).write_to(&dir).expect_err("recursive merge pair");
+        assert!(matches!(&failure, GenerateError::CyclicAllOf { schemas, merge: Some(site) }
+            if schemas == &["A", "B"] && site.contains(place) && site.contains("listThings")), "{failure:?}");
+        assert!(failure.to_string().contains("break the cycle in an Overlay"), "{failure}");
+        assert_nothing_written(&dir, label);
     }
 }
 

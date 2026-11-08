@@ -717,18 +717,23 @@ pub enum GenerateError {
         #[source]
         message: Box<dyn Error + Send + Sync>,
     },
-    /// A merge reaches a loop through top-level composition or through merges
-    /// carried in inline properties, items or maps. These can overflow typify's
-    /// stack, so the check precedes conversion. Plain recursive property and item
-    /// references, loops of `oneOf` alone, and reference wrappers with only a
-    /// title, description or `type: object` pass when no merge reaches them.
+    /// A merge state repeats through composition, negation, shared property,
+    /// item or map schemas, or merges carried in inline subschemas. These can
+    /// overflow typify's stack, so the check precedes conversion. A property or
+    /// item reference stays a named recursive type when no other operand
+    /// constrains it.
+    /// Loops of `oneOf` alone and reference wrappers with only a title,
+    /// description or `type: object` pass when no merge reaches them.
     /// The property description idiom passes; a multi-member `allOf` with a
     /// description-only second member is refused if it reaches a composition loop.
     ///
-    /// The check is conservative: a named object merged with a named array whose
-    /// items merge that object is refused even though typify converts it. An
-    /// Overlay that breaks the loop repairs this shape too. Other keywords beside
-    /// a reference wrapper count as a merge unless measured as an exemption.
+    /// The check uses document identity rather than value equality. Conservative
+    /// refusals include an object merged with an array whose items merge that
+    /// object, and equal reference operands leading into a composition loop
+    /// (`allOf: [A, A]` with a recursive `oneOf` behind A). typify converts these
+    /// shapes. An Overlay that breaks the loop repairs either refusal. Other
+    /// keywords beside a reference wrapper count as a merge unless measured as
+    /// an exemption.
     #[error("{}{}; break the cycle in an Overlay", made_of(.schemas), merge_at(.merge.as_deref()))]
     CyclicAllOf {
         /// Named schemas on the loop, in document order. A tail into it is omitted.

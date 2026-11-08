@@ -902,21 +902,34 @@ replacement as `syn::TypePath`, including later entries of one format that
 `owned` skips.
 
 `cycles.rs` reads the schemas after the open-map, request-required and nullable
-rewrites, as typify receives them. Each merge is a start for an iterative DFS
-through top-level composition references and merges carried inside inline
-properties, items and maps. Any reachable loop is refused, including a loop of
-wrappers or `oneOf`s that a merge leads into. Named schemas on the loop are listed
-in document order, and an inline merge's place is named too. Plain recursive
-property and item references pass. Wrappers with one reference and only a title,
-description or `type: object` are no merge; the measured rows in
-`a_loop_that_is_no_merge_generates` hold these exemptions. Other keywords count
-as a merge. A multi-member `allOf` starts reference resolution even if its second
-member is only a description, and is refused if it reaches a composition loop.
-The property description idiom is not carried back as a merge.
-The conservative refusal includes a named object merged with a
-named array whose items merge that object, which typify converts. The variant
-doc, module doc, generating guide and CHANGELOG name this shape and its repair:
-an Overlay that breaks the loop. No known overflow stays as an unchecked limit.
+rewrites, as typify receives them. Its arena indexes document nodes by identity.
+`cycles/merge.rs` models the recursive calls of typify 0.8.0's `merge.rs`. A state
+holds a set of operands. A consumed body keeps its constraints without entering
+its composition again. Negation distinguishes a stated schema from a merged
+result: a single negated reference is not resolved. The transitions include
+reference resolution, composition, double negation, negated unions and
+intersections, shared properties/items/maps, a property against another
+operand's map, and conversion of carried inline merges. Tuple items and
+additional items have rows at the JSON Schema seam because OpenAPI 3.0 cannot
+state tuples. `contains` is compared, not merged; `patternProperties` and
+`propertyNames` have no merge call.
+
+Each merge starts an iterative DFS. A state on the active path closes a loop;
+finished states are shared across starts. The refusal lists the named operands
+on the loop in document order and gives an inline merge's place. A tail into a
+loop is omitted. Plain recursive properties/items pass when no other operand
+constrains them, as do shared properties that name the same nonrecursive schema. Wrappers with
+one reference and only a title, description or `type: object` are no merge;
+`a_loop_that_is_no_merge_generates` holds the measured exemptions. A multi-member
+`allOf` starts reference resolution even if its second member is only a
+description. The property description idiom is not carried back as a merge.
+
+Conservative refusals include an object merged with an array whose items merge
+that object, and equal reference operands leading into a composition loop
+(`allOf: [A, A]` with a recursive `oneOf` behind A). typify converts these shapes.
+The walk compares document identities rather than schema values. The variant
+doc, module doc, generating guide and CHANGELOG name both shapes and their
+repair: an Overlay that breaks the loop. No known overflow stays unchecked.
 
 **The generated code names every standard item by its full path.** A schema may be
 called `Ok`, `Err`, `Some`, `None`, `String` or `Default`. A newtype `Ok` is a

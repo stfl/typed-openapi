@@ -378,7 +378,7 @@ in advance:
 | `DuplicateField` | two fields share a Rust name: properties such as `fooBar` and `foo_bar`, or a property and the map typify adds for `additionalProperties` |
 | `EnumVariants` | string enum values become one Rust variant; the message names the values and variant |
 | `Panicked` | typify panicked during conversion or token emission; the message names the failing trial or inline site |
-| `CyclicAllOf` | a merge reaches a loop of composition or carried merges; see the limits below |
+| `CyclicAllOf` | a merge state repeats during composition, negation, container merging or carried conversion; see the limits below |
 | `RustfmtMissing` | `rustfmt` is not on `PATH` |
 
 Every Overlay is applied with `ErrorOnZeroMatch`. A correction whose target the
@@ -775,23 +775,27 @@ Three things are worth knowing:
   caught panic; diagnosis can print a named trial's panic text more than once.
   Repair: correct the shape named in the cause.
 
-  An `allOf` merge that reaches a loop is `GenerateError::CyclicAllOf`, checked
-  after the nullable, open-map and request-required rewrites. The walk follows
-  references through top-level `allOf`, `anyOf` and `oneOf`, and merges carried
-  inside inline properties, items and `additionalProperties`. This includes a
-  merge that leads into a loop of wrappers or `oneOf`s, and a property, item or
-  map whose merge names its own containing schema. The refusal names the schemas
-  on the loop and the merge's place when inline. Repair: break the loop in an Overlay.
+  An `allOf` merge whose operand set repeats is `GenerateError::CyclicAllOf`,
+  checked after the nullable, open-map and request-required rewrites. The walk
+  follows references, top-level composition and negation. It also checks the
+  properties, items and maps that two or more operands combine, a property
+  against another operand's map, and merges carried inside inline subschemas.
+  This includes double negation and a merge into a loop of wrappers or `oneOf`s.
+  The refusal names the schemas on the loop, in document order, and the merge's
+  place when inline. Repair: break the loop in an Overlay.
 
-  Plain recursive property and item references pass. Loops of wrappers or
-  `oneOf`s pass when no merge reaches them. A wrapper with one reference and only
-  `title`, `description` or `type: object`, including the property description
-  idiom `allOf: [{$ref: Node}, {description: …}]`, is not carried as a merge.
-  A multi-member `allOf` still starts reference resolution: a description-only
-  second member is refused when its composition reaches a loop. Other keywords
-  count as a merge. This is conservative: a named object merged with a named
-  array whose items merge that object is refused, although typify converts it.
-  Repair for this shape too: an Overlay that breaks the loop.
+  A recursive property or item passes when no other operand constrains it.
+  Loops of wrappers or `oneOf`s pass when no merge reaches them. A wrapper with one
+  reference and only `title`, `description` or `type: object`, including the
+  property description idiom `allOf: [{$ref: Node}, {description: …}]`, is not
+  carried as a merge. A multi-member `allOf` starts reference resolution even
+  with a description-only second member. Other keywords count as a merge.
+
+  The check compares document identities rather than schema values. It
+  conservatively refuses an object merged with an array whose items merge that
+  object, and equal reference operands leading into a composition loop
+  (`allOf: [A, A]` with a recursive `oneOf` behind A). typify converts these
+  shapes. Repair for either refusal: an Overlay that breaks the loop.
 - **One wire name gets one argument.** A parameter is identified by its name and
   its place, so a document may use `ref` in the path and again in the query, and
   an operation may override a parameter of its path item. The override is one
