@@ -366,6 +366,21 @@ get /vouchers has no operationId; add one in an Overlay
       operationId: listVouchers
 ```
 
+Two operations with one `operationId`. OpenAPI says it MUST be unique, and the id
+is what `Document::get` and every generated wrapper call an operation by, so the
+document is refused with the method and the path of both:
+
+```
+`listThings` is the operationId of both `get /things` and `get /v2/things`; an Overlay gives one of them another
+```
+
+```yaml
+  - target: "$.paths['/v2/things'].get"
+    description: Its own name.
+    update:
+      operationId: listThingsV2
+```
+
 A `servers` on a path item or on an operation. A request goes to the first
 server of the document, and the caller may replace it, so a host that one
 operation names for itself has no place in the model. `typed-openapi` refuses the

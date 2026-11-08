@@ -152,6 +152,7 @@ generate = [
     "dep:schemars",
     "dep:syn",
     "dep:typify",
+    "dep:unicode-ident",
 ]
 
 # `bon`'s builder on the generated wrappers, so a call with four arguments
@@ -210,6 +211,9 @@ syn = { workspace = true, optional = true }
 thiserror = { workspace = true }
 # Writes the Rust type for each schema the document names.
 typify = { workspace = true, optional = true }
+
+# Predicts typify's enum-name character rules before conversion can panic.
+unicode-ident = { workspace = true, optional = true }
 
 [dev-dependencies]
 # This crate's own tests read documents and generate from them. Depending on

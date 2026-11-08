@@ -478,6 +478,13 @@ fn emitting() -> Vec<Case> {
             GenerateError::Typify(Box::new(typify::Error::InvalidTypeId)),
         ),
         case(
+            "GenerateError::Panicked",
+            GenerateError::Panicked {
+                schema: "the schema `Thing`".to_owned(),
+                message: "Failed to make unique variant names for [active,ACTIVE]".into(),
+            },
+        ),
+        case(
             "GenerateError::Operation",
             GenerateError::Operation {
                 op: "listThings".to_owned(),
