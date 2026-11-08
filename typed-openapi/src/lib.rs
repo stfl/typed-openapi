@@ -4,6 +4,45 @@
 //! what a feature is allowed to do to it. -->
 #![doc = include_str!("../README.md")]
 //!
+//! # From a command line to a response
+//!
+//! Load an OpenAPI document and its Overlays, mount its commands, and dispatch
+//! through a [`Recorder`]. The example uses the library's test fixtures; a
+//! network client implements [`SyncClient`] at the same seam.
+//!
+//! ```
+//! # #[cfg(all(feature = "document", feature = "clap"))]
+//! # {
+//! use clap::Command;
+//! use http::{Method, StatusCode};
+//! use serde_json::json;
+//! use typed_openapi::{Document, Recorder, tree};
+//!
+//! # let spec = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml"));
+//! # let overlays = [
+//! #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/corrections.yaml")),
+//! #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cli.yaml")),
+//! # ];
+//! let document = Document::load(spec, &overlays)?;
+//! let matches = Command::new("accounting")
+//!     .subcommands(tree::commands(&document))
+//!     .try_get_matches_from(["accounting", "vouchers", "get", "--id", "5"])?;
+//! let recorder = Recorder::new().strict().answering_route(
+//!     Method::GET, "/vouchers/5", StatusCode::OK, &json!({"id": 5}),
+//! );
+//!
+//! let outcome = tree::dispatch(&document, document.base(), &recorder, &matches)?;
+//! let tree::Outcome::Sent(response) = outcome else { panic!("a read is sent") };
+//! assert_eq!(response.status(), StatusCode::OK);
+//! assert_eq!(response.body(), br#"{"id":5}"#);
+//! # let mut sent = recorder.take();
+//! # assert_eq!(sent.len(), 1);
+//! # assert_eq!(sent.pop().unwrap().uri().path(), "/vouchers/5");
+//! # assert_eq!(recorder.unused(), 0);
+//! # }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
 //! # The API
 //!
 //! The seven things a caller learns:

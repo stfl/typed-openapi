@@ -148,6 +148,72 @@ fn only(recorder: &Recorder) -> http::Request<Vec<u8>> {
     sent.pop().expect("one request")
 }
 
+#[test]
+fn a_sync_call_sends_arguments_and_decodes_a_typed_response() {
+    let client = client();
+    let call = tagging(&client);
+    let recorder = Recorder::new().strict().answering_route(
+        http::Method::PUT,
+        "/api/tags/a%2Fb",
+        StatusCode::OK,
+        &json!({"id": 17}),
+    );
+
+    let answer = call.send(&recorder).expect("the typed answer");
+
+    assert_eq!(answer, Thing { id: 17 });
+    assert_tag_request(&recorder);
+}
+
+#[test]
+fn an_async_call_sends_arguments_and_decodes_a_typed_response() {
+    let client = client();
+    let call = tagging(&client);
+    let recorder = Recorder::new().strict().answering_route(
+        http::Method::PUT,
+        "/api/tags/a%2Fb",
+        StatusCode::OK,
+        &json!({"id": 23}),
+    );
+
+    let answer = block_on(call.send_async(&recorder)).expect("the typed answer");
+
+    assert_eq!(answer, Thing { id: 23 });
+    assert_tag_request(&recorder);
+}
+
+fn tagging(client: &Client) -> typed_openapi::Call<'_, Thing> {
+    client
+        .call(
+            client.document().get("tagThing").expect("the PUT"),
+            Values::new()
+                .param("tag", "a/b")
+                .param("note", "a b")
+                .param("X-Token", "test-header")
+                .json(json!({"name": "a tag"})),
+        )
+        .expect("the arguments satisfy the operation")
+}
+
+fn assert_tag_request(recorder: &Recorder) {
+    let sent = only(recorder);
+    assert_eq!(sent.method(), http::Method::PUT);
+    assert_eq!(
+        sent.uri().to_string(),
+        "http://things.example.test/api/tags/a%2Fb?note=a%20b"
+    );
+    assert_eq!(
+        sent.headers().get("x-token").expect("the header"),
+        "test-header"
+    );
+    assert_eq!(
+        sent.headers().get("content-type").expect("the media type"),
+        "application/json"
+    );
+    assert_eq!(sent.body(), br#"{"name":"a tag"}"#);
+    assert_eq!(recorder.unused(), 0, "the scripted answer was consumed");
+}
+
 /// The request as a reader sees it, and its body.
 fn shown(request: &http::Request<Vec<u8>>) -> (String, Vec<u8>) {
     (render(request), request.body().clone())

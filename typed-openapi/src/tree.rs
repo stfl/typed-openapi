@@ -258,8 +258,22 @@ fn apart(cmd: Command, body: &Body) -> Command {
 /// A read declares no confirmation, so it is handed back unchanged, and a caller
 /// does not have to ask first:
 ///
-/// ```rust,ignore
-/// tree::gates(tree::confirmation(Command::new("finalize-voucher").arg(id), op), op)
+/// ```
+/// # #[cfg(feature = "document")]
+/// # {
+/// # use clap::{Arg, Command};
+/// # use typed_openapi::{Document, tree};
+/// # let document = Document::load(
+/// #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml")),
+/// #     &[include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cli.yaml"))],
+/// # )?;
+/// # let op = document.get("enshrineVoucher").unwrap();
+/// # let id = Arg::new("id").long("id");
+/// let verb = tree::gates(tree::confirmation(Command::new("finalize-voucher").arg(id), op), op);
+/// # let matches = verb.try_get_matches_from(["finalize-voucher", "--id", "5", "--commit", "--enshrine"])?;
+/// # assert!(tree::answers(op, &matches).committed());
+/// # }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// The help says "Send the request". A verb that sends more than one request
@@ -268,10 +282,24 @@ fn apart(cmd: Command, body: &Body) -> Command {
 /// `Command::mut_arg` panics on an id that the command never declared, and the
 /// command of a read declares no [`COMMIT_ID`].
 ///
-/// ```rust,ignore
+/// ```
+/// # #[cfg(feature = "document")]
+/// # {
+/// # use clap::Command;
+/// # use typed_openapi::{COMMIT_ID, Document, tree};
+/// # let document = Document::load(
+/// #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml")), &[],
+/// # )?;
+/// # let op = document.get("createVoucher").unwrap();
+/// # let verb = Command::new("create-voucher");
 /// let verb = tree::confirmation(verb, op).mut_arg(COMMIT_ID, |arg| {
 ///     arg.help("Send the writes. Without it this is a dry run that prints them")
 /// });
+/// # assert!(verb.clone().render_help().to_string().contains("Send the writes"));
+/// # let matches = verb.try_get_matches_from(["create-voucher", "--commit"])?;
+/// # assert!(tree::answers(op, &matches).committed());
+/// # }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[must_use]
 pub fn confirmation(cmd: Command, op: &Operation) -> Command {
@@ -302,8 +330,26 @@ pub fn confirmation(cmd: Command, op: &Operation) -> Command {
 /// An operation that names no gate is handed back unchanged, so a caller does
 /// not have to ask first:
 ///
-/// ```rust,ignore
-/// tree::gates(tree::confirmation(Command::new("finalize-voucher").arg(id), op), op)
+/// ```
+/// # #[cfg(feature = "document")]
+/// # {
+/// # use clap::{Arg, Command};
+/// # use typed_openapi::{Document, tree};
+/// # let document = Document::load(
+/// #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml")),
+/// #     &[include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cli.yaml"))],
+/// # )?;
+/// # let op = document.get("enshrineVoucher").unwrap();
+/// # let id = Arg::new("id").long("id");
+/// let verb = tree::gates(tree::confirmation(Command::new("finalize-voucher").arg(id), op), op);
+/// # let missing_gate = verb.clone().try_get_matches_from(["finalize-voucher", "--id", "5", "--commit"]);
+/// # assert_eq!(missing_gate.unwrap_err().kind(), clap::error::ErrorKind::MissingRequiredArgument);
+/// # let matches = verb.try_get_matches_from(["finalize-voucher", "--id", "5", "--commit", "--enshrine"])?;
+/// # let answers = tree::answers(op, &matches);
+/// # assert!(answers.committed());
+/// # assert!(answers.answered(op.gates().first().unwrap()));
+/// # }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[must_use]
 pub fn gates(cmd: Command, op: &Operation) -> Command {

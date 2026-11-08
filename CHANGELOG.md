@@ -11,6 +11,9 @@ the crate follows [Semantic Versioning][semver].
 
 ### Added
 
+- A runnable crate-root example that loads a document and dispatches through a
+  `Recorder`, plus runnable examples for hand-written confirmation and gate flags.
+
 - The toy adds optional `Contact.creditLimit` as a generated `Cents` wrapper
   over an owned `i64` count. Add `credit_limit: None` to contact literals.
   Values beyond that count fail to decode; choose a wider owned type to accept
