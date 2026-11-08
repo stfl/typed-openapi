@@ -41,7 +41,8 @@ variant and not a break.
 `SyncClient` / `AsyncClient` over `http::Request<Vec<u8>>`. Adapters live in
 `examples/toy/cli/src/client.rs` to be copied, not depended on. An adapter must
 not turn a status code into an error: the body that came with a 4xx is what a
-caller needs.
+caller needs. An adapter must not follow redirects: the original 3xx
+status, headers and body belong to the caller.
 
 **What an owned type is made of never reaches the library.** `num-bigint` is
 declared in `examples/toy/money` and in no other manifest, and `just

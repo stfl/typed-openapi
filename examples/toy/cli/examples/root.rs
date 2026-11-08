@@ -17,14 +17,20 @@ use std::process::ExitCode;
 use clap::Command;
 use clap_complete::CompleteEnv;
 use cli::client::Ureq;
+use cli::output::Output;
 use typed_openapi::tree::{self, Outcome};
 use typed_openapi::{Document, render};
 
 fn main() -> ExitCode {
     match run() {
-        Ok(text) => {
-            print!("{text}");
-            ExitCode::SUCCESS
+        Ok(output) => {
+            print!("{}", output.stdout);
+            eprint!("{}", output.stderr);
+            if output.success {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
         }
         Err(error) => {
             eprintln!("toy: {error}");
@@ -44,7 +50,7 @@ fn root(doc: &Document) -> Command {
         .subcommands(tree::commands(doc))
 }
 
-fn run() -> Result<String, Box<dyn std::error::Error>> {
+fn run() -> Result<Output, Box<dyn std::error::Error>> {
     let api = api::Api::new()?;
 
     // Dynamic completion: the shell asks this binary what completes, so the
@@ -56,18 +62,21 @@ fn run() -> Result<String, Box<dyn std::error::Error>> {
     let matches = root(api.document()).get_matches();
     Ok(
         match tree::dispatch(api.document(), api.base(), &Ureq::new(), &matches)? {
-            Outcome::Sent(response) => String::from_utf8_lossy(response.body()).into_owned(),
+            Outcome::Sent(response) => Output::answered(&response),
             // The word is the document's, the one every write is confirmed with.
-            Outcome::DryRun(request) => format!(
-                "{}\ndry run: nothing was sent. Add --{} to send it.\n",
-                render(&request),
-                api.document().commit()
+            Outcome::DryRun(request) => Output::note(
+                format!(
+                    "{}\ndry run: nothing was sent. Add --{} to send it.\n",
+                    render(&request),
+                    api.document().commit()
+                ),
+                String::new(),
             ),
             // `--json-body-template`. Nothing was built and nothing was sent,
             // so the skeleton is the whole of the output and goes out clean —
             // `root vouchers ... --json-body-template > body.json` leaves a
             // file with JSON in it and nothing else.
-            Outcome::Template(template) => format!("{template}\n"),
+            Outcome::Template(template) => Output::note(format!("{template}\n"), String::new()),
         },
     )
 }

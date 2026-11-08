@@ -1,7 +1,7 @@
 //! What one invocation produced, and the three ways it comes about.
 //!
 //! Nothing here prints: [`crate::app::run`] hands an [`Output`] back and
-//! `main.rs` is the only place that writes to a stream. That is what lets every
+//! the binary entry points write to the streams. That is what lets every
 //! test in `tests/` drive the real command with a recording client and assert on
 //! the bytes.
 

@@ -59,7 +59,10 @@ features:
     cargo clippy -p typed-openapi --no-default-features --features builder -- -D warnings
     cargo clippy -p typed-openapi --all-features --all-targets -- -D warnings
     RUSTDOCFLAGS="-D warnings" cargo doc -p typed-openapi --no-deps --no-default-features
+    cargo check -p cli --no-default-features
+    cargo clippy -p cli --no-default-features --all-targets -- -D warnings
     cargo clippy -p cli --features reqwest-client -- -D warnings
+    cargo test -p cli --features reqwest-client --test http
     cargo clippy -p api-generated --features builder -- -D warnings
     cargo test -p api-generated --features builder --doc
     # The line that catches a builder which replaces a wrapper instead of
