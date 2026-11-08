@@ -4,8 +4,8 @@
 //!
 //! A marker nobody reads is a statement the document makes and the CLI does not
 //! keep. An `x-cli-writes` on a path item leaves the `GET` below it a read, sent
-//! on sight with no error, and an `x-cli-requires` written beside a `$ref` is
-//! dropped by the object model. The adopter wrote the gate and believes in it.
+//! on sight with no error, and an `x-cli-requires` written beside a string
+//! `$ref` is dropped by the object model. The adopter wrote the gate and believes in it.
 //! This crate owns the `x-cli-` prefix, so a key under it that nothing reads is
 //! the adopter's mistake, and it is refused by name and place while the document
 //! is loaded.
@@ -15,7 +15,7 @@
 //! | key | read on |
 //! |---|---|
 //! | `x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes` | an operation: a method of a path item under `paths` |
-//! | `x-cli-requires` | a parameter: of a path item, of an operation, or under `components.parameters`, and not beside a `$ref` |
+//! | `x-cli-requires` | a parameter: of a path item, of an operation, or under `components.parameters`, and not beside a string `$ref` |
 //!
 //! Those are the places the reduction reads, so a key on any other object the
 //! walk enters is read by nothing. An operation under `callbacks` is never
@@ -27,8 +27,8 @@
 //! # What the walk reads
 //!
 //! The walk is over the *overlaid* document before the object model reads it,
-//! because the model drops a key beside a `$ref` without a word. It enters a
-//! value only where [`shape`](crate::shape) says that OpenAPI gives the field
+//! because the model drops a key beside a string `$ref` without a word. It enters
+//! a value only where [`shape`](crate::shape) says that OpenAPI gives the field
 //! the type of one of its objects, or of a list or a map of them, for the kind
 //! of object that holds the field. An `x-…` key of an object it enters is an
 //! extension, and the walk asks about it by its name.
@@ -96,8 +96,8 @@ pub(crate) const REQUIRES: &str = "x-cli-requires";
 enum Subject {
     /// An operation of a path item under `paths`.
     Operation,
-    /// A parameter that is not a `$ref`: a path item's, an operation's, or one
-    /// under `components.parameters`.
+    /// A parameter that is not a Reference Object: a path item's, an
+    /// operation's, or one under `components.parameters`.
     Parameter,
 }
 
@@ -126,9 +126,9 @@ impl Subject {
         use Step::{Index, Key};
         match (kind, at) {
             (Kind::Operation, [Key("paths"), Key(_), Key(_)]) => Some(Self::Operation),
-            // A `$ref` stands for the parameter it names, and the model keeps
-            // nothing beside it.
-            (Kind::Parameter, _) if holder.contains_key("$ref") => None,
+            // A string `$ref` stands for the parameter it names, and the model
+            // keeps nothing beside it.
+            (Kind::Parameter, _) if kind.is_read_as_reference(holder) => None,
             (
                 Kind::Parameter,
                 [Key("paths"), Key(_), Key("parameters"), Index(_)]

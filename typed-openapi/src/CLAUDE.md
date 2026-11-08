@@ -78,10 +78,11 @@ value the caller supplies for every operation under it.
 **This crate owns the `x-cli-` prefix, and a marker is read where it stands or
 the load is refused.** `src/markers.rs` holds the five keys, what each is read
 off, and the scan that `Document::load_with` runs on the overlaid document
-before the object model reads it, because the model drops a key beside a `$ref`
-without a word. The four on an operation are read on a method of a path item
-under `paths`, and `x-cli-requires` on a parameter that is not a `$ref`: a path
-item's, an operation's, or one under `components.parameters`, which is a place
+before the object model reads it, because the model drops a key beside a string
+`$ref` without a word. The four on an operation are read on a method of a path item
+under `paths`, and `x-cli-requires` on a parameter that is not a Reference
+Object: a path item's, an operation's, or one under `components.parameters`,
+which is a place
 the key is read whether or not the `$ref` of an operation names it. An `x-cli-`
 key that nothing reads is `UnknownMarker`, one that stands where nothing reads
 it is `MisplacedMarker`, and each names the key and the node that holds it,
@@ -127,9 +128,10 @@ one in the marker test of the keys that 3.0.3 does not define.
 An object of a kind that can be a reference, and that holds a string `$ref`, is
 to the model the reference alone, and OpenAPI 3.0.3 says of the Reference Object
 that "any properties added SHALL be ignored". `Kind::is_read_as_reference`
-answers it for the kinds the model reads as a `ReferenceOr`, and the walk of
-`src/patterns.rs` judges nothing in such an object and enters none of its other
-keys. A `pattern` beside a `$ref` there is not a `pattern` of the document, and
+answers it for the kinds the model reads as a `ReferenceOr`. Marker subject
+selection uses that predicate too. The walk of `src/patterns.rs` judges nothing
+in such an object and enters none of its other keys. A `pattern` beside a
+`$ref` there is not a `pattern` of the document, and
 refusing it would refuse a document for data that nobody reads. In an object
 that cannot be a reference (a media type, an operation, the path item of a
 callback, an encoding) a `$ref` is a key like any other, and the schema beside

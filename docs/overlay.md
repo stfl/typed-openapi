@@ -684,7 +684,7 @@ and it is last because nothing else has any use for what is in it.
 This crate owns the `x-cli-` prefix, and a marker is read where it stands or the
 document is refused. The four on an operation are read on an operation, a method
 of a path item under `paths`, and `x-cli-requires` on a parameter under `paths`
-or `components.parameters`, and not beside a `$ref`, which the OpenAPI model
+or `components.parameters`, and not beside a string `$ref`, which the OpenAPI model
 drops in silence. The same key on a path item, or any other `x-cli-` key on an
 object of the document, is a `LoadError` that names the key and the node that
 holds it:
