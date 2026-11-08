@@ -731,6 +731,10 @@ paths:
 
     let refused =
         Document::load(&starred(true), &[]).expect_err("a required one could never be supplied");
+    assert!(
+        matches!(&refused, LoadError::Parameter { .. }),
+        "{refused:?}"
+    );
     assert_eq!(
         refused.to_string(),
         "listFirings: parameter `*` is named with a character outside ASCII, or in a way that \
@@ -906,10 +910,7 @@ fn an_enumeration_of_one_and_an_enumeration_holding_nothing_are_both_offered() {
         .try_get_matches_from(["list", "--crazing", ""])
         .expect("the empty string is one of the values the document lists");
     let values = typed_openapi::tree::values(&op, &matches).expect("and it reads back");
-    assert!(
-        format!("{values:?}").contains(r#"("crazing", "")"#),
-        "{values:?}"
-    );
+    assert_eq!(values.params(), &[("crazing".to_owned(), String::new())]);
     assert!(
         typed_openapi::tree::command(&op)
             .try_get_matches_from(["list", "--kiln-state", "glaze"])
@@ -996,6 +997,7 @@ components:
 
     let refused =
         Document::load(PHANTOM, &[]).expect_err("two nodes require what nothing declares");
+    assert!(matches!(&refused, LoadError::Phantom(_)), "{refused:?}");
     assert_eq!(
         refused.to_string(),
         "the document requires keys that nothing declares; declare each key in an \

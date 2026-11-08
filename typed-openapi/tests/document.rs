@@ -909,11 +909,16 @@ fn a_requirement_no_request_could_meet_is_refused_while_the_document_is_reduced(
         )
         .expect_err("the document asks for a companion nothing can supply")
     };
-    let refused = |parameters: &str| refusal(parameters).to_string();
+    let refused = |parameters: &str, is: fn(&LoadError) -> bool| {
+        let error = refusal(parameters);
+        assert!(is(&error), "{error:?}");
+        error.to_string()
+    };
 
     assert_eq!(
         refused(
-            "\x20       - { name: 'voucher[id]', in: query, schema: { type: string }, x-cli-requires: ['voucher[name]'] }\n"
+            "\x20       - { name: 'voucher[id]', in: query, schema: { type: string }, x-cli-requires: ['voucher[name]'] }\n",
+            |error| matches!(error, LoadError::RequiresUnknown { .. }),
         ),
         "listPositions: `voucher[id]` requires `voucher[name]`, which is not a parameter \
          of this operation"
@@ -921,7 +926,8 @@ fn a_requirement_no_request_could_meet_is_refused_while_the_document_is_reduced(
     assert_eq!(
         refused(
             "\x20       - { name: 'voucher[id]', in: query, schema: { type: string }, x-cli-requires: ['session'] }\n\
-             \x20       - { name: session, in: cookie, schema: { type: string } }\n"
+             \x20       - { name: session, in: cookie, schema: { type: string } }\n",
+            |error| matches!(error, LoadError::RequiresUnreachable { .. }),
         ),
         "listPositions: `voucher[id]` requires `session`, and `session` is \
          `in: cookie`, which this CLI does not send"
@@ -929,7 +935,8 @@ fn a_requirement_no_request_could_meet_is_refused_while_the_document_is_reduced(
     assert_eq!(
         refused(
             "\x20       - { name: 'voucher[id]', in: query, schema: { type: string }, x-cli-requires: 'voucher[objectName]' }\n\
-             \x20       - { name: 'voucher[objectName]', in: query, schema: { type: string } }\n"
+             \x20       - { name: 'voucher[objectName]', in: query, schema: { type: string } }\n",
+            |error| matches!(error, LoadError::RequiresList { .. }),
         ),
         "listPositions: `x-cli-requires` on `voucher[id]` is not a list of parameter names"
     );
@@ -1023,6 +1030,7 @@ fn a_content_key_that_is_not_a_media_type_is_refused_while_the_document_is_reduc
 
     let error =
         Document::load(&upload("form-data"), &[]).expect_err("`form-data` names no media type");
+    assert!(matches!(&error, LoadError::MediaType { .. }), "{error:?}");
     assert_eq!(
         error.to_string(),
         "uploadDocument: `form-data` is not a media type; \
@@ -1586,6 +1594,7 @@ fn a_required_parameter_no_flag_can_carry_names_itself_and_the_way_out() {
         &[],
     )
     .expect_err("a required parameter with no flag");
+    assert!(matches!(&error, LoadError::Parameter { .. }), "{error:?}");
     assert_eq!(
         error.to_string(),
         "listVouchers: parameter `filter` is neither a value nor a list of values, \
@@ -1695,6 +1704,7 @@ fn a_style_this_crate_does_not_serialise_names_itself() {
         // refusal carries the style's own spelling.
         let error = Document::load(&document.replace("required: false", "required: true"), &[])
             .expect_err("a required parameter with no flag");
+        assert!(matches!(&error, LoadError::Parameter { .. }), "{error:?}");
         assert!(
             error.to_string().contains(&format!("`style: {style}`")),
             "{error}"
@@ -1717,6 +1727,7 @@ fn a_style_this_crate_does_not_serialise_names_itself() {
             );
             let error =
                 Document::load(&document, &[]).expect_err("a path style this crate does not write");
+            assert!(matches!(&error, LoadError::Parameter { .. }), "{error:?}");
             assert!(
                 error.to_string().contains(&format!("`style: {style}`")),
                 "{schema}: {error}"
@@ -1884,6 +1895,10 @@ fn two_operations_under_one_name_are_refused_by_both_ids() {
          \x20   get: { operationId: renderVoucherPdf, responses: { \"200\": { description: OK } } }\n";
 
     let error = Document::load(&synthetic(COLLIDING), &[]).expect_err("both are `vouchers render`");
+    assert!(
+        matches!(&error, LoadError::DuplicateCommand { .. }),
+        "{error:?}"
+    );
 
     assert_eq!(
         error.to_string(),
@@ -1937,44 +1952,27 @@ fn a_marker_that_is_not_a_name_is_refused() {
         &[],
     )
     .expect_err("a list is not a name");
+    assert!(matches!(&error, LoadError::Override { .. }), "{error:?}");
     assert_eq!(
         error.to_string(),
         "listVouchers: `x-cli-command` is not a string"
     );
 }
 
-/// Every way a gate can be wrong, refused while the document is reduced and
-/// naming the operation and the word.
-///
-/// A gate that reached a shipped binary would be a flag somebody is about to
-/// type, so all of this is the adopter's failure at bless time rather than a
-/// user's at the prompt.
-#[test]
-fn a_gate_the_command_line_cannot_offer_is_refused_by_name() {
-    let refusal = |method: &str, marker: &str| {
-        let paths = format!(
-            "  /vouchers/{{id}}/enshrine:\n\
+fn gate_refusal(method: &str, marker: &str) -> LoadError {
+    let paths = format!(
+        "  /vouchers/{{id}}/enshrine:\n\
              \x20   {method}:\n\
              \x20     operationId: enshrineVoucher\n\
              \x20     x-cli-gates: {marker}\n\
              \x20     responses: {{ \"200\": {{ description: OK }} }}\n"
-        );
-        Document::load(&synthetic(&paths), &[])
-            .expect_err("the document names a gate it cannot offer")
-    };
-    let refused = |method: &str, marker: &str| refusal(method, marker).to_string();
+    );
+    Document::load(&synthetic(&paths), &[]).expect_err("the document names a gate it cannot offer")
+}
 
-    // One word where a list goes would otherwise be no gate at all, which is
-    // the one outcome a default-closed gate must never reach by accident.
-    assert_eq!(
-        refused("post", "enshrine"),
-        "enshrineVoucher: `x-cli-gates` is not a list of names"
-    );
-    assert_eq!(
-        refused("post", "[3]"),
-        "enshrineVoucher: `x-cli-gates` is not a list of names"
-    );
-    let unspellable = refusal("post", "[\"???\"]");
+#[test]
+fn an_unspellable_gate_names_the_operation_and_the_bad_word() {
+    let unspellable = gate_refusal("post", "[\"???\"]");
     assert!(
         matches!(&unspellable, LoadError::GateName { op, .. } if op == "enshrineVoucher"),
         "{unspellable:?}"
@@ -1988,27 +1986,71 @@ fn a_gate_the_command_line_cannot_offer_is_refused_by_name() {
         cause(&unspellable),
         "the x-cli-gates `???` does not kebab-case into [a-z0-9-]"
     );
+}
+
+/// Every way a gate can be wrong, refused while the document is reduced and
+/// naming the operation and the word.
+///
+/// A gate that reached a shipped binary would be a flag somebody is about to
+/// type, so all of this is the adopter's failure at bless time rather than a
+/// user's at the prompt.
+#[test]
+fn a_gate_the_command_line_cannot_offer_is_refused_by_name() {
+    let refused = |method: &str, marker: &str, is: fn(&LoadError) -> bool| {
+        let error = gate_refusal(method, marker);
+        assert!(is(&error), "{error:?}");
+        error.to_string()
+    };
+
+    // One word where a list goes would otherwise be no gate at all, which is
+    // the one outcome a default-closed gate must never reach by accident.
+    assert_eq!(
+        refused("post", "enshrine", |error| matches!(
+            error,
+            LoadError::GateList { .. }
+        )),
+        "enshrineVoucher: `x-cli-gates` is not a list of names"
+    );
+    assert_eq!(
+        refused("post", "[3]", |error| matches!(
+            error,
+            LoadError::GateList { .. }
+        )),
+        "enshrineVoucher: `x-cli-gates` is not a list of names"
+    );
     // A gate spelled like the confirmation, and a gate spelled like a body
     // flag, are refused for different reasons and say so: one word can move
     // and the other cannot.
     assert_eq!(
-        refused("post", "[commit]"),
+        refused("post", "[commit]", |error| matches!(
+            error,
+            LoadError::GateIsTheConfirmation { .. }
+        )),
         "enshrineVoucher: the gate `commit` is the word this CLI confirms with; \
          rename the gate in `x-cli-gates`, or confirm with another word"
     );
     assert_eq!(
-        refused("post", "[json-body]"),
+        refused("post", "[json-body]", |error| matches!(
+            error,
+            LoadError::ReservedGate { .. }
+        )),
         "enshrineVoucher: the gate `json-body` is one of the flags every subcommand \
          already spends"
     );
     assert_eq!(
-        refused("post", "[enshrine, enshrine]"),
+        refused("post", "[enshrine, enshrine]", |error| matches!(
+            error,
+            LoadError::DuplicateGate { .. }
+        )),
         "enshrineVoucher: the gate `enshrine` is named twice"
     );
     // A read runs on sight, so there is nothing for a gate to hold back: the
     // document is saying two things at once and does not say which it meant.
     assert_eq!(
-        refused("get", "[enshrine]"),
+        refused("get", "[enshrine]", |error| matches!(
+            error,
+            LoadError::GatedRead { .. }
+        )),
         "enshrineVoucher: a read stands behind no gate, and this one names \
          `enshrine`; mark the operation `x-cli-writes: true` or drop the gate"
     );
@@ -2044,6 +2086,10 @@ fn a_body_field_that_collides_with_a_gate_refuses_the_document() {
         &[],
     )
     .expect_err("the property and the gate both want --enshrine");
+    assert!(
+        matches!(&error, LoadError::GateTakenByName { .. }),
+        "{error:?}"
+    );
 
     assert_eq!(
         error.to_string(),
@@ -2074,6 +2120,10 @@ fn a_body_field_that_collides_with_the_confirmation_refuses_the_document() {
         &[],
     )
     .expect_err("the property and the confirmation both want --commit");
+    assert!(
+        matches!(&error, LoadError::CommitTakenByName { .. }),
+        "{error:?}"
+    );
 
     assert_eq!(
         error.to_string(),

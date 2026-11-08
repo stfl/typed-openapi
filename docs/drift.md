@@ -37,7 +37,8 @@ early they bite:
 | **changes a summary or a description** | — | — | **nothing** |
 | **loosens a rule nothing hand-written stands for** | — | — | **nothing**, until a value the old rule refused arrives |
 
-The verbatim messages are in the sections below.
+The messages are in the sections below. The bless example uses `/checkout`
+as the checkout's absolute path.
 
 ## Bless time: the Overlay as an assertion
 
@@ -51,14 +52,15 @@ names the layer, because with corrections split by purpose that is the first
 thing to know, and each line under it is a cause:
 
 ```
-bless: cannot use spec/corrections.yaml
+bless: cannot use /checkout/examples/toy/spec/corrections.yaml
   caused by: the Overlay does not apply
   caused by: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
 ```
 
 The form and its cost are in [docs/overlay.md](overlay.md#the-tripwire-form);
-[`typed-openapi/tests/drift.rs`](../typed-openapi/tests/drift.rs) is where both
-tripwires are held to a mutated fixture.
+[`typed-openapi/tests/drift.rs`](../typed-openapi/tests/drift.rs) holds each of
+the six tripwires to a mutated fixture. A test through
+`Settings::write_to` checks the layer path in the error.
 
 The same file records what *passes* this stage, and deliberately so: withdrawing
 an operation no action names, and adding or removing a field the Overlay never

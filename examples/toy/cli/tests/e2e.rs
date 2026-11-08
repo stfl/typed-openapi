@@ -62,7 +62,7 @@ fn run(client: &Recorder, args: &[&str]) -> Output {
 
 #[test]
 fn a_write_without_commit_prints_the_request_and_sends_nothing() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
     let out = run(&client, UPDATE);
     assert_eq!(
         out.stdout,
@@ -86,8 +86,10 @@ fn a_write_without_commit_prints_the_request_and_sends_nothing() {
 /// Comparing the two renderings would only prove `render` is deterministic.
 #[test]
 fn commit_sends_exactly_what_the_dry_run_printed() {
-    let dry = run(&Recorder::new(), UPDATE);
-    let client = Recorder::new().answering(StatusCode::OK, &voucher("draft"));
+    let dry = run(&Recorder::new().strict(), UPDATE);
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("draft"));
     let committed: Vec<&str> = UPDATE.iter().copied().chain(["--commit"]).collect();
     let wet = run(&client, &committed);
 
@@ -176,7 +178,7 @@ fn a_base_url_that_carries_a_credential_stops_the_invocation_and_prints_none_of_
             &["raw", "vouchers", "list"][..],
             &["finalize-voucher", "--id", "5", "--enshrine"][..],
         ] {
-            let client = Recorder::new();
+            let client = Recorder::new().strict();
             let api = api();
             let matches = app::root(&api).get_matches_from(
                 ["toy", "--base-url", base]
@@ -216,7 +218,9 @@ fn a_base_url_that_carries_a_credential_stops_the_invocation_and_prints_none_of_
 /// amount or an offset is ordinary.
 #[test]
 fn a_negative_number_and_a_text_with_a_leading_dash_are_separate_words() {
-    let client = Recorder::new().answering(StatusCode::OK, &serde_json::json!([]));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &serde_json::json!([]));
     run(
         &client,
         &[
@@ -236,7 +240,7 @@ fn a_negative_number_and_a_text_with_a_leading_dash_are_separate_words() {
         .copied()
         .map(|word| if word == "12.50" { "-12.50" } else { word })
         .collect();
-    let out = run(&Recorder::new(), &credit);
+    let out = run(&Recorder::new().strict(), &credit);
     assert!(
         out.stdout
             .contains(r#"{"total":"-12.50","currency":"EUR","status":"draft"}"#),
@@ -256,7 +260,10 @@ fn a_negative_number_and_a_text_with_a_leading_dash_are_separate_words() {
 /// and the raw text `%2B5` never is.
 #[test]
 fn a_number_is_sent_as_it_was_parsed() {
-    let client = Recorder::new().answering(StatusCode::OK, &voucher("draft"));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("draft"))
+        .answering(StatusCode::OK, &serde_json::json!([]));
     run(&client, &["toy", "raw", "vouchers", "get", "--id", "+005"]);
     run(
         &client,
@@ -295,7 +302,7 @@ fn a_path_value_that_is_a_dot_segment_stops_the_invocation_and_sends_nothing() {
         .subcommands(tree::commands(&document));
 
     for value in ["..", ".", ""] {
-        let client = Recorder::new();
+        let client = Recorder::new().strict();
         let matches = root
             .clone()
             .get_matches_from(["toy", "things", "delete", "--name", value, "--commit"]);
@@ -391,7 +398,9 @@ fn every_command_builds() {
 
 #[test]
 fn a_read_carries_no_flag_and_runs_on_sight() {
-    let client = Recorder::new().answering(StatusCode::OK, &serde_json::json!([voucher("paid")]));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &serde_json::json!([voucher("paid")]));
     let out = run(
         &client,
         &["toy", "raw", "vouchers", "list", "--status", "paid"],
@@ -408,7 +417,7 @@ fn a_read_carries_no_flag_and_runs_on_sight() {
 /// HTTP says this is a GET. The document says it writes, and the document wins.
 #[test]
 fn the_writing_get_is_gated_like_any_other_write() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
     let out = run(&client, &["toy", "raw", "vouchers", "render", "--id", "5"]);
     assert!(
         out.stdout.starts_with("GET /vouchers/5/render"),
@@ -445,7 +454,9 @@ fn mailing_a_voucher_wants_its_own_word_beside_commit() {
     );
     assert!(refused.to_string().contains("--email"), "{refused}");
 
-    let client = Recorder::new().answering(StatusCode::ACCEPTED, &serde_json::json!(null));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::ACCEPTED, &serde_json::json!(null));
     let both: Vec<&str> = committed.iter().copied().chain(["--email"]).collect();
     let out = run(&client, &both);
 
@@ -464,7 +475,7 @@ fn a_flag_beside_json_body_is_an_edit_not_a_value_that_is_dropped() {
         serde_json::json!({"total": "1.00", "currency": "EUR", "status": "draft"}).to_string(),
     )
     .expect("writing the fixture");
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
     let out = run(
         &client,
         &[
@@ -495,7 +506,7 @@ fn a_json_body_that_does_not_fit_the_document_is_refused_with_nothing_sent() {
     let path = dir.join("contact.json");
     std::fs::write(&path, serde_json::json!({"name": "Ada"}).to_string())
         .expect("writing the fixture");
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
     let api = api();
     let matches = app::root(&api).get_matches_from([
         "toy",
@@ -550,7 +561,7 @@ fn refused(client: &Recorder, args: &[&str], text: &str) -> (app::Error, String)
 /// AC-7.1: a property no schema declares stops the request in a dry run.
 #[test]
 fn a_property_no_schema_declares_stops_the_dry_run() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
 
     let (error, stderr) = refused(&client, &["toy", "raw", "contacts", "create"], CONTACT);
 
@@ -574,7 +585,7 @@ fn a_property_no_schema_declares_stops_the_dry_run() {
 /// AC-7.2: the same refusal in a confirmed run, with nothing on the wire.
 #[test]
 fn a_property_no_schema_declares_stops_a_confirmed_run_too() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
 
     let (error, stderr) = refused(
         &client,
@@ -596,7 +607,7 @@ fn a_property_no_schema_declares_stops_a_confirmed_run_too() {
 /// AC-7.3: a property one level down is named by its path.
 #[test]
 fn a_nested_property_no_schema_declares_is_named_by_its_path() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
 
     let (error, stderr) = refused(&client, &["toy", "raw", "contacts", "create"], NESTED);
 
@@ -617,7 +628,7 @@ fn a_body_with_only_declared_properties_is_printed_as_given() {
     let dir = tempdir();
     let path = dir.join("good.json");
     std::fs::write(&path, GOOD).expect("writing the fixture");
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
 
     let out = run(
         &client,
@@ -660,7 +671,7 @@ fn a_property_an_open_schema_admits_is_sent_as_before() {
         path,
     ];
 
-    let dry = run(&Recorder::new(), &line);
+    let dry = run(&Recorder::new().strict(), &line);
     assert!(dry.success, "{}", dry.stderr);
     assert!(
         dry.stdout.contains("PUT /contacts/1/labels"),
@@ -670,7 +681,7 @@ fn a_property_an_open_schema_admits_is_sent_as_before() {
     assert!(dry.stdout.contains("vip"), "{}", dry.stdout);
     assert!(dry.stdout.contains("region"), "{}", dry.stdout);
 
-    let client = Recorder::new().answering(
+    let client = Recorder::new().strict().answering(
         StatusCode::OK,
         &serde_json::json!({"vip": "yes", "region": "east"}),
     );
@@ -683,7 +694,7 @@ fn a_property_an_open_schema_admits_is_sent_as_before() {
 /// The open schema takes strings, and only strings: it is a map of them.
 #[test]
 fn an_open_schema_still_holds_its_values_to_their_type() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
 
     let (error, stderr) = refused(
         &client,
@@ -704,7 +715,7 @@ fn an_open_schema_still_holds_its_values_to_their_type() {
 /// the list is refused for what it is.
 #[test]
 fn a_list_in_the_place_of_an_object_stops_the_request() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
 
     let (error, stderr) = refused(
         &client,
@@ -729,7 +740,7 @@ fn a_list_in_the_place_of_an_object_stops_the_request() {
 /// read a list.
 #[test]
 fn a_list_in_the_place_of_a_nested_object_stops_the_request() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
 
     let (error, stderr) = refused(
         &client,
@@ -752,7 +763,7 @@ fn a_list_in_the_place_of_a_nested_object_stops_the_request() {
 /// F-30, from the input of its probe: field flags beside a list.
 #[test]
 fn a_field_flag_beside_a_list_is_refused_and_not_dropped() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
 
     let (error, stderr) = refused(
         &client,
@@ -790,7 +801,9 @@ fn a_nested_body_goes_through_a_file_and_no_dead_flags_are_offered() {
         "name": "Ada", "address": {"street": "1 Main", "city": "Vienna"}
     });
     std::fs::write(&path, contact.to_string()).expect("writing the fixture");
-    let client = Recorder::new().answering(StatusCode::CREATED, &contact);
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::CREATED, &contact);
     let out = run(
         &client,
         &[
@@ -828,7 +841,7 @@ fn a_nested_body_goes_through_a_file_and_no_dead_flags_are_offered() {
 /// That it answers at all is the evidence nothing was built.
 #[test]
 fn the_template_is_the_file_json_body_wants() {
-    let asked = Recorder::new();
+    let asked = Recorder::new().strict();
     let out = run(
         &asked,
         &["toy", "raw", "contacts", "create", "--json-body-template"],
@@ -856,7 +869,7 @@ fn the_template_is_the_file_json_body_wants() {
         .replace("\"street\": \"\"", "\"street\": \"1 Main\"");
     std::fs::write(&path, &filled).expect("writing the fixture");
 
-    let client = Recorder::new().answering(
+    let client = Recorder::new().strict().answering(
         StatusCode::CREATED,
         &serde_json::json!({"id": 1, "name": "Ada",
                             "address": {"street": "1 Main", "city": "Vienna"}}),
@@ -878,11 +891,43 @@ fn the_template_is_the_file_json_body_wants() {
 }
 
 #[test]
+fn raw_body_sends_the_files_bytes_under_the_documents_media_type() {
+    let dir = tempdir();
+    let path = dir.join("document.pdf");
+    let bytes = b"%PDF-1.7\n\0\xff";
+    std::fs::write(&path, bytes).expect("writing the fixture");
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::CREATED, &serde_json::json!(null));
+    let out = run(
+        &client,
+        &[
+            "toy",
+            "raw",
+            "documents",
+            "create",
+            "--raw-body",
+            path.to_str().expect("a UTF-8 path"),
+            "--commit",
+        ],
+    );
+    assert!(out.success, "{}", out.stderr);
+    let sent = client.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].method(), "POST");
+    assert_eq!(sent[0].uri().path(), "/documents");
+    assert_eq!(sent[0].headers()["content-type"], "application/pdf");
+    assert_eq!(sent[0].body(), bytes);
+}
+
+#[test]
 fn the_multipart_upload_is_assembled_from_parts() {
     let dir = tempdir();
     let path = dir.join("doc.bin");
     std::fs::write(&path, b"PDF").expect("writing the fixture");
-    let client = Recorder::new().answering(StatusCode::CREATED, &serde_json::json!(null));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::CREATED, &serde_json::json!(null));
     run(
         &client,
         &[
@@ -906,7 +951,9 @@ fn the_multipart_upload_is_assembled_from_parts() {
 
 #[test]
 fn the_chain_prints_every_request_it_would_make() {
-    let client = Recorder::new().answering(StatusCode::OK, &voucher("open"));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("open"));
     let out = run(&client, FINALIZE);
     let lines: Vec<&str> = out
         .stdout
@@ -992,7 +1039,9 @@ fn the_chains_confirmation_says_that_it_sends_the_writes() {
 
 #[test]
 fn the_chain_skips_the_irreversible_step_for_a_voucher_that_is_not_open() {
-    let client = Recorder::new().answering(StatusCode::OK, &voucher("paid"));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("paid"));
     let out = run(&client, FINALIZE);
     assert!(
         !out.stdout.contains("/vouchers/5/enshrine"),
@@ -1013,7 +1062,9 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
 
     // The dry run: the fetch the chain depends on goes there, and all three
     // requests are printed against it.
-    let dry = Recorder::new().answering(StatusCode::OK, &voucher("open"));
+    let dry = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("open"));
     let printed = run(
         &dry,
         &[
@@ -1043,6 +1094,7 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
 
     // And `--commit` sends every one of them there.
     let wet = Recorder::new()
+        .strict()
         .answering(StatusCode::OK, &voucher("open"))
         .answering(StatusCode::OK, &voucher("paid"))
         .answering(StatusCode::OK, &voucher("paid"));
@@ -1079,6 +1131,7 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
 fn the_chain_sends_the_requests_it_printed() {
     let script = || {
         Recorder::new()
+            .strict()
             .answering(StatusCode::OK, &voucher("open"))
             .answering(StatusCode::OK, &voucher("paid"))
             .answering(StatusCode::OK, &voucher("paid"))
@@ -1109,6 +1162,7 @@ fn the_chain_sends_the_requests_it_printed() {
 #[test]
 fn commit_runs_the_whole_chain_in_order() {
     let client = Recorder::new()
+        .strict()
         .answering(StatusCode::OK, &voucher("open"))
         .answering(StatusCode::OK, &voucher("paid"))
         .answering(StatusCode::OK, &voucher("paid"));
@@ -1136,7 +1190,7 @@ fn commit_runs_the_whole_chain_in_order() {
 
 #[test]
 fn a_static_completion_script_covers_the_whole_tree() {
-    let script = run(&Recorder::new(), &["toy", "completions", "bash"]).stdout;
+    let script = run(&Recorder::new().strict(), &["toy", "completions", "bash"]).stdout;
     for name in ["raw", "finalize-voucher", "vouchers", "update", "archive"] {
         assert!(script.contains(name), "`{name}` is missing from the script");
     }
@@ -1145,23 +1199,37 @@ fn a_static_completion_script_covers_the_whole_tree() {
 #[test]
 fn the_document_refuses_bad_values_before_a_request_is_built() {
     let api = api();
-    for args in [
-        // Not an amount; not a `VoucherStatus`; not an integer; and a PUT
-        // missing two fields the document marks required.
-        vec![
-            "toy", "raw", "vouchers", "update", "--id", "5", "--total", "12.5x",
-        ],
-        vec![
-            "toy", "raw", "vouchers", "update", "--id", "5", "--status", "bogus",
-        ],
-        vec![
-            "toy", "raw", "vouchers", "update", "--id", "x", "--total", "1.00",
-        ],
-        vec![
-            "toy", "raw", "vouchers", "update", "--id", "5", "--total", "12.50",
-        ],
-        // A VAT rate that the `enum` of `0`, `7` and `19` does not list.
-        vec![
+    for (flag, bad) in [
+        ("--total", "12.5x"),
+        ("--status", "bogus"),
+        ("--id", "x"),
+        ("--currency", "EU"),
+    ] {
+        let args: Vec<&str> = UPDATE
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if index > 0 && UPDATE[index - 1] == flag {
+                    bad
+                } else {
+                    *value
+                }
+            })
+            .collect();
+        let error = app::root(&api)
+            .try_get_matches_from(&args)
+            .expect_err("one value breaks the document's rule");
+        assert!(
+            matches!(
+                error.kind(),
+                clap::error::ErrorKind::ValueValidation | clap::error::ErrorKind::InvalidValue
+            ),
+            "{flag}: {error}"
+        );
+        assert!(error.to_string().contains(flag), "{error}");
+    }
+    let error = app::root(&api)
+        .try_get_matches_from([
             "toy",
             "raw",
             "ledger",
@@ -1172,13 +1240,16 @@ fn the_document_refuses_bad_values_before_a_request_is_built() {
             "12.50",
             "--vat-rate",
             "5",
-        ],
-    ] {
-        assert!(
-            app::root(&api).try_get_matches_from(&args).is_err(),
-            "{args:?} should not parse"
-        );
-    }
+        ])
+        .expect_err("the numeric enum does not list 5");
+    assert!(
+        matches!(
+            error.kind(),
+            clap::error::ErrorKind::ValueValidation | clap::error::ErrorKind::InvalidValue
+        ),
+        "{error}"
+    );
+    assert!(error.to_string().contains("--vat-rate"), "{error}");
 }
 
 /// The rates an operator may type are on the help page, because the same code
@@ -1214,7 +1285,7 @@ fn the_help_of_a_numeric_enum_lists_its_values() {
 
 /// A directory of this test binary's own, without taking a dependency for it.
 fn tempdir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "toy-e2e-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()

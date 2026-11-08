@@ -6753,3 +6753,35 @@ fn a_long_composition_chain_into_a_loop_is_refused_without_a_call_per_hop() {
     );
     assert_nothing_written(&dir, "long cycle");
 }
+
+#[test]
+fn a_drift_refusal_through_settings_names_the_layer_file() {
+    let dir = out("drift-layer-name");
+    let source =
+        include_str!("fixtures/toy.yaml").replacen("        total:\n", "        amount:\n", 1);
+    let document = wrote(&dir, "toy.yaml", &source);
+    let layer = wrote(
+        &dir,
+        "corrections.yaml",
+        include_str!("fixtures/corrections.yaml"),
+    );
+    let error = Settings::new(document)
+        .overlay(&layer)
+        .write_to(dir.join("generated"))
+        .expect_err("the correction no longer applies");
+    assert!(
+        matches!(&error, typed_openapi::generate::GenerateError::Overlay { path, source: typed_openapi::overlay::OverlayError::Apply(_) }
+        if path == &layer),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), format!("cannot use {}", layer.display()));
+    let source = std::error::Error::source(&error).expect("the Overlay cause");
+    assert_eq!(source.to_string(), "the Overlay does not apply");
+    let cause = source.source().expect("the action cause").to_string();
+    assert!(cause.contains("actions[1]"), "{cause}");
+    assert!(cause.contains("target matched zero nodes"), "{cause}");
+    assert!(
+        !dir.join("generated").exists(),
+        "a refused bless writes nothing"
+    );
+}
