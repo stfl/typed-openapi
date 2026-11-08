@@ -185,9 +185,8 @@ fn a_property_keeps_its_own_required_apart_from_the_body() {
 // ------------------------------------------------------------ the command line
 
 /// `A7/docs/optbody.yaml`: `reminders create --invoice 7 --commit` carries no
-/// body, because `{}` is refused by the generated type for want of `note`. An
-/// operator who gives no field and no file has given no body, and the request
-/// carries none.
+/// body: no flag and no file is no body. `{}` would fail the generated type
+/// for want of `note`. The request carries no body.
 #[test]
 fn an_optional_flat_body_with_no_flag_sends_no_body() {
     let doc = optional();
@@ -369,8 +368,8 @@ fn a_required_flat_body_that_is_missing_is_refused() {
 }
 
 /// The refusal does not depend on a property being required: a required flat
-/// body in which none is, is the case a model that folded the body's `required`
-/// into its properties could not tell from an optional body.
+/// body in which none is, is the case a model that folds the body's `required`
+/// into its properties cannot tell from an optional body.
 #[test]
 fn a_required_flat_body_with_no_required_property_is_refused_when_missing() {
     let doc = optional();

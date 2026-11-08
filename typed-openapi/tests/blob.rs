@@ -651,7 +651,7 @@ fn two_operations_under_one_name_are_refused_and_both_are_named() {
 
 /// The pair a collision names is the first operation that has a later twin and
 /// its first twin, whichever names the rest of the document repeats. Three
-/// operations under one name give the first two. Of two names that interleave,
+/// operations under one name give the first two. Of two names that are nested,
 /// the one whose first operation comes first is reported, though the other
 /// closes earlier.
 #[test]
@@ -981,10 +981,10 @@ fn a_forgery_clap_builds_is_refused_all_the_same() {
 /// The other side of the line. A value in the blob can break each of these
 /// rules, or sit beside it, and the check leaves each rule out, because no break
 /// of it is inside the line: clap builds the command tree, nothing a gate holds
-/// back is sent, and only the run that meets the value fails. For the last two
-/// the rule refuses an absent server or an absent `operationId`, which a blob
-/// cannot hold, and the values here are ones that a load accepts too. Two
-/// operations of one `operationId` are the exception: a load refuses them, and
+/// back is sent. The empty `operationId` is accepted by a load too; it does not
+/// exercise the load's missing-id refusal. `ServerUrl` concerns URL syntax, not
+/// an absent server. Two operations of one `operationId` are the exception:
+/// a load refuses them, and
 /// the blob below holds them, because no binary is stopped by them.
 #[test]
 fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {

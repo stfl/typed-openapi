@@ -493,11 +493,8 @@ pub enum Unsupported {
     ///
     /// A flag is the one name in this crate a *user types*, so it passes the
     /// rule [`crate::names`] states once and a command name and a gate are
-    /// already held to. A parameter spelled outside it would otherwise get a
-    /// flag called `""`, which clap renders as the end-of-options marker and
-    /// which nothing on the help page distinguishes from one — a name the
-    /// command line cannot spell, spelled anyway, and discoverable only by
-    /// accident.
+    /// already held to. A punctuation-only name could otherwise become an
+    /// empty flag; a non-ASCII name could lose characters during conversion.
     Unspellable,
     /// A name that an earlier parameter of the operation already has, in the
     /// place this value names.
@@ -533,10 +530,7 @@ impl std::fmt::Display for Unsupported {
                     "declared with `style: {style}`, which this CLI does not serialise"
                 )
             }
-            Self::Unspellable => out.write_str(
-                "named with a character outside ASCII, or in a way that does not kebab-case into \
-                 [a-z0-9-]",
-            ),
+            Self::Unspellable => out.write_str("named without an ASCII kebab-case flag spelling"),
             Self::Shared(place) => write!(out, "sharing its name with the `{place}` parameter"),
         }
     }
@@ -757,10 +751,9 @@ pub enum DocumentError {
         word: String,
     },
     /// The confirmation word an operation declares is one a load refuses. It is
-    /// the flag clap sees: where it is `help`, a flag that the subcommand
-    /// declares already, or a word with a leading `-`, a debug build of the
-    /// binary panics when it builds the command tree, and a release build lets
-    /// one declaration take the place of the other.
+    /// the flag clap sees. A leading `-` causes a debug-only clap assertion.
+    /// A word also declared by help or the body's flags collides with that
+    /// declaration.
     #[error(
         "{op}: the confirmation word `{word}` is not one a load accepts; \
          run the bless step again"
@@ -1552,9 +1545,8 @@ impl Body {
 
     /// The `Content-Type` this body goes out under: the `content` key as the
     /// document spells it, parameters included, without the space and the tab at
-    /// its two ends. RFC 9110 reads them as optional white space, and RFC 9113
-    /// calls a field value that starts or ends with one malformed, so a receiver
-    /// reads the same type whether they are sent or not.
+    /// its two ends. A receiver reads the same type without them, and over
+    /// HTTP/2 a request with them is malformed (RFC 9113, section 8.2.1).
     ///
     /// The one place a request reads it, so that a JSON body and a body sent
     /// verbatim cannot take it from two readings. [`Body::None`] sends nothing

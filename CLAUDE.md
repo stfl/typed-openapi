@@ -5,15 +5,15 @@ of it, five crates, all `publish = false`, built and tested with the rest so
 that the example cannot rot.
 
 Run `just gate` before saying anything is done. It is `check` (fmt, compile,
-clippy, rustdoc — each with warnings denied), `features` (each feature alone
-and all together, each with warnings denied, plus the bon-free, clap-free and
-bigint-free assertions),
-`test` (nextest and the doctests, which nextest cannot run), `blessed` (the
-generator still reproduces every committed artefact, and no file in
-`api-generated` is untracked), `package` (the crate built and tested from its
-own tarball) and `audit` (no crate in the tree has an advisory against it, and
-none is ignored; it reads the advisory database over the network, so it fails
-offline). CI runs the same recipes, not a copy of them.
+clippy, rustdoc — each with warnings denied), `features` (each feature alone and
+all together, each with warnings denied, plus the bon-free, clap-free and
+bigint-free assertions), `test` (nextest and the doctests, which nextest cannot
+run), `blessed` (the generator still reproduces every committed artefact, and no
+file in `api-generated` is untracked), `package` (the crate built and tested
+from its own tarball) and `audit` (no crate in the tree has an advisory against
+it, and none is ignored; it reads the advisory database over the network, so it
+fails offline). CI's gate job runs the same recipes. Its separate stable job
+builds and tests the library with all features.
 
 ## Directory notes
 
@@ -22,10 +22,9 @@ there with the file tools; a shell `cat` loads nothing. These carry one:
 `typed-openapi/src/` (the library's modules, `generate/` and `model/` under it)
 and `examples/toy/` (its five crates and `spec/`).
 
-**A change to code in a directory with a note is finished only when that
-note is reconciled**: cut what the change made false, add what it made
-non-obvious. A rule true of a whole tree goes once, in the highest note it
-holds for. A rule that two directories keep stays in this file.
+**A change to code in a directory with a note is finished only when that note is
+reconciled**: cut what the change made false, add what it made non-obvious. A
+rule goes once, in the nearest note above every directory that keeps it.
 
 ## Invariants a change must keep true
 
@@ -134,7 +133,8 @@ never a directory that a test writes. A new `[[test]]` target with
 
 A test or a task that reads `env!("CARGO_MANIFEST_DIR")` works on the tree that
 its binary is built from: `examples/toy/xtask` blesses that tree, and
-`tests/generate.rs`, `tests/hostile.rs`, `tests/layout.rs` and
+`typed-openapi/tests/generate.rs`, `typed-openapi/tests/hostile.rs`,
+`typed-openapi/tests/layout.rs` and
 `examples/toy/cli/tests/feature_gate.rs` read it. Cargo takes a tree as built when its files are not newer than the last
 build in the target directory, so a scratch copy of the tree that shares the
 worktree's target directory can run in place of the worktree, and the worktree in

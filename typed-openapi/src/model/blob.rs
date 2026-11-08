@@ -75,7 +75,7 @@ fn confirms(word: &str) -> bool {
 }
 
 impl Document {
-    /// Hold a decoded reduction to the rules of a load that a blob can break.
+    /// Recheck selected load invariants after decoding a reduction.
     ///
     /// A load writes the model and checks it while it does, and a blob arrives
     /// with those rules not applied. The rules applied again are the document's
@@ -86,9 +86,9 @@ impl Document {
     /// names the operation, or both of two, except for the document's own
     /// confirmation word, which belongs to none.
     ///
-    /// Each rule is asked by the function the load asks, so the check refuses
-    /// every break of it. `src/CLAUDE.md` says which rules of the load are left
-    /// out and why a rule joins the others.
+    /// Names, effects and requirements use shared predicates; flag namespace
+    /// checks mirror the load's namespace validation. The module note records
+    /// the selection rule and the load checks left out.
     pub(super) fn check(&self) -> Result<(), DocumentError> {
         if !confirms(&self.commit) {
             return Err(DocumentError::Confirmation {

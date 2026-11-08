@@ -65,7 +65,8 @@ pub enum LoadError {
     /// holds the line and the column of the text where the reader stopped.
     #[error(transparent)]
     Overlay(crate::overlay::OverlayError),
-    /// An Overlay layer could not be read or could not be applied. The message
+    /// An Overlay layer could not be read or applied, or it changed or removed
+    /// `openapi`. The message
     /// of the cause says which, and holds the line of the text or the index of
     /// the action where there is one.
     #[error("cannot use `overlays[{layer}]`")]
@@ -547,9 +548,9 @@ pub enum LoadError {
     /// removing the earlier.
     ///
     /// A message that names two parameters says which one each repair acts on,
-    /// by its place and its name, and by "earlier" and "later" where the place
-    /// is the same. A pronoun would read as either of them, and the `required`
-    /// of the other one is no repair.
+    /// by its place and its name. For namesakes off the path in the same place,
+    /// "earlier" and "later" identify which `required` can be dropped. The
+    /// `required` of the other one is no repair.
     #[error(
         "{op}: parameter `{name}` is {why}, and the document requires it; {}",
         repair(*.place, .name, .why)
@@ -568,7 +569,7 @@ pub enum LoadError {
     /// where `multipart/form-data` was meant — or, for a key that goes out as the
     /// request's `Content-Type`, is none that a header carries: an ASCII control
     /// character other than a tab, or a white space other than a space and a tab
-    /// before its type or after its subtype. Refused while the document is
+    /// at either end of the whole key. Refused while the document is
     /// reduced, because the alternative is a request sent under a `Content-Type`
     /// no server can read, or no request at all. The message spells the key as
     /// the document does, so that an Overlay's target can match it, and writes a
@@ -585,13 +586,15 @@ pub enum LoadError {
         media_type: String,
     },
     /// A `requestBody` whose `content` key is a media range — `*/*` or `image/*`
-    /// — and is the key the operation would be sent under. Refused while the
+    /// — and is the key the operation would be sent under. Invisible characters
+    /// are shown as code points, as in [`LoadError::MediaType`]. Refused while the
     /// document is reduced, because a range names a set of types and a request
     /// goes out under one, so the alternative is a `Content-Type` that is the
     /// range itself.
     #[error(
-        "{op}: `{media_type}` is a media range, and a body is sent under one media type; \
-         an Overlay is where a document's content type is corrected"
+        "{op}: `{}` is a media range, and a body is sent under one media type; \
+         an Overlay is where a document's content type is corrected",
+        with_code_points(.media_type)
     )]
     MediaRange {
         /// The `operationId` of the operation that declares the body.
@@ -603,13 +606,12 @@ pub enum LoadError {
     /// document means it: a `pattern` that no regex engine here reads, a
     /// `pattern` that holds `\p{`, `\P{` or `\u{`, a `multipleOf` that is not more
     /// than 0, or an `enum` that lists `null` and no other value. The value is one
-    /// that `runnable_scalar` reads, with a flag or without one: a parameter sent
-    /// in the path, the query or a header with a `schema` (its items, for a list),
-    /// or a property of a JSON body whose schema is an object. Refused while the
-    /// document is reduced, because a flag would refuse every value, admit every
-    /// value, or read a rule that the vendor's server reads another way, and
-    /// refused for a value that gets no flag too, so that the verdict does not
-    /// depend on its style, its name or its siblings.
+    /// read for scalar rules, with a flag or without one: a merged path, query
+    /// or nonstandard header parameter with a `schema` (its items, for a list),
+    /// or a non-read-only property of a JSON request body read as an object.
+    /// A string enum kept as a choice does not carry pattern or length rules.
+    /// Refused during reduction even without a flag, so the verdict does not
+    /// depend on style, name or siblings.
     #[error("{op}: `{name}` states a rule that cannot run")]
     Unrunnable {
         /// The `operationId` of the operation that states the rule.
@@ -624,8 +626,9 @@ pub enum LoadError {
         source: crate::scalar::ScalarError,
     },
     /// A `pattern` of a schema that holds `\p{`, `\P{` or `\u{`, where no scalar
-    /// that `runnable_scalar` reads carries it: a response, a named schema, the
-    /// items of an array body, a property of a nested object, a cookie
+    /// read for scalar rules carries it. Examples are a response, a named
+    /// schema holding none of those scalar values, the items of an array body,
+    /// a property of a nested object, a cookie
     /// parameter, or a value whose scalar keeps its `enum` and drops the
     /// `pattern`. `Unrunnable` is the same refusal for the `pattern` that such a
     /// scalar carries. It means one thing with the Unicode flag and another
@@ -700,13 +703,13 @@ pub enum LoadError {
 
 /// A `content` key as the document spells it, except that a character which does
 /// not show is written as its code point (`\u{a0}`): each character that
-/// [`char::escape_debug`] does not print as itself. That is a control character,
-/// a white space other than a space, a format character such as a zero width
-/// space or a soft hyphen, and a combining mark. A key refused for one would
+/// [`char::escape_debug`] does not print as itself. Examples include a control
+/// character, whitespace other than space, a format character such as a zero
+/// width space or a soft hyphen, and a nonspacing mark. A key refused for one would
 /// otherwise read as a media type with no fault in it. A quote and a backslash
 /// are printed as they stand, because an Overlay's target is matched against the
-/// spelling, and so is a space, because a space before the type or after the
-/// subtype is no fault.
+/// spelling. Space is also printed as itself; space and tab at the ends of
+/// the whole key are optional whitespace.
 fn with_code_points(media_type: &str) -> String {
     media_type
         .chars()
@@ -802,8 +805,8 @@ fn repair(place: Place, name: &str, why: &Unsupported) -> String {
 }
 
 /// A parameter as a repair names it, by its place and its name. A message about
-/// a shared name holds two parameters of one name, so a pronoun would read as
-/// either of them; the place says which one a repair acts on.
+/// a shared name uses the place to distinguish parameters in different places;
+/// ordering words distinguish namesakes off the path in the same place.
 fn parameter(place: Place, name: &str) -> String {
     format!("the `{place}` parameter `{name}`")
 }
@@ -836,11 +839,10 @@ pub enum ConfirmationError {
     /// Not a name a person could type as a flag.
     #[error(transparent)]
     Spelling(#[from] NameError),
-    /// A name some other flag on the same subcommand already wears. The others
-    /// cannot move — a body has to be reachable and `--help` is clap's — so
-    /// the confirmation is what gives way.
+    /// A word reserved for help or a body flag. Body flags are declared by
+    /// body kind, but their words are reserved on every operation.
     #[error(
-        "`{word}` is a flag every subcommand already declares, \
+        "`{word}` is reserved for help or a body flag, \
          so it cannot also be the word this CLI confirms with"
     )]
     Taken {
@@ -1891,9 +1893,9 @@ impl Body {
     }
 }
 
-/// The `content` entry a JSON body is read from: the key it stands under, as the
-/// document spells it, which is the `Content-Type` the body goes out under, the
-/// schema beside the key, and whether the body is required.
+/// The JSON entry's original key, schema and required status. The outgoing
+/// `Content-Type` trims space and tab from the two ends of the whole key
+/// ([`Body::media_type`]).
 #[derive(Clone, Copy)]
 struct JsonEntry<'a> {
     media_type: &'a str,
@@ -1973,14 +1975,7 @@ fn json_body(
 /// One flag for each property that the request carries, or `None` where the body
 /// goes whole.
 ///
-/// One nested property is enough to send the whole body through `--json-body`,
-/// wherever it stands in the list, and no sibling gets a flag the request builder
-/// would then throw away. A property whose name has no kebab-case spelling has no
-/// flag either, and the body's rule is about whether a property has one rather
-/// than about why it has none — so it goes the way a nested property goes. What
-/// that buys is the disclosure: the template `--json-body-template` prints carries
-/// the key, where a flag called `""` names it nowhere. A property the API sets is
-/// carried by no request, so it has no flag and decides nothing.
+/// [`flagged_properties`] decides flatness before any flag is claimed.
 ///
 /// The flags are claimed once the body is known to be flat, in document order. A
 /// body that goes whole has no flag, so none of its properties is asked its name,
@@ -2027,9 +2022,19 @@ struct Flagged<'a> {
     spelling: String,
 }
 
+/// One nested property is enough to send the whole body through `--json-body`,
+/// wherever it stands in the list, and no sibling gets a flag the request builder
+/// would then throw away. A property whose name has no kebab-case spelling has no
+/// flag either, and the body's rule is about whether a property has one rather
+/// than about why it has none — so it goes the way a nested property goes. What
+/// that buys is the disclosure: the template `--json-body-template` prints carries
+/// the key, where a flag called `""` names it nowhere. A property the API sets is
+/// carried by no request, so it has no flag and decides nothing.
+///
 /// The properties that the request carries, each with the spelling of its flag, or
-/// `None` where one of them sends the body whole. No flag is claimed here: whether
-/// a body is flat is decided before any property is asked its name.
+/// `None` where one of them sends the body whole. No flag is claimed here.
+/// Read-only properties do not decide flatness; a non-read-only property must
+/// have both a scalar rule and a spellable name.
 fn flagged_properties(properties: Vec<Property<'_>>) -> Option<Vec<Flagged<'_>>> {
     let mut flagged = Vec::with_capacity(properties.len());
     for Property { name, schema, role } in properties {

@@ -141,14 +141,17 @@ listVouchers: `since` states a rule that cannot run
   caused by: `[unterminated` is not a regular expression: Unbalanced bracket
 ```
 
-A rule that cannot run refuses the document wherever its value stands, for each
-value that the reduction reads for its rules: a path, query or header parameter
-with a `schema` (its items, for a list; `Accept`, `Content-Type` and
-`Authorization` are not parameters, as OpenAPI says), and a property of a JSON
-body whose schema is an object. A body goes whole through `--json-body` at its
-first property that has no flag, a nested one or one whose name has no spelling,
-and a property listed after it is read for its rules all the same, so the
-verdict does not depend on the order of the properties. A property that the
+The reduction checks the rules retained by `Scalar` for the merged path, query
+and nonstandard header parameters with a `schema` (items for a list), and for
+non-read-only properties of a JSON request body read as an object. A string enum
+kept as `Choice` drops pattern and length rules. `Accept`, `Content-Type` and
+`Authorization` are ignored as parameters. Replaced path-item entries and
+callback parameters are not reduced as operation parameters.
+
+A non-read-only property with no flag sends an object body whole through
+`--json-body`: examples include a nested object, a list, an unsupported scalar
+schema and a name with no spelling. Other properties are still checked for
+retained rules, so their order does not change the verdict. A property that the
 schema marks `readOnly` is no part of the request, so it is read for none: it
 has no flag, and no flag could have carried its rules. A cookie parameter, a
 parameter stated with `content`, a property of a form, a multipart or a multi-schema `allOf` body and the items of an array body are not read that way. Only the escape below
@@ -173,14 +176,15 @@ listPeople: `surname` states a rule that cannot run
 A flag is one place out of many, because the generated types are made of every
 named schema, of an inline body and of an inline response, and each of them runs
 its `pattern` without the flag too. So the refusal reads every schema that the
-object model reads. A `pattern` of a value in the list above is refused as above,
-with a flag or without one. A `pattern` in any other schema is refused as
-`LoadError::UnrunnablePattern`: a response, a named schema, the items of an array
-body, a property of a nested object, a cookie parameter, and a string whose
-`enum` the flag keeps and whose `pattern` it drops. It names the operation where
-the schema stands in one, and the schema as an Overlay names a target. A
-component that operations reach names none, because one schema serves many
-operations and the Overlay line is made at the component:
+object model reads. A `pattern` of a value in the list above is refused as
+above, with a flag or without one. A `pattern` in any other schema is refused as
+`LoadError::UnrunnablePattern`: for example a response, a named schema that
+holds none of the scalar values above, the items of an array body, a property of
+a nested object, a cookie parameter, and a string whose `enum` the `Scalar`
+keeps and whose `pattern` it drops. It names the operation where the schema
+stands in one, and the schema as an Overlay names a target. A component that
+operations reach names none, because one schema serves many operations and the
+Overlay line is made at the component:
 
 ```
 getPerson: `$.paths['/people/{id}'].get.responses['200'].content['application/json'].schema.properties.surname` states a rule that cannot run
@@ -299,7 +303,7 @@ header value, which may be a credential:
 | the value | variant | why |
 |---|---|---|
 | a path parameter that is empty, `.` or `..` | `ValueError::PathSegment` | a server or a proxy reads such a segment as a step along the path, so `DELETE /things/..` reaches the collection above. A list is judged as the segment it makes, so `..` beside another item is a name |
-| a header value that `http::HeaderValue` refuses | `ValueError::HeaderValue` | a control character other than a tab. A line break in a header is how a header is injected |
+| a header value that `http::HeaderValue` refuses | `ValueError::HeaderValue` | a byte below 0x20 other than tab, or DEL (0x7f). UTF-8 bytes of non-ASCII controls are accepted |
 | a header value, or an item of a header list, that starts or ends with a space or a tab | `ValueError::HeaderWhitespace` | a receiver does not read it as part of the value, so it reads another value than the caller gave |
 | a comma inside one item of a header list | `ValueError::HeaderItemComma` | a header list is written with commas between its items and is not percent-encoded, so the receiver reads two items. A comma in a query or a path list is percent-encoded and stays one |
 | an empty item of a header list | `ValueError::HeaderItemEmpty` | a receiver ignores an empty list element, so `["", "c"]` written as `,c` is read as the one item `c` |
@@ -362,10 +366,10 @@ read as RFC 9110 reads a header value, and one that is not is refused as
 `LoadError::MediaType`, when it is the key that is sent:
 
 - an ASCII control character other than a tab (U+0000 to U+001F and U+007F)
-  anywhere in it, in a parameter as much as in the type. A byte of 0x80 or above,
-  a C1 control character among them, is one a header carries;
-- a white space other than a space and a tab before its type or after its
-  subtype, such as a no-break space. A space and a tab there are the optional
+  anywhere in it, in a parameter as much as in the type. A character past
+  ASCII, a C1 control character among them, has UTF-8 bytes a header carries;
+- a white space other than a space and a tab at either end of the whole key,
+  such as a no-break space. A space and a tab there are the optional
   white space of RFC 9110 and are no fault, and the request goes out without
   them, because a field value must not start or end with one (RFC 9113,
   section 8.2.1). A space or a tab inside the key, such as before the `;`, is
@@ -376,9 +380,10 @@ what a header carries, because that body is sent under a `Content-Type` of its
 own, with the boundary that is chosen when the parts are encoded, and the key is
 never sent: such a document loads. The words spell the key as the document does,
 so that the target of an Overlay can match it, and write each character that
-does not show as its code point (`\u{a0}`): a control character, a white space
-other than a space, a format character such as a zero width space or a soft
-hyphen, and a combining mark. A quote and a backslash are printed as they stand.
+does not show as its code point (`\u{a0}`): examples are a control character,
+white space other than a space, a format character such as a zero width space or
+a soft hyphen, and a nonspacing mark. A quote and a backslash are printed as
+they stand.
 
 A base URL is the scheme, the host and the path of every request, and nothing
 else of it is kept. One with userinfo (`user:password@`) or a query is refused

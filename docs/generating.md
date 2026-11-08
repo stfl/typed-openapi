@@ -162,15 +162,16 @@ and a link to a script is repaired with an `https` link, in an Overlay.
 
 A doc comment of several lines is written as one `///` line for each line of it.
 That is a description of several lines, and the doc of each wrapper in `ops.rs`,
-which holds the generator's paragraphs after the summary even when the summary is
-one line. `rustfmt` leaves such a line as it stands under its stable options,
-`hard_tabs` and `tab_spaces` among them, so what rustdoc reads is the text the
-generator checked. `wrap_comments` and the other options that rewrite doc
-comments are nightly options, and the guarantee does not cover them. Under
-`wrap_comments` `rustfmt` can also refuse a generated file, and the bless stops
-there with `rustfmt rejected the generated …` (`GenerateError::RustfmtFailed`).
-A `rustfmt.toml` in the directory of the generated files that leaves the option
-out ends that, because `rustfmt` reads the nearest one.
+which holds the generator's paragraphs after the summary even when the summary
+is one line. Under stable options, `rustfmt` preserves the text after `///`;
+`hard_tabs` and `tab_spaces` can change the indentation before the slashes, so
+what rustdoc reads is the text the generator checked. `wrap_comments` and the
+other options that rewrite doc comments are nightly options, and the guarantee
+does not cover them. Under `wrap_comments` `rustfmt` can also refuse a generated
+file, and the bless stops there with `rustfmt rejected the generated …`
+(`GenerateError::RustfmtFailed`). A `rustfmt.toml` in the directory of the
+generated files that leaves the option out ends that, because `rustfmt` reads
+the nearest one.
 
 The command line's `--help` reads the model and not the doc comments, so it shows
 the document's text as written.
@@ -328,9 +329,12 @@ let written = Settings::new("vendor.yaml")
 ```
 
 Refused where `word` is not spellable as a flag (`[a-z0-9-]`), and where it is
-one every subcommand already declares — `json-body`, `json-body-template`,
-`raw-body`, `file`, `field`, or clap's own `help`. Those cannot move, so a
-confirmation wearing one of their names would be two flags with one spelling.
+a reserved word — `json-body`, `json-body-template`, `raw-body`, `file`,
+`field`, or clap's own `help`. `help` is declared on every subcommand. JSON
+bodies declare
+`json-body`, with `json-body-template` where a template exists. Opaque bodies
+declare `raw-body`, and multipart bodies `file` and `field`. Their words are
+reserved even on other body kinds.
 
 The chosen word travels in the reduced model, so the binary you ship reads it
 rather than deriving one: the flag a subcommand accepts, the flag its `--help`
@@ -616,33 +620,34 @@ Three things are worth knowing:
   component's schema and is optional where the component is. A schema that a
   component states inline is a type for each operation that takes the component,
   named after the operation. A schema's own `$ref` is followed to
-  `#/components/schemas/` and nowhere else. The load refuses any other, by the
-  reference, as the schema of a parameter, of the items of a list, of the JSON
-  body that is sent and of a multipart body, and as a property of a flat body.
-  The bless refuses it as the schema of a JSON response. A reference anywhere
-  else is typify's: below the top of a response's schema, below the property of
-  a request body, in a body that is sent as bytes, or under a key that is not
-  sent. typify takes the last segment of it for the name of a component, so it
-  types the component of that name, and it panics where the document has none:
-  the bless step catches the panic and refuses the schema that holds the
-  reference, by name (`GenerateError::Panicked`).
+  `#/components/schemas/` on the reduction's schema-resolution road. References
+  outside that prefix are refused where the load resolves a parameter schema,
+  list items, a JSON or multipart body's schema, or an object-body property.
+  The bless refuses one at the top of a JSON response schema. Deeper schemas
+  submitted to typify use its last-segment component lookup; a missing component
+  can cause a caught `GenerateError::Panicked` naming the schema. Schemas ignored
+  by both reduction and generation, such as an unselected request content key,
+  are not resolved by either road. A reference below an opaque byte body is not
+  read merely because the request body exists.
 - **A `title` makes a schema stated inline one type, and a name is one type.**
   A schema stated inline under a `title` is the type of that name. Where two
   places state the same schema under it, they take one type and the `struct` is
   written once: a component that two operations share, the same schema on two
   operations, and a body and a response that state it alike. Where they state
   different schemas, the bless is refused, since the second would take a type of
-  the first one's shape. Two schemas are the same as typify is given them, and
-  the type of a request body does not require what the API sets: a `readOnly`
-  property keeps its place in the type and leaves the `required` list. So a
-  schema whose `required` names a `readOnly` property is two schemas where a
-  body and a response both state it, and the bless is refused. The same schema
-  with the property not required is one. The refusal names each place, and
-  where a component states the schema it names the component and the operation
-  that takes it. For a response it names the first JSON body of the operation,
-  and the bodies state one schema, so a new `title` goes on each of them.
-  Repair: give one of the schemas another `title` in an Overlay, at the
-  component where there is one.
+  the first one's shape. Inline claimants must have equal canonical schemas
+  after `NotRequired`; non-inline claimants must have the same typify type id.
+  An inline claimant and a named claimant conservatively refuse sharing,
+  including a singleton `allOf` around a named reference. The type of a request
+  body does not require what the API sets: a `readOnly` property keeps its place
+  in the type and leaves the `required` list. So a schema whose `required` names
+  a `readOnly` property is two schemas where a body and a response both state
+  it, and the bless is refused. The same schema with the property not required
+  is one. The refusal names each place, and where a component states the schema
+  it names the component and the operation that takes it. For a response it
+  names the first JSON body of the operation, and the bodies state one schema,
+  so a new `title` goes on each of them. Repair: give one of the schemas another
+  `title` in an Overlay, at the component where there is one.
 - **A wrapper answers with the type its success responses state.** A success
   response is a status from `200` to `299` or the range `2XX`; `default` is not
   read. A response that is a `$ref` to `#/components/responses/` is followed, a
@@ -672,7 +677,7 @@ Three things are worth knowing:
   sent under a `Content-Type` no server reads. A key that is sent as the
   `Content-Type` and that no header carries is no media type either: an ASCII
   control character other than a tab, or a white space other than a space and a
-  tab before its type or after its subtype. A key that is a media range (`*/*`,
+  tab at either end of the whole key. A key that is a media range (`*/*`,
   `image/*`) is refused too (`LoadError::MediaRange`), when it is the key the body
   is sent under. The repair is an Overlay action,
   and [overlay.md](overlay.md#1-plain-corrections) writes one out.

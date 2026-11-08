@@ -815,8 +815,7 @@ fn a_parameter_with_a_letter_outside_ascii_has_no_flag_and_a_required_one_refuse
     );
     assert_eq!(
         error.to_string(),
-        "listItems: parameter `straße` is named with a character outside ASCII, or in a way that \
-         does not kebab-case into [a-z0-9-], and the document requires it; correct the \
+        "listItems: parameter `straße` is named without an ASCII kebab-case flag spelling, and the document requires it; correct the \
          parameter in an Overlay, or drop its `required`"
     );
     let mended =

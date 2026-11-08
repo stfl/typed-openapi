@@ -286,7 +286,7 @@ fn a_header_value_the_http_crate_refuses_is_refused_by_name() {
     assert_eq!(
         error.to_string(),
         "getThing: `X-Trace` was given a value that no header can carry: a header value holds \
-         no control character but a tab"
+         no byte below 0x20 except a tab, and no DEL byte (0x7f)"
     );
 }
 
@@ -324,7 +324,7 @@ fn the_command_line_refuses_the_header_value_before_a_request_exists() {
 fn a_header_value_the_http_crate_accepts_is_sent() {
     let doc = doc();
     let op = doc.get("getThing").expect("the operation");
-    for value in ["a\tb", "Grüß", "a, b", "", "x=y; z"] {
+    for value in ["a\tb", "Grüß", "a\u{85}b", "a, b", "", "x=y; z"] {
         let request = Invocation::new(op, Values::new().param("name", "a").param("X-Trace", value))
             .expect("a value the http crate accepts")
             .request(doc.base())
@@ -821,7 +821,7 @@ fn a_dry_run_never_prints_userinfo() {
 /// The request line of a dry run is the path that is sent. When the URI has a
 /// host, a `//` at the start of its path is part of the path and not an
 /// authority, so an `@` after it stays in the line: `http://host//u@h/` is a
-/// base, and so is a document path that starts with `//u@h/`.
+/// base. The `@` also stays when `//u@h/x` comes from the document's path.
 #[test]
 fn a_dry_run_shows_the_path_that_is_sent() {
     let doc = doc();

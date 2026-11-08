@@ -654,7 +654,10 @@ fn add_body(
         Body::Opaque {
             media_type,
             required,
-        } => (*required, verbatim_argument(out, media_type)),
+        } => (
+            *required,
+            verbatim_argument(out, op.body().media_type().unwrap_or(media_type)),
+        ),
         Body::Multipart { names, required } => (*required, parts_argument(out, names)),
     };
     argument.add_to(out, required);
@@ -715,12 +718,12 @@ fn parts_argument(out: &mut Signature, names: &[String]) -> BodyArgument {
     }
 }
 
-/// The argument of a body, before the document says whether it is required.
+/// The body argument before optionality is applied.
 struct BodyArgument {
     name: Ident,
     /// What the argument carries, for the setter that names it.
     carries: &'static str,
-    /// The type of the argument when the body is required.
+    /// The payload type; `add_to` wraps an optional body in `Option`.
     ty: TokenStream,
     /// The `Values` call that a required body is passed to.
     call: TokenStream,
@@ -956,9 +959,8 @@ fn body_type(
 /// nowhere else: a response that cannot be followed, or JSON bodies that do not
 /// agree, are refused. Where a response with no `content` stands beside one with
 /// a JSON body, the answer is `Option` of the type, because the typed call reads
-/// an empty body as `null` and `None` is the answer with no body. A planned call
-/// answers `Option` of that, where `None` is the dry run, so there the answer
-/// with no body is `Some(None)`.
+/// an empty body as `null` and `None` is the answer with no body. See
+/// [`Planned::send`](crate::client::Planned::send) for the dry-run layer.
 fn response_type(
     op: &Operation,
     operation: &openapiv3::Operation,
@@ -981,12 +983,10 @@ fn response_type(
 
 /// The refusal for success responses that have no one answer.
 ///
-/// Both causes name the operation through the `Operation` variant that wraps
-/// this, the status of each response involved, and what each states. The repair
-/// is an Overlay, which is the adopter's to write: the generator picking one of
-/// two schemas would be a correction nobody can read in a diff. A body that a
-/// response component states is named with the component, because the Overlay
-/// goes there and every operation that takes the component is refused alike.
+/// The outer error names the operation. A reference refusal names its status
+/// and reason; a disagreement names each status, media type, component where
+/// present, and schema claim. The adopter repairs the relevant response or
+/// component in an Overlay; the generator cannot choose a schema for them.
 fn unanswerable(refusal: Unanswerable<'_>) -> GenerateError {
     match refusal {
         Unanswerable::Unfollowed { status, source } => unsupported(format!(

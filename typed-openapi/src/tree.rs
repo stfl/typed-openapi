@@ -1023,8 +1023,9 @@ fn body_args(cmd: Command, body: &Body) -> Command {
             media_type,
             required,
         } => cmd.arg(file_arg(RAW_BODY, *required).help(format!(
-            "Request body read from a file, sent verbatim as `{media_type}`; `-` is stdin. \
-             This CLI does not assemble that media type"
+            "Request body read from a file, sent verbatim as `{}`; `-` is stdin. \
+             This CLI does not assemble that media type",
+            body.media_type().unwrap_or(media_type)
         ))),
     }
 }

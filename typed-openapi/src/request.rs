@@ -125,13 +125,12 @@ pub enum ValueError {
         /// The segment the value makes: empty, `.` or `..`.
         value: String,
     },
-    /// A value for a header parameter that [`http::HeaderValue`] refuses: it
-    /// holds a control character other than a tab. Left to the `http` crate the
-    /// refusal comes late and names nothing, and a line break in a header is how
-    /// a header is injected.
+    /// A header parameter containing a byte below 0x20 other than a tab, or
+    /// DEL (0x7f). Bytes from 0x80 are accepted, including the UTF-8 bytes of
+    /// non-ASCII control characters.
     #[error(
         "{op}: `{name}` was given a value that no header can carry: a header value holds no \
-         control character but a tab"
+         byte below 0x20 except a tab, and no DEL byte (0x7f)"
     )]
     HeaderValue {
         /// The `operationId` of the operation the values were checked against.

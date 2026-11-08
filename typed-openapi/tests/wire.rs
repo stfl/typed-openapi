@@ -465,8 +465,7 @@ actions:
     );
     assert_eq!(
         error.to_string(),
-        "getThing: parameter `straße` is named with a character outside ASCII, or in a way that \
-         does not kebab-case into [a-z0-9-], and the document requires it; rename the parameter \
+        "getThing: parameter `straße` is named without an ASCII kebab-case flag spelling, and the document requires it; rename the parameter \
          and its variable in the path together, in an Overlay that writes the path item again \
          under the new path and removes the old one"
     );

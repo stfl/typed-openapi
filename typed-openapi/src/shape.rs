@@ -19,8 +19,9 @@
 //!   an Example Object, and the `parameters` values and the `requestBody` of a
 //!   Link Object;
 //! - the value of an extension, which is the vendor's own JSON;
-//! - a key that the object does not define: `examples` and `dependencies` on a
-//!   3.0 schema.
+//!
+//! The `Defined` reach stops at keys outside OpenAPI 3.0.3. The `Whole` reach
+//! also enters the extra routes below, including `dependencies` on a schema.
 //!
 //! A list of what is entered fails toward a position unread. The schema walk
 //! misses a phantom there, the marker walk a marker, and the pattern walk a
@@ -35,10 +36,11 @@
 //!
 //! A route is one that OpenAPI 3.0.3 defines, which is what the object model
 //! reads, or one that a 3.0 document may carry and the model drops. The second
-//! kind is a field of a later version (`webhooks`, `pathItems`), a keyword of a
-//! later draft (`$defs`, `if`), or a key that no version defines: a key of the
-//! Paths Object that is no path, and a key of the Responses Object that is no
-//! status code. A walk says how far it reaches with a [`Reach`].
+//! kind is a field of a later version (`webhooks`, `pathItems`), a JSON Schema
+//! keyword outside OpenAPI 3.0.3 (`$defs`, `if`), or a key that no version
+//! defines: a key of the Paths Object that is no path, and a key of the
+//! Responses Object that is no status code. A walk says how far it reaches with
+//! a [`Reach`].
 //!
 //! Every walk enters what 3.0.3 defines, so a map added to the table for a route
 //! of that kind is added for all of them. Only the schema walk enters the rest, and
@@ -255,8 +257,8 @@ impl Kind {
     ///
     /// This is the whole of what a walk is allowed to enter. A position left out
     /// is a node unread, and a position wrongly put in is a document wrongly
-    /// refused — so the table names what the specification names, and a shape
-    /// the specification leaves to the vendor is not in it.
+    /// refused. `Defined` follows OpenAPI 3.0.3 routes; `Whole` also follows
+    /// the extra schema routes in `undefined`. Neither enters arbitrary JSON.
     pub(crate) fn route(self, key: &str, reach: Reach) -> Option<Route> {
         self.defined(key).or_else(|| match reach {
             Reach::Defined => None,
@@ -416,8 +418,8 @@ fn keyword(key: &str) -> Option<Route> {
     })
 }
 
-/// The keywords of a later draft of JSON Schema that lead to a schema, which a
-/// 3.0 schema does not have and which typify reads.
+/// JSON Schema keywords outside OpenAPI 3.0.3 that lead to schemas.
+/// The schema walk enters them even where typify emits no type.
 ///
 /// They are the other half of what the schema walk follows: a 3.0 document may
 /// carry any of them, and the model drops them without a word.

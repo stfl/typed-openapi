@@ -861,8 +861,8 @@ fn a_decode_cause_says_the_class_the_line_and_the_column() {
 }
 
 /// A body that is not JSON, one that ends early and one that is JSON of another
-/// type are three classes, and a body of several lines puts the read on the
-/// line it stopped at.
+/// type exercise the three classes. Positions identify the reported failure;
+/// they need not be the point where reading finally stops.
 #[test]
 fn a_decode_cause_tells_the_three_classes_apart() {
     for (body, class, line, column, words) in [
@@ -902,7 +902,8 @@ fn a_decode_cause_tells_the_three_classes_apart() {
 /// cut is in a number that the type skips) or `Eof` (the cut is in a number that
 /// it reads). A body that goes on with text that is not JSON can be `Data` (the
 /// reader refused a value before that text) or `Syntax` (the reader meets that
-/// text before the type refuses anything).
+/// text before the type refuses anything), or `Eof` if that text leaves a
+/// JSON string or another value unfinished.
 #[test]
 fn a_decode_class_is_that_of_the_first_failure_and_not_of_the_text_after_it() {
     for (error, class, line, column) in [
@@ -1207,9 +1208,9 @@ impl<'de> Deserialize<'de> for Currency {
 /// `serde_json` has no place for some types in some positions, so the line and
 /// the column are 0: an untagged enum that no variant matches, an internally
 /// tagged enum whose content is refused, a type that is read through `try_from`
-/// and refuses, and a type with a `Deserialize` of its own that refuses what it
-/// read. The bodies put them at the top of a body, in a newtype struct and in an
-/// `Option`.
+/// and refuses, and a custom `Deserialize` that reads a value of another type
+/// and then refuses it. The bodies put them at the top of a body, in a newtype
+/// struct and in an `Option`.
 #[test]
 fn a_decode_cause_has_no_place_for_some_types_in_some_positions() {
     let none = [

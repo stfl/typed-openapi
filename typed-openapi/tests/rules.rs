@@ -418,7 +418,7 @@ fn a_unicode_pattern_is_refused_in_every_schema_a_type_is_made_of() {
     }
 }
 
-/// A flat property is a flag, so it keeps the refusal that names the property,
+/// A property of an object body is read for its rules, so its refusal names it,
 /// whatever the response and the other properties hold.
 #[test]
 fn a_unicode_pattern_that_becomes_a_flag_is_refused_with_its_property() {
@@ -486,8 +486,8 @@ const UNRUNNABLE: &[&str] = &[
     "{ type: string, pattern: '^\\p{L}+$' }",
 ];
 
-/// The two kinds of property that have no flag, and so send the body whole
-/// through `--json-body`: a nested object, and a name with no spelling.
+/// Examples of properties that send the body whole through `--json-body`:
+/// a nonscalar property such as a nested object, and a name with no spelling.
 const WHOLE: &[&str] = &[
     "o: { type: object, properties: { id: { type: integer } } }",
     "straße: { type: string }",

@@ -230,8 +230,7 @@ itself asserts that the operation is still a `GET`:
 A vendor who moves that operation to `POST` makes this a zero match — which is
 the right outcome, because a `POST` is already gated and the correction has
 become redundant. [`typed-openapi/tests/drift.rs`](../typed-openapi/tests/drift.rs)
-holds every tripwire to a mutated fixture; the example adoption has five, two
-in the vendor layer and three in the CLI layer.
+holds the example adoption's tripwires to mutated fixtures in both layers.
 
 The cost is deliberate: every tripwire is a place a vendor revision stops the
 build. That is the trade — you are buying a failure you can read in exchange for
@@ -441,7 +440,7 @@ request does not change. No action renames a key, so one action writes the path
 item again under the new path and another removes the old one:
 
 ```
-getThing: parameter `straße` is named with a character outside ASCII, or in a way that does not kebab-case into [a-z0-9-], and the document requires it; rename the parameter and its variable in the path together, in an Overlay that writes the path item again under the new path and removes the old one
+getThing: parameter `straße` is named without an ASCII kebab-case flag spelling, and the document requires it; rename the parameter and its variable in the path together, in an Overlay that writes the path item again under the new path and removes the old one
 ```
 
 ```yaml
@@ -690,7 +689,7 @@ object of the document, is a `LoadError` that names the key and the node that
 holds it:
 
 ```
-`x-cli-writes` stands on `$.paths['/vouchers/{id}/render']`, where this crate does not read it; it reads that key on a method of a path item under `paths`
+`x-cli-writes` stands on `$.paths['/vouchers/{id}/render']`, where this crate does not read it; it reads that key on a method of a path item directly in `paths`
 ```
 
 An extension of your own goes under another prefix. A name or a value that
@@ -849,8 +848,7 @@ The trade against the named-schema route above:
 Neither route buys or saves the regex engine: `typed-openapi` links `regress`
 unconditionally so that a command line can enforce whatever pattern the
 document states, and it is in the tree of every crate here — `api`'s included,
-which links no argument parser. The 810 KB is the price of enforcing rules at
-all, not of choosing one of these two routes.
+which links no argument parser. Choosing an owned type does not remove it.
 
 **The dependency row is a real cost, and it is yours alone.** Exact money over
 an integer that cannot overflow means `num-bigint` and its `num-integer` /

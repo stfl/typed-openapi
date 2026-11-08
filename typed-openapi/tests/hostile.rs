@@ -720,10 +720,8 @@ paths:
         &Shape::Unreachable(Unsupported::Unspellable)
     );
     assert!(
-        unwrapped(&op).contains(
-            "`*` has no flag: it is named with a character outside ASCII, or in a way that does \
-             not kebab-case into [a-z0-9-]."
-        ),
+        unwrapped(&op)
+            .contains("`*` has no flag: it is named without an ASCII kebab-case flag spelling."),
         "the long help does not say why it has none:\n{}",
         unwrapped(&op)
     );
@@ -737,8 +735,7 @@ paths:
     );
     assert_eq!(
         refused.to_string(),
-        "listFirings: parameter `*` is named with a character outside ASCII, or in a way that \
-         does not kebab-case into [a-z0-9-], and the document requires it; correct the \
+        "listFirings: parameter `*` is named without an ASCII kebab-case flag spelling, and the document requires it; correct the \
          parameter in an Overlay, or drop its `required`"
     );
 }
