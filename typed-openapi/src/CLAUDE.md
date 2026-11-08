@@ -905,7 +905,9 @@ replacement as `syn::TypePath`, including later entries of one format that
 rewrites, as typify receives them. Its arena indexes document nodes by identity.
 `cycles/merge.rs` models the recursive calls of typify 0.8.0's `merge.rs`. A state
 holds a set of operands. The allOf fold keeps each prefix state, because a later operand cannot stop
-an earlier merge call. A consumed body keeps its constraints without entering
+an earlier merge call. Container bodies merge before either operand's composition
+is consumed, so a later constraint cannot hide a recursive body pair.
+A consumed body keeps its constraints without entering
 its composition again. Negation distinguishes a stated schema from a merged
 result: a single negated reference is not resolved. The transitions include
 reference resolution, composition, double negation, negated unions and

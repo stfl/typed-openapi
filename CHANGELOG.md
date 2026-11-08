@@ -1574,7 +1574,10 @@ the crate follows [Semantic Versioning][semver].
     into a loop of wrappers or `oneOf`s, and a property, item or map whose merge
     names its containing schema. Shared properties, list items and maps are
     checked as operand sets, as are a property against another operand's map and
-    double negation. Recursion that no other operand constrains passes.
+    double negation. Container bodies are checked before either operand's
+    composition: two recursive maps are refused even when one operand's later
+    `allOf` closes its map with `additionalProperties: false`. Recursion that no
+    other operand constrains passes.
     The refusal names the schemas on the loop and
     the place of an inline merge. Plain recursive property and item references,
     and loops of wrappers or `oneOf`s reached by no merge, pass. A single

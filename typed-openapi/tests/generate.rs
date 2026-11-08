@@ -6395,6 +6395,25 @@ const CYCLES: [(&str, &str, &[&str]); 32] = [
     ),
 ];
 
+// merge_schema_object merges bodies before either operand's composition.
+const BODY_CYCLES: [(&str, &str, &[&str]); 3] = [
+    (
+        "recursive map bodies before operand composition",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: object, additionalProperties: {$ref: '#/components/schemas/A'}}\n    B: {type: object, additionalProperties: {$ref: '#/components/schemas/B'}, allOf: [{type: object, additionalProperties: false}]}\n",
+        &["A", "B"],
+    ),
+    (
+        "recursive property bodies before operand composition",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: object, properties: {next: {$ref: '#/components/schemas/A'}}}\n    B: {type: object, properties: {next: {$ref: '#/components/schemas/B'}}, allOf: [{type: object, properties: {next: {type: string}}}]}\n",
+        &["A", "B"],
+    ),
+    (
+        "recursive array bodies before operand composition",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: array, items: {$ref: '#/components/schemas/A'}}\n    B: {type: array, items: {$ref: '#/components/schemas/B'}, allOf: [{type: array, items: {type: string}}]}\n",
+        &["A", "B"],
+    ),
+];
+
 /// typify merges the members of an `allOf` by following each `$ref` to the schema
 /// it names, and a cycle of references has no end: its source says so in a `TODO`
 /// at the arm that follows one (`merge::try_merge_schema`), and the process dies
@@ -6402,7 +6421,7 @@ const CYCLES: [(&str, &str, &[&str]); 32] = [
 /// document, before typify runs, and refused naming the schemas that make it.
 #[test]
 fn a_cycle_of_allof_among_named_schemas_is_refused_naming_the_schemas() {
-    for (at, (label, schemas, cycle)) in CYCLES.iter().enumerate() {
+    for (at, (label, schemas, cycle)) in CYCLES.iter().chain(&BODY_CYCLES).enumerate() {
         let dir = out(&format!("cycle-{at}"));
         let mut doc = with_schemas(schemas);
         if at == 0 {
@@ -6416,6 +6435,37 @@ fn a_cycle_of_allof_among_named_schemas_is_refused_naming_the_schemas() {
             "{label}: {failure:?}"
         );
         assert_nothing_written(&dir, label);
+    }
+}
+
+#[test]
+fn recursive_container_bodies_merge_before_operand_composition() {
+    for (at, (label, schemas, _)) in BODY_CYCLES.iter().enumerate() {
+        for (composition, reversed) in [
+            ("allOf", false),
+            ("allOf", true),
+            ("anyOf", false),
+            ("anyOf", true),
+            ("oneOf", false),
+            ("oneOf", true),
+        ] {
+            let mut schemas = schemas.replace(", allOf:", &format!(", {composition}:"));
+            if reversed {
+                schemas = schemas.replace(
+                    "[{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]",
+                    "[{$ref: '#/components/schemas/B'}, {$ref: '#/components/schemas/A'}]",
+                );
+            }
+            let dir = out(&format!("body-first-{at}-{composition}-{reversed}"));
+            let failure = Settings::new(wrote(&dir, "document.yaml", &with_schemas(&schemas)))
+                .write_to(&dir)
+                .expect_err("container bodies repeat before composition");
+            assert!(
+                matches!(&failure, GenerateError::CyclicAllOf { schemas, merge: None } if schemas == &["A", "B"]),
+                "{label}, {composition}, reversed={reversed}: {failure:?}"
+            );
+            assert_nothing_written(&dir, label);
+        }
     }
 }
 

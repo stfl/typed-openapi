@@ -99,8 +99,7 @@ impl Schemas<'_> {
             .collect()
     }
 
-    /// try_merge_schema resolves references before merge_schema_object consumes
-    /// the bodies and their top-level composition.
+    /// try_merge_schema resolves booleans and references before entering bodies.
     fn expansion(&self, parts: &Operands) -> Option<Vec<Operands>> {
         if let Some(next) = self.booleans(parts) {
             return Some(next);
@@ -112,6 +111,10 @@ impl Schemas<'_> {
                 return Some(vec![Self::replacing(parts, *part, [Part::Whole(target)])]);
             }
         }
+        None
+    }
+
+    fn compositions(&self, parts: &Operands) -> Option<Vec<Operands>> {
         parts.iter().find_map(|part| {
             let Part::Whole(id) = part else { return None };
             let object = self.object(*part)?;
@@ -210,8 +213,13 @@ impl Schemas<'_> {
             next.extend(expanded.into_iter().map(State::Merge));
             return next;
         }
-        // `merge_schema_object` merges object/array bodies before applying not.
+        // merge_schema_object merges object/array bodies before applying either
+        // operand's composition; a later constraint cannot stop these calls.
         next.extend(self.pairs(parts).into_iter().map(State::Merge));
+        if let Some(expanded) = self.compositions(parts) {
+            next.extend(expanded.into_iter().map(State::Merge));
+            return next;
+        }
         for part in parts {
             if let Part::Not(id) = part {
                 next.push(State::Subtract {
@@ -346,7 +354,7 @@ impl Schemas<'_> {
 
     fn subtract_merged(&self, positive: &Operands, parts: &Operands) -> Vec<State> {
         let mut next = vec![State::Merge(parts.clone())];
-        if let Some(expanded) = self.expansion(parts) {
+        if let Some(expanded) = self.expansion(parts).or_else(|| self.compositions(parts)) {
             next.extend(expanded.into_iter().map(|parts| State::Subtract {
                 positive: positive.clone(),
                 negative: Negative::Merged(parts),
