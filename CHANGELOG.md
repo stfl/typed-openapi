@@ -129,6 +129,10 @@ the crate follows [Semantic Versioning][semver].
 
 ### Changed
 
+- Generated document and summary headers name each input with its parent
+  directory. Replacement promises name the generated newtype without a position.
+  Run the bless step again to update these comments.
+
 - Without an Overlay, generated Rust headers point corrections at the vendor
   document. Run the bless step again to update the headers.
 
