@@ -39,9 +39,9 @@ pub trait AsyncClient {
 `tokio::spawn`ed.
 
 Keeping the client out is what lets one generated crate serve a binary that
-uses ureq and a service that uses `reqwest`, and it is why the default feature
-set is 30 crates — 21 without `clap`. It is also where authentication goes:
-nothing here signs a request, so your adapter does.
+uses ureq and a service that uses `reqwest`. No HTTP client reaches the
+library's dependency graph. It is also where authentication goes: nothing here
+signs a request, so your adapter does.
 
 ## A reference to a client is a client
 
@@ -70,7 +70,6 @@ and take the reference from here.
 
 ## Writing an adapter
 
-An adapter is about ten lines.
 [`examples/toy/cli/src/client.rs`](../examples/toy/cli/src/client.rs) holds one
 for ureq 3 and one for `reqwest::Client`, written to be copied rather than
 depended on — they are in the example precisely so that they are not a

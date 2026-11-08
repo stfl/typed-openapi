@@ -26,6 +26,9 @@ the path has none left to spend, the method decides:
 | `PUT` | either | `update` |
 | `PATCH` | either | `patch` |
 | `DELETE` | either | `delete` |
+| `HEAD` | either | `head` |
+| `OPTIONS` | either | `options` |
+| `TRACE` | either | `trace` |
 
 Whether the path addresses one resource is read from the segments below the
 group only. A `{tenant}` above the group says which tenant, for every operation
@@ -674,7 +677,7 @@ $ cargo run --features document --example clashing-words
 enshrineVoucher: the property `enshrine` and the gate `enshrine` both want `--enshrine`; rename the gate in `x-cli-gates`, to `gate-enshrine` or another word
 ```
 
-[Choosing the confirmation word](generating.md#choosing-the-confirmation-word)
+[Choosing the confirmation word](generating.md#settingscommit_wordword---resultsettings-confirmationerror)
 has the call; `typed-openapi/examples/README.md` walks the whole collision.
 
 Only a value that has a flag is held to this. A property of a body that goes

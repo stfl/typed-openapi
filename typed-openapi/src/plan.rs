@@ -49,7 +49,7 @@ impl Answers {
         Self::default()
     }
 
-    /// The write confirmation — `--commit`, on a command line.
+    /// The write confirmation, spelled as [`Operation::commit`] on a command line.
     #[must_use]
     pub fn commit(mut self) -> Self {
         self.commit = true;

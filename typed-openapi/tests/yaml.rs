@@ -506,3 +506,51 @@ fn a_document_is_read_into_the_same_value_whichever_way_it_is_written() {
 
     assert_eq!(yaml, json);
 }
+
+#[test]
+fn json_characters_outside_yaml_printable_text_need_escapes_before_overlays() {
+    const DOCUMENT: &str = r#"{"openapi":"3.0.3","info":{"title":"MARK","version":"1"},"servers":[{"url":"http://x"}],"paths":{}}"#;
+    const LAYER: &str = r#"{"overlay":"1.1.0","info":{"title":"MARK","version":"1"},"actions":[{"target":"$.info","update":{"title":"repaired"}}]}"#;
+    let plain = DOCUMENT.replace("MARK", "plain");
+    let repair = LAYER.replace("MARK", "plain");
+    for point in (0x7F..=0x9F)
+        .chain([0xFFFE, 0xFFFF])
+        .filter(|point| *point != 0x85)
+    {
+        let character = char::from_u32(point).expect("a Unicode scalar").to_string();
+        let document = DOCUMENT.replace("MARK", &character);
+        let layer = LAYER.replace("MARK", &character);
+        // JSON itself admits these characters; the YAML reader refuses them.
+        assert!(serde_json::from_str::<Value>(&document).is_ok());
+        assert!(serde_json::from_str::<Value>(&layer).is_ok());
+        let refused = typed_openapi::Document::load(&document, &[&repair])
+            .expect_err("the text is refused before the repair layer");
+        let typed_openapi::LoadError::Overlay(OverlayError::Document(cause)) = &refused else {
+            panic!("U+{point:04X}: {refused}");
+        };
+        assert!(cause.message().contains("unexpected character"));
+        let refused = typed_openapi::Document::load(&plain, &[&layer])
+            .expect_err("an Overlay with the raw character is refused");
+        let typed_openapi::LoadError::Layer {
+            layer: 0,
+            source: OverlayError::Syntax(cause),
+        } = &refused
+        else {
+            panic!("U+{point:04X}: {refused}");
+        };
+        assert!(cause.message().contains("unexpected character"));
+        let escaped = format!("\\u{point:04x}");
+        let document = DOCUMENT.replace("MARK", &escaped);
+        let layer = LAYER.replace("MARK", &escaped);
+        assert_eq!(
+            overlay::parse(&document).expect("the escape loads")["info"]["title"],
+            character
+        );
+        typed_openapi::Document::load(&document, &[]).expect("an escaped document loads");
+        typed_openapi::Document::load(&plain, &[&layer]).expect("an escaped Overlay loads");
+    }
+    typed_openapi::Document::load(&DOCUMENT.replace("MARK", "\u{85}"), &[])
+        .expect("U+0085 is printable YAML text");
+    typed_openapi::Document::load(&plain, &[&LAYER.replace("MARK", "\u{85}")])
+        .expect("U+0085 is printable in an Overlay too");
+}

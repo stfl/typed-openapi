@@ -60,8 +60,19 @@ bless: cannot use /checkout/examples/toy/spec/corrections.yaml
   caused by: overlay: invalid value: string "1.0.0", expected `1.1.<patch>` semver (Overlay v1.1)
 ```
 
-Overlay files are YAML or JSON, and so are the documents they extend. They are
-read as YAML 1.2 reads booleans: `yes`, `no`, `on`, `off`, `y` and `n` are
+Overlay files are YAML or JSON, and so are the documents they extend.
+The reader refuses raw U+007F, U+0080 to U+009F except U+0085, and U+FFFE and
+U+FFFF. This applies inside a JSON string too, although JSON permits them.
+A document is refused with "the OpenAPI document cannot be read as YAML or
+JSON". An Overlay is refused with "the Overlay document cannot be read as YAML
+or JSON". The cause says "unexpected character" and names the character.
+
+The document is read before the first Overlay, so no Overlay can repair this
+refusal. An Overlay is read before its actions run. Write the character as an
+escape in the vendor's text before the bless reads it: for example, `\u007f`
+in a JSON string. The escaped character loads in a document and in an Overlay.
+
+Booleans are read as YAML 1.2 reads them: `yes`, `no`, `on`, `off`, `y` and `n` are
 strings, and `true` and `false` are the booleans. A mapping that repeats a key is refused,
 with the line and column of the second one.
 

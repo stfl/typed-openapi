@@ -29,7 +29,7 @@ pub struct Part {
 }
 
 impl Part {
-    /// A text part: `--field name=value`.
+    /// A text part: `--field NAME=VALUE`.
     #[must_use]
     pub fn text(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
@@ -40,7 +40,7 @@ impl Part {
         }
     }
 
-    /// A file part: `--file name=@path`. `filename` is what the server sees.
+    /// A file part: `--file NAME=PATH`. `filename` is what the server sees.
     ///
     /// The part is sent under the media type the filename's extension names —
     /// [`media_type_of`] — because a server that stores an upload keeps the
@@ -58,7 +58,7 @@ impl Part {
     }
 
     /// The part's name in the form, as the caller gave it: the `name` of
-    /// `--field name=value` and of `--file name=@path`.
+    /// `--field NAME=VALUE` and of `--file NAME=PATH`.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name

@@ -37,15 +37,15 @@ early they bite:
 | **changes a summary or a description** | — | — | **nothing** |
 | **loosens a rule nothing hand-written stands for** | — | — | **nothing**, until a value the old rule refused arrives |
 
-The messages are in the sections below. The bless example uses `/checkout`
-as the checkout's absolute path.
+The messages are in the sections below. Compiler excerpts omit source line
+and column numbers. The bless example uses `/checkout` as the checkout's
+absolute path.
 
 ## Bless time: the Overlay as an assertion
 
-`ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Six
-of the example adoption's eleven actions — three in
-[`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml), three in
-[`spec/cli.yaml`](../examples/toy/spec/cli.yaml) — are written as targets that
+`ErrorOnZeroMatch` is what makes a correction a check as well as an edit.
+The tripwire actions in [`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml)
+and [`spec/cli.yaml`](../examples/toy/spec/cli.yaml) are written as targets that
 state what the vendor currently says, so a revision that changes the thing being
 corrected fails the bless rather than being silently overwritten. The first line
 names the layer, because with corrections split by purpose that is the first
@@ -59,7 +59,7 @@ bless: cannot use /checkout/examples/toy/spec/corrections.yaml
 
 The form and its cost are in [docs/overlay.md](overlay.md#the-tripwire-form);
 [`typed-openapi/tests/drift.rs`](../typed-openapi/tests/drift.rs) holds each of
-the six tripwires to a mutated fixture. A test through
+the tripwires to a mutated fixture. A test through
 `Settings::write_to` checks the layer path in the error.
 
 The same file records what *passes* this stage, and deliberately so: withdrawing
@@ -84,7 +84,7 @@ const _: () = assert!(api::documented(
 
 ```
 error[E0080]: evaluation panicked: assertion failed: api::documented("enshrineVoucher", "POST", "/vouchers/{id}/enshrine")
-  --> examples/toy/cli/src/finalize.rs:19:15
+  --> examples/toy/cli/src/finalize.rs
 ```
 
 The assertion is a whole row, so an operation that keeps its `operationId` and
@@ -113,14 +113,14 @@ A field added upstream is E0027, and it names the field:
 
 ```
 error[E0027]: pattern does not mention field `note`
-  --> examples/toy/api/src/posting.rs:44:13
+  --> examples/toy/api/src/posting.rs
 ```
 
 A field renamed is E0026, and rustc suggests the new name:
 
 ```
 error[E0026]: struct `api_generated::types::Voucher` does not have a field named `total`
-  --> examples/toy/api/src/posting.rs:49:13
+  --> examples/toy/api/src/posting.rs
    |
    |             total,
    |             ^^^^^ help: `api_generated::types::Voucher` has a field named `amount`
@@ -146,7 +146,7 @@ one in `finalize::plan`. A variant the vendor adds is:
 
 ```
 error[E0004]: non-exhaustive patterns: `&api_generated::types::VoucherStatus::Void` not covered
-  --> examples/toy/api/src/posting.rs:57:27
+  --> examples/toy/api/src/posting.rs
 ```
 
 `api` fails before `cli` is reached, so one such change reports once, in the
@@ -154,9 +154,9 @@ crate that owns the decision.
 
 ## Test time: the committed artefacts
 
-A bless step writes four files, plus the counts page where an adoption asks for
-one, and the CLI only ever reads one of them — the binary blob. Five checks hold
-the set together.
+The bless step writes the corrected document, the Rust types and wrappers, the
+model blob, and an optional counts page. The CLI reads the binary blob.
+The checks below hold the artefacts together.
 
 [`api/tests/typed.rs`](../examples/toy/api/tests/typed.rs) reduces the
 *committed document* again and compares it with the *committed blob*, operation
@@ -182,10 +182,10 @@ the document and the generated inventory disagree at operation 10: the inventory
 says `voidVoucher` and the document says there is no such operation
 ```
 
-[`api/tests/corrections.rs`](../examples/toy/api/tests/corrections.rs) is the
-third: every row of `CORRECTIONS` is checked against both documents in both
-directions, so a correction the vendor has caught up with turns red instead of
-going on working in silence. One test per kind of row, each saying which row and
+[`api/tests/corrections.rs`](../examples/toy/api/tests/corrections.rs) checks
+every row of `CORRECTIONS` against both documents in both directions, so a
+correction the vendor has caught up with turns red instead of going on working
+in silence. One test per kind of row, each saying which row and
 why:
 
 ```
@@ -198,7 +198,7 @@ And in the other direction — `` `Voucher.note` is in the corrected document an
 not the vendor's, and no row says so `` — so an Overlay edit nobody wrote down
 fails too. [docs/overlay.md](overlay.md) has the detail.
 
-[`api/tests/money.rs`](../examples/toy/api/tests/money.rs) is the fourth, and it
+[`api/tests/money.rs`](../examples/toy/api/tests/money.rs) checks the owned amount. It
 exists because the reading behind one type in this adoption is hand-written. A
 newtype the generator writes the whole of compiles the document's `pattern` into
 its own `FromStr`, so it cannot drift; `Voucher.total` is a newtype whose
@@ -234,10 +234,9 @@ The compile-fail doctests in [`api/src/lib.rs`](../examples/toy/api/src/lib.rs)
 pin E0027, E0026, E0004 and E0080 by code. The builder doctest in
 `api-generated` pins E0277.
 
-[`api/tests/summary.rs`](../examples/toy/api/tests/summary.rs) is the fifth, and
-it is the one that holds *prose*. `src/summary.md` is counted off the reduction
-and `README.md` quotes those counts, so the test builds each sentence out of
-`Document::summary` and looks for it in the page a reader arrives at:
+[`api/tests/summary.rs`](../examples/toy/api/tests/summary.rs) holds *prose*.
+`src/summary.md` is counted off the reduction and `README.md` quotes those
+counts, so the test builds each sentence out of `Document::summary` and looks for it in the page a reader arrives at:
 
 ```
 the README does not say `**13 operations**`; the reduction moved and the paragraph did not

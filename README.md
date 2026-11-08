@@ -60,7 +60,7 @@ own numbers — `pattern`, the lengths, the bounds, `multipleOf`, an `enum` of
 numbers or booleans, and a list's `minItems`, `maxItems` and `uniqueItems` — on
 the command line and in a typed call alike. A body field's flag runs the same
 rules, and its generated type runs fewer: [docs/validation.md][val] says which.
-What that costs is a fifth of the binary.
+A regex engine is linked in every feature set.
 
 ## The gate
 
@@ -91,7 +91,7 @@ that quote a number.
 Corrections come in layers, applied in the order you name them, so the repairs
 stay a document worth handing back to the vendor and the command-line markings
 sit above them. The generator ships inside this crate behind the `generate`
-feature, so your `xtask` is about twenty lines — see [docs/generating.md][gen].
+feature, so your `xtask` calls it directly — see [docs/generating.md][gen].
 
 A vendor revision that moves something you corrected fails the bless step,
 naming the layer it is in, rather than silently overwriting the correction; one
@@ -111,17 +111,18 @@ Each feature adds and removes whole items and never changes one, so a match on
 one of the crate's errors is the same in every build, `_` arm included.
 
 **No HTTP client, in any combination.** The seam is a two-method trait over
-`http::Request<Vec<u8>>`, and an adapter is about ten lines. The default feature
-set is 30 crates; 21 without `clap`. Writing one, and the `Recorder` that
-answers a test from a script instead, are in [docs/client.md][client].
+`http::Request<Vec<u8>>`. The `clap` feature adds the command tree and
+completion dependencies.
+Writing an adapter, and the `Recorder` that answers a test from a script,
+are in [docs/client.md][client].
 
 ## What it does not do
 
 - **No authentication.** Sign the `http::Request` in your adapter.
 - **No per-field flags for a body that is not flat.** A nested, `oneOf`, `allOf`
-  or `anyOf` body goes out as one `--json-body FILE`, held to being JSON and no
-  further — holding its *content* to a schema needs the generated `struct`,
-  which only your crate can name. The typed wrapper takes that type either way.
+  or `anyOf` body goes out as one `--json-body FILE`. The adopter calls
+  `client::fits` with the generated type to check its content before sending
+  it ([docs/validation.md][val]). The typed wrapper takes that type either way.
 - **No object parameters.** An object, a schema that states a keyword the crate
   does not read as a value, a schema with no `type`, an `in: cookie`, a
   `content`-described parameter, an unserialisable `style`, a name that will not
@@ -152,8 +153,8 @@ answers a test from a script instead, are in [docs/client.md][client].
   `x-cli-group` and `x-cli-command` in an Overlay.
 - **No async CLI.** The command tree is sync; `AsyncClient` is for the typed
   caller.
-- **A regex engine in every binary.** Enforcing `pattern` costs one and no
-  feature removes it: 810 KB of the example's 4.6 MB stripped binary.
+- **A regex engine in every binary.** Enforcing `pattern` links `regress`, and no
+  feature removes it.
 - **The reduced model is a binary blob**, diffable only by regenerating it.
 - **Stable Rust.** CI builds and tests the crate with all features on, on
   current stable, and on nothing older. `rust-version` is 1.89, which the YAML

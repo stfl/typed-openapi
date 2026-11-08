@@ -63,7 +63,7 @@
 //! assert_eq!(client.send(get("/vouchers?page=1")).unwrap().body(), br#"[{"id":5}]"#);
 //! assert_eq!(client.send(get("/vouchers?page=2")).unwrap().body(), b"[]");
 //!
-//! // One answer queued for anything is left, and nothing asked for it.
+//! // The POST failure and the fallback answer are unused.
 //! assert_eq!(client.unused(), 2);
 //! assert_eq!(client.take().len(), 2);
 //! ```

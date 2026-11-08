@@ -1291,10 +1291,11 @@ says only what a probe of every failure shows, and the same holds for the class
 and the position of a `serde_json::Error`: a sentence about them is a rule that
 every probe keeps or an example that a test holds, and a list of cases says
 "such as". Reading a `serde_json::Value` into a type names a value and a type
-for some failures, and for others only a missing key or an unmatched `untagged`
-enum. That read, `postcard` and `syn` over tokens carry no position. The adapter
-rule, that an adapter must not turn a status code into an error, is on
-`SyncClient` and `AsyncClient` themselves, because an adopter writes an adapter
+for some failures. Other failures name, for example, a missing key or an
+unmatched `untagged` enum. A type with its own `Deserialize` supplies its own
+message, as typify's pattern newtypes do. That read, `postcard` and `syn` over
+tokens carry no position. The adapter rule, that an adapter must not turn a
+status code into an error, is on `SyncClient` and `AsyncClient` themselves, because an adopter writes an adapter
 from that page.
 
 **A feature shows as a label, and no item writes it.** `src/lib.rs` turns

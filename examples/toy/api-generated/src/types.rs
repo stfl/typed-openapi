@@ -12,7 +12,7 @@
     reason = "generated source is not graded on style or on any lint that the crate \
               holding it turns on; the allow covers this module and nothing else"
 )]
-///`Settings::replace("money", "money::Money")` promises that this type parses from a string and prints to one, and the newtype above is written in terms of both.
+///`Settings::replace("money", "money::Money")` promises that this type parses from a string and prints to one, and the generated newtype is written in terms of both.
 const _: () = {
     fn parses_from_a_string<T: ::std::str::FromStr>() {}
     fn prints_to_a_string<T: ::std::fmt::Display>() {}
@@ -21,7 +21,7 @@ const _: () = {
         prints_to_a_string::<money::Money>();
     }
 };
-///`Settings::replace("cents", "money::Cents")` promises that this type parses from a string and prints to one, and the newtype above is written in terms of both.
+///`Settings::replace("cents", "money::Cents")` promises that this type parses from a string and prints to one, and the generated newtype is written in terms of both.
 const _: () = {
     fn parses_from_a_string<T: ::std::str::FromStr>() {}
     fn prints_to_a_string<T: ::std::fmt::Display>() {}

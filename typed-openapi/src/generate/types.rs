@@ -286,8 +286,8 @@ fn promises(file: &syn::File, paths: &[RustPath]) -> Result<Vec<syn::Item>, Gene
         }
         let said = format!(
             "`Settings::replace(\"{format}\", \"{rust}\")` promises that this type parses \
-             from a string and prints to one, and the newtype above is written in terms \
-             of both."
+             from a string and prints to one, and the generated newtype is written in \
+             terms of both."
         );
         promises.push(
             syn::parse2(quote! {

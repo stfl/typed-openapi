@@ -2,8 +2,8 @@
 
 One adoption of [`typed-openapi`](../../typed-openapi) from end to end: a vendor
 document with vendor mistakes, two Overlay layers that correct it, a bless
-step, and two CLIs over the result. It is built, linted and tested with the library on
-every push, so it cannot rot into an example that no longer compiles.
+step, and both a nested and a root CLI over the result. It is built, linted and
+tested with the library on every push, so it cannot rot into an example that no longer compiles.
 
 The Toy Accounting API is invented. The default server is
 `http://localhost:9999`, and every write is a dry run until `--commit`.
@@ -121,7 +121,7 @@ third layer this adoption has no need of.
 | serves a `GET` that stores a PDF | `x-cli-writes: true`, in `spec/cli.yaml` | `vouchers render` is behind `--commit` |
 | serves one upload under a media type nothing here assembles | left alone, and both uploads work | `--raw-body` for the `application/pdf` one, `--file` / `--field` for the multipart one |
 
-The six **tripwire** actions in both layers state what the vendor currently says
+The **tripwire** actions in both layers state what the vendor currently says
 in their JSONPaths, so under
 `ErrorOnZeroMatch` a vendor revision that moves the thing being corrected fails
 the bless step instead of being silently overwritten, naming the layer it is
