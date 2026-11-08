@@ -401,17 +401,14 @@ fn declared(document: &str, schema: &str, property: &str) -> bool {
 
 #[test]
 fn an_undeclared_property_on_another_schema_does_not_count_as_declared() {
-    let mut document = json(VENDOR);
-    document
-        .pointer_mut("/components/schemas/Contact/properties")
-        .expect("Contact properties")
-        .as_object_mut()
-        .expect("a property map")
-        .insert(
-            "internal_ref".to_owned(),
-            serde_json::json!({"type": "string"}),
-        );
-    let text = document.to_string();
-    assert!(declared(&text, "Contact", "internal_ref"));
-    assert!(!declared(&text, "Voucher", "internal_ref"));
+    let contact =
+        "    Contact:\n      type: object\n      required: [name, address]\n      properties:\n";
+    assert!(VENDOR.contains(contact), "the fixture declares Contact");
+    let document = VENDOR.replacen(
+        contact,
+        &format!("{contact}        internal_ref:\n          type: string\n"),
+        1,
+    );
+    assert!(declared(&document, "Contact", "internal_ref"));
+    assert!(!declared(&document, "Voucher", "internal_ref"));
 }
