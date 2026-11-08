@@ -4,9 +4,10 @@ The invariants the example keeps. The rules of the library are in
 `typed-openapi/src/CLAUDE.md`, and the rules that reach past this directory are
 in the root `CLAUDE.md`.
 
-**The typed half of an adoption links no argument parser.** `api` and
-`api-generated` take the library with `default-features = false`.
-`just clap-free` is the check.
+**The typed half of an adoption links no argument parser.** The normal
+dependency graph reaches `typed-openapi` through `api` → `api-generated`.
+`api-generated` sets `default-features = false` on that dependency.
+`just clap-free` checks the normal dependency graph of `api`.
 
 **Generated files are never edited.** `examples/toy/api-generated/src/{types,ops}.rs`,
 `src/model.postcard`, `src/summary.md` and `spec/toy.overlaid.yaml` are written

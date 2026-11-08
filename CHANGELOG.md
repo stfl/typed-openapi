@@ -9,6 +9,11 @@ the crate follows [Semantic Versioning][semver].
 
 ## Unreleased
 
+### Fixed
+
+- The packaged `clashing-words` example requires both `document` and `clap`, so
+  document-only and generate-only test builds skip it.
+
 ### Added
 
 - A runnable crate-root example that loads a document and dispatches through a

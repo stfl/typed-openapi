@@ -116,9 +116,9 @@ bigint-free:
     }
     echo "num-bigint reaches the example's own type and nothing else"
 
-# The typed half of an adoption must link no argument parser: `api` takes the
-# library with `default-features = false`, so a clap in its tree is a
-# regression and not a preference.
+# The typed half of an adoption must link no argument parser: `api` reaches the
+# library through `api-generated`, which sets `default-features = false`.
+# A clap in that normal dependency tree is a regression.
 
 # Prove the typed half of the example links no argument parser.
 clap-free:
@@ -221,10 +221,11 @@ blessed:
 # The build is not enough: a crate can compile and still ship tests that do not,
 # because the dev-dependency on itself that turns their features on is dropped
 # from the tarball. So the recipe unpacks the `.crate` file, the very archive
-# crates.io receives, and builds its tests twice. With every feature on they run
-# and pass. With the default features none of them is built, because each test
-# target declares the features it needs: a target that declares none is a
-# compile error here and a green run in the workspace.
+# crates.io receives, and compiles its tests and examples with no features,
+# document only, generate only, defaults, and all features. Each target declares
+# the features it needs, so cargo skips it when they are off. The all-features
+# run also executes the tests and doctests. This is a selected matrix, not every
+# feature combination.
 #
 # The unpacked copy lives in a scratch directory outside the repository, because
 # cargo refuses to build a package that sits inside a workspace it is not a
@@ -269,8 +270,11 @@ package:
     cargo package -p typed-openapi --allow-dirty --target-dir "$target"
     tar -xzmf "$packaged"/typed-openapi-*.crate -C "$scratch"
     manifests=("$scratch"/typed-openapi-*/Cargo.toml)
-    cargo test --all-features --manifest-path "${manifests[0]}" --target-dir "$target"
+    cargo test --no-run --no-default-features --manifest-path "${manifests[0]}" --target-dir "$target"
+    cargo test --no-run --no-default-features --features document --manifest-path "${manifests[0]}" --target-dir "$target"
+    cargo test --no-run --no-default-features --features generate --manifest-path "${manifests[0]}" --target-dir "$target"
     cargo test --no-run --manifest-path "${manifests[0]}" --target-dir "$target"
+    cargo test --all-features --manifest-path "${manifests[0]}" --target-dir "$target"
 
 # Regenerate the example adoption from the vendor document and the Overlay.
 # Everything it writes is committed, so a diff after this recipe is the answer
