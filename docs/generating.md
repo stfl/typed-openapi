@@ -12,7 +12,7 @@ the only thing you write is a binary that calls it.
 
 - [The artefacts](#the-artefacts)
 - [`Settings`](#settings)
-- [Layers](#layers)
+- [Layers](overlay.md#layers)
 - [Wiring your own `xtask`](#wiring-your-own-xtask)
 - [The crate it writes into](#the-crate-it-writes-into)
 - [The `builder` feature](#the-builder-feature)
@@ -49,6 +49,15 @@ with the file it exempts rather than with a wrapping module. `warnings` is in
 the block, so `clippy::nursery`, `missing_docs` and `unused_qualifications` at
 `warn`, with `-D warnings` over them, do not fail on a file you did not write. A
 lint outside the named groups that your crate sets to `deny` remains yours to relax.
+
+Mark the blob as binary in your repository's `.gitattributes`:
+
+```gitattributes
+*.postcard binary
+```
+
+This disables text diffs, text merges and end-of-line conversion for model blobs.
+Review a blob change with its corrected document and generated Rust files.
 
 ### The blob's stamp
 
@@ -201,7 +210,8 @@ what each layer buys.
 ### `Settings::replace(format, rust_type) -> Settings`
 
 Emit `rust_type` wherever the document declares `format`. Call it once per
-format; calls accumulate.
+format. Calls for different formats accumulate. When a format is named more
+than once, the first replacement is kept.
 
 This is where a type you already own replaces the `String` the document would
 otherwise produce. A schema of `format: money` becomes your own `Money`, with

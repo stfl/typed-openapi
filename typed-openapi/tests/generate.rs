@@ -1071,6 +1071,21 @@ fn every_generated_file_names_the_command_that_rewrites_it() {
     );
 }
 
+#[test]
+fn without_overlays_a_correction_belongs_in_the_vendor_document() {
+    let dir = out("header-without-overlays");
+    Settings::new(wrote(&dir, "document.yaml", PATTERNED))
+        .write_to(&dir)
+        .expect("the document generates without an Overlay");
+    for file in ["src/types.rs", "src/ops.rs"] {
+        assert!(
+            read(&dir.join(file))
+                .contains("every correction belongs in `header-without-overlays/document.yaml`"),
+            "{file} does not name where to put a correction"
+        );
+    }
+}
+
 /// A path that is not there names itself, rather than surfacing as a bare
 /// `No such file or directory` from somewhere inside the generator.
 #[test]

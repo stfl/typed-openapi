@@ -420,7 +420,7 @@ impl Settings {
     /// source gets from an adopter's lints.
     fn rust_header(&self, corrected: &Path) -> String {
         let belongs = match self.overlays.as_slice() {
-            [] => format!("is generated from `{}`", locator(&self.document)),
+            [] => format!("belongs in `{}`", locator(&self.document)),
             layers => {
                 let named: Vec<String> = layers
                     .iter()

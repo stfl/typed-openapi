@@ -65,10 +65,14 @@ code is written against a looser setting and grandfathered in. `unsafe_code` is
 **forbidden**, not denied. `clippy.toml` tunes the size lints; a hit is a
 cleanup item, and `#[expect]` needs a reason a reviewer would accept.
 
-Doc comments are prose that says *why*, in present tense, describing the system
-as it is. Never "now", "no longer", "previously", "instead of" — a reader
-arriving today never saw the earlier version. The diff belongs in the commit
-message.
+Doc comments say *why* and describe the system as it is. They carry no
+history: a reader arriving today never saw the earlier version. A comparison
+of present choices can use "instead of". The diff belongs in the commit message.
+
+Name the item, do not count it. Replace a count, a copied value or a source
+line number with the item or the property it stands for. A figure that a reader
+needs stays only when a test holds it to the system, as the toy's summary test
+holds its README counts.
 
 **An error says its own layer once.** An `#[error]` string describes the layer
 that owns it and never prints a source it also marks `#[source]` or `#[from]`.

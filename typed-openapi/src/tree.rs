@@ -857,7 +857,8 @@ fn given(field: &Field, matches: &ArgMatches) -> Result<bool, ArgError> {
     Ok(one::<String>(matches, field.flag())?.is_some())
 }
 
-/// `--file NAME=PATH` and `--field NAME=VALUE`, in the order they were given.
+/// Text parts precede file parts. Within each kind, parts keep the order given.
+/// The flags are `--field NAME=VALUE` and `--file NAME=PATH`.
 fn parts(matches: &ArgMatches) -> Result<Option<Vec<Part>>, ArgError> {
     let mut parts = Vec::new();
     for raw in strings(matches, FIELD_PART)? {

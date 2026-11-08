@@ -402,3 +402,19 @@ fn block_on<F: Future>(future: F) -> F::Output {
         }
     }
 }
+
+#[test]
+fn fits_keeps_a_pattern_newtypes_own_deserialisation_message() {
+    let mut body = serde_json::json!({"total": "12.50", "currency": "eur", "status": "open"});
+    let refused = typed_openapi::client::fits::<Voucher>("createVoucher", &body)
+        .expect_err("the currency pattern requires uppercase letters");
+    let typed_openapi::client::BodyError::Mismatch { op, path, source } = &refused else {
+        panic!("{refused}");
+    };
+    assert_eq!(op, "createVoucher");
+    assert_eq!(path, "currency");
+    assert_eq!(source.to_string(), "doesn't match pattern \"^[A-Z]{3}$\"");
+    body["currency"] = serde_json::json!("EUR");
+    typed_openapi::client::fits::<Voucher>("createVoucher", &body)
+        .expect("a matching currency fits");
+}

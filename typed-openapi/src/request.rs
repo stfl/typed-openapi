@@ -798,7 +798,7 @@ pub fn render(request: &Request<Vec<u8>>) -> String {
         let _ = writeln!(out, "host: {}", without_userinfo(authority.as_str()));
     }
     for (name, value) in request.headers() {
-        let _ = writeln!(out, "{name}: {}", value.to_str().unwrap_or("<non-utf8>"));
+        let _ = writeln!(out, "{name}: {}", value.to_str().unwrap_or("<non-ascii>"));
     }
     if !request.body().is_empty() {
         out.push('\n');
@@ -904,6 +904,27 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn a_header_outside_visible_ascii_is_not_labelled_as_invalid_utf8() {
+        for bytes in ["Grüß".as_bytes(), &[0xFF]] {
+            let request = Request::builder()
+                .uri("http://x/")
+                .header(
+                    "x-name",
+                    HeaderValue::from_bytes(bytes).expect("a valid header"),
+                )
+                .body(Vec::new())
+                .expect("a request with a header");
+            assert!(render(&request).contains("x-name: <non-ascii>\n"));
+        }
+        let request = Request::builder()
+            .uri("http://x/")
+            .header("x-name", "plain\ttext")
+            .body(Vec::new())
+            .expect("an ASCII header");
+        assert!(render(&request).contains("x-name: plain\ttext\n"));
     }
 
     #[test]

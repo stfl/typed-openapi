@@ -644,7 +644,7 @@ pub enum Body {
         /// [`BodyError`]: crate::client::BodyError
         read_only: Vec<String>,
     },
-    /// `multipart/form-data`: assembled from `--file name=@path` and
+    /// `multipart/form-data`: assembled from `--file NAME=PATH` and
     /// `--field name=value`. `names` is what the document declares, for the
     /// help line; the CLI accepts any part name, because a document that
     /// declares none (or misdeclares them) is common and refusing would help

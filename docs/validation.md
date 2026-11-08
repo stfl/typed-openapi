@@ -533,31 +533,19 @@ go through a file.
 
 ## What it costs
 
-`regress` is a dependency in every feature set, because a shipped binary
-enforces `pattern` and so does a generated newtype. Measured on this
-repository's `examples/toy`, sequentially on an idle machine, three repetitions
-per cell, median reported; the second column is the same example built with no
-regex engine linked at all.
+`regress` is a dependency in every feature set. A shipped binary enforces
+`pattern`, and a generated newtype uses the same engine. No feature removes
+it, so a binary pays for the engine even when it uses an owned replacement.
+The binary size and build time depend on the adoption, the toolchain and the
+build settings.
 
-| | enforced | not enforced | the engine |
-|---|---|---|---|
-| the stripped `toy` binary | 4 604 624 B | 3 794 048 B | **+810 576 B (+21%)** |
-| clean `cargo build -p cli --release` | 10.23 s | 9.93 s | +0.30 s (+3%) |
-| crates in `cli`'s normal dependency graph | 65 | 64 | +`regress` |
-
-**The cost is the binary.** A fifth of the `toy` binary is a regular-expression
-engine, and there is no feature that removes it: a rule that is optional is a
-rule a caller cannot rely on, and the point of reading the rule off the document
-is that both consumers get the same one. `memchr`, `regress`'s only dependency,
-is already in the graph through `serde_json`.
-
-It also puts a floor under the compiler: `regress` uses let-chains, which need
-Rust 1.88. CI builds on current stable and on nothing older.
-
-Reproduce the first row with:
+Inspect the dependency graph and measure your binary with:
 
 ```sh
-cargo build -p cli --release && strip -o toy.stripped target/release/toy && stat -c%s toy.stripped
+cargo tree -p cli -e normal
+cargo build -p cli --release
+strip -o toy.stripped target/release/toy
+stat -c%s toy.stripped
 ```
 
 ## Owning the rule yourself

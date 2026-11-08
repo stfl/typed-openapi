@@ -129,6 +129,12 @@ the crate follows [Semantic Versioning][semver].
 
 ### Changed
 
+- Without an Overlay, generated Rust headers point corrections at the vendor
+  document. Run the bless step again to update the headers.
+
+- A dry-run header outside visible ASCII uses `<non-ascii>` as its placeholder,
+  including valid UTF-8 text. It uses `<non-utf8>` in 0.0.2.
+
 - **The toy adapters return redirects to the caller.** ureq uses
   `max_redirects(0)` and reqwest uses `redirect::Policy::none()`. A confirmed
   write that receives a 303 reports that response. Repair for copied adapters:
