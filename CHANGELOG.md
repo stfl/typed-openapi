@@ -11,6 +11,9 @@ the crate follows [Semantic Versioning][semver].
 
 ### Fixed
 
+- A parameter with a nonstring `$ref` keeps its `x-cli-requires` marker, as a
+  direct parameter does. The marker's value and requirements are checked.
+  A string `$ref` still refuses a sibling marker as `MisplacedMarker`.
 - The packaged `clashing-words` example requires both `document` and `clap`, so
   document-only and generate-only test builds skip it.
 

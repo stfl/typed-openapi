@@ -78,6 +78,10 @@ name = "media"
 required-features = ["document", "clap"]
 
 [[test]]
+name = "marker_references"
+required-features = ["generate"]
+
+[[test]]
 name = "optional"
 required-features = ["document", "clap"]
 
