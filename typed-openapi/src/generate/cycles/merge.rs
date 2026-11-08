@@ -155,20 +155,24 @@ impl Schemas<'_> {
         if !annotation_only(body) {
             consumed.push(Part::Body(id));
         }
-        consumed.extend(
-            sub.all_of
-                .iter()
-                .flatten()
-                .map(|member| Part::Whole(self.id(member))),
-        );
-        if let Some(not) = &sub.not {
-            consumed.push(Part::Not(self.id(not)));
+        let mut base = Self::replacing(parts, Part::Whole(id), consumed);
+        // try_merge_all and try_merge_with_subschemas fold left to right. A
+        // later operand (such as a false map) cannot stop an earlier merge call.
+        let mut prefixes = Vec::new();
+        for (at, member) in sub.all_of.iter().flatten().enumerate() {
+            base.insert(Part::Whole(self.id(member)));
+            if at > 0 || base.len() > 1 {
+                prefixes.push(base.clone());
+            }
         }
-        let base = Self::replacing(parts, Part::Whole(id), consumed);
-        match sub.any_of.as_ref().or(sub.one_of.as_ref()) {
+        if let Some(not) = &sub.not {
+            base.insert(Part::Not(self.id(not)));
+        }
+        prefixes.extend(match sub.any_of.as_ref().or(sub.one_of.as_ref()) {
             Some(members) => self.alternatives(&base, members),
             None => vec![base],
-        }
+        });
+        prefixes
     }
 
     // try_merge_with_each_subschema first tries each pair. Its result can carry

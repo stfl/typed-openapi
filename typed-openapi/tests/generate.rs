@@ -6199,7 +6199,7 @@ fn the_schema_that_holds_the_cause_is_named_and_not_the_one_that_refers_to_it() 
 
 /// Every refusal of the cycle test names the schemas that make the cycle, in the
 /// order of the document. `Tail` leads into a cycle and is not part of it.
-const CYCLES: [(&str, &str, &[&str]); 31] = [
+const CYCLES: [(&str, &str, &[&str]); 32] = [
     (
         "the pair of SEV-282's review",
         "    Left:  { allOf: [{ $ref: '#/components/schemas/Right' }, { properties: { id: { type: \
@@ -6387,6 +6387,12 @@ const CYCLES: [(&str, &str, &[&str]); 31] = [
         "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/A'}]}\n    A: {oneOf: [{$ref: '#/components/schemas/B'}, {type: string}]}\n    B: {oneOf: [{$ref: '#/components/schemas/A'}, {type: integer}]}\n",
         &["A", "B"],
     ),
+    // try_merge_all merges its prefix before a later closed map can stop it.
+    (
+        "recursive pair before a closed map",
+        "    C: {allOf: [{$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}, {$ref: '#/components/schemas/Closed'}]}\n    A: {type: object, additionalProperties: {$ref: '#/components/schemas/A'}}\n    B: {type: object, additionalProperties: {$ref: '#/components/schemas/B'}}\n    Closed: {type: object, additionalProperties: false}\n",
+        &["A", "B"],
+    ),
 ];
 
 /// typify merges the members of an `allOf` by following each `$ref` to the schema
@@ -6498,6 +6504,10 @@ const NO_MERGE: &[(&str, &str)] = &[
     (
         "an array that points back",
         "    A: {type: array, items: {$ref: '#/components/schemas/A'}}\n",
+    ),
+    (
+        "closed map before the recursive pair",
+        "    C: {allOf: [{$ref: '#/components/schemas/Closed'}, {$ref: '#/components/schemas/A'}, {$ref: '#/components/schemas/B'}]}\n    A: {type: object, additionalProperties: {$ref: '#/components/schemas/A'}}\n    B: {type: object, additionalProperties: {$ref: '#/components/schemas/B'}}\n    Closed: {type: object, additionalProperties: false}\n",
     ),
 ];
 
