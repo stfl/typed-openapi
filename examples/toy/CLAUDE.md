@@ -16,17 +16,18 @@ command line cares, `examples/toy/spec/cli.yaml`. `just bless` must
 leave `git diff` empty when nothing upstream has changed — a non-empty diff
 means either the vendor moved or the generator did.
 
-**A type the adopter owns is held to the document by a test, because nothing
-else holds it.** A newtype the generator writes the whole of compiles the
-document's `pattern` into its own `FromStr`, so it cannot drift. A wrapper
-around `examples/toy/money` reads with *that crate's* `FromStr` and borrows
-nothing — `examples/toy/api/tests/money.rs` reads the rule off the embedded
-document and holds the amount to it in both directions, which is also why
-`Money` counts cents in a `num-bigint` integer: the pattern admits an unbounded
-run of digits, and a narrower count would refuse values the document allows.
-Any future `replace` owes the same test. `Voucher.total` and `Voucher.currency`
-are the two routes kept side by side so that neither loses its demonstration:
-both are named schemas and both are newtypes, and what differs is where the
-reading lives — inside the generated `FromStr` for `Currency`, inside the
-adopter's crate for `Money`. `api` re-exports `money` as a module rather than
-by item so that `api::Money` and `api::money::Money` keep their own names.
+**An owned replacement is held to the document both ways, or guarded so it
+is never reachable as a flag.** `api/tests/money.rs` holds `money::Money` to
+its pattern in both directions. Its arbitrary-precision count accepts the
+unbounded digits the document allows. `api/tests/cents.rs` uses
+`Operation::carrying` to guard that the narrower `money::Cents` never reaches
+a parameter flag or a flat-body field flag. `Contact` has a nested address,
+so its body goes through `--json-body` and the owned type. A response can
+contain a value the document allows and this narrower type refuses; decoding
+then fails. The adopter accepts that cost when choosing the type, as
+sevdesk-cli does with `Amount`.
+
+The toy keeps three routes side by side: `Voucher.total` is owned and held
+both ways, `Voucher.currency` is generated, and `Contact.creditLimit` is
+owned and guarded. `api` re-exports `money` as a module so the generated
+schema wrappers and their owned values keep distinct names.

@@ -72,6 +72,11 @@ pub enum Correction {
 ///
 /// [`OPERATIONS`]: crate::OPERATIONS
 pub const CORRECTIONS: &[Correction] = &[
+    Correction::Retyped {
+        schema: "Contact",
+        property: "creditLimit",
+        named: "Cents",
+    },
     // The vendor types an amount as a bare string and gives it `format: money`
     // without saying what an amount looks like. The Overlay says it, under a
     // name — and keeps the format on that name, because the type the bless step

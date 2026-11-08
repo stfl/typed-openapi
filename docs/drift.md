@@ -41,8 +41,8 @@ The verbatim messages are in the sections below.
 
 ## Bless time: the Overlay as an assertion
 
-`ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Five
-of the example adoption's nine actions — two in
+`ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Six
+of the example adoption's eleven actions — three in
 [`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml), three in
 [`spec/cli.yaml`](../examples/toy/spec/cli.yaml) — are written as targets that
 state what the vendor currently says, so a revision that changes the thing being
@@ -216,6 +216,21 @@ pattern admits an unbounded run of digits, so `Money` counts cents in an
 arbitrary-precision integer. A narrower one would refuse amounts the document
 allows, and this page would have to list the gap — a second test says so, at
 nineteen, twenty, forty and a hundred digits.
+
+An owned replacement must agree with the document in both directions, or
+have a guard that it is never reachable as a flag.
+[`api/tests/cents.rs`](../examples/toy/api/tests/cents.rs) shows the second
+choice: `money::Cents` counts cents in an `i64`, while the `Cents` pattern
+allows arbitrarily many digits. The guard asks `Operation::carrying("cents")`
+for every operation, covering parameters and flat-body fields, and names the
+operation on failure. `Contact.creditLimit` goes through `--json-body` because
+`Contact` has a nested address. A response can contain a document-valid value
+that the narrower type refuses; decoding then fails. Choosing the type accepts
+that cost, as sevdesk-cli does with `Amount`.
+
+The compile-fail doctests in [`api/src/lib.rs`](../examples/toy/api/src/lib.rs)
+pin E0027, E0026, E0004 and E0080 by code. The builder doctest in
+`api-generated` pins E0277.
 
 [`api/tests/summary.rs`](../examples/toy/api/tests/summary.rs) is the fifth, and
 it is the one that holds *prose*. `src/summary.md` is counted off the reduction

@@ -830,7 +830,7 @@ The trade against the named-schema route above:
 | the type's name | the schema's | the schema's, wrapped around yours |
 | `Display`, arithmetic, conversions | what the generator emits | anything you write, reached through the wrapper |
 | enforced on the command line | yes | only if the document states the rule too |
-| held to the document | by construction — typify compiles the same `pattern` | by a test you write |
+| held to the document | by construction — typify compiles the same `pattern` | by a test you write, or guarded against reaching flags |
 | your dependency tree | nothing — the generator writes the type | whatever your type is built from |
 | the regex engine | linked either way ([validation.md](validation.md#what-it-costs)) | linked either way |
 
@@ -858,6 +858,14 @@ is what notices: it reads the `pattern` out of the embedded document and holds
 the amount to it over every edge the pattern has, in both directions, so a
 vendor who widens the rule fails there instead of quietly admitting values the
 type refuses.
+
+A narrower replacement can instead be guarded so it never reaches a flag.
+The toy's `Contact.creditLimit` uses `money::Cents`, an `i64` count, with an
+unbounded digit pattern. `api/tests/cents.rs` uses `Operation::carrying` to
+check parameters and flat-body fields. Its nested address keeps `Contact` on
+`--json-body`. A response with a value the pattern allows but the count cannot
+hold fails to decode. The adopter accepts that cost when choosing the type;
+sevdesk-cli's `Amount` makes the same choice.
 
 Reach for `replace` when you need behaviour on the type, or when no JSON Schema
 can say what the value *is*. Reach for the named schema alone when you need the

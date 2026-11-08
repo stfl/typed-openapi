@@ -199,6 +199,7 @@ fn a_query_parameter_is_omitted_when_it_is_none() {
 fn a_nested_body_is_one_typed_argument() {
     let api = api();
     let contact = Contact {
+        credit_limit: Some("1250".parse().unwrap()),
         id: None,
         name: "Ada".to_owned(),
         address: api::Address {
@@ -211,6 +212,7 @@ fn a_nested_body_is_one_typed_argument() {
         serde_json::from_slice::<serde_json::Value>(request.body()).unwrap(),
         serde_json::json!({
             "address": {"city": "Vienna", "street": "1 Main"},
+            "creditLimit": "1250",
             "name": "Ada",
         })
     );

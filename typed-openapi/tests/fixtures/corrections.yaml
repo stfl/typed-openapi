@@ -7,15 +7,15 @@ info:
     `spec/toy.yaml` is never edited.
 
     This layer is about the vendor's API and nothing else: an undocumented
-    field, an undocumented operation, and two values the vendor names a rule
-    for — one in a `format`, one in prose — and never states. Applying it alone
+    field, an undocumented operation, and three values the vendor names a rule
+    for — two in `format` tags, one in prose — and never states. Applying it alone
     yields the document the vendor should have shipped — which is worth having
     on its own, because anything that reads OpenAPI can read it, including the
     vendor. Nothing here mentions a command line; `cli.yaml` is the layer that
     does.
 
     Applied with `ErrorOnZeroMatch`: an action that matches nothing fails the
-    bless instead of lapsing quietly. Two actions below use that deliberately
+    bless instead of lapsing quietly. Three actions below use that deliberately
     as tripwires — their JSONPaths state what the vendor currently says, so a
     vendor revision that changes it fails the bless rather than being silently
     overwritten.
@@ -122,3 +122,16 @@ actions:
                 application/json:
                   schema:
                     $ref: "#/components/schemas/Voucher"
+
+  - target: $.components.schemas
+    description: State the count of cents once, under a name.
+    update:
+      Cents:
+        type: string
+        format: cents
+        pattern: ^[0-9]+$
+
+  - target: "$.components.schemas.Contact[?(@.creditLimit.format == 'cents')].creditLimit"
+    description: Point the vendor's credit limit at that rule.
+    update:
+      $ref: "#/components/schemas/Cents"

@@ -316,6 +316,9 @@ components:
           type: string
         address:
           $ref: '#/components/schemas/Address'
+        creditLimit:
+          type: string
+          format: cents
     ContactLabels:
       type: object
       description: Free-form labels on a contact, each a string.

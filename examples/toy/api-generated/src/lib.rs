@@ -100,7 +100,7 @@ pub use client::{Api, BodyError, Call, DOCUMENT, Error, MODEL, NoContent, SUMMAR
 /// A required argument left out does not compile, so the builder cannot turn a
 /// four-argument call into a three-argument one that sends the wrong request:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let api = api_generated::Api::new()?;
 /// let call = api.update_voucher_builder().id(5).call()?;

@@ -1,7 +1,7 @@
 //! The Toy Accounting API as Rust: owned types, typed operations, one embedded
 //! document.
 //!
-//! The document the vendor ships is wrong in six ways, and every correction
+//! The adopter corrects the document the vendor ships. Every correction
 //! lives in an Overlay as standard OpenAPI Overlay actions: `spec/corrections.yaml`
 //! for what the vendor got wrong, then `spec/cli.yaml` for what only a command
 //! line needs. `cargo run -p xtask -- bless` applies them in that order and
@@ -54,7 +54,7 @@
 //! ## Owning a type by hand
 //!
 //! Nothing forces the adopter to take a generated type, and this adoption owns
-//! two. [`money::Money`] sits *below* the generated code, which names it: the
+//! three. [`money::Money`] sits *below* the generated code, which names it: the
 //! document says which shape an amount is and `Settings::replace` says which
 //! Rust type that shape is, so the [`Money`] the document declares is a
 //! transparent newtype over it and there is no conversion at the boundary.
@@ -62,10 +62,50 @@
 //! own reading of it — and that is where the wrapper comes off, because a
 //! ledger posting is the adopter's vocabulary and holds their own amount.
 //!
-//! Two lints scoped to this crate keep the second honest: together they forbid
+//! Two lints scoped to this crate keep the conversion honest: together they forbid
 //! both ways of writing a struct pattern that does not name every field — `..`
 //! and `field: _` — so a conversion out of a generated type cannot quietly
 //! ignore a field the vendor added.
+//!
+//! [`money::Cents`] also sits below the generated code. Its `i64` count is
+//! narrower than the document's unbounded digits. `tests/cents.rs` guards that
+//! no operation carries `cents` as a flag; a response outside the count's range
+//! fails to decode, which is a cost this adoption accepts.
+//!
+//! ## Compile-time drift checks
+//!
+//! A destructure must name every generated field (E0027):
+//!
+//! ```compile_fail,E0027
+//! fn read(voucher: &api::Voucher) {
+//!     let api::Voucher { currency, id, internal_ref, status } = voucher;
+//! }
+//! ```
+//!
+//! A field name absent from the generated struct is E0026:
+//!
+//! ```compile_fail,E0026
+//! fn read(voucher: &api::Voucher) {
+//!     let api::Voucher { amount, .. } = voucher;
+//! }
+//! ```
+//!
+//! A match must cover every generated variant (E0004):
+//!
+//! ```compile_fail,E0004
+//! fn booked(status: api::VoucherStatus) -> bool {
+//!     match status {
+//!         api::VoucherStatus::Draft => false,
+//!         api::VoucherStatus::Open => true,
+//!     }
+//! }
+//! ```
+//!
+//! An operation dependency asserts the complete inventory row (E0080):
+//!
+//! ```compile_fail,E0080
+//! const _: () = assert!(api::documented("withdrawnVoucher", "POST", "/withdrawn"));
+//! ```
 #![warn(
     clippy::rest_pattern_accessible_field,
     clippy::unneeded_field_pattern,
@@ -81,7 +121,7 @@ pub use api_generated::ops::{OPERATION_COUNT, OPERATIONS, OperationId, documente
 pub use api_generated::types::*;
 pub use api_generated::{Api, BodyError, Call, DOCUMENT, Error, NoContent, SUMMARY, to_json};
 pub use corrections::{CORRECTIONS, Correction};
-// The crate holding the one type the generated code names rather than defines.
+// The crate holding the types the generated code names rather than defines.
 // It is re-exported whole so that an adopter's own code names `api` and nothing
 // below it, and as a module rather than by item so that the two amounts keep
 // their own names: [`Money`] is the schema the document declares, and

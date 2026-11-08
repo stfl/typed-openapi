@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use api::{CORRECTIONS, Correction, Money, OPERATIONS, Voucher};
+use api::{CORRECTIONS, Cents, Contact, Correction, Money, OPERATIONS, Voucher};
 use typed_openapi::{Document, Effect, Gate};
 
 /// The vendor's document, unpatched. `api` never reads this — that is the
@@ -264,6 +264,8 @@ fn every_retype_still_corrects_something() {
     // typify's own `String` rather than the generated newtype.
     let total: fn(&Voucher) -> &Money = |voucher| &voucher.total;
     let _ = total;
+    let credit_limit: fn(&Contact) -> &Option<Cents> = |contact| &contact.credit_limit;
+    let _ = credit_limit;
 }
 
 /// An undeclared property is a correction only while the vendor leaves it out.

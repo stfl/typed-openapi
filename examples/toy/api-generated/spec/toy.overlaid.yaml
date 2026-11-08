@@ -362,6 +362,10 @@ components:
           type: string
         address:
           $ref: "#/components/schemas/Address"
+        creditLimit:
+          type: string
+          format: cents
+          $ref: "#/components/schemas/Cents"
     ContactLabels:
       type: object
       description: Free-form labels on a contact, each a string.
@@ -376,3 +380,7 @@ components:
       type: string
       description: An ISO 4217 currency code.
       pattern: ^[A-Z]{3}$
+    Cents:
+      type: string
+      format: cents
+      pattern: ^[0-9]+$

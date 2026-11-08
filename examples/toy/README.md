@@ -1,7 +1,7 @@
 # The toy adoption
 
 One adoption of [`typed-openapi`](../../typed-openapi) from end to end: a vendor
-document that is wrong in six ways, two Overlay layers that correct it, a bless
+document with vendor mistakes, two Overlay layers that correct it, a bless
 step, and two CLIs over the result. It is built, linted and tested with the library on
 every push, so it cannot rot into an example that no longer compiles.
 
@@ -114,21 +114,22 @@ third layer this adoption has no need of.
 | the vendor | the correction | what it buys |
 |---|---|---|
 | declares `format: money` and never says what an amount is | an Overlay `update` naming a `Money` schema with the rule *and* the vendor's format in it, pointing `total` at it, and `xtask`'s `.replace("money", "money::Money")` | `--total` rejects `1,50`, and `Voucher.total` is a transparent newtype over a fixed-point type that adds |
+| declares `format: cents` without its digit rule | an Overlay naming `Cents` with `^[0-9]+$`, plus `.replace("cents", "money::Cents")` | `Contact.creditLimit` uses the owned count, guarded against flag exposure |
 | calls a bare string an ISO 4217 code, in prose nothing can run | an `update` naming a `Currency` schema with `^[A-Z]{3}$` in it, and pointing `currency` at it | `Voucher.currency` is a `Currency`, and `--currency` rejects `eur` |
 | returns an `internal_ref` it never documented | an `update` adding the property | a struct field and a `--internal-ref` flag |
 | ships `archiveVoucher` and documents it nowhere | an `update` adding the path | a wrapper and a subcommand, for no Rust at all |
 | serves a `GET` that stores a PDF | `x-cli-writes: true`, in `spec/cli.yaml` | `vouchers render` is behind `--commit` |
 | serves one upload under a media type nothing here assembles | left alone, and both uploads work | `--raw-body` for the `application/pdf` one, `--file` / `--field` for the multipart one |
 
-Three of those actions are **tripwires** — two in the vendor layer, one in the
-CLI layer: their JSONPath states what the vendor currently says, so under
+The **tripwire** actions in both layers state what the vendor currently says
+in their JSONPaths, so under
 `ErrorOnZeroMatch` a vendor revision that moves the thing being corrected fails
 the bless step instead of being silently overwritten, naming the layer it is
 in. [`../../docs/overlay.md`](../../docs/overlay.md) explains the form;
 [`../../docs/drift.md`](../../docs/drift.md) is the whole table of what is
 caught where.
 
-[`api/src/corrections.rs`](api/src/corrections.rs) lists the same six as Rust,
+[`api/src/corrections.rs`](api/src/corrections.rs) lists the corrections as Rust,
 one line each, and `api/tests/corrections.rs` holds that list to both documents
 in both directions — a row that no longer describes a real difference fails, and
 a real difference with no row fails.
@@ -137,7 +138,7 @@ a real difference with no row fails.
 
 | crate | written by | holds |
 |---|---|---|
-| [`money`](money) | the adopter | one type: a fixed-point amount, which the generated code wraps |
+| [`money`](money) | the adopter | a fixed-point amount and bounded cents, which the generated code wraps |
 | [`api-generated`](api-generated) | `just bless`, except `client.rs` and `lib.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
 | [`api`](api) | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
 | [`cli`](cli) | the adopter | the `toy` binary, and `examples/root.rs` beside it |
@@ -155,8 +156,7 @@ them; `money` sits below `api-generated` because the generated source names it,
 and `api-generated`'s whole dependency list is `serde`, `serde_json`, `http`,
 `money` and the library — nothing about a generator reaches it.
 
-One type here is hand-written, and it is the one no OpenAPI document can
-describe. OpenAPI has no fixed-point decimal, so [`money`](money/src/lib.rs)
+The owned types live below the generated crate. OpenAPI has no fixed-point decimal, so [`money`](money/src/lib.rs)
 owns a `Money` over whole cents — an arbitrary-precision count of them, so
 `+`, `-` and `sum()` are exact and total and nothing has to be unwrapped — and
 `xtask` tells the bless step that `format: money` means that type. The document
@@ -169,6 +169,13 @@ adoption spends. `Voucher.currency` next door goes the other way — the Overlay
 names a `Currency` schema and the generator writes the reading as well as the
 type — and the two fields are side by side because neither route replaces the
 other.
+
+`Contact.creditLimit` shows a narrower owned type: `money::Cents` holds an
+`i64` count, while the document's `Cents` pattern allows unbounded digits.
+[`api/tests/cents.rs`](api/tests/cents.rs) guards that no operation carries
+`cents` as a flag. The nested address keeps the contact body on `--json-body`.
+A response outside the owned count's range fails to decode even when the
+document allows it; choosing this type accepts that cost.
 
 `num-bigint` is declared in `money`'s manifest and nowhere else: what an owned
 type is made of is the adopter's business, never the library's, and
@@ -223,6 +230,7 @@ Settings::new(adoption.join("spec/toy.yaml"))
     .overlay(adoption.join("spec/corrections.yaml"))
     .overlay(adoption.join("spec/cli.yaml"))
     .replace("money", "money::Money")
+    .replace("cents", "money::Cents")
     .summary_page("src/summary.md")
     .write_to(adoption.join("api-generated"))
 ```
