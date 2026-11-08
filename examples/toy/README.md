@@ -5,10 +5,11 @@ document that is wrong in six ways, two Overlay layers that correct it, a bless
 step, and two CLIs over the result. It is built, linted and tested with the library on
 every push, so it cannot rot into an example that no longer compiles.
 
-The Toy Accounting API is invented, and nothing here reaches the network: the
-default server is `http://localhost:9999`, every write is a dry run until
-`--commit`, and the tests drive the real commands through a recording client
-with no socket.
+The Toy Accounting API is invented. The default server is
+`http://localhost:9999`, and every write is a dry run until `--commit`.
+Recorder-based command tests use no socket. The adapter tests use a local
+HTTP server. The root CLI test runs the example process through a local HTTP
+proxy and checks its exit code, stdout and stderr.
 
 ## Try it
 
