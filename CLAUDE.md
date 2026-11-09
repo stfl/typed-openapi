@@ -4,7 +4,8 @@
 of it, five crates, all `publish = false`, built and tested with the rest so
 that the example cannot rot.
 
-Run `just gate` before saying anything is done. It is `check` (fmt, compile,
+Run `just gate` before saying anything is done. It is `release-check` (the release
+decision against local synthetic Git history), `check` (fmt, compile,
 clippy, rustdoc — each with warnings denied), `features` (each feature alone and
 all together, each with warnings denied, plus the bon-free, clap-free and
 bigint-free assertions), `test` (nextest and the doctests, which nextest cannot
@@ -167,10 +168,12 @@ changes with each version, and `blessed` fails on a bump that did not write it
 again. The version is in `[workspace.package]` of the root `Cargo.toml`, a file
 that no directory note covers.
 
-A merge to `main` that carries a version nobody has tagged is the one act that
-releases, and `.github/workflows/release.yml` does all of it. Its `version` job
-reads the manifest and answers `release` or `rehearse`; no later job looks at
-the event itself. `publish` waits for `gate` and `rehearse`, holds `id-token`
+A push to `main` that changes the version to one nobody has tagged releases,
+and `.github/workflows/release.yml` does all of it. Its `version` job reads the
+root manifest at the event's commit and its `before` commit. Unavailable
+comparison history or an unreadable before-version fails the job. An unchanged
+version or a dispatch answers `rehearse`; no later job looks at the event
+itself. `publish` waits for `gate` and `rehearse`, holds `id-token`
 and publishes through crates.io Trusted Publishing; `rehearse` has built the
 package outside the environment, so `publish` uploads with `--no-verify` and
 compiles no dependency beside the two tokens. `announce` then makes the tag and
@@ -181,7 +184,9 @@ There is no tag trigger, so a tag pushed by hand publishes nothing, and a
 dispatch from any branch is a dry run: every job that reads runs, none that
 writes does. Each writing step looks before it writes, so a release that
 stopped half-way finishes when its failed jobs are run again with "Re-run
-failed jobs". "Re-run all jobs" is no substitute: after a run that made the tag
+failed jobs", at the original event and commit. A later push with the same
+version rehearses even if the failed run has not made its tag. "Re-run all
+jobs" is no substitute: after a run that made the tag
 and failed at the Release, `version` finds the tag and answers `rehearse`.
 `workflow_dispatch` stays declared in the file on `main`, because GitHub
 accepts a dispatch of a branch's copy only then. The group of `release.yml`
@@ -190,9 +195,10 @@ third run joins it.
 
 `rehearse` and `publish` run `cargo +stable`, because `rust-toolchain.toml` pins
 a nightly and the library is a stable crate, and they set no `RUSTFLAGS`,
-because the gate is where warnings are denied. The gate's `package` recipe
-builds the tarball on the pinned nightly, and the `rust stable` job of `ci.yml`
-is what says the library compiles on stable. Both workflows read with
+because the gate is where warnings are denied. The gate's `package` commands
+also run on stable; its tests of the unpacked tarball use the pinned nightly.
+The `rust stable` job of `ci.yml` builds and tests the library on stable, and
+sets `RUSTUP_TOOLCHAIN=stable` so its cache probes that compiler too. Both workflows read with
 `contents: read` at the top and a job widens only what it needs. Every `uses:`
 is pinned by commit SHA with its version in a comment, and Dependabot proposes
 the next SHA. The tools `install-action` fetches are pinned by version in both

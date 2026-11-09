@@ -1,6 +1,6 @@
 name: release
 
-# A merge to `main` that carries a version nobody has tagged is the one act that
+# A push to `main` that changes the version to one nobody has tagged
 # publishes: the crate goes to crates.io, then the tag and the GitHub Release
 # follow. There is no tag trigger, so a tag pushed by hand publishes nothing,
 # and a dispatch is a dry run from any branch — it runs every job that reads
@@ -43,35 +43,55 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: stable
+          fetch-depth: 0
       - id: read
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
 
-          version=$(cargo +stable metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "typed-openapi") | .version')
-          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]] || {
-            echo "::error::the manifest's version '$version' is not a semantic version"
-            exit 1
+          manifest_version() {
+            local value
+            value=$(git show "$1:Cargo.toml" | python3 -c \
+              'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["workspace"]["package"]["version"])') || return 1
+            [[ $value =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]] || {
+              echo "::error::the manifest at $1 has no semantic version" >&2
+              return 1
+            }
+            printf '%s\n' "$value"
           }
+          version=$(manifest_version "$GITHUB_SHA")
           tag="v$version"
 
-          # A release is a push to `main` of a version that has no tag yet. The
-          # tag is what says the version went out, so a merge that leaves the
-          # version alone finds its tag and rehearses. An unreachable remote
-          # fails the job, because it must never read as "no tag".
+          # Compare the original event's commits, including on a retry. A later
+          # push with the same version cannot take over a failed release, even
+          # before its tag exists. A failed lookup must never mean "new version".
           existing=$(git ls-remote --tags origin "refs/tags/$tag")
           if [ "$GITHUB_EVENT_NAME" != push ] || [ "$GITHUB_REF" != refs/heads/main ]; then
             mode=rehearse
             echo "$GITHUB_EVENT_NAME on $GITHUB_REF is a rehearsal."
-          elif [ -n "$existing" ]; then
-            mode=rehearse
-            echo "$tag exists, so this push has nothing to release."
           else
-            mode=release
-            echo "$tag does not exist, so this push releases $version."
+            [[ $BEFORE =~ ^[0-9a-f]{40}$ && ! $BEFORE =~ ^0+$ ]] || {
+              echo "::error::the push has no comparison commit"
+              exit 1
+            }
+            if ! git cat-file -e "$BEFORE^{commit}"; then
+              git fetch --no-tags origin "$BEFORE"
+            fi
+            before_version=$(manifest_version "$BEFORE") || {
+              echo "::error::the before-version is unavailable"
+              exit 1
+            }
+            if [ "$version" = "$before_version" ]; then
+              mode=rehearse
+              echo "The version is unchanged at $version, so this push rehearses."
+            elif [ -n "$existing" ]; then
+              mode=rehearse
+              echo "$tag exists, so this push has nothing to release."
+            else
+              mode=release
+              echo "This push changes $before_version to untagged $version."
+            fi
           fi
 
           # The notes are the version's section of the changelog: from its
@@ -115,6 +135,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install
+      - run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # `just gate` runs `audit`, which needs `cargo-deny`. `ci.yml` installs the
       # same versions.
@@ -141,7 +162,7 @@ jobs:
           toolchain: stable
       # `rust-toolchain.toml` pins a nightly, and the library is a stable
       # crate, so the cargo commands of this job and of `publish` name
-      # `+stable`. The gate's `package` recipe builds on the pinned nightly.
+      # `+stable`, as do the gate's package commands.
       - run: cargo +stable publish --dry-run -p typed-openapi
       - name: what a release would make
         env:
@@ -150,7 +171,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           NOTES: ${{ needs.version.outputs.notes }}
         run: |
-          echo "Mode: $MODE. Only a push to main that carries an untagged version releases."
+          echo "Mode: $MODE. Only a push to main that changes the version to an untagged one releases."
           echo "Tag: $TAG, on $GITHUB_SHA."
           echo "Release notes:"
           if [ -n "$NOTES" ]; then
