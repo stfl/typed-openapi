@@ -24,7 +24,7 @@ use quote::ToTokens as _;
 use serde_json::json;
 use typed_openapi::generate::{GenerateError, Settings};
 use typed_openapi::overlay::{self, OverlayError, Place};
-use typed_openapi::{Document, Effect, LoadError};
+use typed_openapi::{Document, Effect, LoadError, RefError};
 
 const TOY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml");
 const CORRECTIONS: &str = concat!(
@@ -2380,6 +2380,7 @@ fn a_fence_inside_a_container_names_a_language_rustdoc_leaves_alone() {
 fn what_is_indented_is_capped_and_what_is_fenced_is_kept() {
     let descriptions = [
         "A list:\n\n- TABBED\n\t- b\n".to_owned(),
+        "Before:\n\n    *     INDENTED-MARKER\n".to_owned(),
         format!("Quoted:\n\n>{}DEEP-QUOTE\n", " ".repeat(30)),
         "Before:\n\n- ```text\n  * STAR-IN-ITEM is kept\n        DEEP-IN-ITEM is no code\n  ```\n"
             .to_owned(),
@@ -2392,6 +2393,10 @@ fn what_is_indented_is_capped_and_what_is_fenced_is_kept() {
     let types = read(&dir.join("src/types.rs"));
 
     assert_eq!(doc_with(&types, "TABBED"), "A list:\n\n- TABBED\n   - b");
+    assert_eq!(
+        doc_with(&types, "INDENTED-MARKER"),
+        "Before:\n\n   *    INDENTED-MARKER"
+    );
     assert_eq!(doc_with(&types, "DEEP-QUOTE"), "Quoted:\n\n>    DEEP-QUOTE");
     assert_eq!(
         doc_with(&types, "STAR-IN-ITEM"),
@@ -2745,6 +2750,56 @@ fn blocks() -> Vec<String> {
     texts
 }
 
+fn doc_text(attributes: &[syn::Attribute]) -> String {
+    attributes
+        .iter()
+        .filter_map(|attribute| {
+            if !attribute.path().is_ident("doc") {
+                return None;
+            }
+            let syn::Meta::NameValue(value) = &attribute.meta else {
+                panic!("a description is a doc string");
+            };
+            let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(text),
+                ..
+            }) = &value.value
+            else {
+                panic!("a description is a string literal");
+            };
+            Some(text.value())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn docs_by_item(source: &str) -> BTreeMap<String, String> {
+    let file = syn::parse_file(source).expect("generated Rust parses");
+    let mut docs = BTreeMap::new();
+    for item in &file.items {
+        let syn::Item::Struct(item) = item else {
+            continue;
+        };
+        docs.insert(item.ident.to_string(), doc_text(&item.attrs));
+        for field in &item.fields {
+            if let Some(name) = &field.ident {
+                docs.insert(format!("{}.{name}", item.ident), doc_text(&field.attrs));
+            }
+        }
+    }
+    for item in &file.items {
+        let syn::Item::Impl(item) = item else {
+            continue;
+        };
+        for member in &item.items {
+            if let syn::ImplItem::Fn(method) = member {
+                docs.insert(method.sig.ident.to_string(), doc_text(&method.attrs));
+            }
+        }
+    }
+    docs
+}
+
 /// No container and no info string gets a vendor's sentence run by `rustdoc`.
 ///
 /// This is the oracle and not a copy of its rule. The comments of a document
@@ -2757,7 +2812,11 @@ fn blocks() -> Vec<String> {
 #[test]
 fn no_container_and_no_info_string_gets_a_vendors_sentence_run_by_rustdoc() {
     let dir = out("prose-matrix");
-    let descriptions = blocks();
+    let descriptions: Vec<String> = blocks()
+        .iter()
+        .enumerate()
+        .map(|(at, text)| text.replace("CODE", &format!("PROSE_{at}_END")))
+        .collect();
     Settings::new(wrote(
         &dir,
         "document.json",
@@ -2765,16 +2824,24 @@ fn no_container_and_no_info_string_gets_a_vendors_sentence_run_by_rustdoc() {
     ))
     .write_to(&dir)
     .expect("the document generates");
-    let comments = doc_comments_alone(&read(&dir.join("src/types.rs")));
-    let wrappers = doc_comments_alone(&read(&dir.join("src/ops.rs")));
-    assert!(
-        comments.matches("pub f").count() >= 2 * descriptions.len(),
-        "a description did not reach a field and a type, so this proves less than it says"
-    );
-    assert!(
-        wrappers.matches("pub f").count() >= descriptions.len(),
-        "a description did not reach a wrapper, so this proves less than it says"
-    );
+    let types = read(&dir.join("src/types.rs"));
+    let ops = read(&dir.join("src/ops.rs"));
+    let type_docs = docs_by_item(&types);
+    let wrapper_docs = docs_by_item(&ops);
+    for at in 0..descriptions.len() {
+        let marker = format!("PROSE_{at}_END");
+        for (docs, name) in [
+            (&type_docs, format!("Thing.p{at}")),
+            (&type_docs, format!("S{at}")),
+            (&wrapper_docs, format!("o{at}")),
+        ] {
+            assert!(
+                docs.get(&name).is_some_and(|text| text.contains(&marker)),
+                "{name} lost its source description {marker}"
+            );
+        }
+    }
+    let comments = doc_comments_alone(&types);
 
     assert_nothing_runs(&dir, "matrix");
 
@@ -3867,11 +3934,27 @@ fn wrapper(ops: &str, name: &str) -> String {
         .iter()
         .rposition(|line| !is_doc(line))
         .map_or(0, |apart| apart + 1);
+    assert!(from < head, "`{name}` has no description in:\n{ops}");
     let to = lines[head..]
         .iter()
         .position(|line| *line == "    }")
         .unwrap_or_else(|| panic!("`{name}` has no closing brace in:\n{ops}"));
     lines[from..=head + to].join("\n")
+}
+
+#[test]
+fn wrapper_extraction_stops_at_the_preceding_wrapper() {
+    const OPS: &str = "impl Client {\n    /// First description.\n    pub fn first() {\n    }\n    /// Second description.\n    pub fn second() {\n    }\n}\n";
+    let second = wrapper(OPS, "second");
+    assert!(second.contains("Second description."));
+    assert!(!second.contains("First description."));
+}
+
+#[test]
+#[should_panic(expected = "has no description")]
+fn wrapper_extraction_requires_its_own_description() {
+    const OPS: &str = "impl Client {\n    /// First description.\n    pub fn first() {\n    }\n    pub fn second() {\n    }\n}\n";
+    wrapper(OPS, "second");
 }
 
 /// The fixture's `createLedgerEntry` describes its request body where it uses
@@ -5494,7 +5577,9 @@ fn the_load_refuses_a_reference_out_of_the_schemas_where_it_reads_the_schema() {
         assert!(
             matches!(
                 &error,
-                GenerateError::Unusable(LoadError::Unresolvable { .. })
+                GenerateError::Unusable(LoadError::Unresolvable {
+                    source: RefError::Missing { reference }, ..
+                }) if reference == "#/definitions/Thing"
             ),
             "{label}: {error:?}"
         );
@@ -5811,10 +5896,9 @@ fn a_bless_that_rustfmt_refuses_places_no_artefact() {
 
 // ----------------------------------------------- a nullable schema admits null
 
-/// The vendor's own words for "or `null`": `nullable: true`, on every shape a
-/// schema has. `note` is the input of the probe `A4/docs/shapes.yaml` behind
-/// F-17, a property that is required and nullable, and the rest are the shapes
-/// sevdesk's document states it on.
+/// The integration corpus for `nullable: true` on the shapes below. `note` is
+/// required and nullable. This corpus is separate from the JSON rewrite cases
+/// in the generator's unit tests.
 const NULLABLE: &str = r##"
 openapi: 3.0.3
 info: { title: Nullable, version: "1.0" }
