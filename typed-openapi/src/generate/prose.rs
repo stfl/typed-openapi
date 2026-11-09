@@ -47,14 +47,14 @@ use quote::quote;
 ///
 /// # How a description is written
 ///
-/// As one `///` line for each of its lines, because a `///` line reaches
-/// rustdoc as it stands and the parser can then be asked about the text that
-/// rustdoc asks it about. The body of a `/* */` comment does not: `rustfmt`
-/// lays it out by rules of its own, which differ with the settings the adopter
-/// formats with and with what it takes for a string that runs over a line
-/// break, and rustc takes a column of stars out of it. Each of those moves some
-/// lines of a description and not others, and a block that was prose is code
-/// once the lines above it have moved.
+/// As one `///` line for each of its lines, because text after the slashes
+/// reaches rustdoc without stable rustfmt moving it and the parser can then be
+/// asked about the text that rustdoc asks it about. The body of a `/* */`
+/// comment does not: `rustfmt` lays it out by rules of its own, which differ
+/// with the settings the adopter formats with and with what it takes for a
+/// string that runs over a line break, and rustc takes a column of stars out of
+/// it. Each of those moves some lines of a description and not others, and a
+/// block that was prose is code once the lines above it have moved.
 ///
 /// Every line with text in it of a description of several lines starts with one
 /// space, as a doc comment is conventionally written, and rustdoc takes it off
@@ -82,16 +82,17 @@ use quote::quote;
 /// # What may be edited, and what may not
 ///
 /// **The generated page has to say what the vendor wrote.** Each edit is chosen
-/// against that, and there are three kinds.
+/// against that. The edits include:
 ///
 /// - The edits that keep the vendor's layout from being code. Capping an
 ///   indentation keeps a nested list nested where it would become a code block,
 ///   and pulling a hanging item's content back keeps it an item. They change
 ///   white space the vendor has no stake in.
-/// - The edits that the adopter's page asks for: `\<` and `\[`. They are the
-///   two that change what the page shows, and each stands only where the
-///   vendor's text would have been an element or a link of the vendor's on the
-///   adopter's page.
+/// - Escaping `<` outside code, including autolinks and ordinary text, and
+///   escaping `[` for links or images with disallowed destinations.
+/// - Renaming Rust-like fence info to `text`, and falling back to a fenced
+///   sample when repeated edits reach [`ROUNDS`].
+/// - Normalizing margins, tabs and trailing whitespace ([`margins`]).
 /// - The edits that the compiler and `rustfmt` leave no choice about. A
 ///   bidirectional control is written as its code point, in a sample too,
 ///   because the compiler refuses it in a comment and the lint that does so is
@@ -307,10 +308,9 @@ fn plain(prose: &str) -> String {
 /// the indentation that the lines share, counts it as one character, so the two
 /// agree only once every tab is spaces, as many as the tab was worth. White
 /// space that is no indentation to Markdown, such as a no-break space, is
-/// deleted where a line starts: [`capped`] and [`unhung`] find the text of a line
-/// with `trim_start`, which takes off white space of every kind, and would read
-/// a line that Markdown takes for a paragraph as an indented line or a list
-/// item.
+/// deleted at the text margin as normalization. This can change Markdown
+/// structure: a line `\u{a0}- item` becomes a list item. The parser checks the
+/// normalized text, not the vendor's original layout.
 ///
 /// White space at the end of a line is deleted too, so that the parser is asked
 /// about the line as it will stand. `rustfmt` takes it off, bar a run of spaces
@@ -423,24 +423,11 @@ struct Edit {
 /// reads the text again after every round, and the text is finished when a
 /// reading finds nothing to change.
 ///
-/// It finishes, because a round lowers one of four counts, and the counts are
-/// ranked: the `<` that no backslash escapes, the white space in the text, the
-/// fences that rustdoc reads as Rust, and the `[` that opens a link to a place
-/// this module does not allow. A change never raises a count that is ranked
-/// above its own, and it may raise one below, since taking code apart can show a
-/// `<`, a fence or a link. Escaping a `<` lowers the first and writes no white
-/// space, taking white space away lowers the second and writes no `<`, naming a
-/// language lowers the third and writes neither, and escaping a `[` lowers the
-/// fourth and writes none of them. The last count rises only when a change
-/// ranked above it shows a link that a block hid: the `<` that opened an HTML
-/// block is escaped, or the white space is taken off an indented block in a
-/// quote, and the lines are Markdown again. A link that hid another one, as a
-/// link cannot hold a link, is found in the round after it.
-///
-/// The argument is about this module's changes and a parser that reads text the
-/// way this module expects. A parser that does not is not a reason to hang a
-/// bless, so a description that has not settled in [`ROUNDS`] readings is kept
-/// whole as a [`sample`].
+/// Edits can expose more Markdown on the next reading: escaping the `<` in
+/// `[a](<javascript:x)` exposes its destination, and removing an outer link
+/// can expose an inner one, as in `[[a](javascript:x)](https://ok.example)`.
+/// [`ROUNDS`] bounds the loop; text that still needs edits becomes a fenced
+/// [`sample`].
 fn settled(mut text: String) -> String {
     for _ in 0..ROUNDS {
         let edits = found(&text).edits;

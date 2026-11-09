@@ -30,7 +30,7 @@ env:
 jobs:
   # The recipes are the gate, here and on a laptop. CI runs `just` itself rather
   # than a copy of what the recipes say, so the two cannot drift and a
-  # contributor who runs `just gate` has run what CI will run.
+  # contributor who runs `just gate` has run this job. The stable job is separate.
   gate:
     name: just gate
     runs-on: ubuntu-latest
@@ -53,15 +53,15 @@ jobs:
 
       # `check` is fmt, compile, clippy and rustdoc, each with warnings denied.
       - run: just check
-      # `features` compiles the library in every combination a consumer can
-      # select, and proves the typed half of the example links no clap.
+      # `features` checks no features, each feature alone, and all together,
+      # plus the example builds and dependency assertions in the recipe.
       - run: just features
       - run: just test
       # Runs the generator and fails if it no longer reproduces what is
-      # committed. Nothing else in the gate executes the bless step.
+      # committed, and on untracked files in api-generated.
       - run: just blessed
-      # `package` builds the crate from its own tarball, which is the only
-      # check that it stands up outside this workspace.
+      # `package` builds and tests the crate from its own tarball outside
+      # the workspace, including the selected narrow feature builds.
       - run: just package
       # Fails on an advisory against any crate in the tree, every feature on,
       # and ignores none. The advisory database moves without a commit here, so

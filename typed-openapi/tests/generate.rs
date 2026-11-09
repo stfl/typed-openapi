@@ -369,8 +369,8 @@ fn an_optional_body_is_an_option_argument_that_none_leaves_out() {
 }
 
 /// A body the document requires is a plain argument, and its wrapper says
-/// nothing of `None`: no signature of an adoption whose bodies are all required
-/// has an `Option` in it. The toy's are, and so is the fixture's `createLabel`,
+/// nothing of `None`: no body argument of an adoption whose bodies are all
+/// required is an `Option`. The toy's are, and so is the fixture's `createLabel`,
 /// in which no property is required.
 #[test]
 fn a_required_body_is_a_plain_argument() {
@@ -2048,8 +2048,9 @@ components:
 /// half of what decides whether a paragraph in it is code, so a generator that
 /// wrote one would be judged as the comment would be run.
 ///
-/// A `#[doc = "…"]` attribute is no comment, and a copy that left it out would
-/// hand the judges less than the file holds, so a file that has one fails here.
+/// Any `#[doc` attribute, including `#[doc(hidden)]`, fails this helper. An
+/// attribute is not copied as a comment and would leave the judges less text
+/// than the file holds.
 fn doc_comments_alone(source: &str) -> String {
     if let Some(attribute) = source
         .lines()
@@ -4851,7 +4852,7 @@ const DISAGREEING: [(&str, &str, &[&str]); 7] = [
 /// media type the response lists: the rule holds inside one response as it does
 /// across two.
 #[test]
-fn json_bodies_that_state_different_schemas_are_refused_by_name() {
+fn json_bodies_that_do_not_state_one_schema_are_refused_by_name() {
     for (label, responses, words) in DISAGREEING {
         let error = answering("answer-two", responses).expect_err(label);
         let reason = reason_of(&error, "getThing");
@@ -5413,9 +5414,8 @@ fn a_titled_schema_that_is_stated_twice_differently_is_refused() {
     }
 }
 
-/// A document with one operation, `paths`, and a component `Thing`: the
-/// reference `#/definitions/Thing` leads out of `#/components/schemas/` to a
-/// schema that would resolve if it were followed.
+/// A document with a component `Thing`. `#/definitions/Thing` remains missing;
+/// only typify's last-segment lookup can find the component under this spelling.
 fn outside(name: &str, paths: &str) -> Result<(String, String), GenerateError> {
     let dir = out(name);
     let document = wrote(
@@ -5501,12 +5501,11 @@ fn the_load_refuses_a_reference_out_of_the_schemas_where_it_reads_the_schema() {
     }
 }
 
-/// Where the load reads no schema, the reference goes on to typify: a body that
-/// is sent as bytes and a body under a key that is not sent are not read, and a
-/// property of a response's schema is typify's own. typify reads a reference by
-/// its last segment, so it types the component of that name.
+/// Opaque bodies and unselected content keys are ignored by reduction and
+/// generation. A reference within a response property is submitted to typify,
+/// whose last-segment lookup finds the declared component in this fixture.
 #[test]
-fn a_reference_out_of_the_schemas_where_the_load_reads_no_schema_is_typifys() {
+fn ignored_body_schemas_are_not_resolved_and_response_properties_use_typify() {
     let out_of_the_schemas = "$ref: '#/definitions/Thing'";
     for (label, paths, argument) in [
         (

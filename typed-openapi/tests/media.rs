@@ -510,9 +510,8 @@ fn a_character_that_does_not_show_is_written_as_its_code_point() {
     }
 }
 
-/// A space and a tab are the optional white space before the type and after the
-/// subtype, so a key with one after its subtype loads and is sent as the document
-/// spells it.
+/// Space and tab inside the key, between the subtype and its parameters, are
+/// sent as spelled. Only space and tab at the ends of the whole key are trimmed.
 #[test]
 fn a_space_and_a_tab_after_the_subtype_are_no_fault() {
     let content = "          \"application/json \\t; charset=utf-8\":\n            \
@@ -605,4 +604,52 @@ fn a_multipart_key_is_not_asked_what_a_header_carries() {
             "{key}: {sent}"
         );
     }
+}
+
+#[test]
+fn an_invisible_media_range_key_is_shown_with_code_points() {
+    let content = "          \"application/*; x=\\u0085\":\n            schema: { type: string }\n";
+    let error = Document::load(&posting(content), &[]).expect_err("a range is refused");
+    assert!(
+        matches!(&error, LoadError::MediaRange { media_type, .. }
+        if media_type == "application/*; x=\u{85}"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "upload: `application/*; x=\\u{85}` is a media range, and a body is sent under one media type; an Overlay is where a document's content type is corrected"
+    );
+}
+
+#[cfg(feature = "generate")]
+#[test]
+fn raw_body_help_and_generated_docs_name_the_trimmed_media_type() {
+    let vendor = posting(
+        "          \"\\ttext/plain; charset=utf-8 \":\n            schema: { type: string }\n",
+    );
+    let doc = Document::load(&vendor, &[]).expect("a media key with optional whitespace");
+    let mut command = clap::Command::new("media").subcommands(tree::commands(&doc));
+    let help = command
+        .find_subcommand_mut("uploads")
+        .expect("the group")
+        .find_subcommand_mut("create")
+        .expect("the command")
+        .render_long_help()
+        .to_string();
+    assert!(
+        help.contains("sent verbatim as `text/plain; charset=utf-8`"),
+        "{help}"
+    );
+    let path = scratch("trimmed-media.yaml", &vendor);
+    let output = path.with_extension("generated");
+    typed_openapi::generate::Settings::new(&path)
+        .write_to(&output)
+        .expect("generate the wrapper");
+    let ops = std::fs::read_to_string(output.join("src/ops.rs")).expect("the wrapper");
+    assert!(
+        ops.contains("sent verbatim under the document's own `text/plain; charset=utf-8`"),
+        "{ops}"
+    );
+    std::fs::remove_file(path).expect("remove the input");
+    std::fs::remove_dir_all(output).expect("remove the output");
 }

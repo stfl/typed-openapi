@@ -81,8 +81,7 @@ pub enum OverlayError {
     )]
     OpenApiVersion {
         /// The `openapi` key before the layer. `None` is no key. It is boxed
-        /// because a `Value` is large and this error sits in every `Result` of
-        /// the module.
+        /// to keep a large `Value` out of each `OverlayError` result.
         before: Option<Box<serde_json::Value>>,
         /// The `openapi` key after the layer, as `before` is.
         after: Option<Box<serde_json::Value>>,

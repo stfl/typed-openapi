@@ -1038,7 +1038,8 @@ fn every_spelling_of_read_only_is_optional_in_the_type() {
 /// struct `name`. The type of the field is an `Option` whether or not its key
 /// may be missing. typify gives an `Option` whose key must be there a
 /// `deserialize_with`, which asks serde for the key, and one whose key may be
-/// missing none, so serde reads the missing key as `None`. The attributes are
+/// missing none, so serde reads the missing key as `None`, or as the document's
+/// default where the schema states one. The attributes are
 /// the ones `syn` parses, so a `#[serde(..)]` that `rustfmt` wraps over several
 /// lines is read whole.
 fn requires_the_key(types: &str, name: &str, field: &str) -> bool {

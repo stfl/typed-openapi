@@ -11,6 +11,29 @@ the crate follows [Semantic Versioning][semver].
 
 ### Fixed
 
+- Diagnostic and help text follows the existing rules: header values reject
+  bytes below 0x20 except tab, and DEL, while UTF-8 bytes of non-ASCII controls
+  remain accepted. Missing flag spellings use one reason. Media-range errors
+  show invisible characters as code points. Raw-body help and wrapper docs
+  print the outgoing media type with space and tab trimmed from the whole
+  key's ends. No input acceptance or media-key selection rule changes.
+
+- A parameter whose name has no flag spelling (`*`, `()` or `_`) no longer
+  gets an empty flag. An optional parameter has no flag; a required one is
+  refused as `LoadError::Parameter`. Long help and generated wrappers describe
+  the missing flag. Repair: rename it in an Overlay, and rename its path
+  variable too for a path parameter. For example:
+
+  ```yaml
+  actions:
+    - target: $.paths['/things'].get.parameters[?(@.name == '*')]
+      update:
+        name: filter
+  ```
+
+  For a query or header parameter this changes the wire name; use the name
+  the server accepts, or remove `required` only if the server permits omission.
+
 - A parameter with a nonstring `$ref` keeps its `x-cli-requires` marker, as a
   direct parameter does. The marker's value and requirements are checked.
   A string `$ref` still refuses a sibling marker as `MisplacedMarker`.
@@ -46,20 +69,21 @@ the crate follows [Semantic Versioning][semver].
     bytes decode and more bytes follow the encoding, and the message counts them.
 - **A decoded blob is checked again for what a load checks.** `from_blob`
   refuses a confirmation word that `Loading::commit` refuses. In each operation
-  it refuses a flag that is not spelled as a load spells it, a flag that every
-  subcommand spends (`help` and the five flags that carry a body), two
-  declarations that take one flag (any two of a parameter, a body property, a
-  gate and, on a write, the confirmation word, and a gate named twice), a gate
-  on a read, a method that writes held as a read, a group or a command called
-  `help`, and a `requires` that names its own parameter, a parameter the
-  operation does not declare or one that has no flag. It refuses two operations
-  under one `<group> <command>`. A blob like that used to decode. In a debug
-  build of the binary, clap panicked at start-up on a flag declared twice, on a
-  flag or a confirmation word that begins with `-`, on `help` or a body flag
-  that the subcommand declares already, on two operations under one name, on a
-  group or command called `help` and on a parameter that requires itself; in a
-  release build one declaration took the place of the other. A write held as a
-  read, a `GET` that names a gate among them, was sent without `--commit`. The
+  it refuses a flag that is not spelled as a load spells it, a flag word
+  reserved on every operation (`help` and the five words for body flags), two
+  declarations that take one flag (the confirmation of a write, the gates,
+  parameters with flags and body properties with flags, including a repeated
+  gate), a gate on a read, a method that writes held as a read, a group or a
+  command called `help`, and a `requires` that names its own parameter, a
+  parameter the operation does not declare or one that has no flag. It refuses
+  two operations under one `<group> <command>`. A blob like that used to decode.
+  In a debug build of the binary, clap panicked at start-up on a flag declared
+  twice, on a flag or a confirmation word that begins with `-`, on `help` or a
+  body flag that the subcommand declares already, on two operations under one
+  name, on a group or command called `help` and on a parameter that requires
+  itself; colliding declarations could shadow each other in release builds. The
+  leading-dash and self-requirement assertions were debug-only. A write held as
+  a read, a `GET` that names a gate among them, was sent without `--commit`. The
   other refusals stopped no build. Twelve variants carry these refusals:
   `DocumentError::{Confirmation, OperationConfirmation, Flag, FlagSpent,
   FlagTwice, GatedRead, WriteAsRead, NameSpent, DuplicateCommand,
@@ -357,20 +381,19 @@ the crate follows [Semantic Versioning][semver].
   `docs/overlay.md`. The README's *What it does not do* lists both.
 - **A name with a character outside ASCII is refused and not mangled.**
   `names::spelled` kept the ASCII letters of such a name and made a separator of
-  the rest, so `straße` was the flag `--stra-e`, `/kontakte/änderungen` the group
-  `kontakte nderungen`, and `é` written as `e` and a combining accent was a plain
-  `e`. It refuses the name and transliterates nothing. The rule is that the name
-  is ASCII, so a letter written as a base and a combining mark, a dash, a
-  no-break space and a character that nobody sees (a soft hyphen, a zero-width
+  the rest, so `straße` was the flag `--stra-e`, `/kontakte/änderungen` the
+  group `kontakte nderungen`, and `é` written as `e` and a combining accent was
+  a plain `e`. It refuses the name and transliterates nothing. The rule is that
+  the name is ASCII, so a letter written as a base and a combining mark, a dash,
+  a no-break space and a character that nobody sees (a soft hyphen, a zero-width
   space) are refused as a letter is. The message of the `NameError` names the
   first such character by its code point, such as `U+00AD`, because a soft
   hyphen shows as nothing and an en dash as a hyphen; a name of ASCII that
   kebab-cases to nothing keeps ``does not kebab-case into [a-z0-9-]``. The line
-  that names a parameter with no flag reads ``named with a character outside
-  ASCII, or in a way that does not kebab-case into [a-z0-9-]``, in the long help
-  and in the documentation of a generated wrapper, so a bless step writes that
-  sentence where it wrote the shorter one. A document that loaded is refused
-  where the name is:
+  that names a parameter with no flag reads ``named without an ASCII kebab-case
+  flag spelling``, in the long help and in the documentation of a generated
+  wrapper, so a bless step writes that sentence; the shorter sentence was not
+  released. A document that loaded is refused where the name is:
   - a path segment (`Name`). Repair: `x-cli-group` and `x-cli-command` in an
     Overlay;
   - a gate in `x-cli-gates` (`GateName`). Repair: write the gate with an ASCII
@@ -418,7 +441,7 @@ the crate follows [Semantic Versioning][semver].
 - **An `x-cli-` key that this crate reads nowhere, or reads where it does not
   stand, is refused.** This crate owns the prefix. `x-cli-command`,
   `x-cli-gates`, `x-cli-group` and `x-cli-writes` are read on an operation, a
-  method of a path item under `paths`, and `x-cli-requires` on a parameter that
+  method of a path item directly in `paths`, and `x-cli-requires` on a parameter that
   is not a `$ref`. Every other key under the prefix is
   `LoadError::UnknownMarker { key, at }`, and a key of the five on any other
   object of the document is `LoadError::MisplacedMarker { key, at }`, among them
@@ -643,8 +666,8 @@ the crate follows [Semantic Versioning][semver].
   control character late, as "failed to parse header value", with no name; the
   rest was sent as it came. Four refusals come from `Invocation::new`, each
   `ValueError::<variant> { op, name }`, and none prints the value:
-  - `HeaderValue`: a byte that `http::HeaderValue` refuses (a control character
-    other than a tab).
+  - `HeaderValue`: a byte that `http::HeaderValue` refuses (a byte below 0x20
+    except tab, or DEL (0x7f)).
   - `HeaderWhitespace`: a space or a tab at the start or the end of a value, or of
     one item of a list, which a receiver strips (RFC 9110 sections 5.5 and 5.6.1).
     `" a"` was sent as `" a"`.
@@ -661,8 +684,8 @@ the crate follows [Semantic Versioning][semver].
   (`LoadError::HeaderName { op, name }`); it loaded, and a request that gave it a
   value failed. A header with no flag sends nothing and is not asked. `ValueError`
   is `#[non_exhaustive]`, so the variants are no break. Repair: an Overlay that
-  corrects the name or removes the parameter; send no control character other
-  than a tab in a header value; send a header value, and each item of a header
+  corrects the name or removes the parameter; send no byte below 0x20 except tab,
+  and no DEL byte, in a header value; send a header value, and each item of a header
   list, with no space or tab at its edge; send no comma inside an item of a list;
   and leave out an empty item.
 - **A number is sent as it was parsed, and a number that would be sent as
@@ -760,11 +783,12 @@ the crate follows [Semantic Versioning][semver].
   the text `p{L}`, and with it a letter. The command line and the generated type
   run a `pattern` without the flag, and each generated type that holds one
   refuses `Müller` and accepts `p{L}` where a vendor's server that runs it with
-  the flag does the opposite. On a `pattern` that a path, query or header
-  parameter or a property of a JSON body carries, with a flag or without one, the
-  document is refused as `LoadError::Unrunnable { op, name, source }`. In any
-  other schema (a response, a property of a nested object, the items of an array
-  body, a named schema) it is refused as the new
+  the flag does the opposite. On a `pattern` retained by the reduction's scalar
+  rules (the values listed in `docs/validation.md`, *The engine*, with or without
+  a flag), the document is refused as
+  `LoadError::Unrunnable { op, name, source }`. In any other schema (for example
+  a response, a nested property, array-body items, or a named schema holding
+  none of those scalar values) it is refused as the new
   `LoadError::UnrunnablePattern { op, at, source }`, which names the operation
   where one holds the schema and the schema as an Overlay names a target. A
   schema beside a `$ref` that is text, in an object that can be a reference, is
@@ -778,13 +802,13 @@ the crate follows [Semantic Versioning][semver].
   the rule to the server.
 - **An `enum` that lists `null` and no other value is refused while the document
   is reduced.** A flag cannot send `null`, so the `enum` left no rule and the
-  flag admitted every value, where JSON Schema admits no integer under
-  `{ type: integer, enum: [null] }`. The document is refused as
-  `LoadError::Unrunnable { op, name, source }` on a path, query or header
-  parameter, on the items of such a list and on a property of a JSON body whose
-  schema is an object. `null` beside a value stays the way OpenAPI 3.0 says that
-  a value may be `null`. Repair: an Overlay that removes the `enum`, or lists the
-  values.
+  flag admitted every value, where JSON Schema admits no integer under `{ type:
+  integer, enum: [null] }`. The document is refused as `LoadError::Unrunnable {
+  op, name, source }` on a path, query or header parameter, on list items and on
+  object-body properties where the reduction reads scalar rules, as listed in
+  `docs/validation.md`, *The engine*. `null` beside a value stays the way
+  OpenAPI 3.0 says that a value may be `null`. Repair: an Overlay that removes
+  the `enum`, or lists the values.
 - **A `multipleOf` that is not more than 0 is refused while the document is
   reduced.** A step of 0 refused every value, and `multipleOf: -1` with the value
   `i64::MIN` made `Scalar::parse` panic. The document is refused as
@@ -795,18 +819,16 @@ the crate follows [Semantic Versioning][semver].
   siblings.** A body goes whole through `--json-body` at its first property that
   has no flag, a nested one or one whose name has no spelling, and the
   properties listed after it were not read for their rules, so a `pattern` that
-  no engine reads refused a document or not by the order of the properties.
-  Every property of the object that a JSON body's schema is, is read now, and the
-  three refusals above hold wherever it stands. A document that loaded and
-  failed the bless is refused with the property named: a `pattern` such as `[`,
-  an `enum` of `null` alone (`LoadError::Unrunnable`) and a `$ref` that does not
-  resolve, which made typify panic (`LoadError::Unresolvable`). A document that
-  loaded and blessed is refused too, after a nested property or one whose name
-  has no spelling: a `multipleOf` that is not more than 0, and a `$ref` that the
-  reduction cannot follow because it is a cycle or points inside a component
-  (`LoadError::Unresolvable`). Repair: an Overlay that states the rule another
-  way or removes it, or that makes the `$ref` name a component schema
-  (`#/components/schemas/<name>`) that does not lead back to itself.
+  no engine reads refused a document or not by the order of the properties. The
+  non-read-only properties of a JSON body read as an object are checked for
+  retained scalar rules; the limits are in `docs/validation.md`, *The engine*. A
+  document that loaded and failed the bless is refused with the property named:
+  a `pattern` such as `[`, an `enum` of `null` alone (`LoadError::Unrunnable`),
+  and a missing or inside-component `$ref` that could make typify panic
+  (`LoadError::Unresolvable`). A document that loaded and blessed is refused too
+  after such a property for a nonpositive `multipleOf` or a reference cycle.
+  Repair: correct or remove the rule, or lead to a schema through
+  `#/components/schemas/<name>` references that name no component twice.
 
 - **A body goes out under the media type that the document declares.** A JSON
   body was sent as `application/json` whatever its `content` key said, so a body
@@ -824,16 +846,17 @@ the crate follows [Semantic Versioning][semver].
     `template`.
 
   `Body::media_type()` is new: it answers the key of a JSON body and of a body
-  sent verbatim, and `None` for no body and for `multipart/form-data`, whose
-  `Content-Type` carries a boundary chosen when the parts are encoded.
-  `Document::MODEL_LAYOUT` is 7. Repair: a `match` that binds `JsonFields(fields)`
-  binds `JsonFields { fields, .. }`, and one that binds the fields of `JsonWhole`
-  by name adds `media_type` or `..`. Run the bless step again and commit
-  `model.postcard`: a blob of layout 6 is `DocumentError::Stale`. A body that
-  is declared under several `content` keys is sent under the first that names
-  JSON, wherever it stands, and else under the first of all. That is the rule
-  the crate applied, and it reads `application/*+json` as JSON, as it did;
-  `docs/validation.md` states it and `tests/media.rs` pins it.
+  sent verbatim, with space and tab trimmed from the whole key's ends, and
+  `None` for no body and for `multipart/form-data`, whose `Content-Type` carries
+  a boundary chosen when the parts are encoded. `Document::MODEL_LAYOUT` is 7.
+  Repair: a `match` that binds `JsonFields(fields)` binds `JsonFields { fields,
+  .. }`, and one that binds the fields of `JsonWhole` by name adds `media_type`
+  or `..`. Run the bless step again and commit `model.postcard`: a blob of
+  layout 6 is `DocumentError::Stale`. A body that is declared under several
+  `content` keys is sent under the first that names JSON, wherever it stands,
+  and else under the first of all. That is the rule the crate applied, and it
+  reads `application/*+json` as JSON, as it did; `docs/validation.md` states it
+  and `tests/media.rs` pins it.
 - **A `content` key that is a media range is refused while the document is
   reduced.** `*/*` and `image/*` were media types to the check and became the
   request's `Content-Type`, which no server reads. A key with a `*` in its type
@@ -864,8 +887,8 @@ the crate follows [Semantic Versioning][semver].
   is the key that goes out as the `Content-Type`.** The check read the type and
   the subtype and nothing else of the key, so these loaded:
   - an ASCII control character other than a tab in a parameter after the `;`;
-  - a white space other than a space and a tab before the type or after the
-    subtype, which `str::trim` took off before the check: a line feed, vertical
+  - whitespace other than space or tab at either end of the whole key, which
+    `str::trim` took off before the check: examples include a line feed, vertical
     tab, form feed or carriage return, a no-break space, or a next-line
     character, such as `application/json` followed by a no-break space.
 
@@ -876,23 +899,25 @@ the crate follows [Semantic Versioning][semver].
   every request with `RequestError::Http` for a control character. A JSON body
   now goes out under the key, so the load refuses each of them as
   `LoadError::MediaType`, for a JSON body and a body sent verbatim, when the key
-  is the one that is sent. A C1 control character in a parameter is a byte that a
-  header carries, and it loads as it did. A space and a tab before the type or
-  after the subtype are optional white space in RFC 9110 and are no fault, and
-  the request goes out without them, because RFC 9113 calls a field value that
-  starts or ends with one malformed: a JSON body with such a key went out as
-  `application/json`, and a body sent verbatim went out with them. A space or a
-  tab inside the key, as before the `;`, is sent as the document spells it.
-  A `multipart/form-data` key is not asked what a header carries, because that
-  body writes its own `Content-Type`, with a boundary, and its key is never sent:
-  a document that holds one with such a byte loaded and its requests went out as
-  `multipart/form-data; boundary=…`, and it still does. The message prints the
-  key as the document spells it, and writes each character that does not show as
-  its code point (`\u{a0}`): a control character, a white space other than a
-  space, a format character such as a zero width space, and a combining mark.
-  sevdesk-cli declares no such key: its 82 body keys are `application/json`,
-  `multipart/form-data` and `application/x-www-form-urlencoded`. Repair: an
-  Overlay that replaces the key with the type the server reads.
+  is the one that is sent. Characters past ASCII, including C1 controls in a
+  parameter, have UTF-8 bytes a header carries, and load as before. Space and
+  tab at the ends of the whole key are optional whitespace in RFC 9110 and are
+  no fault, and the request goes out without them, because RFC 9113 calls a
+  field value that starts or ends with one malformed: a JSON body with such a
+  key went out as `application/json`, and a body sent verbatim went out with
+  them. A space or a tab inside the key, as before the `;`, is sent as the
+  document spells it. A `multipart/form-data` key is not asked what a header
+  carries, because that body writes its own `Content-Type`, with a boundary, and
+  its key is never sent: a document that holds one with such a byte loaded and
+  its requests went out as `multipart/form-data; boundary=…`, and it still does.
+  The message prints the key as the document spells it, and writes each
+  character that does not show as its code point (`\u{a0}`): examples include a
+  control character, whitespace other than a space, a format character such as a
+  zero width space, and a nonspacing mark. `MediaRange` uses the same visible
+  spelling. sevdesk-cli declares no such key: its 82 body keys are
+  `application/json`, `multipart/form-data` and
+  `application/x-www-form-urlencoded`. Repair: an Overlay that replaces the key
+  with the type the server reads.
 - **An optional body can be left out, and a required one cannot.** The model
   lost whether `requestBody` is required for a flat JSON body: it folded the
   body's `required` into each property's, so an optional flat body and a required
@@ -916,9 +941,10 @@ the crate follows [Semantic Versioning][semver].
     `ValueError::MissingBody`. It was a flat JSON body that got through. Repair:
     give the body with `Values::json`.
   - The command line sends no body for a flat body when no flag and no
-    `--json-body` is given, and no `Content-Type` with it; it sent `{}` for every
-    flat body. An optional body then goes out with no body, and a required one is
-    refused as `ValueError::MissingBody`, as it is for the other kinds of body.
+    `--json-body` is given, and no `Content-Type` with it; it sent `{}` where
+    clap demanded no flag. An optional body then goes out with no body. A
+    required flat body with no required property reaches `ValueError::MissingBody`;
+    clap refuses earlier where a required property or whole-body flag is missing.
     Repair: `--json-body` with a file that holds `{}`, or `-` with `{}` on stdin,
     sends the empty object. The flag of a required property is demanded of a
     required body only, and `--json-body` stands for it, as before.
@@ -1226,9 +1252,9 @@ the crate follows [Semantic Versioning][semver].
       of a body that goes whole has no flag, so its name is not refused.
       - One named like a gate of `x-cli-gates` is `LoadError::GateTakenByName`:
         a query parameter `force` on a write with `x-cli-gates: [force]`, bare
-        or inside an `allOf` of one element, and a property `force` of a JSON
-        body that is flat now and went whole before. Such properties of a body
-        that loaded and are refused are, for example:
+        or inside an `allOf` of one element, and a non-read-only property
+        `force` of a JSON body that is flat now and went whole before. Such
+        properties of a body that loaded and are refused are, for example:
         - `force: { type: integer, minimum: 0.0 }` alone, or before or after
           `name: { type: string }`;
         - `force: { type: integer }` after a property of the first kind
@@ -1318,10 +1344,9 @@ the crate follows [Semantic Versioning][semver].
   generated `ops.rs` calls `crate::to_json("createVoucher", body)?`, so an
   `ops.rs` written by an earlier release does not compile. Repair: run the bless
   step again and commit `ops.rs`; a wrapper of your own passes its
-  `operationId`. A bless step that links the crate it writes, as sevdesk-cli's
-  `xtask` does for its `surface` task, does not build until that crate compiles,
-  so the first bless after the upgrade is run with that dependency cut for the
-  one run.
+  `operationId`. A bless step that links the crate it writes does not build
+  until that crate compiles. Where an adoption has that dependency, cut it for
+  the first bless after the upgrade.
 - **`client::Error::Status` no longer prints the server's body.** It printed
   `<status>: <body>`, and the body can hold a credential or a client's data,
   where an error is printed to a log. It prints
@@ -1389,7 +1414,8 @@ the crate follows [Semantic Versioning][semver].
     with (`hard_tabs` with a `tab_spaces` of 2 or 3 wrote a vendor's indented
     line as a code block) and with a `"` that runs over a line break, and rustc
     takes a column of stars out of one (`**bold**` was shown as `*bold**`). A
-    `///` line is left as it stands. Each line with text in it has one space
+    `///` line keeps the text after the slashes under stable options;
+    `hard_tabs` changes its item indentation. Sanitized prose lines have one space
     after the slashes, and so has a description of one line that starts with a
     `/`. A list the vendor bulleted with `*` keeps its `*`.
 
@@ -1422,12 +1448,13 @@ the crate follows [Semantic Versioning][semver].
   - An operation with a JSON success response beside one with no `content`, such
     as a `204` or a response component with no `content`, answers `Option` of
     the type, whichever is listed first. `None` is the answer with no body. A
-    `204` answer was `NoContent`, or an `Error::Decode` where the type refuses
-    `null`, by the order of the two. Repair: run the bless step again, commit
-    `ops.rs`, and match `Ok(None)` of `Call::send` for the answer with no body.
-    `Planned::send` answers `Option` of that, where `None` is a dry run, so on
-    the planned road the answer with no body is `Ok(Some(None))`. A `match` with
-    the arms `None` and `Some(t)` takes a dry run for a `204`.
+    `204` answer was `NoContent` where the wrapper returned that type, and
+    `Error::Decode` where it returned a type refusing `null`; order mattered for
+    a `200` with a JSON body on the operation. Repair: run the bless step again,
+    commit `ops.rs`, and match `Ok(None)` of `Call::send` for the answer with no
+    body. `Planned::send` answers `Option` of that, where `None` is a dry run,
+    so on the planned road the answer with no body is `Ok(Some(None))`. A
+    `match` with the arms `None` and `Some(t)` takes a dry run for a `204`.
   - The JSON bodies of the success responses have to agree, under every JSON
     media type of each response, because the client sends no `Accept` header and
     a server may answer with any of them. Two that do not state one schema leave
@@ -1445,7 +1472,7 @@ the crate follows [Semantic Versioning][semver].
   - A success response that cannot be followed (a reference to a response that
     the document does not hold, one that points inside a component, or a cycle)
     is refused by name with the reference. The wrapper answered `NoContent`, or
-    the type of an earlier status, and did not follow it. A response whose
+    the type of another status, and did not follow it. A response whose
     schema is a `$ref` outside `#/components/schemas/` is
     refused with that reference. Repair: an Overlay that corrects or removes the
     reference.

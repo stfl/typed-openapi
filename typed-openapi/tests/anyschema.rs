@@ -1072,9 +1072,9 @@ fn a_value_that_has_a_flag_is_held_to_the_words_consent_is_given_by() {
 /// the property its name.
 ///
 /// A property "of the first kind" is a scalar that `openapiv3` holds as
-/// `AnySchema`, such as `{ type: integer, minimum: 0.0 }`. A property that is no
-/// scalar this crate reads is one of `{ type: string, oneOf: [{ type: string }] }`,
-/// `{ readOnly: true }` and an `allOf` of two schemas.
+/// `AnySchema`, such as `{ type: integer, minimum: 0.0 }`. A property that is
+/// no scalar this crate reads is, for example, `{ type: string, oneOf: [{ type:
+/// string }] }`, `{ readOnly: true }` and an `allOf` of two schemas.
 const NAMES_ASKED: [(&str, &str, bool); 22] = [
     ("a plain property alone", "NAME: { type: integer }", true),
     (
@@ -1118,7 +1118,7 @@ const NAMES_ASKED: [(&str, &str, bool); 22] = [
         true,
     ),
     (
-        "a plain property after a `readOnly` property of no schema",
+        "a plain property after a `readOnly` property with no `type`",
         "a: { readOnly: true }, NAME: { type: integer }",
         true,
     ),

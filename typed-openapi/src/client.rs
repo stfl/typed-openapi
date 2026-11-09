@@ -138,8 +138,7 @@ pub enum Error {
     },
 }
 
-/// The kind of failure that a response body is, and its place, and nothing the
-/// body said.
+/// The kind of failure of a response body, its place, and nothing the body said.
 ///
 /// The place is the line and the column that `serde_json` gives over the text it
 /// read. That text is the body, or `null` for an empty body, which has nothing

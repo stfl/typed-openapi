@@ -841,10 +841,11 @@ components:
 /// spellings of a definitions map.
 ///
 /// The table spells positions that OpenAPI 3.0.3 does not define as well:
-/// `webhooks`, `components.pathItems`, the keywords of a later draft, a key of
-/// `paths` that is no path and a key of the responses that is no status code.
-/// Each is a row, because the walk judges a schema by what it holds and not by
-/// where it stands, and the model drops each of them without a word.
+/// `webhooks`, `components.pathItems`, the JSON Schema keywords outside OpenAPI
+/// 3.0.3, a key of `paths` that is no path and a key of the responses that is
+/// no status code. Each is a row, because the walk judges a schema by what it
+/// holds and not by where it stands, and the model drops each of them without a
+/// word.
 ///
 /// Four of the keywords carry their phantom one level further down, under a
 /// `properties` of their own. `not`, `if`, `then` and `else` exempt everything

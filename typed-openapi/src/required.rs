@@ -34,12 +34,12 @@
 //!
 //! The table has two kinds of route: the ones that OpenAPI 3.0.3 defines, and
 //! the ones that a 3.0 document may carry and the object model drops, among
-//! them `webhooks`, `components.pathItems`, the keywords of a later draft such
-//! as `$defs` and `if`, a key of `paths` that is no path, and a key of the
-//! responses that is no status code. This walk enters both. It judges a schema
-//! by what it holds and not by where it stands, so where it can tell that a
-//! name is declared nowhere, a phantom is refused, and the refusal names an
-//! Overlay.
+//! them `webhooks`, `components.pathItems`, the JSON Schema keywords outside
+//! OpenAPI 3.0.3 such as `$defs` and `if`, a key of `paths` that is no path,
+//! and a key of the responses that is no status code. This walk enters both. It
+//! judges a schema by what it holds and not by where it stands, so where it can
+//! tell that a name is declared nowhere, a phantom is refused, and the refusal
+//! names an Overlay.
 //!
 //! Position is what tells a schema from JSON that merely looks like one, and a
 //! specification extension is why that has to be told. An object the

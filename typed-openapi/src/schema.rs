@@ -1177,17 +1177,17 @@ pub(crate) fn is_media_type(media_type: &str) -> bool {
 
 /// Whether this key can be a request's `Content-Type` as it stands.
 ///
-/// [`is_media_type`] reads a key as a person does and is asked of every key that
-/// is picked. This is asked only of a key that goes out as the header, a JSON
-/// body's and one that is sent verbatim: a `multipart/form-data` body writes its
-/// own `Content-Type`, with a boundary, and its key is never sent. The header is
-/// read as RFC 9110 reads it: a space and a tab before the type and after the
-/// subtype are optional white space and are trimmed, and no other white space is,
-/// so a no-break space there is no `token` character and a server reads no type
-/// in it. The whole key must also be a header value, which refuses an ASCII
-/// control character other than a tab, in a parameter as much as in the essence.
-/// The rest of a parameter is not parsed, for the reason that [`is_media_type`]
-/// gives.
+/// [`is_media_type`] reads a key as a person does and is asked of every request
+/// body key that is picked. This is asked only of a key that goes out as the
+/// header, a JSON body's and one that is sent verbatim: a `multipart/form-data`
+/// body writes its own `Content-Type`, with a boundary, and its key is never
+/// sent. The header is read as RFC 9110 reads it: space and tab at either end
+/// of the whole key are optional whitespace and are trimmed, and no other
+/// whitespace is, so a no-break space there is no `token` character and a
+/// server reads no type in it. The whole key must also be a header value, which
+/// refuses an ASCII control character other than a tab, in a parameter as much
+/// as in the essence. The rest of a parameter is not parsed, for the reason
+/// that [`is_media_type`] gives.
 #[must_use]
 pub(crate) fn is_content_type(media_type: &str) -> bool {
     has_type_and_subtype(before_parameters(media_type).trim_matches([' ', '\t']))

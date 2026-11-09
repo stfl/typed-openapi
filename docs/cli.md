@@ -186,9 +186,9 @@ own type rather than the box `DispatchError::Transport` carries.
 | a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is; none for the three headers [OpenAPI ignores](#headers-openapi-says-to-ignore) |
 | the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode`, and held to the array's `minItems`, `maxItems` and `uniqueItems` |
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
-| a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE`; a property is required exactly when the body and the property both are, unless `--json-body` is given |
+| a JSON body read as an object whose non-read-only properties are scalars (excluding the `AnySchema` case below) | one `--<property>` per property, plus `--json-body FILE`; a property is required exactly when the body and the property both are, unless `--json-body` is given |
 | a property of a JSON body that the schema marks `readOnly` | nothing: the API sets it, so the subcommand's long help names it, and the body is flat or whole without regard to it |
-| any other JSON body — an array, no schema, or an object with a nested property, a name with no spelling or a schema this CLI does not read as a value | `--json-body FILE`, plus `--json-body-template` where the document describes a shape, except for the object that the text below names |
+| any other JSON body — an array, no schema, or an object with a non-read-only property that is nested, has no name spelling or has a schema this CLI does not read as a value | `--json-body FILE`, plus `--json-body-template` where the document describes a shape, except for the object that the text below names |
 | a JSON body declared under `application/merge-patch+json`, `application/vnd.api+json` or any other `+json` type that is not a range | the same flags, and the body is sent under that key, not under `application/json` |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
 | any other media type | `--raw-body FILE`, sent verbatim under that media type |
@@ -197,27 +197,27 @@ own type rather than the box `DispatchError::Transport` carries.
 | `x-cli-gates: [enshrine, email]` on an operation | `--enshrine` and `--email`, both required |
 | `x-cli-requires: [other]` on a parameter | its flag is refused unless `--other` is given too |
 
-One nested property is enough to make the whole body `--json-body` only: no
-sibling gets a flag the request builder would then throw away. `contacts create`
-is the case — its `address` is an object, so there is no `--name`, and asking
-for one is a clap error rather than a value silently dropped. A property whose
-*name* has no kebab-case spelling does the same thing for the same reason, and so
-does a property whose schema is no scalar that this CLI reads: a composition (an
-`allOf` of more than one schema, `oneOf`, `anyOf`, `not`), a keyword that its
-`type` does not have (`pattern` beside `type: integer`), or no `type`. What the
-rule turns on is whether a property has a flag, never why it has none, and
-`--json-body-template` is then where the key that could not be spelled is
-written down. The whole body goes through `--json-body`, which reads it as JSON,
-so the property is a part of the body. A CLI that calls `tree::dispatch` sends
-that body as it is, and one that holds it to the generated type does so at its
-own seam, as *With a check of your own in the middle* says. The help names no
-reason for it: a parameter that has no flag has nothing else to fall back on, and
-a body has the file.
+One nested property that is not `readOnly` is enough to make the whole body
+`--json-body` only: no sibling gets a flag the request builder would then throw
+away. `contacts create` is the case — its `address` is an object, so there is no
+`--name`, and asking for one is a clap error rather than a value silently
+dropped. A property whose *name* has no kebab-case spelling does the same thing
+for the same reason, and so does a property whose schema is no scalar that this
+CLI reads: a composition (an `allOf` of more than one schema, `oneOf`, `anyOf`,
+`not`), a keyword that its `type` does not have (`pattern` beside `type:
+integer`), or no `type`. What the rule turns on is whether a property has a
+flag, never why it has none, and `--json-body-template` is then where the key
+that could not be spelled is written down. The whole body goes through
+`--json-body`, which reads it as JSON, so the property is a part of the body. A
+CLI that calls `tree::dispatch` sends that body as it is, and one that holds it
+to the generated type does so at its own seam, as *With a check of your own in
+the middle* says. The help names no reason for it: a parameter that has no flag
+has nothing else to fall back on, and a body has the file.
 
-An object that states a keyword its `type` does not have (`minLength` beside
-`type: object`), or a keyword with no content (`enum: []`), is held by
-`openapiv3` as `AnySchema`, and this CLI reads no object from that. A body that
-is one goes whole, and its properties are not read at all: it has no
+An object held by `openapiv3` as `AnySchema`, such as one with a keyword its
+`type` does not have (`minLength` beside `type: object`), with content or with
+none (`enum: []`), is not read as an object by this CLI. Such a body goes whole.
+Its properties get no flags, supply no flag rules and make no template: it has no
 `--json-body-template`, unless it carries an `example`, which is the template as
 the document has it, and the long help names none of its `readOnly` properties.
 
@@ -564,7 +564,7 @@ all — `form-data` where `multipart/form-data` was meant is a
 `LoadError::MediaType`, not a `--raw-body` sent under a `Content-Type` no server
 parses — or, where it is sent as the `Content-Type`, is none that a header
 carries: an ASCII control character other than a tab, or a white space other than
-a space and a tab before its type or after its subtype. So is a key that is a media
+space and tab at either end of the whole key. So is a key that is a media
 range, `*/*` or `image/*`: a request goes out under one type, and the range does
 not name it (`LoadError::MediaRange`).
 [docs/overlay.md](overlay.md#1-plain-corrections) has the action that repairs
@@ -683,7 +683,8 @@ has the call; `typed-openapi/examples/README.md` walks the whole collision.
 Only a value that has a flag is held to this. A property of a body that goes
 whole has no flag, so one named like a gate or like the confirmation loads
 wherever it stands among the other properties, and so does a parameter that has
-no flag.
+no flag. This exempts the name collision only; a required parameter may still
+be refused for another cause.
 
 ## Value checking
 

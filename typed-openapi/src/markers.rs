@@ -14,7 +14,7 @@
 //!
 //! | key | read on |
 //! |---|---|
-//! | `x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes` | an operation: a method of a path item under `paths` |
+//! | `x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes` | an operation: a method of a path item directly in `paths` |
 //! | `x-cli-requires` | a parameter: of a path item, of an operation, or under `components.parameters`, and not beside a string `$ref` |
 //!
 //! Those are the places the reduction reads, so a key on any other object the
@@ -38,7 +38,7 @@
 //! `parameters` values and the `requestBody` of a Link Object), the value of an
 //! extension, and a key that OpenAPI 3.0.3 does not define. The last is one
 //! class whoever defines the key: a field of a later version (`webhooks`), a
-//! keyword of a later draft (`$defs`, or `dependencies` on a schema), or a key
+//! JSON Schema keyword outside 3.0.3 (`$defs`, `dependencies`), or a key
 //! that no version defines (`vouchers` in `paths`, which is no path, and `foo`
 //! among the responses, which is no status code). The object model drops each
 //! of them and nothing builds a request or a flag from them. What stands there
@@ -151,7 +151,7 @@ impl Subject {
 pub(crate) fn reading(key: &str) -> String {
     match READ.iter().find(|(read, _)| *read == key) {
         Some((_, Subject::Operation)) => {
-            "it reads that key on a method of a path item under `paths`".to_owned()
+            "it reads that key on a method of a path item directly in `paths`".to_owned()
         }
         Some((read, Subject::Parameter)) => format!(
             "it reads `{read}` on a parameter under `paths` or `components.parameters`, \
@@ -227,7 +227,7 @@ impl<'d> Walk<'d> {
         }
     }
 
-    /// Every entry of a map of nodes of one kind. The keys of the map are
+    /// Entries selected by `Keys::entry` for this reach. The keys of the map are
     /// names, and are not read, unless the route says the specification lets a
     /// vendor extend the map: the Paths Object and the Responses Object, whose
     /// `x-…` keys are asked and stand on no subject.
@@ -499,7 +499,7 @@ mod tests {
     fn the_reason_of_a_refusal_says_where_the_key_is_read() {
         assert_eq!(
             reading("x-cli-gates"),
-            "it reads that key on a method of a path item under `paths`"
+            "it reads that key on a method of a path item directly in `paths`"
         );
         assert_eq!(
             reading("x-cli-requires"),
@@ -571,7 +571,7 @@ mod tests {
     /// A value that OpenAPI 3.0.3 gives the type Any, and a key that an object
     /// does not define, are the vendor's data and no part of the document. A
     /// walk that entered them would refuse a document with no marker in it.
-    /// The keys that 3.0.3 does not define anywhere are in the test below.
+    /// The test below also covers keys outside 3.0.3 in these positions.
     #[test]
     fn a_field_of_type_any_and_a_key_the_object_does_not_define_are_not_entered() {
         let response = "paths:\n  /a:\n    get:\n      responses:\n        '200': ";
@@ -609,10 +609,9 @@ mod tests {
 
     /// A key that OpenAPI 3.0.3 does not define is no part of a 3.0 document,
     /// whoever defines it: a field of a later version (`webhooks`), a keyword
-    /// of a later draft (`$defs`), or a key that no version defines
-    /// (`paths.vouchers`). The object model drops each of them, and nothing
-    /// else reads them, so a marker under one is read by nothing and is no
-    /// mistake of the adopter's.
+    /// outside OpenAPI 3.0.3 (`$defs`), or a key that no version defines
+    /// (`paths.vouchers`). The object model drops each of them, so a marker
+    /// there is no mistake of the adopter's.
     #[test]
     fn a_key_that_openapi_3_0_3_does_not_define_is_not_entered() {
         // One marker that nothing reads and one that is read elsewhere, so a
@@ -628,7 +627,7 @@ mod tests {
         ]
         .map(str::to_owned)
         .into();
-        // A keyword of a later draft: each one the schema walk of `required`
+        // A JSON Schema keyword outside 3.0.3: each one the schema walk of `required`
         // follows that a 3.0 schema does not have.
         for keyword in [
             "$defs",

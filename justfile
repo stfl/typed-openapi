@@ -1,5 +1,4 @@
-# Workspace tasks. Every cargo invocation carries `--workspace` so that a crate
-# added later is covered without editing a recipe.
+# Workspace tasks and selected package and feature checks.
 
 default:
     just --list
@@ -37,10 +36,11 @@ check:
 
 # A feature that adds or removes items has to be compiled with it and without
 # it, because nothing else finds an item that only exists in one of them. These
-# are the builds: the default, nothing, each feature alone, and all together. No
-# pair of features is built. The `builder` runs go further than a compile: the
-# example's demonstration of it is a pair of doctests that only exist when the
-# feature is on, so this is the only recipe that can run them.
+# are the library builds: nothing, each feature alone, and all together.
+# `generate` implies `document`; other pairs are not checked separately. The
+# `builder` runs go further than a compile: the example's demonstration of it is
+# a pair of doctests that only exist when the feature is on, so this is the only
+# recipe that can run them.
 #
 # Each build is linted with warnings denied, as `check` lints the widest one. A
 # warning that only one feature set produces, such as an item that nothing calls
@@ -150,7 +150,7 @@ test:
 audit:
     cargo deny check advisories bans sources
 
-# Everything CI runs, in the order CI runs it.
+# Everything CI's gate job runs, in the same order. The stable job is separate.
 gate: check features test blessed package audit
 
 # Every artefact under `api-generated` is committed, so the generator has to be

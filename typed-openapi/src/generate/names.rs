@@ -324,13 +324,15 @@ impl Claim {
     /// typify hands back the type it holds for a name it holds, so the same id
     /// does not say that the schema is the same. It is the same where both
     /// claimants state a schema inline and the two are equal as typify is given
-    /// them, after [`NotRequired`](super::types) has taken what the API sets off
-    /// the `required` of a body's. Where each is stated does not matter: a
-    /// component that two operations share, the same titled schema on two
-    /// operations, and a body and a response that state it alike are one schema
-    /// and one type. A schema whose `required` names a property the API sets is
-    /// two schemas where a body and a response both state it, because the body
-    /// does not require that property, and they are refused.
+    /// them, after [`NotRequired`](super::types) has taken what the API sets
+    /// off the `required` of a body's. Where each is stated does not matter: a
+    /// shared component, equal inline claims on two operations, and equal
+    /// inline body and response claims can share. A named claim and an inline
+    /// claim do not compare equal, even if the inline schema is a singleton
+    /// `allOf` around a reference to that component. A schema whose `required`
+    /// names a property the API sets is two schemas where a body and a response
+    /// both state it, because the body does not require that property, and they
+    /// are refused.
     fn is_shared_by(&self, id: &TypeId, origin: &Origin) -> bool {
         self.id == *id && self.stated.as_ref() == origin.stated()
     }
@@ -742,8 +744,8 @@ pub(super) enum Reading<'a> {
     Json(Statement<'a>),
     /// The JSON bodies agree on one answer, and a success response has no
     /// `content` at all, such as a `204`. The call answers `Option` of the type,
-    /// and `None` is the answer with no body. A planned call wraps that in the
-    /// `Option` of a dry run, so there `Some(None)` is the answer with no body.
+    /// and `None` is the answer with no body. See
+    /// [`Planned::send`](crate::client::Planned::send) for the dry-run layer.
     JsonOrEmpty(Statement<'a>),
 }
 
@@ -766,7 +768,7 @@ pub(super) enum Unanswerable<'a> {
         /// Why the reference leads nowhere.
         source: RefError,
     },
-    /// Two JSON bodies state different schemas.
+    /// Two JSON bodies do not state one schema.
     Disagree {
         /// The body that came first in the document.
         first: Statement<'a>,

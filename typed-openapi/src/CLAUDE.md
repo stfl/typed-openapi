@@ -2,8 +2,8 @@
 
 The invariants the library's modules keep. A path that starts with `src/` or
 `tests/` is relative to `typed-openapi/`, and one that starts with `examples/`
-is relative to the repository root. The rules that reach past this directory are
-in the root `CLAUDE.md`, and the rules of the example are in
+or `docs/` is relative to the repository root. The rules that reach past this
+directory are in the root `CLAUDE.md`, and the rules of the example are in
 `examples/toy/CLAUDE.md`.
 
 **The gate is default-closed and derived from the document.** `Plan::decide` in
@@ -101,17 +101,17 @@ and reads nothing under any other key: a field of type Any (`example`,
 `default`, `enum`, the `value` of an Example Object, the `parameters` values and
 the `requestBody` of a Link Object), the value of an extension, and a key that
 3.0.3 does not define. The last is one class: a field of a later version
-(`webhooks`, `components.pathItems`), a keyword of a later draft (`$defs`, `if`,
-`dependencies`), and a key that no version defines (a key of `paths` that does
-not start with `/`, and a key of a Responses Object that is neither `default`
-nor a status code that `openapiv3::StatusCode` reads). The model drops each of
-them and nothing builds a request or a flag from what stands there. A scan that
-entered them would read a 3.0 document as 3.1, and refuse a document for data
-that nobody reads. An `x-…` key of an object it enters is an extension. A
-property, a component, a media type and a response header may be spelled
-`x-cli-writes`, so the keys of a map of names somebody chose are names and are
-not read; the Paths Object and the Responses Object are the two maps whose `x-…`
-keys are extensions.
+(`webhooks`, `components.pathItems`), a JSON Schema keyword outside OpenAPI
+3.0.3 (`$defs`, `if`, `dependencies`), and a key that no version defines (a key
+of `paths` that does not start with `/`, and a key of a Responses Object that is
+neither `default` nor a status code that `openapiv3::StatusCode` reads). The
+model drops each of them and nothing builds a request or a flag from what stands
+there. A scan that entered them would read a 3.0 document as 3.1, and refuse a
+document for data that nobody reads. An `x-…` key of an object it enters is an
+extension. A property, a component, a media type and a response header may be
+spelled `x-cli-writes`, so the keys of a map of names somebody chose are names
+and are not read; the Paths Object and the Responses Object are the two maps
+whose `x-…` keys are extensions.
 
 A route is one that 3.0.3 defines or one that only the schema walk enters
 (`Reach::Defined` and `Reach::Whole`), and each has one place in the table. A
@@ -121,7 +121,7 @@ what it holds and not by where it stands: wherever it can tell that a name is
 declared nowhere it refuses the phantom, although typify writes no type there
 (F-81), and the refusal names an Overlay. A marker is judged by where it stands,
 so the scan stops at what the model reads. So does the walk of `src/patterns.rs`,
-because a generated type is made of nothing that the model drops. A route that
+because those checks concern schemas the model reads. A route that
 the table gains for the schema walk alone gets a row in `tests/required.rs` and
 one in the marker test of the keys that 3.0.3 does not define.
 
@@ -154,18 +154,19 @@ recommends and the example keeps — there is no enum, no schema and no naming
 rule in the library. `examples/toy/api/tests/corrections.rs` is what holds the
 example to its own convention.
 
-**Every rule the document states about a value is enforced, in one place.**
-`Scalar` carries what the schema said — `pattern`, `minLength`/`maxLength`, the
-bounds, `multipleOf`, and an `enum` of strings, numbers or booleans — and
-`Scalar::parse` is the only thing that checks any of them. `Scalar::wire` is the
-text of a parameter that goes on the wire, and it asks `parse`'s own reading of
-a number, so there is no second check: the number that is checked is the number
-that is sent, and `Invocation::new` keeps the text. An `f64` reads the nearest
-float of its digits, so a number is refused when that float is another number
-(`exact` compares decimal numbers, not text), and an integer past `i64` is out of
-range and not "not an integer". A numeric `enum` admits a value and not a
-spelling (`+200` for `200`), and a boolean `enum` of both values is `None`,
-because it states what `type: boolean` states.
+**The scalar rules kept by the reduction are enforced in one place.** `Scalar`
+carries the rules selected from the schema — `pattern`, `minLength`/`maxLength`,
+the bounds, `multipleOf`, and an `enum` of strings, numbers or booleans — and
+`Scalar::parse` checks those retained rules. A string enum reduces to `Choice`
+and drops pattern and length checks; this is not conjunction semantics.
+`Scalar::wire` is the text of a parameter that goes on the wire, and it asks
+`parse`'s own reading of a number, so there is no second check: the number that
+is checked is the number that is sent, and `Invocation::new` keeps the text. An
+`f64` reads the nearest float of its digits, so a number is refused when that
+float is another number (`exact` compares decimal numbers, not text), and an
+integer past `i64` is out of range and not "not an integer". A numeric `enum`
+admits a value and not a spelling (`+200` for `200`), and a boolean `enum` of
+both values is `None`, because it states what `type: boolean` states.
 
 A rule that reaches `--help` and not the parser is the defect this invariant
 exists to prevent, so a rule has one note, the words that finish "is not …", and
@@ -272,9 +273,9 @@ refused as a range. A response is not sent, so it is read at every key of its
 with `str::trim`. A key that goes out as the request's `Content-Type`, a JSON
 body's and one that is sent verbatim, is asked `is_content_type` as well, after
 the question of a range: the header is read as RFC 9110 reads it, so only a space
-and a tab before the type and after the subtype are trimmed, and the whole key is
-a header value (an ASCII control character other than a tab is not one, and a
-byte of 0x80 or above, a C1 control character among them, is). A
+and a tab at the ends of the whole key are trimmed. A header value refuses
+bytes below 0x20 except tab, and DEL. Characters past ASCII, including C1
+controls, have UTF-8 bytes that a header carries. A
 `multipart/form-data` key is never asked `is_content_type`, because that body
 writes its own `Content-Type` with a boundary, and a refusal over a key that is
 not sent would refuse documents this crate serves correctly. The message prints
@@ -342,7 +343,8 @@ one, a parameter with a `deepObject` style, a parameter whose name has no
 spelling. `src/patterns.rs` walks the overlaid document by the table of
 `src/shape.rs` at `Reach::Defined`, after the reduction, and every other
 `pattern` is `LoadError::UnrunnablePattern`: one in a schema that
-`runnable_scalar` does not read (a response, a named schema, the items of an
+`runnable_scalar` does not carry (for example a response, a named schema holding
+none of the reduced scalar values, the items of an
 array body, a property of a nested object, a cookie parameter), and one that the
 scalar drops because it keeps the `enum`. It names the operation where the
 schema stands in one and the schema as an Overlay names a target. A component
@@ -357,18 +359,19 @@ the values that the reduction reads for a scalar, with a flag or without one: a
 parameter that `declared` keeps and that is sent in the path, the query or a
 header with a `schema` (its items, for a list), and a property of a JSON body
 whose schema is an object. `json_body` sends the whole body through
-`--json-body` when a property has no flag, a nested one or one whose name has no
-spelling, wherever it stands, so it reads every property (`properties_of`)
-before it decides whether the body is flat. A property the API sets is read for
-no rule. A rule asked only of the properties listed before the one that sends
-the body whole would make a document that loads depend on which property comes
-first. A cookie parameter, a parameter stated with `content`, a property of a
-form or multipart body or of a body whose schema is an `allOf` of more than one
-schema, and the items of an array body are not read by it. The walk asks them
-the escape rule and nothing else, so a `multipleOf` of 0 or a `pattern` that no
-engine reads loads there. A rule of this kind that is added for a value is added
-in `runnable_scalar`, which `shape_of` and `properties_of` share, and a rule of
-every schema is added to the walk.
+`--json-body` when `flagged_properties` finds a non-read-only property with no
+flag, such as a nested object, list, unsupported scalar schema or unspellable
+name, so it reads every property (`properties_of`) before it decides whether the
+body is flat. A property the API sets is read for no rule. A rule asked only of
+the properties listed before the one that sends the body whole would make a
+document that loads depend on which property comes first. A cookie parameter, a
+parameter stated with `content`, a property of a form or multipart body or of a
+body whose schema is an `allOf` of more than one schema, and the items of an
+array body are not read by it. The walk asks them the escape rule and nothing
+else, so a `multipleOf` of 0 or a `pattern` that no engine reads loads there. A
+rule of this kind that is added for a value is added in `runnable_scalar`, which
+`shape_of` and `properties_of` share, and a rule of every schema is added to the
+walk.
 
 **A document is read as the version it says, or refused by name.**
 `Document::load_with` asks the vendor's `openapi` right after it reads the
@@ -540,31 +543,30 @@ and `items_of`, `list_type` and the template walk (`Walk::skeleton` and
 its twin has, and a body that is one has the template its twin has. No object is
 read as a value, and `json_body` and the template walk read a body's object only
 where `openapiv3` holds it as an object. A body that is an object it holds as
-`AnySchema` (one that states a keyword of another type, or a keyword with no
-content such as `enum: []`) goes whole, with no template but its `example` as the
-document has it and with no read-only names. Every other shape is an
-`Unsupported` that is true of it:
-`Keyword` for a composition, for a keyword the `type` does not have, for an
-`enum` that lists a value of another type and for a `type` that is none of the
-six, `Untyped` for a schema with no `type` and no composition, and `Structured`
-for an object whose keywords all belong to it and for an array whose items are
-no value. The keyword is the first the schema states, in one fixed order with
-the compositions first, because the object model keeps no order among them. An
-integer's bound is read wherever its double names the integers the bound admits
-(`integer_end`). A double with a fraction is the integer next inside it, as an
-inclusive bound, because the text of an integer gives a whole double and no
-integer lies between the text and the double. A whole double below 2^53 is that
-integer whatever text gave it, which is the approximation named above. A double
-past every `i64` bounds nothing, or admits none and is refused by its keyword. A
-whole double from 2^53 to 2^63, both ends included, is the double of more than
-one integer's text, so it is refused by its keyword and never rounded again. A
-step is read as an integer only where it is whole (`integer_step`): a whole
-double below 2^53 is that integer whatever text gave it, as for a bound, which is
-the approximation named above, and a double with a fraction or a whole one from
-2^53 is refused by its keyword. A
-parameter takes the reason as its `Unreachable`, and a property takes it as the
-body going whole, as any property with no flag does. Neither refuses the
-document that holds it, and only a required parameter does.
+`AnySchema` (one that states a keyword of another type, with content or with
+none, such as `minLength: 1` or `enum: []`) goes whole, with no template but its
+`example` as the document has it and with no read-only names. Every other shape
+is an `Unsupported` that is true of it: `Keyword` for a composition, for a
+keyword the `type` does not have, for an `enum` that lists a value of another
+type and for a `type` that is none of the six, `Untyped` for a schema with no
+`type` and no composition, and `Structured` for an object whose keywords all
+belong to it and for an array whose items are no value. The keyword is the first
+the schema states, in one fixed order with the compositions first, because the
+object model keeps no order among them. An integer's bound is read wherever its
+double names the integers the bound admits (`integer_end`). A double with a
+fraction is the integer next inside it, as an inclusive bound, because the text
+of an integer gives a whole double and no integer lies between the text and the
+double. A whole double below 2^53 is that integer whatever text gave it, which
+is the approximation named above. A double past every `i64` bounds nothing, or
+admits none and is refused by its keyword. A whole double from 2^53 to 2^63,
+both ends included, is the double of more than one integer's text, so it is
+refused by its keyword and never rounded again. A step is read as an integer
+only where it is whole (`integer_step`): a whole double below 2^53 is that
+integer whatever text gave it, as for a bound, which is the approximation named
+above, and a double with a fraction or a whole one from 2^53 is refused by its
+keyword. A parameter takes the reason as its `Unreachable`, and a property takes
+it as the body going whole, as any property with no flag does. Neither refuses
+the document that holds it, and only a required parameter does.
 
 `stated` is the one reader of a value's schema, a list's, a JSON body's and a
 multipart body's. A single-element `allOf` is a `$ref` that kept its siblings
@@ -703,11 +705,11 @@ path, so a rename changes the request and is no correction. Two path parameters
 of one name have one variable in the template, so no rename parts them, and the
 later one is told to remove the earlier. A message with two parameters of one
 name says which parameter each repair acts on (`parameter`: its place and its
-name, and "earlier" and "later" where the place is the same), and never writes
-"its" for either one: the `required` of the namesake is no repair, and a
-pronoun reads as the parameter named last. Each repair that `repair` names has a
-test in `tests/wire.rs` that loads the document with the Overlay the words name,
-and a new reason or place adds one.
+name, and "earlier" and "later" for namesakes off the path in the same place),
+and never writes "its `required`" for either one: the `required` of the namesake
+is no repair, and a pronoun reads as the parameter named last. Each repair that
+`repair` names has a test in `tests/wire.rs` that loads the document with the
+Overlay the words name, and a new reason or place adds one.
 
 `reconcile` holds the path template to the path parameters, and refuses a
 variable with no path parameter, a path parameter with no variable and a path
@@ -815,17 +817,13 @@ one entry of one `content` map. A copy of the reading in the generator would
 refuse a document at the bless that the command line serves, or type a wrapper
 from another entry than the request sends. The reduction refuses a `requestBody`
 `$ref` that cannot be followed before the generator meets it, so the refusal in
-`body_type` is a guard and no document reaches it. The load refuses a `$ref`
-outside `#/components/schemas/` as the schema of a parameter, of the items of a
-list, of the JSON body that is sent and of a multipart body, and as a property of
-a flat body. It refuses none in a body sent as bytes or under a key that is not
-sent, none below the property of a request body, and none in a response: typify
-reads such a reference by its last segment, so it types the component of that
-name, and panics where the document has none, which `GenerateError::Panicked`
-catches and names. A response is no part of a request, so the reduction reads
-none, and `resolve_response` is the generator's alone: the bless is where a
-response that cannot be followed, or whose schema leads out of
-`#/components/schemas/` at its top, is refused, by the reference.
+`body_type` is a guard and no document reaches it. The load resolves schemas
+through `schema::follow`; the generator follows response components separately.
+`docs/generating.md`, *Requirements and limits*, lists the reference roads by
+their consumer, including schemas ignored by both. A response is no part of a
+request, so the reduction reads none, and `resolve_response` is the generator's
+alone: the bless is where a response that cannot be followed, or whose schema
+leads out of `#/components/schemas/` at its top, is refused, by the reference.
 
 `names::success` reads every success response, a status from `200` to `299` and
 the range `2XX` but not `default`, and answers a `Reading`. Every JSON entry of
@@ -854,7 +852,10 @@ schema stated inline under a name typify holds, it answers with the type it
 holds, whatever the schema that asks, so the same id does not say that the
 schema is the same. `Claims::record` lets a second claimant through only when
 `Claim::is_shared_by` it: it asks for the same type and states an equal schema,
-as typify is given it after `NotRequired`, wherever each is stated. A component
+as typify is given it after `NotRequired`. Sharing is conservative: inline
+claims compare canonical inline schemas; non-inline claims must have the
+same typify type id. An inline claimant and a named claimant do not share, even where
+following a singleton `allOf` reference would yield an equal schema. A component
 that two operations share, the same titled schema on two operations, and a body
 and a response that state it alike are one schema and one type. A schema whose
 `required` names a property the API sets is two schemas where a body and a
@@ -1183,35 +1184,35 @@ undeclared property is the point. `false` stays what typify closes with
 
 **`nullable: true` is said as a schema that admits `null` before typify reads
 it.** typify reads `nullable` as a keyword it does not know, so a property that
-the document requires and calls nullable would be a field of a plain type, and the
-vendor's own `null` would fail to decode. `AdmitsNull` in
+the document requires and calls nullable would be a field of a plain type, and
+the vendor's own `null` would fail to decode. `AdmitsNull` in
 `src/generate/types.rs` is a `schemars` visitor, run by `admit_null` over the
 named and the inline schemas after `set_by_the_api`. It widens a schema of one
 `type` in place (`type: [T, null]`, which typify reads as an `Option` and names
-as it named `T`), and it puts any other schema in an `anyOf` beside
-`{type: null}`, with its title, description, default and `readOnly` left
-outside. The order matters: `NotRequired` reads a property as `read_only_of`
-does, and `read_only_of` reads an `allOf` of one element, which is the spelling
-that carries `nullable` beside a reference and which `AdmitsNull` puts in an
-`anyOf`. A property that the API sets and that admits `null` is an `Option` that
-a request does not require, in every spelling, and `tests/readonly.rs` holds
-it. `AdmitsNull` walks the schema and not the JSON, so a `default` or an
-`example` that holds the same word is not changed, and a property called
-`nullable` is a property. A schema that admits `null` already (the type `null`,
-a list of types that holds it, a schema that holds anything) is not wrapped, so
-no type is an `Option` of an `Option`. `reference_to` keeps the word when it
-puts a format the adopter owns behind a reference, because the type the adopter
-owns says nothing about `null`. `nullable` beside a `$ref` is dropped by the
-object model with every other property beside a reference, as OpenAPI 3.0.3
-says, so the generator never sees it, and `allOf` of the one reference is the
-spelling that carries it. A named schema that is nullable is a newtype over an
-`Option`, as typify writes any named type that is not a struct, and a nullable
-response is an `Option` answer. `tests/generate.rs` holds each shape that a
-document can state. The tests of `src/generate/types.rs` hold the lists of types,
-which no document can state: the list without `null` is a row of the table that
-says `nullable` as a schema that admits `null`, and the list that holds `null` is
-a row of the table of schemas that admit it already. Both tables hold rows that a
-document states too.
+as it named `T`), and it puts any other schema in an `anyOf` beside `{type:
+null}`, with its title, description, default and `readOnly` left outside. The
+order matters: `NotRequired` reads a property as `read_only_of` does, and
+`read_only_of` reads an `allOf` of one element, which is the spelling that
+carries `nullable` beside a reference and which `AdmitsNull` puts in an `anyOf`.
+A property that the API sets and that admits `null` is an `Option` that a
+request does not require, in every spelling, and `tests/readonly.rs` holds it.
+`AdmitsNull` walks the schema and not the JSON, so a `default` or an `example`
+that holds the same word is not changed, and a property called `nullable` is a
+property. A schema that admits `null` already (the type `null`, a list of types
+that holds it, a schema that holds anything) is not wrapped, so no type is an
+`Option` of an `Option`. `reference_to` keeps the word when it puts a format the
+adopter owns behind a reference, because the type the adopter owns says nothing
+about `null`. `nullable` beside a `$ref` is dropped by the object model with
+every other property beside a reference, as OpenAPI 3.0.3 says, so the generator
+never sees it, and `allOf` of the one reference is the spelling that carries it.
+A named schema that is nullable is a newtype over an `Option`, as typify writes
+any named type that is not a struct, and a nullable response is an `Option`
+answer. `tests/generate.rs` holds the integration corpus. The unit tables in
+`src/generate/types.rs` also cover document shapes such as an extension-only
+nullable schema and the lists of types that no 3.0 document can state: the list
+without `null` is a row of the table that says `nullable` as a schema that
+admits `null`, and the list that holds `null` is a row of the table of schemas
+that admit it already. Both tables hold rows that a document states too.
 
 **Every YAML text is read by one function, and no type of a 0.x crate is in a
 public error.** `read` in `src/overlay.rs` is the function every document and
@@ -1340,16 +1341,15 @@ each operation, its names, its effect, its gates, its flags and each `requires`,
 and then the names two operations share. An operation is asked whole before the
 next one, and the names two operations share after every operation. The error
 names the operation, or both of two, except for the document's own confirmation
-word, which has none. Each rule is asked in one place that the load and the
-check share: `spends`, `spends_command`, `gate_on_read`, `first_collision`,
-`Effect::of_method` and `unmet` in `src/model.rs`, because `reduce` is behind
-the `document` feature and `blob` is not, and `names::is_spelled`.
-`first_collision` makes one pass over the operations, because the check runs at
-every start-up of a shipped binary and the number of operations is the
-document's. `spends_command` is beside them, and `placement` in
-`src/model/reduce.rs` asks it of the group and the command, as `check_names`
-does. `check_requires` matches `Unmet` with no `_` arm, so a new way for a
-`requires` to fail stops compiling until the decode names it.
+word, which has none. The shared predicates are: `spends`, `spends_command`,
+`gate_on_read`, `first_collision`, `Effect::of_method` and `unmet` in
+`src/model.rs`, because `reduce` is behind the `document` feature and `blob` is
+not, and `names::is_spelled`. `first_collision` makes one pass over the
+operations, because the check runs at every start-up of a shipped binary and the
+number of operations is the document's. `spends_command` is beside them, and
+`placement` in `src/model/reduce.rs` asks it of the group and the command, as
+`check_names` does. `check_requires` matches `Unmet` with no `_` arm, so a new
+way for a `requires` to fail stops compiling until the decode names it.
 
 The flags of an operation share one namespace: the confirmation word of a write,
 the gates, the parameters that have a flag and the properties of a body, with
@@ -1369,42 +1369,43 @@ is sent on sight.
 
 **The check repeats a rule of the load when a break of it is inside a line, and
 then it repeats the whole rule.** A value in the blob can break a rule, and the
-break does one of two things. The binary panics: clap does when it builds the
-command tree in a debug build, or other code that reads the value, and in a
-release build one declaration silently takes the place of another. Or a request
-that the gate holds back is sent on sight. Those two are the damage the check
-stands in front of, because a damaged blob must not make clap panic and the gate
-is the first invariant of the crate. The line is drawn round a rule and not
-round one break of it: where a blob can hold a break of a rule that is inside the
-line, the check asks the load's own function, so it refuses every break of that
-rule, also one that costs only the run. A second rule beside the load's, for the
+break does one of two things. The binary can panic, including in clap's
+debug-only command-tree checks; colliding declarations can also shadow each
+other in release builds. Or a request that the gate holds back is sent on sight.
+Those two are the damage the check stands in front of, because a damaged blob
+must not make clap panic and the gate is the first invariant of the crate. The
+line is drawn round a rule and not round one break of it: where a blob can hold
+a break of a rule that is inside the line, the check repeats the rule, so it
+refuses every break of that rule, also one that costs only the run. Flag
+namespace validation is a separate implementation; names, effects and
+requirements use shared predicates. A second rule beside the load's, for the
 breaks inside the line alone, would drift away from it, and the rule is asked
 once for each name in any case. A rule of which no break is inside the line is
 left out, because a break costs only the run that meets it: a `pattern` that no
 engine runs refuses every value of its flag when the flag is parsed, and
 repeating the rule would compile every pattern of every operation at each
-start-up to run one subcommand. A refusal whose input the blob does not hold (the
-document's text, a `$ref`, an `x-cli-` marker) cannot be broken from the blob at
-all. Two refusals of a load stand outside the line. A blob whose header
+start-up to run one subcommand. A refusal whose input the blob does not hold
+(the document's text, a `$ref`, an `x-cli-` marker) cannot be broken from the
+blob at all. Two refusals of a load stand outside the line. A blob whose header
 parameter has a name that no header has meets the `http` crate when a value is
-given for it (`RequestError::Http`), so `HeaderName` is not repeated. A blob whose
-base holds userinfo or a query meets `Invocation::request`, which refuses every
-base it is given, so `ServerBase` is not repeated either. Neither sends a
-request. Three rules are repeated whatever their breaks, because F-70, the finding
-that asked for the check, names them: the confirmation word, which is the
-validation of `Loading::commit`, the spelling of each flag, and each `requires`.
-The spelling of a flag and the confirmation word of a write have breaks inside
-the line (a word with a leading `-` makes a debug build panic), and so has a
-`requires` that names its own parameter (`RequiresItself`: clap refuses an
-argument that requires itself). The other two breaks of a `requires`, a name the
-operation does not declare and one that has no flag, cost the run only, because
-`companion_flags` in `src/tree.rs` leaves them out of the command. No break of
-the document's own confirmation word is inside the line, and neither is a
-duplicate `operationId`: a blob that holds two is read by `Document::get` as the
-first of them and fails `Api::new` against an inventory that lists them once. A
-slice that adds a refusal at load asks whether a value in the blob can break it,
-reads what a binary does with the blob that does, and adds the check when the
-answer is inside the line.
+given for it (`RequestError::Http`), so `HeaderName` is not repeated. A blob
+whose base holds userinfo or a query meets `Invocation::request`, which refuses
+every base it is given, so `ServerBase` is not repeated either. Neither sends a
+request. Three rules are repeated whatever their breaks, because F-70, the
+finding that asked for the check, names them: the confirmation word, which is
+the validation of `Loading::commit`, the spelling of each flag, and each
+`requires`. The spelling of a flag and the confirmation word of a write have
+breaks inside the line (a word with a leading `-` makes a debug build panic),
+and so has a `requires` that names its own parameter (`RequiresItself`: a debug
+build of clap refuses an argument that requires itself). The other two breaks of
+a `requires`, a name the operation does not declare and one that has no flag,
+cost the run only, because `companion_flags` in `src/tree.rs` leaves them out of
+the command. No break of the document's own confirmation word is inside the
+line, and neither is a duplicate `operationId`: a blob that holds two is read by
+`Document::get` as the first of them and fails `Api::new` against an inventory
+that lists them once. A slice that adds a refusal at load asks whether a value
+in the blob can break it, reads what a binary does with the blob that does, and
+adds the check when the answer is inside the line.
 
 Postcard drops the message of a `serde` error, so a check inside a `try_from`
 could say only that the blob is damaged, and a rule that compares two flags or two
@@ -1514,36 +1515,39 @@ tabs under `hard_tabs`, leaves a line inside a `"` that runs over a line break
 at its own column and puts every other line at the column of the item, and rustc
 takes a column of stars out of the comment. A block that was prose is code once
 the lines above it have moved, and a model of what `rustfmt` does to the body is
-a guarantee about the wrong program, so no model is kept. A `///` line is left
-as it stands, and the parser is asked about the text rustdoc asks it about:
-`flush` takes the indentation that all lines share, as rustdoc does, and
-`margins` writes tabs as spaces. Each line with text in it of a doc comment of
-several lines has one space in front of it, and a doc comment of one line has
-one only when it starts with a `/`. The space is the fixed point of
-`format_code_in_doc_comments`, which would otherwise put a space after the
-slashes of every line in a fence and widen a sample, and it keeps a line that
-starts with a `/` a doc comment. rustdoc takes the space off with the
-indentation that all lines share, and that holds because one doc attribute
-stands on an item: typify writes one for a type, a field and a variant, and
+a guarantee about the wrong program, so no model is kept. The text after the
+slashes of a `///` line stays in place under stable formatting options,
+including `hard_tabs`, which changes the item indentation, and the parser is
+asked about the text rustdoc asks it about: `flush` takes the indentation that
+all lines share, as rustdoc does, and `margins` writes tabs as spaces. For
+sanitized prose, each line with text in a multiline doc comment has one space
+after its slashes, and a doc comment of one line has one only when it starts
+with a `/`. The space is the fixed point of `format_code_in_doc_comments`, which
+would otherwise put a space after the slashes of every line in a fence and widen
+a sample, and it keeps a line that starts with a `/` a doc comment. rustdoc
+takes the space off with the indentation that all lines share, for these prose
+fragments: typify writes one attribute for a type, field or variant, and
 `paragraphs` in `src/generate/ops.rs` joins a wrapper's summary and the
 generator's own paragraphs into one. A second fragment with no space would leave
-it on the first. The guarantee is for the options of `rustfmt` that are stable.
-`wrap_comments` rewraps a doc comment, and the generator does not predict where
-it breaks a line.
+it on the first. `OperationId`'s generated enum attributes are separate
+fragments; its variant descriptions still pass through `written`. The guarantee
+is for the options of `rustfmt` that are stable. `wrap_comments` rewraps a doc
+comment, and the generator does not predict where it breaks a line.
 
 So the judges are the programs, and an edit to `prose.rs` is finished when they
-pass. `tests/generate.rs` hands the comments of both generated files to
-`rustdoc --test`: for a matrix of containers and info strings, for a seeded
-random corpus, for a column of stars, a `"` that runs over a line break, an
-edition named on a fence and a line that starts with a `/`, and under the
-settings of `rustfmt` that write indentation as tabs or format the code in doc
-comments (the second only where `rustfmt` reads it, which a stable one does
-not). `rustdoc` renders the page of both files for the corpus and for the
-control document, and the tests read every `href` and `src` on it. `rustc`
-compiles the comments of the control document and of the bidirectional controls.
-`doc_comments_alone` fails on a doc attribute in a generated file, because the
-judges are given comments. A list of shapes passes while a shape that nobody
-listed runs: the corpus is there to go past the list. `settled` reads the text
-again after every change, because one change can make the next necessary:
-escaping the `<` that opens an HTML block leaves lines for the parser, and one
-of them may open a fence. Its doc says why the loop ends.
+pass. `tests/generate.rs` hands the comments of both generated files to `rustdoc
+--test`: for a matrix of containers and info strings, for a seeded random
+corpus, for a column of stars, a `"` that runs over a line break, an edition
+named on a fence and a line that starts with a `/`, and under the settings of
+`rustfmt` that write indentation as tabs or format the code in doc comments (the
+second only where `rustfmt` reads it, which a stable one does not). `rustdoc`
+renders the page of both files for the corpus and for the control document, and
+the tests read every `href` and `src` on it. `rustc` compiles the comments of
+the control document and of the bidirectional controls. `doc_comments_alone`
+rejects any `#[doc` attribute, including `#[doc(hidden)]`, because the judges
+are given comments. A list of shapes passes while a shape that nobody listed
+runs: the corpus is there to go past the list. `settled` reads the text again
+after every change, because one change can make the next necessary: escaping the
+`<` that opens an HTML block leaves lines for the parser, and one of them may
+open a fence. The round limit falls back to a fenced sample if edits do not
+settle.

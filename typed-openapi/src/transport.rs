@@ -9,8 +9,7 @@
 //! This crate ships no adapter and depends on no HTTP client, in any feature
 //! combination: an adopter's choice of client is theirs, and a crate that
 //! pinned one would make it everyone's. `examples/toy/cli/src/client.rs` has
-//! both adapters in full — a ureq 3 agent in nine lines, a `reqwest::Client`
-//! in twelve — written to be copied rather than depended on.
+//! both adapters in full, written to be copied rather than depended on.
 //!
 //! An adapter in an adopter's crate wraps the client in a newtype, because
 //! [`SyncClient`] and the client are both foreign there. A crate that owns

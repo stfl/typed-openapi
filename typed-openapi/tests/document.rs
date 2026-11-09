@@ -2213,7 +2213,7 @@ fn the_chosen_word_reaches_the_help_and_the_summary_too() {
     );
 }
 
-/// A word every subcommand already declares cannot also be the confirmation:
+/// A word reserved for help or a body flag cannot also be the confirmation:
 /// clap resolves two flags of one spelling at a user's startup, and an
 /// adopter's mistake belongs at their bless instead.
 #[test]
@@ -2225,7 +2225,7 @@ fn a_confirmation_wearing_another_flags_name_is_refused() {
         assert_eq!(
             refusal.to_string(),
             format!(
-                "`{taken}` is a flag every subcommand already declares, \
+                "`{taken}` is reserved for help or a body flag, \
                  so it cannot also be the word this CLI confirms with"
             )
         );
@@ -2722,7 +2722,7 @@ fn an_x_cli_key_on_a_path_item_is_refused_by_key_and_place() {
     assert_eq!(
         error.to_string(),
         "`x-cli-writes` stands on `$.paths['/render/{id}']`, where this crate does not \
-         read it; it reads that key on a method of a path item under `paths`"
+         read it; it reads that key on a method of a path item directly in `paths`"
     );
 
     for key in [
