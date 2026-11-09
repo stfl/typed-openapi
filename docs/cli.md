@@ -446,27 +446,29 @@ reason is true of the schema: `oneOf`, `anyOf`, an `allOf` of more than one
 schema and `not` are named, and so is a keyword that the `type` does not have
 (`allOf` or `pattern` beside `type: integer`, `minLength` beside `type: array`),
 an `enum` that lists a value of another type, and an integer's `multipleOf` that
-has a fraction or is whole from 2^53. A schema that states no `type` and no
-composition has the reason "stated with no `type`". A single `allOf` element is
-read as the schema it wraps for a list, a JSON body and a multipart body, as it
-is for a value.
+has a fraction or is whole with magnitude at least 2^53. A schema that states
+no `type` and no composition has the reason "stated with no `type`". A single
+`allOf` element is read as the schema it wraps for a list, a JSON body and a
+multipart body, as it is for a value.
 
-`openapiv3` holds a bound that is no `i64` as a double, and the double is read
-where it names the integers the bound admits. A bound with a fraction is the
-integer next inside it, whatever `exclusiveMinimum` or `exclusiveMaximum` says:
-`minimum: 0.5` is at least 1. A whole bound below 2^53 is that integer, whatever
-text gave it: the reader keeps the double and not the text, so
-`minimum: 1.00000000000000001` is at least 1, and the flag accepts 1 where the
-document admits only 2 and above. A `maximum` above every `i64` bounds nothing,
-and so does a `minimum` below every one, so an unsigned 64-bit id (`minimum: 0`,
-`maximum: 18446744073709551615`) is an integer of at least 0. A `minimum` above
-every `i64` and a `maximum` below every one are met by no integer of a flag, and
-a whole bound from 2^53 to 2^63 is the double of more than one integer's text,
-so each is named by its keyword and rounded no further. A step (`multipleOf`) is
-read as an integer only where it is whole: a whole double below 2^53 is that
-integer, whatever text gave it, as for a bound, so `multipleOf: 2.00000000000000001`
-is the step 2. A step with a fraction is named by its keyword, because no step
-says that an integer is a multiple of 2.5, and so is a whole one from 2^53.
+`openapiv3` holds a bound that is no `i64` as a double. The double is read
+where it names the integers the bound admits. A bound with a fraction is the integer next inside it, whatever
+`exclusiveMinimum` or `exclusiveMaximum` says: `minimum: 0.5` is at least 1. A
+whole bound with magnitude below 2^53 is that integer, whatever text gave it:
+the reader keeps the double and not the text, so `minimum: 1.00000000000000001`
+is at least 1, and the flag accepts 1 where the document admits only 2 and
+above. A `maximum` above every `i64` bounds nothing, and so does a `minimum`
+below every one, so an unsigned 64-bit id (`minimum: 0`, `maximum:
+18446744073709551615`) is an integer of at least 0. A `minimum` above every
+`i64` and a `maximum` below every one are met by no integer of a flag, and a
+whole bound with magnitude from 2^53 to 2^63, both ends included, is the double
+of more than one integer's text, so each is named by its keyword and rounded no
+further. The refused whole-bound intervals are `[-2^63, -2^53]` and `[2^53, 2^63]`.
+A step (`multipleOf`) is read as an integer only where it is whole: a whole
+double with magnitude below 2^53 is that integer, whatever text gave it, as for
+a bound, so `multipleOf: 2.00000000000000001` is the step 2. A step with a
+fraction is named by its keyword, because no step says that an integer is a
+multiple of 2.5, and so is a whole one with magnitude at least 2^53.
 
 The parameters of an operation are one list. It holds the path item's
 parameters in the order the path item lists them, with a parameter of the
@@ -563,10 +565,13 @@ A body is refused the same way when its `content` key is not a media type at
 all — `form-data` where `multipart/form-data` was meant is a
 `LoadError::MediaType`, not a `--raw-body` sent under a `Content-Type` no server
 parses — or, where it is sent as the `Content-Type`, is none that a header
-carries: an ASCII control character other than a tab, or a white space other than
-space and tab at either end of the whole key. So is a key that is a media
-range, `*/*` or `image/*`: a request goes out under one type, and the range does
-not name it (`LoadError::MediaRange`).
+carries: a byte below 0x20 except tab, or DEL. For a key sent as `Content-Type`,
+the essence before the first `;` must also be `type/subtype` after space and
+tab are trimmed from the essence's ends. Other parameter bytes are not parsed.
+Output separately trims space and tab from the whole key's ends. A media range
+such as `*/*` or `image/*` is refused too: a request goes out under one type,
+and the range does not name it (`LoadError::MediaRange`).
+
 [docs/overlay.md](overlay.md#1-plain-corrections) has the action that repairs
 either. Which key is sent when a body has several is a rule of its own, in
 [validation.md](validation.md#what-goes-on-the-wire).
@@ -688,9 +693,9 @@ be refused for another cause.
 
 ## Value checking
 
-A flag's value parser is the document's own schema, so a value the document
-rules out reports itself at parse time the way a bad enum value does — one error
-shape for one kind of mistake.
+A flag's value parser checks the scalar and list rules retained in the model.
+A string enum keeps its choices and discards `pattern`, `minLength` and
+`maxLength`. A value that fails a retained rule reports itself at parse time.
 
 | the document says | value name | accepted |
 |---|---|---|
@@ -701,8 +706,9 @@ shape for one kind of mistake.
 | `enum: [...]` on a string | `<STRING>` | one of the listed values, and these complete |
 | an array of scalars | repeatable | each value as above, and the list inside `minItems`, `maxItems` and `uniqueItems` |
 
-Every rule a scalar schema states is enforced, and the ones that constrain a
-value are on the flag's help line, written by the same code that refuses it.
+Each retained scalar rule is enforced. The retained constraints are on the
+flag's help line, written by the same code that refuses the value. For a string
+enum, this means membership alone, without pattern or length checks.
 [validation.md](validation.md) is the whole list — what each refusal reads
 like, which road a parameter and a body field take, and what the regex engine
 behind `pattern` costs a binary.

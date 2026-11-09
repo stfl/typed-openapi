@@ -887,10 +887,11 @@ the crate follows [Semantic Versioning][semver].
   is the key that goes out as the `Content-Type`.** The check read the type and
   the subtype and nothing else of the key, so these loaded:
   - an ASCII control character other than a tab in a parameter after the `;`;
-  - whitespace other than space or tab at either end of the whole key, which
-    `str::trim` took off before the check: examples include a line feed, vertical
-    tab, form feed or carriage return, a no-break space, or a next-line
-    character, such as `application/json` followed by a no-break space.
+  - whitespace other than space or tab at an end of the essence before the
+    first `;`, which `str::trim` took off before the check: examples include a
+    line feed, vertical tab, form feed or carriage return, a no-break space, or a
+    next-line character, such as `application/json` followed by a no-break space.
+    This also covers `text/plain\u{a0}; x=a`, with the no-break space before `;`.
 
   A JSON body ignored the key and went out as `application/json`, so each of
   them loaded and worked. A body sent verbatim loaded too, and went out with the
@@ -900,24 +901,27 @@ the crate follows [Semantic Versioning][semver].
   now goes out under the key, so the load refuses each of them as
   `LoadError::MediaType`, for a JSON body and a body sent verbatim, when the key
   is the one that is sent. Characters past ASCII, including C1 controls in a
-  parameter, have UTF-8 bytes a header carries, and load as before. Space and
-  tab at the ends of the whole key are optional whitespace in RFC 9110 and are
-  no fault, and the request goes out without them, because RFC 9113 calls a
-  field value that starts or ends with one malformed: a JSON body with such a
-  key went out as `application/json`, and a body sent verbatim went out with
-  them. A space or a tab inside the key, as before the `;`, is sent as the
-  document spells it. A `multipart/form-data` key is not asked what a header
-  carries, because that body writes its own `Content-Type`, with a boundary, and
-  its key is never sent: a document that holds one with such a byte loaded and
-  its requests went out as `multipart/form-data; boundary=…`, and it still does.
-  The message prints the key as the document spells it, and writes each
-  character that does not show as its code point (`\u{a0}`): examples include a
-  control character, whitespace other than a space, a format character such as a
-  zero width space, and a nonspacing mark. `MediaRange` uses the same visible
-  spelling. sevdesk-cli declares no such key: its 82 body keys are
-  `application/json`, `multipart/form-data` and
+  parameter, have UTF-8 bytes a header carries, and load as before. Other
+  parameter bytes are not parsed: `text/plain; x=\u{a0}` still loads and retains
+  its final no-break space. Essence validation and output trimming are separate.
+  Space and tab at the ends of the whole key are optional whitespace in RFC
+  9110 and are no fault, and the request goes out without them, because RFC
+  9113 calls a field value that starts or ends with one malformed: a JSON body
+  with such a key went out as `application/json`, and a body sent verbatim went
+  out with them. A space or a tab inside the key, as before the `;`, is sent as
+  the document spells it. A `multipart/form-data` key is not asked what a
+  header carries, because that body writes its own `Content-Type`, with a
+  boundary, and its key is never sent: a document that holds one with such a
+  byte loaded and its requests went out as `multipart/form-data; boundary=…`,
+  and it still does. The message prints the key as the document spells it, and
+  writes each character that does not show as its code point (`\u{a0}`):
+  examples include a control character, whitespace other than a space, a format
+  character such as a zero width space, and a nonspacing mark. `MediaRange`
+  uses the same visible spelling. sevdesk-cli declares no such key: its 82 body
+  keys are `application/json`, `multipart/form-data` and
   `application/x-www-form-urlencoded`. Repair: an Overlay that replaces the key
   with the type the server reads.
+
 - **An optional body can be left out, and a required one cannot.** The model
   lost whether `requestBody` is required for a flat JSON body: it folded the
   body's `required` into each property's, so an optional flat body and a required
@@ -1086,20 +1090,21 @@ the crate follows [Semantic Versioning][semver].
   - An integer's bound that `openapiv3` holds as a double is read where the
     double names the integers the bound admits. A bound with a fraction is the
     integer next inside it, whatever `exclusiveMinimum` or `exclusiveMaximum`
-    says: `minimum: 0.5` is at least 1. A whole bound below 2^53 is that
-    integer, whatever text gave it: the reader keeps the double and not the text,
-    so `minimum: 1.00000000000000001` is at least 1, and the flag accepts 1
-    where the document admits only 2 and above. A step (`multipleOf`) is read as
-    an integer only where it is whole: a whole double below 2^53 is that
-    integer, whatever text gave it, so `multipleOf: 2.00000000000000001` is the
-    step 2. A `maximum` above every `i64` bounds nothing, and so does a
-    `minimum` below every one, so an unsigned 64-bit id (`minimum: 0`,
-    `maximum: 18446744073709551615`) is an integer of at least 0. A `minimum`
-    above every `i64`, a `maximum` below every one and a whole bound from 2^53
-    to 2^63, which is the double of more than one integer's text, are refused by
-    their keyword (`Unsupported::Keyword`) and never rounded. A step that is a
-    double with a fraction, or a whole one from 2^53, is refused by its keyword
-    too.
+    says: `minimum: 0.5` is at least 1. A whole bound with magnitude below 2^53
+    is that integer, whatever text gave it: the reader keeps the double and not
+    the text, so `minimum: 1.00000000000000001` is at least 1, and the flag
+    accepts 1 where the document admits only 2 and above. A step (`multipleOf`)
+    is read as an integer only where it is whole: a whole double with magnitude
+    below 2^53 is that integer, whatever text gave it, so `multipleOf:
+    2.00000000000000001` is the step 2. A `maximum` above every `i64` bounds
+    nothing, and so does a `minimum` below every one, so an unsigned 64-bit id
+    (`minimum: 0`, `maximum: 18446744073709551615`) is an integer of at least
+    0. A `minimum` above every `i64`, a `maximum` below every one and a whole
+    bound with magnitude from 2^53 to 2^63, both ends included, which is the double of more than
+    one integer's text, are refused by their keyword (`Unsupported::Keyword`)
+    and never rounded. A step that is a double with a fraction, or a whole one
+    with magnitude at least 2^53, is refused by its keyword too.
+
   - An array that states a keyword with no content (`properties: {}`,
     `required: []`, `enum: []`, `allOf: []`, `oneOf: []`, `anyOf: []`) is the
     array it is. `openapiv3` holds such an array as `AnySchema`, and this crate

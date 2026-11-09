@@ -463,14 +463,14 @@ pub enum Unsupported {
     /// integers it admits, or a `type` that is none of the six.
     ///
     /// A bound is read as its double names it: one with a fraction is the integer
-    /// next inside it, a whole one below 2^53 is that integer whatever text gave it
-    /// (`openapiv3` keeps the double and not the text, so `1.00000000000000001` is
-    /// 1), and one past every `i64` bounds nothing, or admits none and is refused.
-    /// A `multipleOf` is read only where it is whole: a whole double below 2^53 is
-    /// that integer, whatever text gave it, as for a bound. A whole bound from
-    /// 2^53 to 2^63, where the texts of more than one integer are one double, and a
-    /// `multipleOf` that has a fraction or is whole from 2^53 are refused by their
-    /// keyword.
+    /// next inside it, a whole one with magnitude below 2^53 is that integer
+    /// whatever text gave it (`openapiv3` keeps the double and not the text, so
+    /// `1.00000000000000001` is 1), and one past every `i64` bounds nothing, or
+    /// admits none and is refused. A `multipleOf` is read only where it is whole:
+    /// a whole double with magnitude below 2^53 is that integer, whatever text
+    /// gave it, as for a bound. A whole bound with magnitude from 2^53 to 2^63,
+    /// both ends included, is refused by its keyword. So is a `multipleOf` that
+    /// has a fraction or is whole with magnitude at least 2^53.
     ///
     /// Reading the value anyway would be a guess at what the vendor meant, and a
     /// correction is the adopter's to write in an Overlay where a reviewer can
