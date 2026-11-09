@@ -272,8 +272,12 @@ refused as a range. A response is not sent, so it is read at every key of its
 `is_media_type`, a `type/subtype` of two `token`s, and reads as `is_json` does,
 with `str::trim`. A key that goes out as the request's `Content-Type`, a JSON
 body's and one that is sent verbatim, is asked `is_content_type` as well, after
-the question of a range: the header is read as RFC 9110 reads it, so only a space
-and a tab at the ends of the whole key are trimmed. A header value refuses
+the question of a range. It checks the essence before the first `;`, trimming
+only space and tab from the essence's ends before applying the token grammar.
+`Body::media_type` separately trims space and tab from the whole key's ends for
+output. Other parameter bytes are not parsed: `text/plain; x=\u{a0}` loads and
+retains its final no-break space, but `text/plain\u{a0}; x=a` fails the essence
+check. A header value refuses
 bytes below 0x20 except tab, and DEL. Characters past ASCII, including C1
 controls, have UTF-8 bytes that a header carries. A
 `multipart/form-data` key is never asked `is_content_type`, because that body
@@ -556,17 +560,18 @@ object model keeps no order among them. An integer's bound is read wherever its
 double names the integers the bound admits (`integer_end`). A double with a
 fraction is the integer next inside it, as an inclusive bound, because the text
 of an integer gives a whole double and no integer lies between the text and the
-double. A whole double below 2^53 is that integer whatever text gave it, which
-is the approximation named above. A double past every `i64` bounds nothing, or
-admits none and is refused by its keyword. A whole double from 2^53 to 2^63,
-both ends included, is the double of more than one integer's text, so it is
-refused by its keyword and never rounded again. A step is read as an integer
-only where it is whole (`integer_step`): a whole double below 2^53 is that
-integer whatever text gave it, as for a bound, which is the approximation named
-above, and a double with a fraction or a whole one from 2^53 is refused by its
-keyword. A parameter takes the reason as its `Unreachable`, and a property takes
-it as the body going whole, as any property with no flag does. Neither refuses
-the document that holds it, and only a required parameter does.
+double. A whole double with magnitude below 2^53 is that integer whatever text
+gave it, which is the approximation named above. A double past every `i64`
+bounds nothing, or admits none and is refused by its keyword. A whole double
+with magnitude from 2^53 to 2^63, both ends included, is the double of more
+than one integer's text, so it is refused by its keyword and never rounded
+again. A step is read as an integer only where it is whole (`integer_step`): a
+whole double with magnitude below 2^53 is that integer whatever text gave it,
+as for a bound, which is the approximation named above, and a double with a
+fraction or a whole one with magnitude at least 2^53 is refused by its keyword.
+A parameter takes the reason as its `Unreachable`, and a property takes it as
+the body going whole, as any property with no flag does. Neither refuses the
+document that holds it, and only a required parameter does.
 
 `stated` is the one reader of a value's schema, a list's, a JSON body's and a
 multipart body's. A single-element `allOf` is a `$ref` that kept its siblings

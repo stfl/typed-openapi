@@ -566,14 +566,16 @@ pub enum LoadError {
         why: Unsupported,
     },
     /// A `requestBody` whose `content` key names no media type — `form-data`
-    /// where `multipart/form-data` was meant — or, for a key that goes out as the
-    /// request's `Content-Type`, is none that a header carries: an ASCII control
-    /// character other than a tab, or a white space other than a space and a tab
-    /// at either end of the whole key. Refused while the document is
-    /// reduced, because the alternative is a request sent under a `Content-Type`
-    /// no server can read, or no request at all. The message spells the key as
-    /// the document does, so that an Overlay's target can match it, and writes a
-    /// character that does not show as its code point (`\u{a0}`).
+    /// where `multipart/form-data` was meant — or, for a key that goes out as
+    /// the request's `Content-Type`, fails its additional checks: the essence
+    /// before the first `;`, with space and tab trimmed from its ends, must be
+    /// `type/subtype`, and the whole key must contain no byte below 0x20
+    /// except tab, and no DEL. Other parameter bytes are not parsed. Refused
+    /// while the document is reduced, because the alternative is a request
+    /// sent under a `Content-Type` no server can read, or no request at all.
+    /// The message spells the key as the document does, so that an Overlay's
+    /// target can match it, and writes a character that does not show as its
+    /// code point (`\u{a0}`).
     #[error(
         "{op}: `{}` is not a media type; \
          an Overlay is where a document's content type is corrected",

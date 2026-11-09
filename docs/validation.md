@@ -1,7 +1,8 @@
 # What is checked, and what checking costs
 
-Every rule the document states about a scalar value, and about a list of them,
-is enforced on a parameter and on a body field's flag. The generated type of a
+The scalar and list rules retained in the model are enforced on a parameter
+and on a body field's flag. A string enum retains its choices and discards
+`pattern`, `minLength` and `maxLength`. The generated type of a
 body field runs fewer of them, and [Where each rule runs](#where-each-rule-runs)
 says which. The primer is [the README](../README.md); this page is the reference
 for someone deciding how much of their API's contract they get for free, and
@@ -10,8 +11,9 @@ what the engine that provides it costs their binary.
 ## The rules
 
 A scalar is a value that fits on one flag and in one struct field.
-[`Scalar`](../typed-openapi/src/scalar.rs) carries what the schema says about
-one, and `Scalar::parse` checks all of it.
+[`Scalar`](../typed-openapi/src/scalar.rs) carries the retained rules, and
+`Scalar::parse` checks them. A string enum becomes `Scalar::Choice`, which
+checks membership without the schema's pattern or length rules.
 
 | the document says | value name | a refusal reads |
 |---|---|---|
@@ -368,14 +370,16 @@ read as RFC 9110 reads a header value, and one that is not is refused as
 - an ASCII control character other than a tab (U+0000 to U+001F and U+007F)
   anywhere in it, in a parameter as much as in the type. A character past
   ASCII, a C1 control character among them, has UTF-8 bytes a header carries;
-- a white space other than a space and a tab at either end of the whole key,
-  such as a no-break space. A space and a tab there are the optional
-  white space of RFC 9110 and are no fault, and the request goes out without
-  them, because a field value must not start or end with one (RFC 9113,
-  section 8.2.1). A space or a tab inside the key, such as before the `;`, is
-  sent as the document spells it.
+- an essence before the first `;` that is not `type/subtype` after space and
+  tab are trimmed from the essence's ends. A no-break space beside the type
+  or subtype fails this token grammar, including before a `;` inside the key.
 
-The rest of a parameter is not parsed. A `multipart/form-data` key is not asked
+The rest of a parameter is not parsed. For example, `text/plain; x=\u{a0}`
+loads and retains its final no-break space; `text/plain\u{a0}; x=a` is refused.
+Output trimming is separate: `Body::media_type()` removes space and tab from
+the ends of the whole key. A field value must not start or end with either
+(RFC 9113, section 8.2.1). Space and tab inside the key, such as before the `;`,
+are sent as the document spells them. A `multipart/form-data` key is not asked
 what a header carries, because that body is sent under a `Content-Type` of its
 own, with the boundary that is chosen when the parts are encoded, and the key is
 never sent: such a document loads. The words spell the key as the document does,

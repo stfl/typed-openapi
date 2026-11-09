@@ -197,7 +197,7 @@ fn minimums() -> Vec<Row> {
             false,
             low(Some(Inclusive(-9_007_199_254_740_991))),
         ),
-        // Whole, from 2^53 to 2^63, both ends included: no one integer.
+        // Whole, with magnitude from 2^53 to 2^63, both ends included: no one integer.
         ("9007199254740992.0", false, Err("minimum")),
         ("-9007199254740992.0", false, Err("minimum")),
         ("9223372036854775807.0", false, Err("minimum")),
@@ -234,7 +234,7 @@ fn maximums() -> Vec<Row> {
             false,
             high(Some(Inclusive(9_007_199_254_740_991))),
         ),
-        // Whole, from 2^53 to 2^63, both ends included.
+        // Whole, with magnitude from 2^53 to 2^63, both ends included.
         ("9007199254740992.0", false, Err("maximum")),
         ("9007199254740993.0", false, Err("maximum")),
         ("-9007199254740992.0", false, Err("maximum")),
@@ -264,12 +264,13 @@ fn spelled(keyword: &str, bound: &str, exclusive: bool) -> String {
 }
 
 /// An integer's `minimum`, which `openapiv3` holds as a double when it is no
-/// `i64`. A double with a fraction is the text of a number that is no integer, so
-/// the integer next inside it is the bound, with or without `exclusiveMinimum`. A
-/// whole double below 2^53 is that integer, whatever text gave it. From 2^53 to 2^63, both ends included,
-/// more than one integer's text is that double, and the bound is refused. A
-/// double above 2^63 is above every integer a flag carries, so none meets it, and
-/// one below −2^63 is below every one, so it bounds nothing.
+/// `i64`. A double with a fraction is the text of a number that is no integer,
+/// so the integer next inside it is the bound, with or without
+/// `exclusiveMinimum`. A whole double with magnitude below 2^53 is that
+/// integer, whatever text gave it. At magnitudes from 2^53 to 2^63, both ends
+/// included, more than one integer's text is that double, and the bound is
+/// refused. A double above 2^63 is above every integer a flag carries, so none
+/// meets it, and one below −2^63 is below every one, so it bounds nothing.
 #[test]
 fn an_integers_minimum_that_openapiv3_holds_as_a_double_is_read_where_the_double_is_exact() {
     for (bound, exclusive, expected) in minimums() {
@@ -313,11 +314,12 @@ fn an_unsigned_64_bit_id_is_an_integer_of_at_least_0() {
     );
 }
 
-/// A step is read as an integer only where it is whole: a whole double below 2^53 is
-/// that integer, whatever text gave it, as for a bound, so `2.00000000000000001` is
-/// the step 2. A double with a fraction
-/// and a whole one from 2^53 are refused by their keyword: `2.5` states that an
-/// integer is a multiple of 5, and no step that this crate reads says so.
+/// A step is read as an integer only where it is whole: a whole double with
+/// magnitude below 2^53 is that integer, whatever text gave it, as for a
+/// bound, so `2.00000000000000001` is the step 2. A double with a fraction and
+/// a whole one with magnitude at least 2^53 are refused by their keyword:
+/// `2.5` states that an integer is a multiple of 5, and no step that this
+/// crate reads says so.
 #[test]
 fn an_integers_step_that_openapiv3_holds_as_a_double_is_read_only_where_it_is_whole() {
     for (schema, expected) in [

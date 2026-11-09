@@ -675,12 +675,15 @@ Three things are worth knowing:
   with no `type/subtype` in it — `form-data` where `multipart/form-data` was
   meant — is a `LoadError` naming the operation and the key, rather than bytes
   sent under a `Content-Type` no server reads. A key that is sent as the
-  `Content-Type` and that no header carries is no media type either: an ASCII
-  control character other than a tab, or a white space other than a space and a
-  tab at either end of the whole key. A key that is a media range (`*/*`,
-  `image/*`) is refused too (`LoadError::MediaRange`), when it is the key the body
-  is sent under. The repair is an Overlay action,
-  and [overlay.md](overlay.md#1-plain-corrections) writes one out.
+  `Content-Type` must also have a `type/subtype` essence before the first `;`,
+  after space and tab are trimmed from the essence's ends. The whole key must
+  contain no byte below 0x20 except tab, and no DEL. Other parameter bytes are
+  not parsed. Output separately trims space and tab from the whole key's ends.
+  A key that is a media range (`*/*`, `image/*`) is refused too
+  (`LoadError::MediaRange`), when it is the key the body is sent under. The
+  repair is an Overlay action, and [overlay.md](overlay.md#1-plain-corrections)
+  writes one out.
+
 - **A parameter becomes an argument only where a command line could spell it.**
   A scalar is one argument; an array of scalars is a `Vec` argument the wrapper
   fills by repeating the wire name, which is what a repeated flag does. The

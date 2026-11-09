@@ -1,5 +1,4 @@
-//! Every rule the document states about a value is enforced in one place and
-//! rendered in one place.
+//! Retained scalar rules are enforced in one place and rendered in one place.
 //!
 //! `Scalar::parse` is the one check and `Scalar::note` the one rendering, so a
 //! rule that reaches `--help` is a rule that refuses a value, and a refusal

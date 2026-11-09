@@ -573,15 +573,11 @@ fn listed<T>(
         .collect()
 }
 
-/// The least whole number from which a double does not name one integer: 2^53.
-/// A whole double below it is read as that integer, whatever text gave it, and from
-/// it up the texts of more than one integer round to the same double.
+/// The magnitude from which integer text can round to the same double: 2^53.
 const EXACT: f64 = 9_007_199_254_740_992.0;
 
-/// 2^63, the first whole number past `i64`. The doubles from 2^53 to this one,
-/// both ends included, are doubles that more than one integer's text rounds to, and
-/// the next double above it, and every one beyond, is above every integer a flag
-/// carries.
+/// The magnitude through which whole doubles are refused as ambiguous bounds.
+/// Beyond 2^63 or below -2^63, a bound is outside the range of `i64`.
 const BEYOND: f64 = 9_223_372_036_854_775_808.0;
 
 /// Which end of an integer's range a bound is.
@@ -609,13 +605,15 @@ impl End {
 ///   this is the double of a text that is no integer, and no integer lies between
 ///   the text and the double. The bound is the next integer inside, as an
 ///   inclusive one: `exclusiveMinimum` says nothing that the ceiling does not.
-/// - A whole double below 2^53 is that integer, whatever text gave it. The reader
-///   keeps the double and not the text, so a text with a fraction that rounds to a
-///   whole double (`minimum: 1.00000000000000001`) is read as that whole number,
-///   and no code here can tell it from `1.0`. That is the approximation of this
-///   reading, and the step has it too ([`integer_step`]).
-/// - A whole double from 2^53 to 2^63, both ends included, is the double of more
-///   than one integer's text, so it is refused.
+/// - A whole double with magnitude below 2^53 is that integer, whatever text
+///   gave it. The reader keeps the double and not the text, so a text with a
+///   fraction that rounds to a whole double (`minimum: 1.00000000000000001`)
+///   is read as that whole number, and no code here can tell it from `1.0`.
+///   That is the approximation of this reading, and the step has it too
+///   ([`integer_step`]).
+/// - A whole double with magnitude from 2^53 to 2^63, both ends included, is
+///   the double of more than one integer's text, so it is refused. These
+///   intervals are `[-2^63, -2^53]` and `[2^53, 2^63]`.
 /// - A double past that, above or below, is past every integer a flag carries. A
 ///   `minimum` above them admits none of them, which no scalar says, so it is
 ///   refused; a `maximum` above them bounds nothing. A `maximum` below them admits
@@ -653,13 +651,14 @@ fn integer_end(
     }
 }
 
-/// An integer's `multipleOf`, which `openapiv3` holds as an `f64` once it is no
-/// `i64`: `2.0` and `1e3` are the integers 2 and 1000. A whole double below 2^53 is
-/// that integer, whatever text gave it, as for a bound: the reader keeps the double
-/// and not the text, so `multipleOf: 2.00000000000000001` is the step 2. A double
-/// with a fraction is refused, because an integer is a multiple of 2.5 when it is
-/// a multiple of 5 and no step that this crate reads says so, and so is a whole one
-/// from 2^53, which a double does not state exactly.
+/// An integer's `multipleOf`, which `openapiv3` holds as an `f64` once it is
+/// no `i64`: `2.0` and `1e3` are the integers 2 and 1000. A whole double with
+/// magnitude below 2^53 is that integer, whatever text gave it, as for a
+/// bound: the reader keeps the double and not the text, so `multipleOf:
+/// 2.00000000000000001` is the step 2. A double with a fraction is refused,
+/// because an integer is a multiple of 2.5 when it is a multiple of 5 and no
+/// step that this crate reads says so, and so is a whole one with magnitude at
+/// least 2^53, which a double does not state exactly.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the step is whole and below 2^53 in size, which an i64 holds"
@@ -1181,13 +1180,13 @@ pub(crate) fn is_media_type(media_type: &str) -> bool {
 /// body key that is picked. This is asked only of a key that goes out as the
 /// header, a JSON body's and one that is sent verbatim: a `multipart/form-data`
 /// body writes its own `Content-Type`, with a boundary, and its key is never
-/// sent. The header is read as RFC 9110 reads it: space and tab at either end
-/// of the whole key are optional whitespace and are trimmed, and no other
-/// whitespace is, so a no-break space there is no `token` character and a
-/// server reads no type in it. The whole key must also be a header value, which
-/// refuses an ASCII control character other than a tab, in a parameter as much
-/// as in the essence. The rest of a parameter is not parsed, for the reason
-/// that [`is_media_type`] gives.
+/// sent. The essence before the first `;`, with space and tab trimmed from its
+/// ends, must be `type/subtype`. A no-break space at an end of that essence is
+/// no `token` character. The whole key must also be a header value, which
+/// refuses bytes below 0x20 except tab, and DEL, in a parameter as much as in the
+/// essence. Other parameter bytes are not parsed. Output trimming is separate:
+/// [`crate::model::Body::media_type`] trims space and tab from the whole key's
+/// ends, and retains other whitespace in a parameter.
 #[must_use]
 pub(crate) fn is_content_type(media_type: &str) -> bool {
     has_type_and_subtype(before_parameters(media_type).trim_matches([' ', '\t']))
