@@ -151,7 +151,11 @@ audit:
     cargo deny check advisories bans sources
 
 # Everything CI's gate job runs, in the same order. The stable job is separate.
-gate: check features test blessed package audit
+gate: release-check check features test blessed package audit
+
+# Run the release decision with synthetic local Git history; no remote writes.
+release-check:
+    python3 .github/tests/test_release.py
 
 # Every artefact under `api-generated` is committed, so the generator has to be
 # able to reproduce them. A diff here is either the vendor's document moving or
@@ -229,9 +233,9 @@ blessed:
 #
 # The unpacked copy lives in a scratch directory outside the repository, because
 # cargo refuses to build a package that sits inside a workspace it is not a
-# member of, and `target/package/<name>-<version>/` does. `--manifest-path`
-# keeps the working directory here, so `rustup` reads `rust-toolchain.toml` for
-# the test run as it does for everything else, and `--target-dir` lets the run
+# member of, and `target/package/<name>-<version>/` does. The package commands
+# name `+stable`; `--manifest-path` keeps the working directory here, so the
+# tarball's test runs use the pinned nightly. `--target-dir` lets the run
 # reuse the dependencies already compiled in that directory. `tar -m` stamps the
 # unpacked files with the time of unpacking: a `.crate` carries one old date on
 # every file, cargo takes a file no newer than its last build for unchanged, and
@@ -266,8 +270,8 @@ package:
     scratch=$(mktemp -d)
     trap 'rm -rf "$scratch" "$packaged"' EXIT
     rm -rf "$packaged"
-    cargo package -p typed-openapi --list --allow-dirty
-    cargo package -p typed-openapi --allow-dirty --target-dir "$target"
+    cargo +stable package -p typed-openapi --list --allow-dirty
+    cargo +stable package -p typed-openapi --allow-dirty --target-dir "$target"
     tar -xzmf "$packaged"/typed-openapi-*.crate -C "$scratch"
     manifests=("$scratch"/typed-openapi-*/Cargo.toml)
     cargo test --no-run --no-default-features --manifest-path "${manifests[0]}" --target-dir "$target"

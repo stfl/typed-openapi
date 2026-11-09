@@ -20,7 +20,8 @@ $ just gate    # every check of CI's `just gate` job
 ```
 
 `just gate` is the one command a change passes before it merges. It runs every
-check of CI's `just gate` job: formatting, clippy and rustdoc with warnings
+check of CI's `just gate` job: the release decision against local Git history,
+formatting, clippy and rustdoc with warnings
 denied, every feature combination a consumer can select, the tests and the
 doctests, a bless that has to reproduce every committed artefact, the crate
 built from its own tarball, and the audit of the dependency tree.
@@ -40,9 +41,10 @@ Only `rustup` reads `rust-toolchain.toml`, so on a host without it, check the
 compiler before trusting a green gate. `rustc --version` prints the commit date
 of the compiler, which is one day before the date in the file.
 
-The gate needs `just` and `cargo-nextest` installed, and `just audit` needs
-`cargo-deny`. `.github/workflows/ci.yml` pins the versions of the tools CI
-installs.
+The gate needs `just`, `cargo-nextest` and Python 3.11 or newer installed, and
+`just audit` needs `cargo-deny`. The package commands use `cargo +stable`, so
+install stable with `rustup toolchain install stable --profile minimal` too.
+`.github/workflows/ci.yml` pins the versions of the tools CI installs.
 
 ## Dependencies
 
