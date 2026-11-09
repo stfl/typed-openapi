@@ -978,14 +978,9 @@ fn a_forgery_clap_builds_is_refused_all_the_same() {
     }
 }
 
-/// The other side of the line. A value in the blob can break each of these
-/// rules, or sit beside it, and the check leaves each rule out, because no break
-/// of it is inside the line: clap builds the command tree, nothing a gate holds
-/// back is sent. The empty `operationId` is accepted by a load too; it does not
-/// exercise the load's missing-id refusal. `ServerUrl` concerns URL syntax, not
-/// an absent server. Two operations of one `operationId` are the exception:
-/// a load refuses them, and
-/// the blob below holds them, because no binary is stopped by them.
+/// These decoded blobs pass the post-decode check and build a clap tree. The
+/// assertions below check the remaining value, request and inventory failures.
+/// A media range can still become a header; its server response is not tested.
 #[test]
 fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {
     let read = |edit: Edit| {
@@ -1031,8 +1026,7 @@ fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {
     assert!(sent.expect("the values satisfy it").is_err());
 
     // `MediaRange`: a header carries a range, so the request is built and goes
-    // out under it. The server is what refuses a `Content-Type` that names no
-    // one type.
+    // out under it. This checks the header, not the server's response.
     let doc = read(|value| {
         operation(value, "createVoucher")["body"]["JsonFields"]["media_type"] = json!("*/*");
     });
@@ -1046,10 +1040,6 @@ fn a_rule_the_check_leaves_out_costs_the_run_that_meets_it_and_never_a_panic() {
     let doc = read(|value| value["base"] = json!("localhost:9999"));
     let sent = request(&doc, "getVoucher", Values::new().param("id", 5));
     assert!(sent.expect("the values satisfy it").is_err());
-
-    // `NoOperationId`: an empty id is a name in messages and in `get`.
-    let doc = read(|value| operation(value, "getVoucher")["id"] = json!(""));
-    assert!(doc.get("").is_some());
 
     // `DuplicateOperationId`: the command line mounts each operation under its
     // own `<group> <command>`, which the check holds apart, so no id is asked

@@ -683,7 +683,8 @@ fn two_required_entries_of_one_name_and_place_are_told_apart_by_their_order() {
         )
         .expect_err("the later entry is still required");
         assert!(
-            matches!(earlier, LoadError::Parameter { .. }),
+            matches!(&earlier, LoadError::Parameter { op, name, place, why: Unsupported::Shared(shared) }
+                if op == "listThings" && name == "q" && *place == in_place && *shared == in_place),
             "{earlier:?}"
         );
     }

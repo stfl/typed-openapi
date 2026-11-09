@@ -558,12 +558,13 @@ fn a_space_and_a_tab_at_an_end_of_the_key_are_not_sent() {
 /// The words spell the key as the document does, so the target of the Overlay
 /// that repairs it can match: a quote and a backslash are printed as they stand,
 /// and only a character that does not show is written as its code point. The
-/// inputs are `form-data; name="file"`, `form\data`, `application/jsoné` and
+/// inputs include `form-data; name="file"`, `form-data'`, `form\data`, `application/jsoné` and
 /// `application/json` with a replacement character after it.
 #[test]
 fn the_words_spell_the_key_as_the_document_does() {
     for (key, spelled) in [
         (r#"'form-data; name="file"'"#, r#"`form-data; name="file"`"#),
+        (r#""form-data'""#, "`form-data'`"),
         (r"'form\data'", r"`form\data`"),
         ("'application/json\u{e9}'", "`application/json\u{e9}`"),
         ("'application/json\u{fffd}'", "`application/json\u{fffd}`"),
