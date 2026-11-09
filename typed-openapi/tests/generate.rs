@@ -3943,13 +3943,18 @@ fn wrapper(ops: &str, name: &str) -> String {
 }
 
 #[test]
-fn wrapper_extraction_requires_its_own_description() {
+fn wrapper_extraction_stops_at_the_preceding_wrapper() {
     const OPS: &str = "impl Client {\n    /// First description.\n    pub fn first() {\n    }\n    /// Second description.\n    pub fn second() {\n    }\n}\n";
     let second = wrapper(OPS, "second");
     assert!(second.contains("Second description."));
     assert!(!second.contains("First description."));
-    let missing = OPS.replace("    /// Second description.\n", "");
-    assert!(std::panic::catch_unwind(|| wrapper(&missing, "second")).is_err());
+}
+
+#[test]
+#[should_panic(expected = "has no description")]
+fn wrapper_extraction_requires_its_own_description() {
+    const OPS: &str = "impl Client {\n    /// First description.\n    pub fn first() {\n    }\n    pub fn second() {\n    }\n}\n";
+    wrapper(OPS, "second");
 }
 
 /// The fixture's `createLedgerEntry` describes its request body where it uses

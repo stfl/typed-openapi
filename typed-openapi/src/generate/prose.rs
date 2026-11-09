@@ -961,6 +961,7 @@ mod tests {
             ("*     five", "*    five"),
             ("1.     five", "1.    five"),
             ("  - \t\tdeep", "  -    deep"),
+            ("  - \tx", "  -    x"),
             ("*    four", "*    four"),
             ("-   three", "-   three"),
             ("-\tx", "-\tx"),
