@@ -22,7 +22,7 @@ $ just gate    # every check of CI's `just gate` job
 `just gate` is the one command a change passes before it merges. It runs every
 check of CI's `just gate` job: the release decision against local Git history,
 formatting, clippy and rustdoc with warnings
-denied, every feature combination a consumer can select, the tests and the
+denied, each feature alone and all together, the tests and the
 doctests, a bless that has to reproduce every committed artefact, the crate
 built from its own tarball, and the audit of the dependency tree.
 
