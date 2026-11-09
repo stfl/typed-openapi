@@ -992,9 +992,8 @@ fn a_decode_column_is_the_bytes_of_the_line_before_the_place() {
     assert_eq!((source.line, source.column), (1, 0), "an object for a list");
 }
 
-/// The column counts bytes and not characters, so after a character of two bytes
-/// it is one more than the characters before it, and where the reader stops on
-/// the first byte of a character it falls inside that character.
+/// The reported column counts bytes from one. It is not a byte offset from
+/// zero: using it as an offset can land inside a multibyte character.
 #[test]
 fn a_decode_column_counts_bytes_and_can_fall_inside_a_character() {
     let after = r#"{"id":"ä"}"#;
@@ -1014,7 +1013,7 @@ fn a_decode_column_counts_bytes_and_can_fall_inside_a_character() {
     assert_eq!((inside_cause.line, inside_cause.column), (1, 7));
     assert!(
         !inside.is_char_boundary(inside_cause.column),
-        "column 7 is the first byte of `ä`, which has two"
+        "column 7 is one-based; byte offset 7 is inside `ä`"
     );
 }
 

@@ -5891,10 +5891,9 @@ fn a_bless_that_rustfmt_refuses_places_no_artefact() {
 
 // ----------------------------------------------- a nullable schema admits null
 
-/// The vendor's own words for "or `null`": `nullable: true`, on every shape a
-/// schema has. `note` is the input of the probe `A4/docs/shapes.yaml` behind
-/// F-17, a property that is required and nullable, and the rest are the shapes
-/// sevdesk's document states it on.
+/// The integration corpus for `nullable: true` on the shapes below. `note` is
+/// required and nullable. This corpus is separate from the JSON rewrite cases
+/// in the generator's unit tests.
 const NULLABLE: &str = r##"
 openapi: 3.0.3
 info: { title: Nullable, version: "1.0" }
