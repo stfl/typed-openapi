@@ -194,15 +194,15 @@ Licensed under either of Apache-2.0 or MIT, at your option.
 
 [overlay]: https://spec.openapis.org/overlay/v1.1.0.html
 [`openapiv3`]: https://docs.rs/openapiv3
-[gen]: https://github.com/stfl/typed-openapi/blob/main/docs/generating.md
-[drift]: https://github.com/stfl/typed-openapi/blob/main/docs/drift.md
-[ov]: https://github.com/stfl/typed-openapi/blob/main/docs/overlay.md
-[ad]: https://github.com/stfl/typed-openapi/blob/main/docs/adoption.md
-[cli]: https://github.com/stfl/typed-openapi/blob/main/docs/cli.md
-[val]: https://github.com/stfl/typed-openapi/blob/main/docs/validation.md
-[bu]: https://github.com/stfl/typed-openapi/blob/main/docs/builders.md
-[client]: https://github.com/stfl/typed-openapi/blob/main/docs/client.md
-[ex]: https://github.com/stfl/typed-openapi/tree/main/examples/toy
-[changelog]: https://github.com/stfl/typed-openapi/blob/main/CHANGELOG.md
-[contrib]: https://github.com/stfl/typed-openapi/blob/main/CONTRIBUTING.md
-[security]: https://github.com/stfl/typed-openapi/blob/main/SECURITY.md
+[gen]: https://github.com/stfl/typed-openapi/blob/v0.1.0/docs/generating.md
+[drift]: https://github.com/stfl/typed-openapi/blob/v0.1.0/docs/drift.md
+[ov]: https://github.com/stfl/typed-openapi/blob/v0.1.0/docs/overlay.md
+[ad]: https://github.com/stfl/typed-openapi/blob/v0.1.0/docs/adoption.md
+[cli]: https://github.com/stfl/typed-openapi/blob/v0.1.0/docs/cli.md
+[val]: https://github.com/stfl/typed-openapi/blob/v0.1.0/docs/validation.md
+[bu]: https://github.com/stfl/typed-openapi/blob/v0.1.0/docs/builders.md
+[client]: https://github.com/stfl/typed-openapi/blob/v0.1.0/docs/client.md
+[ex]: https://github.com/stfl/typed-openapi/tree/v0.1.0/examples/toy
+[changelog]: https://github.com/stfl/typed-openapi/blob/v0.1.0/CHANGELOG.md
+[contrib]: https://github.com/stfl/typed-openapi/blob/v0.1.0/CONTRIBUTING.md
+[security]: https://github.com/stfl/typed-openapi/blob/v0.1.0/SECURITY.md
