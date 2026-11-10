@@ -161,6 +161,29 @@ the crate follows [Semantic Versioning][semver].
 
 ### Changed
 
+- **`Recorder::failing` and `Recorder::failing_route` take a `Reach`.** The
+  signatures are `failing(reach, message)` and
+  `failing_route(method, path, reach, message)`, also through the
+  `transport::Recorder` path. Repair: pass the reach of the simulated failure
+  before its message, so a retry rule can distinguish a request that did not
+  reach the server from one whose outcome is unknown.
+- **`tree::Outcome` adds `Template(String)`.** It carries the JSON skeleton
+  requested with `--json-body-template`; no request is sent. Repair: add a
+  `Template(text)` arm to a match and print the text.
+- **`Shape::Flag` gains `format: Option<String>`.** It holds the document's
+  format spelling, or `None` where none is declared. Repair: include `format`
+  in a struct literal, and add it or `..` to a pattern.
+- **`Body::JsonWhole` gains `template: Option<String>`.** It holds the JSON
+  skeleton, or `None` where the document describes no shape to render. Repair:
+  include `template` in a struct literal, and add it or `..` to a pattern.
+- **`Unsupported` adds `Unspellable`.** It names a parameter whose name has no
+  ASCII flag spelling. Repair: add an `Unspellable` arm to an exhaustive match;
+  the parameter has no flag.
+- **Implicit enum discriminants change.** `ArgError::PartSyntax` moves from
+  2 to 3. `ValueError::{MissingBody, UnexpectedBody, WrongBodyKind}` move from
+  5, 6 and 7 to 12, 13 and 14. Repair: identify these errors by their named
+  variants rather than their numeric positions.
+
 - Generated document and summary headers name each input with its parent
   directory. Replacement promises name the generated newtype without a position.
   Run the bless step again to update these comments.
