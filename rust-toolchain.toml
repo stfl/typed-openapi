@@ -17,5 +17,5 @@
 # Dependabot's `rust-toolchain` entry proposes the next one weekly, and CI
 # installs whatever this file names, with no `toolchain:` of its own.
 [toolchain]
-channel = "nightly-2026-10-20"
+channel = "nightly-2026-11-10"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]
