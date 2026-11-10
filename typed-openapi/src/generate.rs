@@ -62,17 +62,26 @@
 //! correction that stops applying is the loudest thing a vendor revision can
 //! do, and this is where it is heard. The failure names the layer it is in.
 
+mod artefacts;
+mod cycles;
+mod enums;
+mod guard;
+mod identifiers;
 mod names;
 mod ops;
+mod prose;
 mod types;
 
-use std::io;
+use std::error::Error;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 
-use syn::visit_mut::VisitMut;
 use thiserror::Error;
 
+use self::artefacts::Artefacts;
 use crate::model::DocumentError;
+use crate::openapi::Misfit;
 use crate::overlay::OverlayError;
 use crate::{ConfirmationError, Document, LoadError, Loading, overlay};
 
@@ -89,8 +98,16 @@ const DEFAULT_COMMAND: &str = "cargo run -p xtask -- bless";
 /// It is an inner attribute rather than a wrapping module so that the exemption
 /// travels with the file it exempts, and it is the same block in every
 /// generated file so that an adopter can grep for it.
+///
+/// `warnings` is what keeps the file quiet under a lint set that this list does
+/// not name, such as `clippy::nursery`, `missing_docs` and
+/// `unused_qualifications`, and under `-D warnings` on top of it: a lint at the
+/// level `warn` is a lint that the adopter chose, and none of it is aimed at a
+/// file that they did not write. A lint outside the named groups that they set
+/// to `deny` by name remains theirs to relax.
 const ALLOW: &str = "\
 #![allow(
+    warnings,
     clippy::all,
     clippy::pedantic,
     clippy::restriction,
@@ -98,8 +115,8 @@ const ALLOW: &str = "\
     unreachable_pub,
     unused,
     rustdoc::all,
-    reason = \"generated source is not graded on style; the allow covers this \\
-              module and nothing else\"
+    reason = \"generated source is not graded on style or on any lint that the crate \\
+              holding it turns on; the allow covers this module and nothing else\"
 )]
 ";
 
@@ -261,9 +278,17 @@ impl Settings {
     /// and the header of each Rust file states where the others are. One
     /// argument buys all four in the arrangement they have to be in.
     ///
-    /// Every Rust file is handed to `rustfmt` after it is written, so what
+    /// **A bless that is refused writes nothing.** Every artefact is built in
+    /// memory first, and every Rust file is handed to `rustfmt` there, so what
     /// lands in the tree is what `cargo fmt --check` expects and the bless step
-    /// stays one command.
+    /// stays one command. The first file is written only after the document,
+    /// every emitter, the blob's round trip and `rustfmt` have all said yes. A
+    /// refusal at any of them leaves the committed artefacts as they were, which
+    /// is what keeps a vendor revision that the generator refuses from leaving
+    /// the new types beside the old wrappers. Each file is then written beside
+    /// its destination and renamed over it, so a disk that fills part-way is
+    /// stopped before any file is replaced, and a reader sees the old file or
+    /// the new one.
     pub fn write_to(&self, crate_dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, GenerateError> {
         let dir = crate_dir.as_ref();
         let corrected = self.correct()?;
@@ -288,22 +313,24 @@ impl Settings {
             &header,
             &self.replacements,
         )?;
-
-        write_bytes(&spec, document.as_bytes())?;
-        write_rust(&types, &source)?;
-        write_rust(
+        let types_source = formatted(&types, &source)?;
+        let ops_source = formatted(
             &ops,
             &ops::emit(&corrected.api, &corrected.model, &header, &names)?,
         )?;
-        write_model(&model, &corrected.model)?;
 
-        let mut written = vec![spec, types, ops, model];
+        let mut artefacts = Artefacts::new();
+        artefacts.add(spec, document);
+        artefacts.add(types, types_source);
+        artefacts.add(ops, ops_source);
+        artefacts.add(model, blob(&corrected.model)?);
         if let Some(page) = page {
-            let counted = format!("{}{}", self.summary_header(), corrected.model.summary());
-            write_bytes(&page, counted.as_bytes())?;
-            written.push(page);
+            artefacts.add(
+                page,
+                format!("{}{}", self.summary_header(), corrected.model.summary()),
+            );
         }
-        Ok(written)
+        artefacts.write()
     }
 
     /// Every layer, laid over the document in order, in the three views the
@@ -315,16 +342,26 @@ impl Settings {
         };
 
         let mut overlaid = overlay::parse(&read(&self.document)?).map_err(fault(&self.document))?;
+        // The vendor's version, before the first layer, as `Document::load_with`
+        // asks it: this road lays the layers itself, and a layer that does not
+        // apply to a 3.1 document is a refusal for the document, not for the
+        // layer.
+        crate::openapi::require_3_0(&overlaid).map_err(GenerateError::Unusable)?;
         for layer in &self.overlays {
             overlaid = overlay::apply(overlaid, &read(layer)?).map_err(fault(layer))?;
         }
-        let yaml = serde_yaml_ng::to_string(&overlaid).map_err(GenerateError::Yaml)?;
+        // The emitter keeps its defaults, which quote every string a YAML 1.1
+        // reader would misread (`"N"`, `"yes"`, `"1.0"`), so a reader that
+        // follows 1.1 reads back the strings that were written.
+        let yaml = serde_saphyr::to_string(&overlaid)
+            .map_err(|error| GenerateError::Yaml(Box::new(error)))?;
 
         // Refuse to emit against a document this crate cannot build a CLI from.
         // Everything below trusts that this succeeded.
         let model =
             Document::load_with(&yaml, &[], &self.loading).map_err(GenerateError::Unusable)?;
-        let api = serde_json::from_value(overlaid).map_err(GenerateError::NotOpenApi)?;
+        let api = crate::openapi::model_of(&overlaid)
+            .map_err(|Misfit { at, source }| GenerateError::NotOpenApi { at, source })?;
 
         Ok(Corrected { yaml, model, api })
     }
@@ -347,7 +384,7 @@ impl Settings {
             "# Generated by `{}` from {}.\n\
              # Do not edit: every correction belongs in an Overlay.\n",
             self.command,
-            listed(&self.inputs(file_name)),
+            listed(&self.inputs(locator)),
         )
     }
 
@@ -374,7 +411,7 @@ impl Settings {
              that command counts them again.\n\
              -->\n\n",
             self.command,
-            listed(&self.inputs(file_name)),
+            listed(&self.inputs(locator)),
         )
     }
 
@@ -383,7 +420,7 @@ impl Settings {
     /// source gets from an adopter's lints.
     fn rust_header(&self, corrected: &Path) -> String {
         let belongs = match self.overlays.as_slice() {
-            [] => format!("is generated from `{}`", locator(&self.document)),
+            [] => format!("belongs in `{}`", locator(&self.document)),
             layers => {
                 let named: Vec<String> = layers
                     .iter()
@@ -409,6 +446,33 @@ impl Settings {
             .map(|path| name(path))
             .collect()
     }
+}
+
+/// What [`GenerateError::OneType`] asks an adopter to change.
+///
+/// A `title` on an inline schema gives its type a name of the document's own, so
+/// it is the repair wherever one of the two is inline. Two schemas the document
+/// declares have names the vendor wrote, and one of them is renamed.
+fn repair(inline: bool) -> &'static str {
+    if inline {
+        "give an inline schema a `title` in an Overlay"
+    } else {
+        "rename one of them in an Overlay"
+    }
+}
+
+/// What [`GenerateError::CyclicAllOf`] says of the schemas that make a cycle.
+fn made_of(schemas: &[String]) -> String {
+    let named: Vec<String> = schemas.iter().map(|schema| format!("`{schema}`")).collect();
+    let noun = if named.len() == 1 {
+        "schema"
+    } else {
+        "schemas"
+    };
+    format!(
+        "an `allOf` merge reaches a cycle through the {noun} {}",
+        listed(&named)
+    )
 }
 
 /// A list as prose: `a`, then `a and b`, then `a, b and c`.
@@ -461,354 +525,83 @@ fn read(path: &Path) -> Result<String, GenerateError> {
     })
 }
 
-/// A vendor's description, kept where rustdoc will not run it.
-///
-/// Every description in the document becomes a doc comment, and rustdoc
-/// compiles and executes the code blocks in a doc comment. Markdown makes a
-/// code block out of three ordinary shapes of prose: a run of lines indented
-/// four spaces or more, a list item whose content sits five columns from its
-/// marker, and a fence that names no language. A vendor writing a nested list,
-/// a column of items lined up under the widest marker, or a hanging example
-/// writes all three without meaning any of them, and what the adopter gets is
-/// `cargo test --doc` failing on the vendor's sentences — which no lint
-/// allowance reaches, because a doctest is executed rather than linted.
-///
-/// So each line is made unrunnable where it would otherwise be run, and left
-/// alone everywhere else. The generator is what put the prose where rustdoc
-/// would execute it, so the generator is where it is made safe; an adopter
-/// switching doctests off for the whole crate would be hiding this and taking
-/// their own hand-written files with it.
-///
-/// # What may be edited, and what may not
-///
-/// **The generated page has to render what the vendor wrote.** Every edit here
-/// is chosen against that: it changes bytes the vendor has no stake in, so that
-/// the rendering is the one they meant. Capping an indentation keeps a nested
-/// list nested instead of letting it become a code block; pulling a hanging
-/// item's content back keeps it an item; writing a bullet as `-` keeps the
-/// bullet, which rustc would otherwise eat. What none of them may do is change
-/// what the page says — the inside of a fence is the vendor's sample and is
-/// passed through untouched, and a fence's language is renamed rather than
-/// dropped, because the word is what a reader's highlighting goes by.
-struct Prose;
-
-impl VisitMut for Prose {
-    fn visit_attribute_mut(&mut self, attr: &mut syn::Attribute) {
-        let syn::Meta::NameValue(pair) = &mut attr.meta else {
-            return;
-        };
-        if !pair.path.is_ident("doc") {
-            return;
-        }
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(text),
-            ..
-        }) = &mut pair.value
-        else {
-            return;
-        };
-        *text = syn::LitStr::new(&unrunnable(&text.value()), text.span());
-    }
-}
-
-/// How wide Markdown counts a tab when it measures indentation.
-const TAB: usize = 4;
-
-/// The deepest indentation that cannot open a code block.
-///
-/// Four opens one, so three is what is left. It is enough to keep a nested list
-/// nested — a list marker needs only to reach its parent's content column — so
-/// what capping costs is the depth of an unusually deep one, and what it buys
-/// is a crate whose tests run.
-const KEEP: usize = 3;
-
-/// The widest gap between a list marker and its content that cannot open a
-/// code block.
-///
-/// Markdown measures a list item's content from the end of its marker rather
-/// than from the start of the line, so this is one wider than [`KEEP`]: five
-/// columns after a marker open a code block inside the item, four do not.
-/// Measured on `-`, `+`, `*` and an ordered marker alike.
-///
-/// Four is safe only where the marker survives to hold the gap off the margin,
-/// which is [`dashed`]'s doing; [`unhung`] says what happens where it does
-/// not.
-const HANG: usize = 4;
-
-/// The bullet a list marker is written with.
-///
-/// `-` rather than `*`, and [`dashed`] says why.
-const BULLET: char = '-';
-
-/// The most digits Markdown reads as one ordered list marker.
-const ORDERED: usize = 9;
-
-/// `prose` with nothing in it that rustdoc would compile.
-fn unrunnable(prose: &str) -> String {
-    let capped = capped_lines(prose);
-    if !capped.contains('\n') {
-        // One line is one `///`, where nothing is indented and there is
-        // nothing to strip.
-        return capped;
-    }
-    // More than one line is a `/* */` comment, and `rustfmt` indents its body
-    // to the item it sits on — every line but the first, which stays flush
-    // against the opening `/*`. rustc strips the indentation a comment's lines
-    // share, and a flush first line holds that strip down to almost nothing, so
-    // the rest of the body arrives still carrying the column the item sits at:
-    // a paragraph the vendor indented three spaces lands six in, which is a
-    // code block. Opening on a blank line puts the first line inside the
-    // indented body with the others, where the strip reaches it, and that same
-    // paragraph lands back on its three.
-    format!("\n{capped}\n")
-}
-
-/// `prose` with no line indented deeply enough to open a code block, no list
-/// item hanging its content far enough to open one, no bullet rustc will eat,
-/// and no fence rustdoc would read as Rust.
-///
-/// A line is capped, then unhung, then dashed, then read as a fence, and the
-/// first step's place in that order is the rule: Markdown reads a fence at
-/// three columns or fewer, so an indented one is not a fence at all but the
-/// start of an indented code block — capping it first is what turns it into the
-/// fence the vendor meant, rather than leaving a block whose first line happens
-/// to be three backticks. The two list steps cannot disturb that, because a run
-/// of backticks is not a list marker.
-fn capped_lines(prose: &str) -> String {
-    let mut fenced = false;
-    let lines: Vec<String> = prose
-        .split('\n')
-        .map(|line| {
-            // Inside a fence the content is the vendor's sample, kept as they
-            // wrote it — the fence above it already says nobody will run it.
-            if fenced && fence(line).is_none() {
-                return line.to_owned();
-            }
-            let tamed = dashed(&unhung(&capped(line)));
-            let Some((marker, language)) = fence(&tamed) else {
-                return tamed;
-            };
-            if fenced {
-                fenced = false;
-                return tamed;
-            }
-            fenced = true;
-            if compiled(language) {
-                let indent: String = tamed.chars().take_while(|c| c.is_whitespace()).collect();
-                format!("{indent}{marker}{INERT}")
-            } else {
-                tamed
-            }
-        })
-        .collect();
-    lines.join("\n")
-}
-
-/// The language named on a fence rustdoc will not compile.
-///
-/// Any word it does not recognise does, and this one says what the block is.
-const INERT: &str = "text";
-
-/// The words rustdoc reads above a code block as *attributes of Rust* rather
-/// than as the name of a language.
-///
-/// A fence carrying one of them — or carrying nothing — is a block rustdoc
-/// compiles and runs, so a vendor who wrote `rust` over a line of pseudocode
-/// has written a doctest without meaning to. Every other word names a language
-/// rustdoc leaves alone, and the vendor's own is worth keeping: it is what a
-/// reader's syntax highlighting goes by.
-const COMPILED: [&str; 7] = [
-    "compile_fail",
-    "ignore",
-    "no_run",
-    "rust",
-    "should_panic",
-    "standalone_crate",
-    "test_harness",
-];
-
-/// Would rustdoc compile a block a fence naming `language` opens?
-fn compiled(language: &str) -> bool {
-    let word = language.split([',', ' ', '\t']).next().unwrap_or(language);
-    word.is_empty() || word.starts_with("edition") || COMPILED.contains(&word)
-}
-
-/// The marker this line fences with and the language it names, if it is a
-/// fence.
-///
-/// A fence is three or more backticks or tildes. Whether it is indented too
-/// far to be one is settled before this is asked, by capping the line.
-fn fence(line: &str) -> Option<(&str, &str)> {
-    let body = line.trim_start();
-    let mark = ['`', '~']
-        .into_iter()
-        .find(|mark| body.chars().take(3).filter(|c| c == mark).count() == 3)?;
-    let run = body.len() - body.trim_start_matches(mark).len();
-    let (marker, language) = body.split_at(run);
-    Some((marker, language.trim()))
-}
-
-/// `line` with its indentation capped at [`KEEP`].
-fn capped(line: &str) -> String {
-    let content = line.trim_start();
-    if content.is_empty() || columns(line) <= KEEP {
-        return line.to_owned();
-    }
-    format!("{}{content}", " ".repeat(KEEP))
-}
-
-/// How many columns the whitespace at the start of `text` is worth.
-///
-/// Markdown counts a tab as [`TAB`], and both caps are stated in columns, so
-/// this is the one place that reading is made.
-fn columns(text: &str) -> usize {
-    text.chars()
-        .take_while(|c| c.is_whitespace())
-        .map(|c| if c == '\t' { TAB } else { 1 })
-        .sum()
-}
-
-/// `line` with the gap between a list marker and its content capped at
-/// [`HANG`].
-///
-/// This is the code block [`capped`] cannot see. A vendor lining the text of
-/// several items up under the widest marker writes five spaces after a short
-/// one, and Markdown reads content that far from a marker as an indented code
-/// block *inside* the item — while the line's own indentation, which is all
-/// [`capped`] measures, is nothing at all.
-///
-/// The cap holds at four only because [`dashed`] has taken `*` off the front of
-/// every bullet. Where a `*` survives, rustc eats it out of a `/* */` comment
-/// and leaves the gap standing alone as ordinary indentation, and four columns
-/// of that under a blank line opens a block of its own. The two rules are one
-/// rule, and `PROSE`'s list set off by a blank line is what holds them
-/// together.
-///
-/// The line is left alone when the marker carries no content: a marker on its
-/// own opens nothing, and there is no gap to measure.
-fn unhung(line: &str) -> String {
-    let content = line.trim_start();
-    let Some(width) = list_marker(content) else {
-        return line.to_owned();
-    };
-    let (indent, rest) = line.split_at(line.len() - content.len());
-    let (marker, after) = rest.split_at(width);
-    let text = after.trim_start();
-    if text.is_empty() || columns(after) <= HANG {
-        return line.to_owned();
-    }
-    format!("{indent}{marker}{}{text}", " ".repeat(HANG))
-}
-
-/// `line` with a `*` bullet written as [`BULLET`].
-///
-/// rustc rebuilds a `/* */` comment by stripping a leading `*` off every line
-/// whenever all of the lines it weighs carry one at the same column, which is
-/// the shape a vendor's bullet list takes exactly. What reaches the reader is
-/// then a run of sentences where the vendor wrote a list, and nothing on the
-/// page says a marker went missing.
-///
-/// Markdown draws the same bullet for `-` and `*`, so this is one character the
-/// vendor has no stake in and the rendering is the one they wrote. `+` and the
-/// ordered markers are left alone: rustc eats none of them.
-fn dashed(line: &str) -> String {
-    let content = line.trim_start();
-    if !content.starts_with('*') || list_marker(content).is_none() {
-        return line.to_owned();
-    }
-    let (indent, rest) = line.split_at(line.len() - content.len());
-    let (_, after) = rest.split_at(1);
-    format!("{indent}{BULLET}{after}")
-}
-
-/// How wide the list marker at the start of `content` is, if it is one.
-///
-/// Markdown's markers are `-`, `+` or `*`, and up to [`ORDERED`] digits
-/// followed by `.` or `)`. Whitespace after it is what makes it a marker at
-/// all, which is also what keeps `*emphasis*` at the start of a line out of
-/// this.
-fn list_marker(content: &str) -> Option<usize> {
-    let width = if content.starts_with(['-', '+', '*']) {
-        1
-    } else {
-        let digits = content.chars().take_while(char::is_ascii_digit).count();
-        if digits == 0 || digits > ORDERED {
-            return None;
-        }
-        if !content.get(digits..)?.starts_with(['.', ')']) {
-            return None;
-        }
-        digits + 1
-    };
-    content
-        .get(width..)?
-        .starts_with([' ', '\t'])
-        .then_some(width)
-}
-
-/// Write a file, creating the directory it goes in if it is missing.
-fn write_bytes(path: &Path, contents: &[u8]) -> Result<(), GenerateError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| GenerateError::Write {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-    std::fs::write(path, contents).map_err(|source| GenerateError::Write {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-/// Write the reduction a binary loads, after reading it straight back.
+/// The reduction a binary loads, after reading it straight back.
 ///
 /// `model` is the one [`Document::load`] a bless step makes — the same value
 /// the generated types and wrappers were emitted from — so encoding it is the
 /// only way the blob and the document can come apart. The read-back proves they
 /// have not: what a binary will deserialise is what this step reduced.
-fn write_model(path: &Path, model: &Document) -> Result<(), GenerateError> {
+fn blob(model: &Document) -> Result<Vec<u8>, GenerateError> {
     let blob = model.to_blob().map_err(GenerateError::Blob)?;
     let read_back = Document::from_blob(&blob).map_err(GenerateError::Blob)?;
     if &read_back != model {
         return Err(GenerateError::RoundTrip);
     }
-    write_bytes(path, &blob)
+    Ok(blob)
 }
 
-fn write_rust(path: &Path, source: &str) -> Result<(), GenerateError> {
-    write_bytes(path, source.as_bytes())?;
-    rustfmt(path)
-}
-
-/// Hand a written file to `rustfmt`.
+/// `source`, as `rustfmt` lays it out for the file at `path`.
 ///
-/// Formatting the file on disk rather than piping the source through keeps the
-/// result identical to what an adopter's own `cargo fmt` would produce, which
-/// is the only reason a generated file can sit under `cargo fmt --check` at
-/// all.
-fn rustfmt(path: &Path) -> Result<(), GenerateError> {
-    let status = std::process::Command::new("rustfmt")
-        .arg("--edition")
-        .arg("2024")
-        .arg(path)
-        .status()
-        .map_err(|source| {
-            if source.kind() == io::ErrorKind::NotFound {
-                GenerateError::RustfmtMissing
-            } else {
-                GenerateError::RustfmtSpawn {
-                    path: path.to_path_buf(),
-                    source,
-                }
+/// The source goes through standard input, so that nothing is written before
+/// every step has passed. `rustfmt` reads its configuration from the directory
+/// it runs in and the ones above it when it is given no file, as it does from
+/// the directory of a file it is given, so it runs in the nearest directory of
+/// `path` that exists: the result is what an adopter's own `cargo fmt` would
+/// produce for the file once it is there, which is the only reason a generated
+/// file can sit under `cargo fmt --check` at all.
+fn formatted(path: &Path, source: &str) -> Result<String, GenerateError> {
+    let output = rustfmt(config_home(path), source).map_err(|source| {
+        if source.kind() == io::ErrorKind::NotFound {
+            GenerateError::RustfmtMissing
+        } else {
+            GenerateError::RustfmtSpawn {
+                path: path.to_path_buf(),
+                source,
             }
-        })?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(GenerateError::RustfmtFailed {
-            path: path.to_path_buf(),
-        })
+        }
+    })?;
+    let refused = || GenerateError::RustfmtFailed {
+        path: path.to_path_buf(),
+    };
+    if !output.status.success() {
+        return Err(refused());
     }
+    String::from_utf8(output.stdout).map_err(|_| refused())
+}
+
+/// The nearest directory above `path` that exists.
+fn config_home(path: &Path) -> &Path {
+    path.ancestors()
+        .skip(1)
+        .find(|ancestor| ancestor.is_dir())
+        .unwrap_or(Path::new("."))
+}
+
+/// Run `rustfmt` over `source` in `home`, and answer with what it printed.
+///
+/// `rustfmt` says what is wrong with a source on standard error, which is the
+/// bless step's own, so the person who reads the refusal reads the cause above it.
+fn rustfmt(home: &Path, source: &str) -> io::Result<Output> {
+    let mut child = Command::new("rustfmt")
+        .args(["--edition", "2024", "--emit", "stdout"])
+        .current_dir(home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let mut input = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("rustfmt has no standard input"))?;
+    // Fed from a thread of its own, so that a source larger than a pipe cannot
+    // wait for output that waits for the rest of the input.
+    std::thread::scope(|scope| {
+        let feeding = scope.spawn(move || input.write_all(source.as_bytes()));
+        let output = child.wait_with_output();
+        feeding
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+        output
+    })
 }
 
 /// Why a bless step stopped.
@@ -820,41 +613,177 @@ fn rustfmt(path: &Path) -> Result<(), GenerateError> {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GenerateError {
-    #[error("reading {path}: {source}")]
+    /// The document or an Overlay file could not be read.
+    #[error("cannot read {path}")]
     Read {
+        /// The path as the adopter gave it to [`Settings::new`] or
+        /// [`Settings::overlay`].
         path: PathBuf,
+        /// The error the operating system returned.
         #[source]
         source: io::Error,
     },
-    #[error("writing {path}: {source}")]
+    /// A generated file, or a directory it goes in, could not be written, or the
+    /// file written beside it could not be put in its place. Nothing is placed
+    /// before every file is written, and what was written beside is removed.
+    #[error("cannot write {path}")]
     Write {
+        /// The file the generator was writing, or the directory above it that
+        /// it was making: under the directory given to [`Settings::write_to`],
+        /// or where [`Settings::summary_page`] points.
         path: PathBuf,
+        /// The error the operating system returned, or the one this crate builds
+        /// for a destination that is a directory.
         #[source]
         source: io::Error,
     },
-    /// A document or a layer over it that does not read, or does not apply.
-    /// `path` is the file to go and open: with corrections split across
-    /// layers, which one stopped the bless is the first thing to know.
-    #[error("{path}: {source}")]
+    /// A document or a layer over it that does not read, does not apply, or
+    /// changes the `openapi` of the document. `path` is the file to go and
+    /// open: with corrections split across layers, which one stopped the bless
+    /// is the first thing to know.
+    #[error("cannot use {path}")]
     Overlay {
+        /// The path as the adopter gave it to [`Settings::new`] or
+        /// [`Settings::overlay`].
         path: PathBuf,
+        /// What stopped the file: its syntax, its shape, an action that matched
+        /// nothing, or a layer that changed the `openapi` of the document.
         #[source]
         source: OverlayError,
     },
-    #[error("the overlaid document is not representable as YAML: {0}")]
-    Yaml(#[source] serde_yaml_ng::Error),
-    #[error("the overlaid document does not describe a usable CLI: {0}")]
+    /// The YAML emitter refused the corrected document. The cause is boxed so
+    /// that no type of the emitter is part of this crate's API.
+    #[error("the overlaid document is not representable as YAML")]
+    Yaml(#[source] Box<dyn Error + Send + Sync>),
+    /// The document could not be reduced to a command tree. The cause is the
+    /// refusal that [`Document::load_with`] gives for it. A version of OpenAPI
+    /// that this crate does not read is refused for the vendor's document before
+    /// the first layer is laid, and every other cause is a refusal of the
+    /// document with its layers laid.
+    #[error("the document does not describe a usable CLI")]
     Unusable(#[source] LoadError),
-    #[error("the overlaid document is not an OpenAPI 3 document: {0}")]
-    NotOpenApi(#[source] serde_json::Error),
-    #[error("schema `{name}` is not representable as JSON: {source}")]
-    Schema {
-        name: String,
+    /// The corrected document is not an OpenAPI 3 document, so the generator
+    /// has no object model of it.
+    #[error("the overlaid document is not an OpenAPI 3 document: refused at `{at}`")]
+    NotOpenApi {
+        /// The first node that the OpenAPI model refuses, from the root of the
+        /// document: `info.title`, `components.schemas.Voucher`, a path item as
+        /// `paths[/vouchers]`, or a node inside a path item as
+        /// `paths[/vouchers].get.deprecated`. `.` is the document itself.
+        at: String,
+        /// `serde_json`'s message.
         #[source]
         source: serde_json::Error,
     },
-    #[error("typify cannot build Rust types from the document's schemas: {0}")]
-    Typify(#[source] typify::Error),
+    /// A schema that cannot be written as the JSON typify takes in.
+    #[error("schema `{name}` is not representable as JSON")]
+    Schema {
+        /// The schema's name in `components.schemas`, or for an inline schema a
+        /// sentence naming the request body or response that states it.
+        name: String,
+        /// `serde_json`'s reason.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// typify refused a schema. The cause is boxed so that no type of typify
+    /// is part of this crate's API.
+    #[error("typify cannot build Rust types from the document's schemas")]
+    Typify(#[source] Box<dyn Error + Send + Sync>),
+    /// String enum values that become the same Rust variant after typify's two
+    /// naming passes. Rename one of the values in an Overlay.
+    #[error(
+        "string enum in {schema} has values {values:?} that become Rust variant `{variant}`; rename a value in an Overlay"
+    )]
+    EnumVariants {
+        /// The schema or inline site that holds the enum.
+        schema: String,
+        /// Values that collide, in their declared order.
+        values: Vec<String>,
+        /// The Rust variant they become.
+        variant: String,
+    },
+    /// typify panicked during conversion or token emission. With `panic = "unwind"`,
+    /// the generator catches it and names the smallest failing trial in document
+    /// order, or the body or response stated inline. The cause is typify's text.
+    ///
+    /// The process's panic hook runs on each caught panic. Diagnosis repeats
+    /// conversion of named schemas, so their panic text can appear several times;
+    /// an inline conversion panic is caught once without this search.
+    #[error("typify panicked while it built the Rust type of {schema}")]
+    Panicked {
+        /// A sentence naming every schema of the failing trial, or an inline site.
+        schema: String,
+        /// What typify said when it panicked.
+        #[source]
+        message: Box<dyn Error + Send + Sync>,
+    },
+    /// A merge state repeats through composition, negation, shared property,
+    /// item or map schemas, or merges carried in inline subschemas. These can
+    /// overflow typify's stack, so the check precedes conversion. A property or
+    /// item reference stays a named recursive type when no other operand
+    /// constrains it.
+    /// Loops of `oneOf` alone and reference wrappers with only a title,
+    /// description or `type: object` pass when no merge reaches them.
+    /// The property description idiom passes; a multi-member `allOf` with a
+    /// description-only second member is refused if it reaches a composition loop.
+    ///
+    /// The check uses document identity rather than value equality. Conservative
+    /// refusals include an object merged with an array whose items merge that
+    /// object, and equal reference operands leading into a composition loop
+    /// (`allOf: [A, A]` with a recursive `oneOf` behind A). typify converts these
+    /// shapes. An Overlay that breaks the loop repairs either refusal. Other
+    /// keywords beside a reference wrapper count as a merge unless measured as
+    /// an exemption.
+    #[error("{}{}; break the cycle in an Overlay", made_of(.schemas), merge_at(.merge.as_deref()))]
+    CyclicAllOf {
+        /// Named schemas on the loop, in document order. A tail into it is omitted.
+        schemas: Vec<String>,
+        /// The inline merge that reaches the loop, including its property or items path.
+        merge: Option<String>,
+    },
+    /// Two items of the generated `ops.rs` that one name would define twice, which
+    /// is a compile error in the file the bless writes. The items are the wrappers,
+    /// the `_builder` methods, the variants of `OperationId`, the reserved handle
+    /// methods `new`, `call` and `document`, and for each
+    /// operation the methods that `bon` derives for its builder: a setter for each
+    /// argument, a second one named `maybe_…` for each argument that is optional,
+    /// and `call`, which ends the builder. Renaming one of them here would be a
+    /// generator choosing a public name nobody asked for, so the document is
+    /// refused. An Overlay changes the `operationId`. A parameter's name is its
+    /// wire key, so an Overlay can only remove one.
+    #[error(
+        "`{name}` would be defined twice in the generated ops.rs, as {first} and as {second}; \
+         correct one of them in an Overlay"
+    )]
+    DuplicateIdentifier {
+        /// The name that is defined twice, as it is written in Rust.
+        name: String,
+        /// A phrase naming the item that has the name first: the wrapper of an
+        /// operation, a method of the handle, a setter of a builder.
+        first: String,
+        /// A phrase naming the item that has it second.
+        second: String,
+    },
+    /// Two fields of one generated type share a Rust name: properties, or a
+    /// property and the map typify adds for `additionalProperties`. typify writes a
+    /// field for each property and does not make two of one name unique, so the
+    /// type declares the field twice, which is a compile error in the file the
+    /// bless writes. The properties are the document's, and typify's naming is what
+    /// makes them one, so the message names the struct and the field and not the
+    /// properties, which typify does not hand back. An Overlay removes or renames
+    /// one of them.
+    #[error(
+        "the type `{ty}` would declare the field `{field}` twice, because two of its fields are \
+         one name in Rust; correct one of them in an Overlay"
+    )]
+    DuplicateField {
+        /// The name of the type in Rust, as typify spells it: a struct, or an enum
+        /// that has a variant of named fields. A type that a property of a schema
+        /// makes has a name that typify derived.
+        ty: String,
+        /// The name of the field in Rust.
+        field: String,
+    },
     /// A wrapper would have to name the type of a schema the document's
     /// `components.schemas` never declared. Emitting an identifier for it
     /// anyway is how an adopter ends up bisecting a generated file, so the
@@ -863,21 +792,41 @@ pub enum GenerateError {
         "`#/components/schemas/{schema}` is referenced but not declared, so no \
          wrapper can name the type it would be"
     )]
-    NoType { schema: String },
-    /// Two of the document's shapes reduce to one Rust type. typify writes a
-    /// definition per shape and uniquifies nothing, so emitting them is a file
-    /// that defines the same type twice; renaming one here would be a generator
-    /// choosing a public name nobody asked for.
+    NoType {
+        /// The name the reference ends in, as the document spells it.
+        schema: String,
+    },
+    /// Two of the document's shapes reduce to one Rust name. For two schemas the
+    /// document declares, typify writes a definition each and uniquifies
+    /// nothing, so emitting them is a file that defines the same type twice. For
+    /// a schema stated inline under a name typify already holds, it answers with
+    /// the type it holds, so the second wrapper would take a type of the first
+    /// one's shape. Renaming one here would be a generator choosing a public name
+    /// nobody asked for. Two inline schemas that are equal are one shape, and are
+    /// not refused.
     ///
     /// `first` and `second` are sentences naming where each shape stands — a
-    /// schema the document declares, or a body or response an operation states
-    /// inline — because the two are refused together and a reader needs to know
-    /// which is which.
-    #[error("{first} and {second} are both `{rust}` in Rust; rename one of them in an Overlay")]
+    /// schema the document declares, or a request body or response that states
+    /// one inline, on the operation or in the component the operation takes —
+    /// because the two are refused together and a reader needs to know which is
+    /// which.
+    ///
+    /// The cheap repair is a `title` on an inline schema, which typify names the
+    /// type after, so the message names it where one of the two is inline and
+    /// asks for a rename of a schema the document declares where neither is.
+    #[error(
+        "{first} and {second} are both `{rust}` in Rust; {}",
+        repair(*.inline)
+    )]
     OneType {
+        /// The sentence naming the shape that claimed the Rust name first.
         first: String,
+        /// The sentence naming the shape that claimed it second.
         second: String,
+        /// The Rust name both reduce to, in typify's spelling.
         rust: String,
+        /// Whether either shape is stated inline, including a nested schema.
+        inline: bool,
     },
     /// A schema whose Rust name is one this crate declares a replaced type
     /// under. Every other named schema becomes a type of its own, so this one
@@ -889,37 +838,69 @@ pub enum GenerateError {
          type `Settings::replace` substitutes under, so it generates no type \
          of its own; rename it in an Overlay"
     )]
-    Reserved { schema: String },
+    Reserved {
+        /// The schema's name in `components.schemas`, as the document spells it.
+        schema: String,
+    },
+    /// A document element this generator has no Rust spelling for, or a Rust
+    /// type the adopter named that does not parse. The text names the element
+    /// and says why.
     #[error("{0}")]
     Unsupported(String),
     /// A failure while emitting one operation's wrapper, named by the
     /// operation it came from. Everything else this crate refuses says which
     /// operation it is about, and a generated file is too large to bisect by
     /// hand for one that does not.
-    #[error("{op}: {source}")]
+    #[error("the wrapper for {op} cannot be generated")]
     Operation {
+        /// The `operationId` of the operation whose wrapper was being emitted.
         op: String,
+        /// The refusal itself.
         #[source]
         source: Box<GenerateError>,
     },
-    #[error("the generated {file} is not valid Rust: {source}")]
+    /// Tokens the generator wrote do not parse as Rust. This is a defect of the
+    /// generator.
+    #[error("the generated {file} is not valid Rust")]
     NotRust {
+        /// The name of the generated file the tokens were bound for.
         file: &'static str,
+        /// The parser's error.
         #[source]
         source: syn::Error,
     },
-    #[error("the reduced model does not survive a round trip: {0}")]
+    /// The reduced model could not be encoded to the blob, or the blob could
+    /// not be read back.
+    #[error("the reduced model does not survive a round trip")]
     Blob(#[source] DocumentError),
+    /// The blob was read back and differs from the reduction it was written
+    /// from, so a binary that loads it would not hold the document the bless
+    /// step reduced.
     #[error("the reduced model is not the document's reduction after a round trip")]
     RoundTrip,
+    /// No `rustfmt` executable was found on `PATH`.
     #[error("rustfmt is not on PATH, and a bless step formats every Rust file it writes")]
     RustfmtMissing,
-    #[error("running rustfmt on {path}: {source}")]
+    /// `rustfmt` was found and could not be run: it did not start, or its input
+    /// or its output could not be passed.
+    #[error("cannot run rustfmt on {path}")]
     RustfmtSpawn {
+        /// The generated file `rustfmt` was to format.
         path: PathBuf,
+        /// The error the operating system returned, or the one this crate builds
+        /// when it cannot take the standard input of the process.
         #[source]
         source: io::Error,
     },
+    /// `rustfmt` ran and exited with a failure, or printed text that is not
+    /// UTF-8.
     #[error("rustfmt rejected the generated {path}")]
-    RustfmtFailed { path: PathBuf },
+    RustfmtFailed {
+        /// The generated file `rustfmt` was to format.
+        path: PathBuf,
+    },
+}
+
+fn merge_at(merge: Option<&str>) -> String {
+    merge.map_or_else(String::new, |place| format!(" (merge at {place})"))
 }

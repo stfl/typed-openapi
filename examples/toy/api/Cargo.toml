@@ -11,21 +11,22 @@ description = "Owned Rust types and typed operations for the Toy Accounting API.
 builder = ["api-generated/builder"]
 
 [dependencies]
+# The types and wrappers the bless step writes, re-exported as this crate's own.
 api-generated = { path = "../api-generated" }
 # Named here as well as under `api-generated`, because this crate re-exports the
 # crate whole beside the generated types: an adopter's own code names `api` and
 # nothing below it.
 money = { path = "../money" }
-typed-openapi = { path = "../../../typed-openapi", default-features = false }
 
 [dev-dependencies]
-# `tests/typed.rs`, `tests/corrections.rs` and `tests/money.rs` reduce the
-# committed document again and hold the committed blob, the correction list and
-# the hand-owned `Money` to it. That is the one thing in this crate that needs
-# the reader; the library itself never does.
+# The tests reduce the committed document again to check the blob, corrections
+# and owned types. The library itself needs no document reader.
 typed-openapi = { path = "../../../typed-openapi", features = ["document"] }
+# The `StatusCode` and `Method` the typed-call tests build and compare.
 http = { workspace = true }
+# The documents and bodies the tests read and compare, as JSON values.
 serde_json = { workspace = true }
+# The client that the crate-level doctest shows.
 ureq = { workspace = true }
 
 [lints]

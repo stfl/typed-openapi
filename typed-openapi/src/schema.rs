@@ -1,7 +1,5 @@
 //! Following `$ref`s, and deciding what one schema is worth on a command line.
 //!
-//! *Requires the `document` feature.*
-//!
 //! This is the whole of what this crate understands about JSON Schema: a schema
 //! either fits on one flag — it is a [`Scalar`] — or it does not, and then the
 //! body goes through a file. Nothing richer is modelled, because nothing richer
@@ -19,16 +17,21 @@
 //! `--help` cannot state — so the walk that decided the body was not flat also
 //! writes down what it saw, as the JSON skeleton a user fills in.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
+use http::HeaderValue;
+#[cfg(feature = "generate")]
+use openapiv3::Response;
 use openapiv3::{
-    ArrayType, Components, IntegerType, NumberType, ObjectType, ReferenceOr, Schema, SchemaKind,
-    StringType, Type, VariantOrUnknownOrEmpty,
+    AnySchema, ArrayType, BooleanType, Components, IntegerType, NumberType, ObjectType,
+    ReferenceOr, RequestBody, Schema, SchemaKind, StringType, Type, VariantOrUnknownOrEmpty,
 };
 use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::model::Unsupported;
 use crate::scalar::{Bounds, Limit, Scalar, Text};
 
 /// A `$ref` this crate cannot follow to what it names.
@@ -42,10 +45,30 @@ use crate::scalar::{Bounds, Limit, Scalar, Text};
 pub enum RefError {
     /// A reference naming nothing this document holds.
     #[error("`{reference}` does not resolve")]
-    Missing { reference: String },
+    Missing {
+        /// The `$ref` as the document spells it, such as
+        /// `#/components/schemas/Voucher`.
+        reference: String,
+    },
+    /// A reference into the inside of a component this document holds, such as
+    /// `#/components/schemas/Holder/properties/code`. This crate follows a
+    /// component and goes no further in. A reference that goes inside a name
+    /// that no component has is [`RefError::Missing`].
+    #[error(
+        "`{reference}` points inside a component, and this crate follows only \
+         `#/components/<section>/<name>`"
+    )]
+    Inside {
+        /// The `$ref` as the document spells it.
+        reference: String,
+    },
     /// A reference reached a second time while following one chain.
     #[error("`{reference}` is a reference cycle")]
-    Cycle { reference: String },
+    Cycle {
+        /// The `$ref` that was reached a second time, spelled as the document
+        /// spells it.
+        reference: String,
+    },
 }
 
 /// How deep a body template spells the document out.
@@ -61,15 +84,17 @@ pub enum RefError {
 const MAX_DEPTH: usize = 8;
 
 /// Follow `#/components/<section>/<name>` hops until an item appears.
-pub fn resolve<'c, T>(
+pub(crate) fn resolve<'c, T>(
     value: &'c ReferenceOr<T>,
     section: impl Fn(&str) -> Option<&'c ReferenceOr<T>>,
     name: &str,
 ) -> Result<&'c T, RefError> {
-    follow(value, &section, name, &mut BTreeSet::new())
+    follow(value, &section, name, &mut BTreeSet::new()).map(|(item, _)| item)
 }
 
-/// The same walk, with the references already taken handed in.
+/// The same walk, with the references already taken handed in, and the last
+/// reference it took with the item it ended at: where the item stands, which is
+/// `None` for an item written where the walk began.
 ///
 /// What terminates it is that set and not a count of the hops, which is the
 /// argument [`crate::required`] makes about its own walk and it holds here for
@@ -88,34 +113,96 @@ fn follow<'c, T>(
     section: &impl Fn(&str) -> Option<&'c ReferenceOr<T>>,
     name: &str,
     seen: &mut BTreeSet<&'c str>,
-) -> Result<&'c T, RefError> {
+) -> Result<(&'c T, Option<&'c str>), RefError> {
     let prefix = format!("#/components/{name}/");
     let mut current = value;
+    let mut at = None;
     loop {
         match current {
-            ReferenceOr::Item(item) => return Ok(item),
+            ReferenceOr::Item(item) => return Ok((item, at)),
             ReferenceOr::Reference { reference } => {
+                at = Some(reference.as_str());
                 if !seen.insert(reference.as_str()) {
                     return Err(RefError::Cycle {
                         reference: reference.clone(),
                     });
                 }
-                current = reference
-                    .strip_prefix(&prefix)
-                    .and_then(section)
-                    .ok_or_else(|| RefError::Missing {
+                // The component is what comes before the first `/`, and it is
+                // looked up before the rest is read: a pointer into a component
+                // that does not exist is a name to go and look for, and not a
+                // pointer that goes in too far.
+                let rest = reference.strip_prefix(&prefix);
+                let component = rest.and_then(|rest| rest.split('/').next());
+                let Some(found) = component.and_then(section) else {
+                    return Err(RefError::Missing {
                         reference: reference.clone(),
-                    })?;
+                    });
+                };
+                if rest.is_some_and(|rest| rest.contains('/')) {
+                    return Err(RefError::Inside {
+                        reference: reference.clone(),
+                    });
+                }
+                current = found;
             }
         }
     }
 }
 
-pub fn resolve_schema<'c>(
+pub(crate) fn resolve_schema<'c>(
     schema: &'c ReferenceOr<Schema>,
     components: &'c Components,
 ) -> Result<&'c Schema, RefError> {
     resolve(schema, schemas(components), "schemas")
+}
+
+/// The request body that an operation's `requestBody` stands for:
+/// `#/components/requestBodies/` hops followed.
+///
+/// The reduction reads a body through this, and the generator through
+/// [`resolve_request_body_at`], which is this and says where the entry stands. So
+/// the body a command line is built from and the type a wrapper takes are the
+/// entry of one `content` map, and a reference one of them follows is a
+/// reference the other follows.
+pub(crate) fn resolve_request_body<'c>(
+    body: &'c ReferenceOr<RequestBody>,
+    components: &'c Components,
+) -> Result<&'c RequestBody, RefError> {
+    resolve_request_body_at(body, components).map(|(body, _)| body)
+}
+
+/// [`resolve_request_body`], and the reference the entry stands behind: the last
+/// hop of the chain, which is the entry a refusal sends an adopter to. `None`
+/// where the body is written on the operation.
+pub(crate) fn resolve_request_body_at<'c>(
+    body: &'c ReferenceOr<RequestBody>,
+    components: &'c Components,
+) -> Result<(&'c RequestBody, Option<&'c str>), RefError> {
+    follow(
+        body,
+        &|key| components.request_bodies.get(key),
+        "requestBodies",
+        &mut BTreeSet::new(),
+    )
+}
+
+/// The response that one status of an operation stands for:
+/// `#/components/responses/` hops followed, and the reference the entry stands
+/// behind (`None` where the response is written on the operation).
+///
+/// Only the generator follows a response's `$ref`, because a response is no part
+/// of a request: the reduction has no use for one.
+#[cfg(feature = "generate")]
+pub(crate) fn resolve_response<'c>(
+    response: &'c ReferenceOr<Response>,
+    components: &'c Components,
+) -> Result<(&'c Response, Option<&'c str>), RefError> {
+    follow(
+        response,
+        &|key| components.responses.get(key),
+        "responses",
+        &mut BTreeSet::new(),
+    )
 }
 
 /// The section every schema reference in this module resolves against.
@@ -138,7 +225,11 @@ fn schemas<'c>(components: &'c Components) -> impl Fn(&str) -> Option<&'c Refere
 ///
 /// One element is where this stops. An `allOf` of two schemas is a real
 /// composition, and a composition is not a scalar: it comes back as itself, and
-/// [`scalar_of`] answers `None` for it.
+/// [`scalar_of`] reads it as one that names `allOf`.
+///
+/// This is the one reader of a schema that a list's items, a JSON body and a
+/// multipart body are read through, as a parameter's and a property's are, so a
+/// wrapper is a wrapper wherever it stands.
 ///
 /// Unwrapping and following are one walk, so they share one set of the
 /// references taken: a schema whose only member leads back to the schema is a
@@ -146,40 +237,469 @@ fn schemas<'c>(components: &'c Components) -> impl Fn(&str) -> Option<&'c Refere
 /// and a set spanning both is what meets it. Nothing bounds the number of
 /// wrappers, because every one of them that is not a reference is a step
 /// further into a document that is finite.
-fn stated<'c>(
+pub(crate) fn stated<'c>(
     schema: &'c ReferenceOr<Schema>,
     components: &'c Components,
 ) -> Result<&'c Schema, RefError> {
+    unwrapped(schema, components, |_| ())
+}
+
+/// [`stated`], and each schema the walk passes on the way, the stated one last.
+///
+/// What a wrapper says beside its element is about the value the wrapper stands
+/// for, so a reading that wants it, such as `readOnly`, takes it from the schemas
+/// passed and not from the one stated.
+fn unwrapped<'c>(
+    schema: &'c ReferenceOr<Schema>,
+    components: &'c Components,
+    mut passed: impl FnMut(&'c Schema),
+) -> Result<&'c Schema, RefError> {
     let schemas = schemas(components);
     let mut seen = BTreeSet::new();
-    let mut current = follow(schema, &schemas, "schemas", &mut seen)?;
+    let (mut current, _) = follow(schema, &schemas, "schemas", &mut seen)?;
     loop {
+        passed(current);
         let SchemaKind::AllOf { all_of } = &current.schema_kind else {
             return Ok(current);
         };
         let [only] = all_of.as_slice() else {
             return Ok(current);
         };
-        current = follow(only, &schemas, "schemas", &mut seen)?;
+        (current, _) = follow(only, &schemas, "schemas", &mut seen)?;
     }
 }
 
-/// `Some(scalar)` when this schema fits on one flag, `None` when it does not.
-pub fn scalar_of(
+/// Whether the document marks the value this schema stands for `readOnly`.
+///
+/// `readOnly` is about the value that stands at a property: the API sets it, and
+/// a request "SHOULD NOT" send it (OpenAPI 3.0.3). A `$ref` erases the flag
+/// written beside it, so a vendor who wants a property of a named type read-only
+/// writes the reference in an `allOf` of one element with the flag beside it, and
+/// a named schema that says it is read-only wherever a property points at it. The
+/// answer is yes if any schema [`stated`] passes says so.
+pub(crate) fn read_only_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
-) -> Result<Option<Scalar>, RefError> {
+) -> Result<bool, RefError> {
+    let mut read_only = false;
+    unwrapped(schema, components, |passed| {
+        read_only |= passed.schema_data.read_only;
+    })?;
+    Ok(read_only)
+}
+
+/// Whether one schema fits on a flag.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Fit {
+    /// It fits on one flag.
+    Scalar(Scalar),
+    /// It does not, and this is why.
+    Other(Unsupported),
+}
+
+/// The scalar this schema is, or the reason it is none.
+///
+/// A schema that states a scalar `type` is that scalar, whichever way
+/// `openapiv3` holds it. The crate reads a schema into `Type::String`,
+/// `Type::Number`, `Type::Integer` or `Type::Boolean` when every keyword beside
+/// the `type` has the shape of that type, and into `AnySchema` for the rest. The
+/// rest is not all alike: an integer bound spelled `0.0` or `1e3` has the shape of
+/// a number, and a `string` beside an `allOf` has no scalar's shape at all. So
+/// [`typed`] reads the first kind into the type it would have been, and every
+/// other shape is named by the keyword that stops it, and never by a reason that
+/// is not true of it.
+pub(crate) fn scalar_of(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+) -> Result<Fit, RefError> {
     let schema = stated(schema, components)?;
-    let SchemaKind::Type(ty) = &schema.schema_kind else {
+    Ok(match typed(&schema.schema_kind) {
+        Ok(ty) => match &*ty {
+            Type::String(s) => Fit::Scalar(string_scalar(s)),
+            Type::Number(n) => Fit::Scalar(Scalar::Number(number_bounds(n))),
+            Type::Integer(i) => Fit::Scalar(Scalar::Integer(integer_bounds(i))),
+            Type::Boolean(b) => Fit::Scalar(Scalar::Boolean(only_boolean(b))),
+            Type::Object(_) | Type::Array(_) => Fit::Other(Unsupported::Structured),
+        },
+        Err(why) => Fit::Other(why),
+    })
+}
+
+/// The type a schema states, once what `openapiv3` left as `AnySchema` is read.
+///
+/// `Err` is why there is none: a composition names its keyword, and so does every
+/// `AnySchema` that states a keyword its `type` does not have. An `AnySchema` that
+/// is an object, with every keyword its type has, is [`Unsupported::Structured`],
+/// and one that states no `type` and no composition is [`Unsupported::Untyped`].
+/// An array with every keyword its type has is the array. The generator types an
+/// argument through this too, so a value has the Rust type of the flag that
+/// carries it.
+pub(crate) fn typed(kind: &SchemaKind) -> Result<Cow<'_, Type>, Unsupported> {
+    match kind {
+        SchemaKind::Type(ty) => Ok(Cow::Borrowed(ty)),
+        SchemaKind::Any(any) => any_type(any).map(Cow::Owned),
+        SchemaKind::OneOf { .. } => Err(keyword("oneOf")),
+        SchemaKind::AllOf { .. } => Err(keyword("allOf")),
+        SchemaKind::AnyOf { .. } => Err(keyword("anyOf")),
+        SchemaKind::Not { .. } => Err(keyword("not")),
+    }
+}
+
+/// The array a schema states, when it states one: `type: array` however
+/// `openapiv3` holds it. A list parameter's flag is made of its items, so the
+/// reduction and the generator both ask this for the array and read one schema.
+pub(crate) fn array_of(kind: &SchemaKind) -> Option<Cow<'_, ArrayType>> {
+    match typed(kind).ok()? {
+        Cow::Borrowed(Type::Array(array)) => Some(Cow::Borrowed(array)),
+        Cow::Owned(Type::Array(array)) => Some(Cow::Owned(array)),
+        Cow::Borrowed(_) | Cow::Owned(_) => None,
+    }
+}
+
+fn keyword(keyword: &str) -> Unsupported {
+    Unsupported::Keyword(keyword.to_owned())
+}
+
+/// The keywords a schema of type `string` has, as the document spells them.
+/// Whatever else an `AnySchema` of a type states is a keyword its type does not
+/// have, and it is named.
+const STRING_KEYWORDS: [&str; 5] = ["pattern", "minLength", "maxLength", "enum", "format"];
+
+/// The keywords a schema of type `number` or `integer` has.
+const NUMERIC_KEYWORDS: [&str; 7] = [
+    "multipleOf",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "enum",
+    "format",
+];
+
+/// The keywords a schema of type `boolean` has: `format` names the kind of a
+/// value, and a boolean has only two.
+const BOOLEAN_KEYWORDS: [&str; 1] = ["enum"];
+
+/// The keywords a schema of type `object` has.
+const OBJECT_KEYWORDS: [&str; 5] = [
+    "properties",
+    "required",
+    "additionalProperties",
+    "minProperties",
+    "maxProperties",
+];
+
+/// The keywords a schema of type `array` has.
+const ARRAY_KEYWORDS: [&str; 4] = ["items", "minItems", "maxItems", "uniqueItems"];
+
+/// What an `AnySchema` is, when its `type` is one of the six and each keyword
+/// beside it is one that the type has.
+///
+/// `openapiv3` holds a schema as `AnySchema` when it cannot hold it as a type, and
+/// the cause of that is one of three things. A keyword that the type does not have
+/// is the first, and it is named whatever the type is. A keyword with no content
+/// (`properties: {}`, `enum: []`) is the second: it is not named, because the
+/// schema is the type it is without it. A value that the type cannot hold is the
+/// third: an `enum` that lists a value of another type, which is refused by the
+/// keyword, and an integer's bound, step or `enum` value that is no `i64`.
+/// `openapiv3` holds a bound or a step as an `f64`, so the double is read as
+/// [`integer_end`] and [`integer_step`] say, and a double that they do not read is
+/// refused by its keyword.
+///
+/// An object with every keyword its type has is [`Unsupported::Structured`]: this
+/// crate reads no object as a value. An array with every keyword its type has is
+/// the array, because `openapiv3` holds an array as `AnySchema` for a keyword
+/// that states nothing (`properties: {}`, `enum: []`), and a list of values is no
+/// less one for it.
+fn any_type(any: &AnySchema) -> Result<Type, Unsupported> {
+    let reading = match any.typ.as_deref() {
+        Some("string") => Reading::of(&STRING_KEYWORDS, read_string),
+        Some("number") => Reading::of(&NUMERIC_KEYWORDS, read_number),
+        Some("integer") => Reading::of(&NUMERIC_KEYWORDS, read_integer),
+        Some("boolean") => Reading::of(&BOOLEAN_KEYWORDS, read_boolean),
+        Some("object") => Reading::of(&OBJECT_KEYWORDS, structured),
+        Some("array") => Reading::of(&ARRAY_KEYWORDS, |any| Ok(read_array(any))),
+        Some(_) => return Err(keyword("type")),
+        None => return Err(typeless(any)),
+    };
+    if let Some(foreign) = keywords(any).find(|stated| !reading.belonging.contains(stated)) {
+        return Err(keyword(foreign));
+    }
+    (reading.read)(any)
+}
+
+/// What an `AnySchema` of one `type` is read with: the keywords the type has, and
+/// the way the type is made of the schema where none is a keyword it does not
+/// have.
+struct Reading {
+    belonging: &'static [&'static str],
+    read: fn(&AnySchema) -> Result<Type, Unsupported>,
+}
+
+impl Reading {
+    const fn of(
+        belonging: &'static [&'static str],
+        read: fn(&AnySchema) -> Result<Type, Unsupported>,
+    ) -> Self {
+        Self { belonging, read }
+    }
+}
+
+fn structured(_: &AnySchema) -> Result<Type, Unsupported> {
+    Err(Unsupported::Structured)
+}
+
+fn read_array(any: &AnySchema) -> Type {
+    Type::Array(ArrayType {
+        items: any.items.clone(),
+        min_items: any.min_items,
+        max_items: any.max_items,
+        unique_items: any.unique_items.unwrap_or_default(),
+    })
+}
+
+fn read_string(any: &AnySchema) -> Result<Type, Unsupported> {
+    Ok(Type::String(StringType {
+        format: any.format.clone().into(),
+        pattern: any.pattern.clone(),
+        enumeration: listed(&any.enumeration, |value| value.as_str().map(str::to_owned))?,
+        min_length: any.min_length,
+        max_length: any.max_length,
+    }))
+}
+
+fn read_number(any: &AnySchema) -> Result<Type, Unsupported> {
+    Ok(Type::Number(NumberType {
+        format: any.format.clone().into(),
+        multiple_of: any.multiple_of,
+        exclusive_minimum: any.exclusive_minimum.unwrap_or_default(),
+        exclusive_maximum: any.exclusive_maximum.unwrap_or_default(),
+        minimum: any.minimum,
+        maximum: any.maximum,
+        enumeration: listed(&any.enumeration, Value::as_f64)?,
+    }))
+}
+
+fn read_integer(any: &AnySchema) -> Result<Type, Unsupported> {
+    let (minimum, exclusive_minimum) = integer_end(
+        End::Minimum,
+        any.minimum,
+        any.exclusive_minimum.unwrap_or_default(),
+    )?;
+    let (maximum, exclusive_maximum) = integer_end(
+        End::Maximum,
+        any.maximum,
+        any.exclusive_maximum.unwrap_or_default(),
+    )?;
+    Ok(Type::Integer(IntegerType {
+        format: any.format.clone().into(),
+        multiple_of: integer_step(any.multiple_of)?,
+        exclusive_minimum,
+        exclusive_maximum,
+        minimum,
+        maximum,
+        enumeration: listed(&any.enumeration, Value::as_i64)?,
+    }))
+}
+
+fn read_boolean(any: &AnySchema) -> Result<Type, Unsupported> {
+    Ok(Type::Boolean(BooleanType {
+        enumeration: listed(&any.enumeration, Value::as_bool)?,
+    }))
+}
+
+/// An `AnySchema` with no `type`: the composition keyword it states, else none.
+///
+/// A schema that states nothing of what it is can be any value, and a flag needs
+/// to know which.
+fn typeless(any: &AnySchema) -> Unsupported {
+    keywords(any)
+        .find(|stated| matches!(*stated, "allOf" | "oneOf" | "anyOf" | "not"))
+        .map_or(Unsupported::Untyped, keyword)
+}
+
+/// The keywords an `AnySchema` states other than its `type`, as the document
+/// spells them, in one fixed order with the compositions first. The order is what
+/// makes the keyword a refusal names the same one for the same schema: the object
+/// model keeps no order among the keywords of a schema.
+///
+/// A keyword whose value is empty (`properties: {}`, `enum: []`) is not stated,
+/// because the object model holds it as it holds the absence.
+fn keywords(any: &AnySchema) -> impl Iterator<Item = &'static str> {
+    [
+        ("allOf", !any.all_of.is_empty()),
+        ("oneOf", !any.one_of.is_empty()),
+        ("anyOf", !any.any_of.is_empty()),
+        ("not", any.not.is_some()),
+        ("properties", !any.properties.is_empty()),
+        ("required", !any.required.is_empty()),
+        ("additionalProperties", any.additional_properties.is_some()),
+        ("minProperties", any.min_properties.is_some()),
+        ("maxProperties", any.max_properties.is_some()),
+        ("items", any.items.is_some()),
+        ("minItems", any.min_items.is_some()),
+        ("maxItems", any.max_items.is_some()),
+        ("uniqueItems", any.unique_items.is_some()),
+        ("pattern", any.pattern.is_some()),
+        ("minLength", any.min_length.is_some()),
+        ("maxLength", any.max_length.is_some()),
+        ("minimum", any.minimum.is_some()),
+        ("maximum", any.maximum.is_some()),
+        ("exclusiveMinimum", any.exclusive_minimum.is_some()),
+        ("exclusiveMaximum", any.exclusive_maximum.is_some()),
+        ("multipleOf", any.multiple_of.is_some()),
+        ("enum", !any.enumeration.is_empty()),
+        ("format", any.format.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(keyword, stated)| stated.then_some(keyword))
+}
+
+/// An `enum`'s values as the type reads them, `null` as `None`. A value that the
+/// type does not read is why the schema is an `AnySchema`, and the `enum` is the
+/// keyword that holds it.
+fn listed<T>(
+    values: &[Value],
+    read: impl Fn(&Value) -> Option<T>,
+) -> Result<Vec<Option<T>>, Unsupported> {
+    values
+        .iter()
+        .map(|value| {
+            if value.is_null() {
+                return Ok(None);
+            }
+            read(value).map(Some).ok_or_else(|| keyword("enum"))
+        })
+        .collect()
+}
+
+/// The magnitude from which integer text can round to the same double: 2^53.
+const EXACT: f64 = 9_007_199_254_740_992.0;
+
+/// The magnitude through which whole doubles are refused as ambiguous bounds.
+/// Beyond 2^63 or below -2^63, a bound is outside the range of `i64`.
+const BEYOND: f64 = 9_223_372_036_854_775_808.0;
+
+/// Which end of an integer's range a bound is.
+#[derive(Clone, Copy)]
+enum End {
+    Minimum,
+    Maximum,
+}
+
+impl End {
+    const fn keyword(self) -> &'static str {
+        match self {
+            Self::Minimum => "minimum",
+            Self::Maximum => "maximum",
+        }
+    }
+}
+
+/// One end of an integer's range, as the integer type holds it: the bound and
+/// whether it is exclusive. `openapiv3` holds a bound that is no `i64` as an `f64`,
+/// so the double is read where it names the integers the bound admits, and refused
+/// by its keyword where it does not.
+///
+/// - A double with a fraction. The text of an integer gives a whole double, so
+///   this is the double of a text that is no integer, and no integer lies between
+///   the text and the double. The bound is the next integer inside, as an
+///   inclusive one: `exclusiveMinimum` says nothing that the ceiling does not.
+/// - A whole double with magnitude below 2^53 is that integer, whatever text
+///   gave it. The reader keeps the double and not the text, so a text with a
+///   fraction that rounds to a whole double (`minimum: 1.00000000000000001`)
+///   is read as that whole number, and no code here can tell it from `1.0`.
+///   That is the approximation of this reading, and the step has it too
+///   ([`integer_step`]).
+/// - A whole double with magnitude from 2^53 to 2^63, both ends included, is
+///   the double of more than one integer's text, so it is refused. These
+///   intervals are `[-2^63, -2^53]` and `[2^53, 2^63]`.
+/// - A double past that, above or below, is past every integer a flag carries. A
+///   `minimum` above them admits none of them, which no scalar says, so it is
+///   refused; a `maximum` above them bounds nothing. A `maximum` below them admits
+///   none and is refused, and a `minimum` below them bounds nothing.
+///
+/// A number of a document is finite, so the double is too.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a double with a fraction is below 2^52 in size, and a whole one is below 2^53 or is not cast"
+)]
+fn integer_end(
+    end: End,
+    bound: Option<f64>,
+    exclusive: bool,
+) -> Result<(Option<i64>, bool), Unsupported> {
+    let Some(bound) = bound else {
+        return Ok((None, exclusive));
+    };
+    if bound.fract() != 0.0 {
+        let inside = match end {
+            End::Minimum => bound.ceil(),
+            End::Maximum => bound.floor(),
+        };
+        return Ok((Some(inside as i64), false));
+    }
+    if bound.abs() < EXACT {
+        return Ok((Some(bound as i64), exclusive));
+    }
+    if bound.abs() <= BEYOND {
+        return Err(keyword(end.keyword()));
+    }
+    match (end, bound.is_sign_positive()) {
+        (End::Minimum, true) | (End::Maximum, false) => Err(keyword(end.keyword())),
+        (End::Minimum, false) | (End::Maximum, true) => Ok((None, exclusive)),
+    }
+}
+
+/// An integer's `multipleOf`, which `openapiv3` holds as an `f64` once it is
+/// no `i64`: `2.0` and `1e3` are the integers 2 and 1000. A whole double with
+/// magnitude below 2^53 is that integer, whatever text gave it, as for a
+/// bound: the reader keeps the double and not the text, so `multipleOf:
+/// 2.00000000000000001` is the step 2. A double with a fraction is refused,
+/// because an integer is a multiple of 2.5 when it is a multiple of 5 and no
+/// step that this crate reads says so, and so is a whole one with magnitude at
+/// least 2^53, which a double does not state exactly.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the step is whole and below 2^53 in size, which an i64 holds"
+)]
+fn integer_step(step: Option<f64>) -> Result<Option<i64>, Unsupported> {
+    let Some(step) = step else {
         return Ok(None);
     };
-    Ok(match ty {
-        Type::String(s) => Some(string_scalar(s)),
-        Type::Number(n) => Some(Scalar::Number(number_bounds(n))),
-        Type::Integer(i) => Some(Scalar::Integer(integer_bounds(i))),
-        Type::Boolean(_) => Some(Scalar::Boolean),
-        Type::Object(_) | Type::Array(_) => None,
+    if step.fract() == 0.0 && step.abs() < EXACT {
+        Ok(Some(step as i64))
+    } else {
+        Err(keyword("multipleOf"))
+    }
+}
+
+/// Whether this schema's `enum` lists values and every one of them is `null`.
+///
+/// A flag cannot send `null`, so [`scalar_of`] leaves such an `enum` out, and the
+/// scalar it reads then admits every value, where JSON Schema admits none that is
+/// not `null`. The reduction asks this beside `scalar_of` and refuses the schema,
+/// because reading it as no rule at all would be the approximation it forbids.
+pub(crate) fn lists_only_null(
+    schema: &ReferenceOr<Schema>,
+    components: &Components,
+) -> Result<bool, RefError> {
+    let schema = stated(schema, components)?;
+    let Ok(ty) = typed(&schema.schema_kind) else {
+        return Ok(false);
+    };
+    Ok(match &*ty {
+        Type::String(s) => only_null(&s.enumeration),
+        Type::Number(n) => only_null(&n.enumeration),
+        Type::Integer(i) => only_null(&i.enumeration),
+        Type::Boolean(b) => only_null(&b.enumeration),
+        Type::Object(_) | Type::Array(_) => false,
     })
+}
+
+/// Whether an `enum` lists something, and that something is `null` alone.
+fn only_null<T>(enumeration: &[Option<T>]) -> bool {
+    !enumeration.is_empty() && enumeration.iter().all(Option::is_none)
 }
 
 /// What a property says about itself, and what it inherits by pointing
@@ -189,7 +709,7 @@ pub fn scalar_of(
 /// schema's is about every field that shares the rule. A field that says
 /// nothing of its own takes the named schema's, which is better than nothing
 /// and is all a bare `$ref` can leave behind.
-pub fn description_of(
+pub(crate) fn description_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
 ) -> Result<Option<String>, RefError> {
@@ -218,23 +738,22 @@ pub fn description_of(
 /// it is for is an adopter asking which of an operation's values are of a kind
 /// the document names — a question only the document can settle and only the
 /// adopter can answer.
-pub fn format_of(
+pub(crate) fn format_of(
     schema: &ReferenceOr<Schema>,
     components: &Components,
 ) -> Result<Option<String>, RefError> {
-    Ok(match &stated(schema, components)?.schema_kind {
-        SchemaKind::Type(Type::String(s)) => as_written(&s.format),
-        SchemaKind::Type(Type::Number(n)) => as_written(&n.format),
-        SchemaKind::Type(Type::Integer(i)) => as_written(&i.format),
-        // A format names the kind of a *value*, and none of these is one: an
-        // object and an array hold values rather than being one, a boolean has
-        // only two, and a composition is several schemas rather than a shape.
-        SchemaKind::Type(Type::Object(_) | Type::Array(_) | Type::Boolean(_))
-        | SchemaKind::OneOf { .. }
-        | SchemaKind::AllOf { .. }
-        | SchemaKind::AnyOf { .. }
-        | SchemaKind::Not { .. }
-        | SchemaKind::Any(_) => None,
+    let schema = stated(schema, components)?;
+    // A format names the kind of a *value*, and none of the rest is one: an
+    // object and an array hold values rather than being one, a boolean has only
+    // two, and a composition is several schemas rather than a shape.
+    let Ok(ty) = typed(&schema.schema_kind) else {
+        return Ok(None);
+    };
+    Ok(match &*ty {
+        Type::String(s) => as_written(&s.format),
+        Type::Number(n) => as_written(&n.format),
+        Type::Integer(i) => as_written(&i.format),
+        Type::Object(_) | Type::Array(_) | Type::Boolean(_) => None,
     })
 }
 
@@ -269,120 +788,274 @@ fn example_of<'c>(
     Ok(stated(schema, components)?.schema_data.example.as_ref())
 }
 
-/// A skeleton of one JSON body, as the text a user redirects into a file.
+/// A skeleton of one JSON body, as the text a user redirects into a file, and the
+/// properties it leaves out because the API sets them.
 ///
 /// The body that goes through a file is the body with no per-field flags, and
 /// the flags are where this crate says what a field is called and what it
 /// accepts — so that body is the one a `--help` page cannot describe. This is
 /// what the walk that decided it was not flat saw on the way.
 ///
-/// `None` where there is no shape to write down: a body the document gives no
-/// schema, or one whose schema is a composition this crate has no reading for.
-/// The absence travels, and a subcommand with nothing to print grows no flag to
-/// ask for it.
-///
 /// Rendered once, while the document is reduced, and carried as the text it
 /// renders to. A shipped binary prints it and reads nothing — the rule both
 /// command names already follow.
-pub fn template(
+pub(crate) struct Template {
+    /// `None` where there is no shape to write down: a body the document gives no
+    /// schema, or one whose schema is a composition this crate has no reading for.
+    /// The absence travels, and a subcommand with nothing to print grows no flag to
+    /// ask for it.
+    pub(crate) text: Option<String>,
+    /// The properties the skeleton leaves out because the API sets them (`readOnly`)
+    /// below the body's own object, each by its path as a `BodyError` spells a key,
+    /// with `[]` for any item of a list (`address.aid`, `positions[].id`, `[].id`),
+    /// in the order the walk meets them. The body's own object is not walked here:
+    /// the reduction reads every property of it, and names each.
+    ///
+    /// These are the keys the skeleton would have written: the walk enters only a
+    /// required property, and an `example` stands in for the schema it is stated
+    /// on, less these keys where the walk goes through it (see
+    /// [`Walk::without_read_only`]). A read-only property that the document does
+    /// not require and no `example` carries is never written, so it is not left
+    /// out and is not named. One that an `example` carries where the walk does not
+    /// go through it stays in the template and is named nowhere.
+    pub(crate) read_only: Vec<String>,
+}
+
+/// Walk `schema` for its skeleton.
+pub(crate) fn template(
     schema: &ReferenceOr<Schema>,
     components: &Components,
-) -> Result<Option<String>, RefError> {
-    let skeleton = skeleton(schema, components, 0)?;
-    if skeleton.is_null() {
-        return Ok(None);
-    }
-    Ok(serde_json::to_string_pretty(&skeleton).ok())
-}
-
-/// One schema as the emptiest value that fits it.
-///
-/// `Value::Null` is what this says about a schema it has no reading for — a
-/// composition, or a node that states nothing at all. Under a required property
-/// that is the honest placeholder for a key the caller must supply and this
-/// crate cannot describe; at the top it is what [`template`] reads as having no
-/// template to offer.
-fn skeleton(
-    schema: &ReferenceOr<Schema>,
-    components: &Components,
-    depth: usize,
-) -> Result<Value, RefError> {
-    // An `example` is instance data, so it is taken whole and never read as a
-    // schema. A vendor whose example spells out a form as `{"required": [...]}`
-    // is writing a value that happens to use those words, and descending into
-    // it would build a template out of somebody's sample. It comes first
-    // because it is the better source: a value the document states round-trips,
-    // where one derived from types alone is only a shape.
-    if let Some(example) = example_of(schema, components)? {
-        return Ok(example.clone());
-    }
-    if let Some(scalar) = scalar_of(schema, components)? {
-        return Ok(empty(&scalar));
-    }
-    let node = stated(schema, components)?;
-    if let SchemaKind::Type(Type::Object(object)) = &node.schema_kind {
-        return object_skeleton(object, components, depth);
-    }
-    if let SchemaKind::Type(Type::Array(array)) = &node.schema_kind {
-        return array_skeleton(array, components, depth);
-    }
-    Ok(Value::Null)
-}
-
-/// The required properties, in the order the document declares them, and
-/// nothing else.
-///
-/// An optional key carrying an empty value is a key the caller never asked to
-/// send: on a `PUT` it is an empty string written over a field somebody meant
-/// to leave alone, and JSON has no comment to mark it as a suggestion with. So
-/// a template carries the minimum the document demands and the document stays
-/// where the rest is stated — the default-closed instinct the write gate has,
-/// applied to a body. A schema that requires nothing renders as `{}`, which is
-/// exactly what it asks of a caller.
-fn object_skeleton(
-    object: &ObjectType,
-    components: &Components,
-    depth: usize,
-) -> Result<Value, RefError> {
-    let mut out = serde_json::Map::new();
-    if depth >= MAX_DEPTH {
-        return Ok(Value::Object(out));
-    }
-    for (name, property) in &object.properties {
-        if !object.required.iter().any(|required| required == name) {
-            continue;
-        }
-        out.insert(
-            name.clone(),
-            skeleton(&property.clone().unbox(), components, depth + 1)?,
-        );
-    }
-    Ok(Value::Object(out))
-}
-
-/// One element rather than none.
-///
-/// An empty list is a body the server accepts and the user learns nothing
-/// from, and what goes *in* the list is exactly what they came here to find
-/// out. One element, itself a skeleton, says that much and is written the same
-/// way as every other value in the template. A list whose `items` the document
-/// omits is the one case with nothing to put in it.
-fn array_skeleton(
-    array: &ArrayType,
-    components: &Components,
-    depth: usize,
-) -> Result<Value, RefError> {
-    if depth >= MAX_DEPTH {
-        return Ok(Value::Array(Vec::new()));
-    }
-    let Some(items) = &array.items else {
-        return Ok(Value::Array(Vec::new()));
-    };
-    Ok(Value::Array(vec![skeleton(
-        &items.clone().unbox(),
+) -> Result<Template, RefError> {
+    let mut walk = Walk {
         components,
-        depth + 1,
-    )?]))
+        read_only: Vec::new(),
+    };
+    let skeleton = walk.skeleton(schema, &Place::body())?;
+    Ok(Template {
+        text: if skeleton.is_null() {
+            None
+        } else {
+            serde_json::to_string_pretty(&skeleton).ok()
+        },
+        read_only: walk.read_only,
+    })
+}
+
+/// Where the walk is in the body: how many steps down, and the path that says so.
+struct Place {
+    depth: usize,
+    path: String,
+}
+
+impl Place {
+    const fn body() -> Self {
+        Self {
+            depth: 0,
+            path: String::new(),
+        }
+    }
+
+    /// The place of a property of the object that stands here.
+    fn property(&self, name: &str) -> Self {
+        let path = if self.path.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{}.{name}", self.path)
+        };
+        Self {
+            depth: self.depth + 1,
+            path,
+        }
+    }
+
+    /// The place of the items of the list that stands here.
+    fn items(&self) -> Self {
+        Self {
+            depth: self.depth + 1,
+            path: format!("{}[]", self.path),
+        }
+    }
+}
+
+/// The walk that writes a skeleton, and notes what it leaves out on the way, so
+/// that the template and the words about it are one reading.
+struct Walk<'c> {
+    components: &'c Components,
+    read_only: Vec<String>,
+}
+
+impl Walk<'_> {
+    /// One schema as the emptiest value that fits it.
+    ///
+    /// `Value::Null` is what this says about a schema it has no reading for — a
+    /// composition, or a node that states nothing at all. Under a required property
+    /// that is the honest placeholder for a key the caller must supply and this
+    /// crate cannot describe; at the top it is what [`template`] reads as having no
+    /// template to offer.
+    fn skeleton(&mut self, schema: &ReferenceOr<Schema>, at: &Place) -> Result<Value, RefError> {
+        // An `example` is instance data, so it is never read as a schema. A vendor
+        // whose example spells out a form as `{"required": [...]}` is writing a
+        // value that happens to use those words, and descending into it would
+        // build a template out of somebody's sample. It comes first because it is
+        // the better source: a value the document states round-trips, where one
+        // derived from types alone is only a shape. It is taken as the document
+        // has it, less the properties the API sets where the walk can tell which
+        // they are.
+        if let Some(example) = example_of(schema, self.components)? {
+            return Ok(self.without_read_only(example, schema, at));
+        }
+        if let Fit::Scalar(scalar) = scalar_of(schema, self.components)? {
+            return Ok(empty(&scalar));
+        }
+        let node = stated(schema, self.components)?;
+        if let SchemaKind::Type(Type::Object(object)) = &node.schema_kind {
+            return self.object_skeleton(object, at);
+        }
+        if let Some(array) = array_of(&node.schema_kind) {
+            return self.array_skeleton(&array, at);
+        }
+        Ok(Value::Null)
+    }
+
+    /// An `example` less each property the API sets, at every depth of the walk.
+    ///
+    /// The example is a value and the schema beside it says which of its keys are
+    /// read-only, so the two are walked together: an object by its properties, a
+    /// list by its items. The walk goes through an object and a list that this
+    /// crate reads, where the example has their shape, and into the value of a key
+    /// that the object's `properties` declare. The example stays as the document
+    /// has it wherever the walk does not go: the value under a key that
+    /// `properties` does not declare, and everything below a schema this walk reads
+    /// no further, such as a composition, a schema with `properties` and no `type`,
+    /// an object or an array that states a keyword its `type` does not have, an
+    /// object that `openapiv3` holds as `AnySchema`, or one that cannot be
+    /// followed, because a template is no place to refuse a document that loads. A
+    /// list of several elements names a property once.
+    fn without_read_only(
+        &mut self,
+        example: &Value,
+        schema: &ReferenceOr<Schema>,
+        at: &Place,
+    ) -> Value {
+        let Ok(node) = stated(schema, self.components) else {
+            return example.clone();
+        };
+        if let (SchemaKind::Type(Type::Object(object)), Value::Object(entries)) =
+            (&node.schema_kind, example)
+        {
+            return self.object_example(object, entries, at);
+        }
+        if let (Some(array), Value::Array(elements)) = (array_of(&node.schema_kind), example) {
+            return self.array_example(&array, elements, at);
+        }
+        example.clone()
+    }
+
+    /// The entries of an object `example`, less the ones its schema marks read-only.
+    fn object_example(
+        &mut self,
+        object: &ObjectType,
+        entries: &serde_json::Map<String, Value>,
+        at: &Place,
+    ) -> Value {
+        let mut kept = serde_json::Map::new();
+        for (name, value) in entries {
+            let Some(property) = object.properties.get(name) else {
+                kept.insert(name.clone(), value.clone());
+                continue;
+            };
+            let property = property.clone().unbox();
+            let place = at.property(name);
+            if read_only_of(&property, self.components).unwrap_or(false) {
+                self.leave_out(place);
+                continue;
+            }
+            kept.insert(
+                name.clone(),
+                self.without_read_only(value, &property, &place),
+            );
+        }
+        Value::Object(kept)
+    }
+
+    /// The elements of a list `example`, each less the properties its items' schema
+    /// marks read-only.
+    fn array_example(&mut self, array: &ArrayType, elements: &[Value], at: &Place) -> Value {
+        let Some(items) = &array.items else {
+            return Value::Array(elements.to_vec());
+        };
+        let items = items.clone().unbox();
+        let place = at.items();
+        Value::Array(
+            elements
+                .iter()
+                .map(|element| self.without_read_only(element, &items, &place))
+                .collect(),
+        )
+    }
+
+    /// The required properties, in the order the document declares them, and
+    /// nothing else.
+    ///
+    /// A property the API sets (`readOnly`) is not one the caller supplies, so it is
+    /// left out whether or not the schema requires it: a skeleton that carried it
+    /// would invite the caller to send what a request should not. Below the body's
+    /// own object the walk says so ([`Template::read_only`]).
+    ///
+    /// An optional key carrying an empty value is a key the caller never asked to
+    /// send: on a `PUT` it is an empty string written over a field somebody meant
+    /// to leave alone, and JSON has no comment to mark it as a suggestion with. So
+    /// a template carries the minimum the document demands and the document stays
+    /// where the rest is stated — the default-closed instinct the write gate has,
+    /// applied to a body. A schema that requires nothing renders as `{}`, which is
+    /// exactly what it asks of a caller.
+    fn object_skeleton(&mut self, object: &ObjectType, at: &Place) -> Result<Value, RefError> {
+        let mut out = serde_json::Map::new();
+        if at.depth >= MAX_DEPTH {
+            return Ok(Value::Object(out));
+        }
+        for (name, property) in &object.properties {
+            if !object.required.iter().any(|required| required == name) {
+                continue;
+            }
+            let property = property.clone().unbox();
+            let place = at.property(name);
+            if read_only_of(&property, self.components)? {
+                self.leave_out(place);
+                continue;
+            }
+            out.insert(name.clone(), self.skeleton(&property, &place)?);
+        }
+        Ok(Value::Object(out))
+    }
+
+    /// Notes a property the skeleton leaves out because the API sets it, unless it
+    /// is a property of the body's own object, which the reduction names itself.
+    /// A path is noted once, because the elements of an example list share one.
+    fn leave_out(&mut self, place: Place) {
+        if place.depth > 1 && !self.read_only.contains(&place.path) {
+            self.read_only.push(place.path);
+        }
+    }
+
+    /// One element rather than none.
+    ///
+    /// An empty list is a body the server accepts and the user learns nothing
+    /// from, and what goes *in* the list is exactly what they came here to find
+    /// out. One element, itself a skeleton, says that much and is written the same
+    /// way as every other value in the template. A list whose `items` the document
+    /// omits is the one case with nothing to put in it.
+    fn array_skeleton(&mut self, array: &ArrayType, at: &Place) -> Result<Value, RefError> {
+        if at.depth >= MAX_DEPTH {
+            return Ok(Value::Array(Vec::new()));
+        }
+        let Some(items) = &array.items else {
+            return Ok(Value::Array(Vec::new()));
+        };
+        Ok(Value::Array(vec![
+            self.skeleton(&items.clone().unbox(), &at.items())?,
+        ]))
+    }
 }
 
 /// The emptiest value of one kind.
@@ -399,17 +1072,23 @@ fn array_skeleton(
 ///
 /// That floor is not a promise that a template cannot be sent. An
 /// enumeration's first value is one the enumeration admits, and the `example`
-/// [`skeleton`] takes whole is one the document states about the API — so a
-/// template drawing every key from those two carries nothing the document
-/// forbids. A template is checked against nothing and is not meant to go out
-/// unread: it says where the values belong, and the values are the caller's to
-/// put there.
+/// [`skeleton`] takes is one the document states about the API — so a template
+/// drawing every key from those two carries nothing the document forbids, bar a
+/// `readOnly` key that an `example` carries where the walk does not go. A
+/// template is checked against nothing and is not meant to go out unread: it says
+/// where the values belong, and the values are the caller's to put there.
 fn empty(scalar: &Scalar) -> Value {
     match scalar {
         Scalar::Text(_) => Value::String(String::new()),
-        Scalar::Integer(_) => Value::from(0),
-        Scalar::Number(_) => Value::from(0.0),
-        Scalar::Boolean => Value::Bool(false),
+        Scalar::Integer(bounds) => bounds
+            .allowed
+            .first()
+            .map_or_else(|| Value::from(0), |first| Value::from(*first)),
+        Scalar::Number(bounds) => bounds
+            .allowed
+            .first()
+            .map_or_else(|| Value::from(0.0), |first| Value::from(*first)),
+        Scalar::Boolean(only) => Value::Bool(only.unwrap_or(false)),
         Scalar::Choice(values) => values
             .first()
             .map_or(Value::Null, |first| Value::String(first.clone())),
@@ -441,6 +1120,7 @@ fn number_bounds(n: &NumberType) -> Bounds<f64> {
         low: limit(n.minimum, n.exclusive_minimum),
         high: limit(n.maximum, n.exclusive_maximum),
         multiple_of: n.multiple_of,
+        allowed: n.enumeration.iter().flatten().copied().collect(),
     }
 }
 
@@ -449,7 +1129,16 @@ fn integer_bounds(i: &IntegerType) -> Bounds<i64> {
         low: limit(i.minimum, i.exclusive_minimum),
         high: limit(i.maximum, i.exclusive_maximum),
         multiple_of: i.multiple_of,
+        allowed: i.enumeration.iter().flatten().copied().collect(),
     }
+}
+
+/// The one value a boolean's `enum` allows, and `None` where it allows both or
+/// lists none: `[true, false]` says what `type: boolean` says already.
+fn only_boolean(b: &BooleanType) -> Option<bool> {
+    let mut listed = b.enumeration.iter().flatten().copied();
+    let first = listed.next()?;
+    listed.all(|value| value == first).then_some(first)
 }
 
 /// One end of a range. OpenAPI 3.0 states exclusivity as a flag beside the
@@ -481,10 +1170,52 @@ fn limit<T>(value: Option<T>, exclusive: bool) -> Option<Limit<T>> {
 /// of types this crate knows: `application/x-www-form-urlencoded`,
 /// `application/vnd.api+json` and every vendor type anyone coins pass it.
 #[must_use]
-pub fn is_media_type(media_type: &str) -> bool {
-    essence(media_type)
+pub(crate) fn is_media_type(media_type: &str) -> bool {
+    has_type_and_subtype(&essence(media_type))
+}
+
+/// Whether this key can be a request's `Content-Type` as it stands.
+///
+/// [`is_media_type`] reads a key as a person does and is asked of every request
+/// body key that is picked. This is asked only of a key that goes out as the
+/// header, a JSON body's and one that is sent verbatim: a `multipart/form-data`
+/// body writes its own `Content-Type`, with a boundary, and its key is never
+/// sent. The essence before the first `;`, with space and tab trimmed from its
+/// ends, must be `type/subtype`. A no-break space at an end of that essence is
+/// no `token` character. The whole key must also be a header value, which
+/// refuses bytes below 0x20 except tab, and DEL, in a parameter as much as in the
+/// essence. Other parameter bytes are not parsed. Output trimming is separate:
+/// [`crate::model::Body::media_type`] trims space and tab from the whole key's
+/// ends, and retains other whitespace in a parameter.
+#[must_use]
+pub(crate) fn is_content_type(media_type: &str) -> bool {
+    has_type_and_subtype(before_parameters(media_type).trim_matches([' ', '\t']))
+        && HeaderValue::from_str(media_type).is_ok()
+}
+
+/// Whether the essence is `type/subtype`: two non-empty `token`s either side of
+/// the one `/` that is not a `token` character.
+fn has_type_and_subtype(essence: &str) -> bool {
+    essence
         .split_once('/')
         .is_some_and(|(ty, subtype)| is_token(ty) && is_token(subtype))
+}
+
+/// Whether this is a media range — `*/*`, `image/*` — and so a set of types and
+/// not one.
+///
+/// A `content` key may be one, because the document can say that a body is
+/// anything that the range admits. A request is sent under one type, and the
+/// range does not name it: `*` is a `token` character, so a range passes
+/// [`is_media_type`] and, sent as it stands, is a `Content-Type` that no server
+/// reads. The `*` is looked for in the type and the subtype and nowhere else,
+/// because a parameter after the `;` is the vendor's to spell. No registered
+/// media type has a `*` in its name, so `application/*+json` is a pattern too,
+/// and a range in the same sense: the vendor means a family, and this crate
+/// cannot choose the member.
+#[must_use]
+pub(crate) fn is_media_range(media_type: &str) -> bool {
+    essence(media_type).contains('*')
 }
 
 /// RFC 9110's `token`: one or more of the characters a field value carries
@@ -499,29 +1230,219 @@ fn is_token(word: &str) -> bool {
 
 /// `application/json`, `application/merge-patch+json`, and anything with
 /// parameters after the essence.
+///
+/// The suffix is all that is read, so `application/*+json` names JSON too. A
+/// request body picks the key it is sent under by this, and a response is read at
+/// every key that this accepts, since the client sends no `Accept` header. A
+/// request body that picks a range is refused as one ([`is_media_range`]).
 #[must_use]
-pub fn is_json(media_type: &str) -> bool {
+pub(crate) fn is_json(media_type: &str) -> bool {
     essence(media_type) == "application/json" || essence(media_type).ends_with("+json")
 }
 
 /// A media type this crate can assemble from `--file` and `--field` parts.
 #[must_use]
-pub fn is_multipart(media_type: &str) -> bool {
+pub(crate) fn is_multipart(media_type: &str) -> bool {
     essence(media_type) == "multipart/form-data"
 }
 
 fn essence(media_type: &str) -> String {
-    media_type
-        .split(';')
-        .next()
-        .unwrap_or(media_type)
-        .trim()
-        .to_ascii_lowercase()
+    before_parameters(media_type).trim().to_ascii_lowercase()
+}
+
+/// What stands before the first `;`: the essence and the white space round it.
+fn before_parameters(media_type: &str) -> &str {
+    media_type.split(';').next().unwrap_or(media_type)
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    /// The keywords each `type` has, from JSON Schema and not from the tables
+    /// above, so that a row dropped from one of them is a test that fails.
+    const OWN: [(&str, &[&str]); 6] = [
+        (
+            "string",
+            &["pattern", "minLength", "maxLength", "enum", "format"],
+        ),
+        (
+            "number",
+            &[
+                "multipleOf",
+                "minimum",
+                "maximum",
+                "exclusiveMinimum",
+                "exclusiveMaximum",
+                "enum",
+                "format",
+            ],
+        ),
+        (
+            "integer",
+            &[
+                "multipleOf",
+                "minimum",
+                "maximum",
+                "exclusiveMinimum",
+                "exclusiveMaximum",
+                "enum",
+                "format",
+            ],
+        ),
+        ("boolean", &["enum"]),
+        (
+            "object",
+            &[
+                "properties",
+                "required",
+                "additionalProperties",
+                "minProperties",
+                "maxProperties",
+            ],
+        ),
+        ("array", &["items", "minItems", "maxItems", "uniqueItems"]),
+    ];
+
+    /// A value of a keyword that the `type` reads.
+    fn sample(keyword: &str, ty: &str) -> Value {
+        match (keyword, ty) {
+            ("allOf" | "oneOf" | "anyOf", _) => json!([{ "type": "string" }]),
+            ("not" | "items", _) => json!({ "type": "string" }),
+            ("properties", _) => json!({ "a": { "type": "string" } }),
+            (
+                "additionalProperties" | "uniqueItems" | "exclusiveMinimum" | "exclusiveMaximum",
+                _,
+            ) => json!(true),
+            (
+                "minProperties" | "maxProperties" | "minItems" | "maxItems" | "minLength"
+                | "maxLength" | "minimum" | "maximum",
+                _,
+            ) => json!(1),
+            ("multipleOf", _) => json!(2),
+            ("pattern" | "format", _) => json!("a"),
+            ("enum", "number" | "integer") => json!([1]),
+            ("enum", "boolean") => json!([true]),
+            ("required" | "enum", _) => json!(["a"]),
+            (other, _) => panic!("no sample for `{other}`"),
+        }
+    }
+
+    /// Every keyword that an `AnySchema` holds.
+    const KEYWORDS: [&str; 23] = [
+        "allOf",
+        "oneOf",
+        "anyOf",
+        "not",
+        "properties",
+        "required",
+        "additionalProperties",
+        "minProperties",
+        "maxProperties",
+        "items",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "pattern",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "enum",
+        "format",
+    ];
+
+    /// The `AnySchema` that states each of `entries`, a keyword and its value.
+    fn any_of(entries: Vec<(String, Value)>) -> AnySchema {
+        let object: serde_json::Map<String, Value> = entries.into_iter().collect();
+        serde_json::from_value(Value::Object(object))
+            .unwrap_or_else(|error| panic!("an AnySchema reads every keyword: {error}"))
+    }
+
+    /// The `AnySchema` of one `type` with one keyword beside it.
+    fn any(ty: &str, keyword: &str) -> AnySchema {
+        any_of(vec![
+            ("type".to_owned(), json!(ty)),
+            (keyword.to_owned(), sample(keyword, ty)),
+        ])
+    }
+
+    /// Every keyword beside every type, and whether the type has it.
+    fn pairs() -> impl Iterator<Item = (&'static str, &'static str, bool)> {
+        OWN.into_iter().flat_map(|(ty, own)| {
+            KEYWORDS
+                .into_iter()
+                .map(move |keyword| (ty, keyword, own.contains(&keyword)))
+        })
+    }
+
+    /// Whether `read` is what a keyword beside a type comes to: named where the type
+    /// does not have it, structured where the type is an object that has it, the
+    /// array where it is an array, and the type otherwise.
+    fn is_read_as_it_should(
+        ty: &str,
+        keyword: &str,
+        has: bool,
+        read: &Result<Type, Unsupported>,
+    ) -> bool {
+        match (has, ty) {
+            (false, _) => matches!(read, Err(Unsupported::Keyword(found)) if found == keyword),
+            (true, "object") => matches!(read, Err(Unsupported::Structured)),
+            (true, "array") => matches!(read, Ok(Type::Array(_))),
+            (true, _) => read.is_ok(),
+        }
+    }
+
+    /// Every keyword beside every type of the six: a keyword that the type has is
+    /// read, and an object is structured. A keyword that the type does not have is
+    /// named. The document of a keyword that a type has is not one that
+    /// `openapiv3` holds as `AnySchema`, so this reads the schema with none round
+    /// it.
+    #[test]
+    fn a_keyword_is_read_where_the_type_has_it_and_named_where_it_does_not() {
+        for (ty, keyword, has) in pairs() {
+            let read = any_type(&any(ty, keyword));
+            assert!(
+                is_read_as_it_should(ty, keyword, has, &read),
+                "{ty} with {keyword}: {read:?}"
+            );
+        }
+    }
+
+    /// An `AnySchema` with no `type` states a composition or states nothing of
+    /// what it is, and a `type` that is none of the six is named.
+    #[test]
+    fn an_any_schema_with_no_type_names_its_first_composition_else_says_so() {
+        let no_type = |keywords: &[&str]| {
+            let entries = keywords
+                .iter()
+                .map(|keyword| ((*keyword).to_owned(), sample(keyword, "")))
+                .collect();
+            any_type(&any_of(entries))
+        };
+        for (keywords, expected) in [
+            (&["allOf", "pattern"][..], keyword("allOf")),
+            (&["oneOf", "pattern"], keyword("oneOf")),
+            (&["anyOf", "pattern"], keyword("anyOf")),
+            (&["not", "pattern"], keyword("not")),
+            (&["not", "anyOf", "pattern"], keyword("anyOf")),
+            (&["not", "oneOf", "allOf"], keyword("allOf")),
+            (&["pattern", "properties"], Unsupported::Untyped),
+            (&[], Unsupported::Untyped),
+        ] {
+            assert_eq!(no_type(keywords).map(drop), Err(expected), "{keywords:?}");
+        }
+        let file = any_type(&AnySchema {
+            typ: Some("file".to_owned()),
+            ..AnySchema::default()
+        });
+        assert_eq!(file.map(drop), Err(keyword("type")));
+    }
 
     /// The grammar has to be wide enough to admit everything a server reads
     /// and narrow enough to catch a key that names no type at all. The first
@@ -549,6 +1470,73 @@ mod tests {
         assert!(!is_media_type("application/json charset=utf-8"));
     }
 
+    /// A key that goes out as the `Content-Type` is a header value, so a byte
+    /// that no header carries is no part of one, in a parameter as much as in the
+    /// essence.
+    #[test]
+    fn a_content_type_is_a_header_value() {
+        assert!(!is_content_type("application/json; x=\"a\u{1}b\""));
+        assert!(!is_content_type("application/json; x=\"a\nb\""));
+        assert!(!is_content_type("application/json;x=\u{7f}"));
+        // A tab is one a header carries, and so is a byte past ASCII, a C1
+        // control character among them.
+        assert!(is_content_type("text/plain; x=\"a\tb\""));
+        assert!(is_content_type("text/plain; x=\"é\""));
+        assert!(is_content_type("text/plain; x=\"a\u{85}b\""));
+        // `is_media_type` leaves a parameter unread, so a multipart key with such
+        // a byte is a media type: the key is never sent and is not held to the
+        // header.
+        assert!(is_media_type("multipart/form-data; x=\"a\u{1}b\""));
+    }
+
+    /// RFC 9110's optional white space is a space and a tab. `str::trim`, which
+    /// `is_media_type` reads the essence with, takes every Unicode white space, so
+    /// a key with another before its type or after its subtype is a media type
+    /// and no content type.
+    #[test]
+    fn a_content_type_is_trimmed_of_a_space_and_a_tab_and_no_other_white_space() {
+        assert!(is_content_type(" text/plain\t"));
+        assert!(is_content_type("application/json ; charset=utf-8"));
+
+        for key in [
+            "application/json\u{a0}",
+            "\u{a0}application/json",
+            "\u{85}application/json",
+            "application/json\u{3000}",
+            "application/merge-patch+json\u{a0}",
+            "text/plain\u{2003}; charset=utf-8",
+            // A vertical tab, a form feed and a carriage return are control
+            // characters, and a header refuses them in the essence too.
+            "application/json\u{b}",
+            "application/json\u{c}",
+            "application/json\r",
+        ] {
+            assert!(!is_content_type(key), "{key:?}");
+        }
+        // `is_media_type` and `is_json` trim every Unicode white space, and the
+        // pick of a key and the typing of a response read through them, so
+        // neither depends on this question.
+        assert!(is_media_type("application/json\u{a0}"));
+        assert!(is_json("application/json\u{a0}"));
+    }
+
+    #[test]
+    fn a_range_has_a_star_in_its_type_or_its_subtype_and_nowhere_else() {
+        assert!(is_media_range("*/*"));
+        assert!(is_media_range("image/*"));
+        assert!(is_media_range("*/json"));
+        assert!(is_media_range("application/*+json"));
+        assert!(is_media_range("Image/*; q=0.5"));
+
+        assert!(!is_media_range("image/png"));
+        assert!(!is_media_range("application/vnd.api+json"));
+        // A parameter is the vendor's to spell, and is read no further than the
+        // `;` that starts it.
+        assert!(!is_media_range(r#"multipart/form-data; boundary="*""#));
+        // Not a media type, which is another refusal and asked first.
+        assert!(!is_media_range("form-data"));
+    }
+
     #[test]
     fn json_is_recognised_through_suffixes_and_parameters() {
         assert!(is_json("application/json"));
@@ -556,6 +1544,11 @@ mod tests {
         assert!(is_json("application/merge-patch+json"));
         assert!(!is_json("form-data"));
         assert!(!is_json("multipart/form-data"));
+        assert!(!is_json("*/*"));
+        // The suffix is all that is read, so a range that ends in it is read as
+        // JSON: it is the key a request body is picked under and then refused,
+        // and the key a response is typed from.
+        assert!(is_json("application/*+json"));
     }
 
     #[test]

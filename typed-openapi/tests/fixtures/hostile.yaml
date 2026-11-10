@@ -8,10 +8,15 @@
 #
 # This document is the other half. Every shape in it is one a real vendor
 # document has written by accident: schema names that differ only in case,
-# parameters named after Rust keywords, one wire name in two places, a property
+# parameters named after Rust keywords, two names that spell one flag, a property
 # whose name has no letters in it, a description whose list markers Markdown
-# reads as code, a body that is an array, a body with no properties, and five
-# parameters this crate cannot spell. The vocabulary is deliberately nothing
+# reads as code, a body that is an array, a body with no properties, five
+# parameters this crate cannot spell, three spellings of `help`, which is
+# clap's before it is anyone's, and a description that hides a code block in
+# a Markdown container, or holds markup, a character that changes the
+# direction of text, or a carriage return, a parameter whose name starts with a
+# digit, and schemas named `Ok`, `Err`, `Some`, `None`, `String`, `Option`,
+# `Result`, `Vec`, `Box` and `Default`. The vocabulary is deliberately nothing
 # this repository uses anywhere else, because half of what is being tested is
 # whether a name survives the trip from the document to a flag and to Rust.
 #
@@ -77,6 +82,12 @@ paths:
           schema:
             type: integer
             format: sagger-count
+        # A parameter that wants the flag clap writes itself. `--help` stays
+        # clap's and the parameter moves aside to `--param-help`; the wire still
+        # carries `help`.
+        - name: help
+          in: query
+          schema: { type: string }
       responses:
         "200":
           description: OK
@@ -106,6 +117,9 @@ paths:
                 bare_cone:
                   type: string
                   format: cone-number
+                # The same word as a property: `--body-help`.
+                help:
+                  type: string
       responses:
         "201":
           description: Created
@@ -118,13 +132,14 @@ paths:
       operationId: appendLogEntry
       summary: Append one line to a firing's log
       parameters:
-        # One wire name in two places, which is a thing OpenAPI allows and a
-        # command line cannot spell twice.
+        # Two wire names that spell one flag and one Rust word, which is a thing
+        # OpenAPI allows (a name is case sensitive) and a command line cannot
+        # spell twice.
         - name: ref
           in: path
           required: true
           schema: { type: string }
-        - name: ref
+        - name: Ref
           in: query
           schema: { type: string }
       # A body stated inline one of whose properties is an object, which sends
@@ -206,7 +221,18 @@ paths:
   /wadding/tallies:
     post:
       operationId: tallyWadding
-      summary: Post a tally of cones used
+      # A summary is where a wrapper's doc starts, so a code block in a Markdown
+      # container and a link to a script are as much the vendor's here as in a
+      # description.
+      summary: |
+        Post a tally of cones used
+
+        > Example request:
+        > ```
+        > curl https://kiln.example/wadding/tallies
+        > ```
+
+        The units are on [the tally sheet](javascript:alert(1)).
       # A body that is an array at the top level.
       requestBody:
         required: true
@@ -222,7 +248,12 @@ paths:
   /glaze-recipes:
     post:
       operationId: fileGlazeRecipe
-      summary: File a glaze recipe
+      summary: |
+        File a glaze recipe
+
+        - ```ignore-wasm32
+          {"cone": "04"}
+          ```
       # An object that declares no properties at all.
       requestBody:
         required: true
@@ -238,6 +269,40 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/glaze_recipe'
+  # An optional parameter whose name starts with a digit, which has a flag and no
+  # spelling as a Rust identifier until an `x` stands in front of it, and two
+  # parameters that name schemas that are called after standard items.
+  /payments:
+    get:
+      operationId: listPayments
+      summary: List payments
+      parameters:
+        - name: 3ds
+          in: query
+          schema: { type: boolean }
+        - name: verdict
+          in: query
+          schema: { $ref: '#/components/schemas/Ok' }
+        - name: tag
+          in: query
+          schema: { $ref: '#/components/schemas/String' }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Standard' }
+  # A path whose first segment is clap's own subcommand. Left alone it names the
+  # group `help` and the document is refused; the marker is the repair, the line
+  # an Overlay writes, and it stands here so that the tree mounts.
+  /help/kiln-notes:
+    get:
+      operationId: listKilnNotes
+      summary: List the notes pinned to the kiln
+      x-cli-group: kiln-help
+      responses:
+        "200":
+          description: OK
 components:
   schemas:
     # Three names in three casings that do not reduce to one Rust type, which is
@@ -289,3 +354,101 @@ components:
         Anything longer than that is written out in full:
 
             soak=90m
+    # Five ways to put a code block where `cargo test --doc` finds it and runs
+    # it: a fence in a block quote, a fence opened on the line of a list marker,
+    # an indented block in a block quote, an info string that is only a class,
+    # and one that skips a target and runs on every other. Beside them, the
+    # shapes that stop the compiler, `rustfmt` or the page: markup, a link to a
+    # script, a character that changes the direction of text (written as an
+    # escape, so that this file holds none), and a carriage return alone. Two
+    # summaries above hold a block and a link too. Nothing refers to it.
+    Placard:
+      type: object
+      properties:
+        quoted:
+          type: string
+          description: |
+            Posted on the kiln door:
+
+            > Example request:
+            > ```
+            > curl https://kiln.example/firings
+            > ```
+        listed:
+          type: string
+          description: |
+            Before every firing:
+
+            - ```
+              check the spyhole
+              ```
+        quoted_indent:
+          type: string
+          description: |
+            Quoted and indented:
+
+            >     curl https://kiln.example/firings
+        classed:
+          type: string
+          description: |
+            A reading, with a class on its fence:
+
+            ```{.json}
+            {"cone": "06"}
+            ```
+        targeted:
+          type: string
+          description: |
+            A reading, ignored on one target:
+
+            ```ignore-wasm32
+            {"cone": "04"}
+            ```
+        markup:
+          type: string
+          description: "<blink>Do not open</blink> while the kiln is hot."
+        linked:
+          type: string
+          description: |
+            Read [the log](javascript:alert(1)), [the chart](JaVaScRiPt:alert(1)),
+            [the notes](&#106;avascript:alert(1)) and ![the photo](data:text/html,x),
+            or [the schedule][sched], and keep [the rules](https://kiln.example/rules)
+            and [the sheet](./sheet) by you.
+
+            [sched]: vbscript:msgbox(1)
+        directed: { type: string, description: "Marked \u202eRTL\u202c on the lid." }
+        returned: { type: string, description: "Two lines\rjoined by a lone carriage return." }
+    # Ten schemas named after what the generated code means by the same words:
+    # the two results, the two options, a string, a list, a box, a result and an
+    # option, and the default of a type. The generated code names every one of them
+    # by its full path, so a schema that is called one of them is a schema and
+    # nothing else, and a newtype over a string (`Ok`, `Some`, `Box`, `String`),
+    # over a number (`None`), an enumeration (`Err`), an object with a field of
+    # each kind and a list are each one more type.
+    Ok: { type: string }
+    Err: { type: string, enum: [open, shut] }
+    Some: { type: string }
+    None: { type: integer }
+    String: { type: string, pattern: '^[a-z]+$' }
+    Option: { type: object, properties: { some: { type: string } } }
+    Result: { type: object, properties: { ok: { type: boolean } } }
+    Vec: { type: array, items: { type: string } }
+    Box: { type: string }
+    Default: { type: object, properties: { d: { type: string } } }
+    # One struct that holds each of them, one by one, and a default that spells
+    # another.
+    Standard:
+      type: object
+      properties:
+        ok: { $ref: '#/components/schemas/Ok' }
+        err: { $ref: '#/components/schemas/Err' }
+        some: { $ref: '#/components/schemas/Some' }
+        none: { $ref: '#/components/schemas/None' }
+        string: { $ref: '#/components/schemas/String' }
+        option: { $ref: '#/components/schemas/Option' }
+        result: { $ref: '#/components/schemas/Result' }
+        vec: { $ref: '#/components/schemas/Vec' }
+        box: { $ref: '#/components/schemas/Box' }
+        fallback:
+          allOf: [{ $ref: '#/components/schemas/Default' }]
+          default: { d: spare }

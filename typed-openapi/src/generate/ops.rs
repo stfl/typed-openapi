@@ -14,14 +14,15 @@
 //! `--json-body` file is held to the same schema a Rust caller is.
 
 use heck::{ToPascalCase, ToSnakeCase};
-use openapiv3::{OpenAPI, ReferenceOr, Schema, SchemaKind, Type};
+use openapiv3::{Components, OpenAPI, Parameter, ReferenceOr, Schema, SchemaKind, Type};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::visit_mut::VisitMut as _;
 
 use super::GenerateError;
-use super::names::{JsonBody, Names, Site};
-use crate::model::{Body, Shape};
+use super::identifiers::{self, Member};
+use super::names::{Answer, Home, JsonBody, Names, Reading, Site, Statement, Unanswerable};
+use crate::model::{Body, Shape, declared, entry_of_flag};
+use crate::schema::{array_of, stated, typed};
 use crate::{Document, Operation};
 
 /// What one operation contributes to the generated file.
@@ -44,6 +45,11 @@ struct Emitted {
     /// it. It delegates rather than repeating the body, so the two cannot
     /// describe different requests.
     builder_method: TokenStream,
+    /// The name of the wrapper, and of the method that starts its builder.
+    wrapper_name: Ident,
+    builder_name: Ident,
+    /// The arguments of the wrapper, which `bon` makes setters of.
+    members: Vec<Member>,
 }
 
 /// A document element this generator has no Rust spelling for.
@@ -58,11 +64,14 @@ pub(super) fn emit(
     names: &Names,
 ) -> Result<String, GenerateError> {
     let ops = gather(api, model, names)?;
+    check_identifiers(&ops)?;
     let operation_id = operation_id(&ops);
     let inventory = inventory(&ops);
     let methods = ops.iter().map(|op| &op.method);
     let builder_methods = ops.iter().map(|op| &op.builder_method);
-    let mut file: syn::File = syn::parse2(quote! {
+    // A summary and a description are the vendor's prose, and a wrapper's doc
+    // is where they land.
+    let file: syn::File = syn::parse2(super::prose::written(quote! {
         use typed_openapi::{Part, Values};
 
         use crate::{Api, Call, Error, NoContent};
@@ -79,20 +88,18 @@ pub(super) fn emit(
         impl Api {
             #(#builder_methods)*
         }
-    })
+    }))
     .map_err(|source| GenerateError::NotRust {
         file: "ops.rs",
         source,
     })?;
-    // A summary and a description are the vendor's prose, and a wrapper's doc
-    // is where they land.
-    super::Prose.visit_file_mut(&mut file);
     Ok(format!("{header}{}", prettyplease::unparse(&file)))
 }
 
 /// One pass over the document, in its order — which is the order every
 /// generated list below is in, and the order `Api::new` checks.
 fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>, GenerateError> {
+    let components = super::names::components(api);
     model
         .iter()
         .map(|op| {
@@ -105,15 +112,29 @@ fn gather(api: &OpenAPI, model: &Document, names: &Names) -> Result<Vec<Emitted>
             // named here, once, rather than at each of the places that can
             // fail.
             let emitted = || {
+                // The parameters as the reduction read them, so that a wrapper's
+                // argument is typed by the entry that won and not by the path
+                // item's entry that the operation's entry replaced.
+                let declared = declared(path_item, operation, components).map_err(|source| {
+                    unsupported(format!("a parameter cannot be followed: {source}"))
+                })?;
+                // One signature for the wrapper and for the builder beside it: they
+                // are one call, and the identifiers it binds are asked once.
+                let signature = signature_of(op, &declared, components, operation, names)?;
+                let response = response_type(op, operation, components, names)?;
+                let plain = operation_ident(&op.id().to_snake_case())?;
                 Ok(Emitted {
                     row: quote! { (#id, #method, #path) },
                     variant: variant_of(op)?,
                     id: id.to_owned(),
                     group: op.group().as_str().to_owned(),
                     command: op.command().as_str().to_owned(),
-                    body: json_body_type(op, operation, names)?,
-                    method: wrapper(op, path_item, operation, names)?,
-                    builder_method: builder_wrapper(op, path_item, operation, names)?,
+                    body: json_body_type(op, operation, components, names)?,
+                    method: wrapper(op, &plain, &signature, &response)?,
+                    builder_method: builder_wrapper(&plain, &signature, &response)?,
+                    wrapper_name: plain.clone(),
+                    builder_name: format_ident!("{plain}_builder"),
+                    members: signature.members,
                 })
             };
             emitted().map_err(|source| GenerateError::Operation {
@@ -135,7 +156,7 @@ fn operation_id(ops: &[Emitted]) -> TokenStream {
     let idents = ops.iter().map(|op| &op.variant);
     let from_command = ops.iter().map(|op| {
         let (group, command, variant) = (&op.group, &op.command, &op.variant);
-        quote! { (#group, #command) => Some(Self::#variant) }
+        quote! { (#group, #command) => ::std::option::Option::Some(Self::#variant) }
     });
     let check_body = check_body(ops);
 
@@ -163,10 +184,10 @@ fn operation_id(ops: &[Emitted]) -> TokenStream {
             #[doc = "This is the one place a name off the command line becomes"]
             #[doc = "a typed operation; everything past it is exhaustive."]
             #[must_use]
-            pub fn from_command(group: &str, command: &str) -> Option<Self> {
+            pub fn from_command(group: &str, command: &str) -> ::std::option::Option<Self> {
                 match (group, command) {
                     #(#from_command,)*
-                    _ => None,
+                    _ => ::std::option::Option::None,
                 }
             }
 
@@ -190,7 +211,8 @@ fn check_body(ops: &[Emitted]) -> TokenStream {
         .filter(|op| op.body.is_none())
         .map(|op| &op.variant)
         .collect();
-    let untyped = (!untyped.is_empty()).then(|| quote! { #(Self::#untyped)|* => Ok(()) });
+    let untyped = (!untyped.is_empty())
+        .then(|| quote! { #(Self::#untyped)|* => ::std::result::Result::Ok(()) });
     quote! {
         #[doc = "Does `body` fit the type this operation's wrapper takes?"]
         #[doc = ""]
@@ -202,7 +224,7 @@ fn check_body(ops: &[Emitted]) -> TokenStream {
         pub fn check_body(
             self,
             body: &serde_json::Value,
-        ) -> Result<(), typed_openapi::client::BodyError> {
+        ) -> ::std::result::Result<(), typed_openapi::client::BodyError> {
             match self {
                 #(#typed,)*
                 #untyped
@@ -290,6 +312,9 @@ fn operation_ident(word: &str) -> Result<Ident, GenerateError> {
 /// answers that, and it is not the arm below it: `accept_as_ident` asks whether
 /// a word may stand unquoted, so it says yes to `3rd_firing` and to the empty
 /// string, and only `syn` refuses a word that is no identifier in any spelling.
+/// The word of a parameter has an `x` in front of a digit first
+/// ([`spelled_with_a_digit`]), so for a parameter only an emptied word reaches
+/// `None`; an `operationId` that starts with a digit does.
 fn ident(word: &str) -> Option<Ident> {
     if typify::accept_as_ident(word) {
         return syn::parse_str(word).ok();
@@ -307,63 +332,83 @@ fn ident(word: &str) -> Option<Ident> {
 fn json_body_type(
     op: &Operation,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<Option<TokenStream>, GenerateError> {
     match op.body() {
-        Body::JsonFields(_) | Body::JsonWhole { .. } => body_type(op, operation, names).map(Some),
+        Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
+            body_type(op, media_type, operation, components, names).map(Some)
+        }
         Body::None | Body::Opaque { .. } | Body::Multipart { .. } => Ok(None),
     }
 }
 
 fn wrapper(
     op: &Operation,
-    item: &openapiv3::PathItem,
-    operation: &openapiv3::Operation,
-    names: &Names,
+    name: &Ident,
+    signature: &Signature,
+    response: &TokenStream,
 ) -> Result<TokenStream, GenerateError> {
-    let name = operation_ident(&op.id().to_snake_case())?;
     let summary = op.summary().unwrap_or(op.id());
-    let signature = format!("{} {}", op.method(), op.path());
+    let request = format!("{} {}", op.method(), op.path());
     let gate = gate_note(op);
 
+    // The delegate beside this one forwards the argument names; a positional call
+    // has no use for them.
     let Signature {
         args,
         builder,
         notes,
-        // The delegate beside this one forwards the argument names; a
-        // positional call has no use for them.
-        names: _,
-    } = signature_of(op, item, operation, names)?;
-    let response = response_type(op, operation, names)?;
+        ..
+    } = signature;
     let variant = variant_of(op)?;
     let doc = paragraphs(
-        [summary, &signature, &gate]
+        [summary, &request, &gate]
             .into_iter()
             .map(str::to_owned)
-            .chain(notes),
+            .chain(notes.iter().cloned()),
     );
     parses(quote! {
         #[doc = #doc]
-        pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
+        pub fn #name(&self, #(#args),*) -> ::std::result::Result<Call<'_, #response>, Error> {
             self.call(OperationId::#variant, Values::new() #(#builder)*)
         }
     })
 }
 
+/// `ident` without the `r#` of a raw identifier: the word the document wrote.
+fn unraw(ident: &Ident) -> String {
+    let spelled = ident.to_string();
+    spelled
+        .strip_prefix("r#")
+        .map_or_else(|| spelled.clone(), str::to_owned)
+}
+
+/// Refuses the first name that two items of the file would define.
+fn check_identifiers(ops: &[Emitted]) -> Result<(), GenerateError> {
+    let operations: Vec<identifiers::Operation<'_>> = ops
+        .iter()
+        .map(|op| identifiers::Operation {
+            id: &op.id,
+            variant: op.variant.to_string(),
+            wrapper: op.wrapper_name.to_string(),
+            builder: op.builder_name.to_string(),
+            members: op.members.clone(),
+        })
+        .collect();
+    identifiers::check(&operations)
+}
+
 /// One doc comment out of the paragraphs it is made of.
 ///
-/// One rather than several, and this is the reason: rustc rebuilds a doc
-/// comment's text by stripping the indentation *all* of an item's doc
-/// fragments share, and a `/* */` fragment carries the indentation the item
-/// sits at while a `///` fragment carries none. Mixing them leaves nothing to
-/// strip, and a vendor's summary arrives four spaces in — a code block, which
-/// rustdoc then compiles. A single fragment cannot be mixed with anything.
-///
-/// A summary that is itself several paragraphs is what makes this reachable,
-/// and one attribute per paragraph is what would reach it: the multi-line
-/// summary becomes the `/* */` fragment and the generated paragraphs beside it
-/// the `///` ones. `PROSE` carries such a summary, so the doctest runner is
-/// what holds this rather than the argument above it.
+/// One string rather than one attribute for each paragraph, and this is the
+/// reason: rustdoc reads the doc of an item as one text, and a block can run
+/// from one paragraph into the next, as an open fence or a list does.
+/// `prose::written` reads the string as that text, and writes it as the lines of
+/// one comment. A summary that is itself several paragraphs is what makes this
+/// reachable, and one attribute per paragraph is what would reach it: each would
+/// be read alone, and a block that the summary leaves open would take in the
+/// paragraphs the generator adds beside it where the parser does not see it.
 fn paragraphs(parts: impl IntoIterator<Item = String>) -> String {
     parts
         .into_iter()
@@ -425,19 +470,16 @@ fn gate_note(op: &Operation) -> String {
 /// It delegates to the plain wrapper rather than repeating its body, so the two
 /// cannot come to describe different requests.
 fn builder_wrapper(
-    op: &Operation,
-    item: &openapiv3::PathItem,
-    operation: &openapiv3::Operation,
-    names: &Names,
+    plain: &Ident,
+    signature: &Signature,
+    response: &TokenStream,
 ) -> Result<TokenStream, GenerateError> {
-    let plain = operation_ident(&op.id().to_snake_case())?;
     let name = format_ident!("{plain}_builder");
     let Signature {
         args,
         names: arguments,
         ..
-    } = signature_of(op, item, operation, names)?;
-    let response = response_type(op, operation, names)?;
+    } = signature;
     let doc = format!(
         "The same call as [`Api::{plain}`], with its arguments named. A missing \
          required argument is a compile error."
@@ -445,7 +487,7 @@ fn builder_wrapper(
     parses(quote! {
         #[doc = #doc]
         #[builder]
-        pub fn #name(&self, #(#args),*) -> Result<Call<'_, #response>, Error> {
+        pub fn #name(&self, #(#args),*) -> ::std::result::Result<Call<'_, #response>, Error> {
             self.#plain(#(#arguments),*)
         }
     })
@@ -463,6 +505,8 @@ struct Signature {
     names: Vec<Ident>,
     builder: Vec<TokenStream>,
     notes: Vec<String>,
+    /// The arguments as `bon` sees them, for the names its setters would share.
+    members: Vec<Member>,
 }
 
 impl Signature {
@@ -524,17 +568,32 @@ impl Signature {
     ///
     /// `carries` says what the argument is in the document's own terms, because
     /// that is the half the reader is missing: the identifier is in front of
-    /// them and the thing it stands for is not.
+    /// them and the thing it stands for is not. `led_by_digit` says the word got
+    /// its `x` because the document's own started with a digit, which is the other
+    /// reason an argument is spelled in a way nobody wrote.
     ///
     /// Every argument comes through here rather than through [`Signature::bind`],
     /// so an argument added later cannot be given a name without being
     /// accounted for under it.
-    fn argument(&mut self, plain: &Ident, word: &str, carries: &str) -> Ident {
+    fn argument(&mut self, plain: &Ident, word: &str, carries: &str, led_by_digit: bool) -> Ident {
         let bound = self.bind(plain.clone(), word);
+        let mut reasons = Vec::new();
+        if led_by_digit {
+            reasons.push(
+                "a Rust identifier does not start with a digit, so `x` stands in front of the word",
+            );
+        }
         if bound != *plain {
+            reasons.push(if led_by_digit {
+                "an argument declared before it had already spent that spelling"
+            } else {
+                "an argument declared before it had already spent the plain spelling"
+            });
+        }
+        if !reasons.is_empty() {
             self.notes.push(format!(
-                "`{bound}` {carries}, under a name of its own: an argument \
-                 declared before it had already spent the plain spelling."
+                "`{bound}` {carries}, under a name of its own: {}.",
+                reasons.join(", and ")
             ));
         }
         bound
@@ -543,7 +602,8 @@ impl Signature {
 
 fn signature_of(
     op: &Operation,
-    item: &openapiv3::PathItem,
+    declared: &[&Parameter],
+    components: &Components,
     operation: &openapiv3::Operation,
     names: &Names,
 ) -> Result<Signature, GenerateError> {
@@ -552,35 +612,155 @@ fn signature_of(
         names: Vec::new(),
         builder: Vec::new(),
         notes: Vec::new(),
+        members: Vec::new(),
     };
     for param in op.params() {
-        add_param(&mut out, param, item, operation, names)?;
+        add_param(&mut out, param, declared, components, names)?;
     }
-    match op.body() {
-        Body::None => {}
-        Body::JsonFields(_) | Body::JsonWhole { .. } => {
-            let ty = body_type(op, operation, names)?;
-            let body = out.argument(&format_ident!("body"), "body", "is the request body");
-            out.args.push(quote! { #body: &#ty });
-            out.builder.push(quote! { .json(crate::to_json(#body)?) });
-        }
-        Body::Opaque { media_type, .. } => {
-            let body = out.argument(&format_ident!("body"), "body", "is the request body");
-            out.notes.push(format!(
-                "`{body}` is sent verbatim under the document's own `{media_type}`, \
-                 which this crate does not assemble."
-            ));
-            out.args.push(quote! { #body: Vec<u8> });
-            out.builder.push(quote! { .raw(#body) });
-        }
-        Body::Multipart { names, .. } => {
-            let parts = out.argument(&format_ident!("parts"), "parts", "carries the body's parts");
-            out.notes.push(multipart_note(&parts, names));
-            out.args.push(quote! { #parts: Vec<Part> });
-            out.builder.push(quote! { .multipart(#parts) });
-        }
-    }
+    add_body(&mut out, op, operation, components, names)?;
     Ok(out)
+}
+
+/// What the body adds to a wrapper: an argument and the `Values` call that
+/// fills it.
+///
+/// A body the document requires is an argument of its type. A body it leaves
+/// optional is an `Option` of that type, and `None` adds no body to the request,
+/// which is what the command line sends when its operator gives none. A Rust
+/// caller and a command line reach one request builder, so a body that one can
+/// leave out is a body that the other can.
+fn add_body(
+    out: &mut Signature,
+    op: &Operation,
+    operation: &openapiv3::Operation,
+    components: &Components,
+    names: &Names,
+) -> Result<(), GenerateError> {
+    let (required, argument) = match op.body() {
+        Body::None => return Ok(()),
+        Body::JsonFields {
+            media_type,
+            required,
+            ..
+        }
+        | Body::JsonWhole {
+            media_type,
+            required,
+            ..
+        } => {
+            let ty = body_type(op, media_type, operation, components, names)?;
+            (*required, json_argument(out, op, &ty))
+        }
+        Body::Opaque {
+            media_type,
+            required,
+        } => (
+            *required,
+            verbatim_argument(out, op.body().media_type().unwrap_or(media_type)),
+        ),
+        Body::Multipart { names, required } => (*required, parts_argument(out, names)),
+    };
+    argument.add_to(out, required);
+    Ok(())
+}
+
+/// The argument of a JSON body of type `ty`.
+fn json_argument(out: &mut Signature, op: &Operation, ty: &TokenStream) -> BodyArgument {
+    let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
+    // The operation is named so that an argument that does not serialise says
+    // whose body it was, as `fits` does in `check_body`.
+    let id = op.id();
+    BodyArgument {
+        carries: "the request body",
+        ty: quote! { &#ty },
+        call: quote! { .json(crate::to_json(#id, #name)?) },
+        payload: quote! {
+            #name
+                .map(|body| crate::to_json(#id, body))
+                .transpose()?
+                .map(typed_openapi::Payload::Json)
+        },
+        name,
+    }
+}
+
+/// The argument of a body that is sent verbatim under `media_type`.
+fn verbatim_argument(out: &mut Signature, media_type: &str) -> BodyArgument {
+    let name = out.argument(&format_ident!("body"), "body", "is the request body", false);
+    out.notes.push(format!(
+        "`{name}` is sent verbatim under the document's own `{media_type}`, \
+         which this crate does not assemble."
+    ));
+    BodyArgument {
+        carries: "the request body",
+        ty: quote! { ::std::vec::Vec<u8> },
+        call: quote! { .raw(#name) },
+        payload: quote! { #name.map(typed_openapi::Payload::Raw) },
+        name,
+    }
+}
+
+/// The argument of a multipart body whose declared parts are `names`.
+fn parts_argument(out: &mut Signature, names: &[String]) -> BodyArgument {
+    let name = out.argument(
+        &format_ident!("parts"),
+        "parts",
+        "carries the body's parts",
+        false,
+    );
+    out.notes.push(multipart_note(&name, names));
+    BodyArgument {
+        carries: "the parts of the request body",
+        ty: quote! { ::std::vec::Vec<Part> },
+        call: quote! { .multipart(#name) },
+        payload: quote! { #name.map(typed_openapi::Payload::Multipart) },
+        name,
+    }
+}
+
+/// The body argument before optionality is applied.
+struct BodyArgument {
+    name: Ident,
+    /// What the argument carries, for the setter that names it.
+    carries: &'static str,
+    /// The payload type; `add_to` wraps an optional body in `Option`.
+    ty: TokenStream,
+    /// The `Values` call that a required body is passed to.
+    call: TokenStream,
+    /// The `Option<Payload>` that an optional body is turned into.
+    payload: TokenStream,
+}
+
+impl BodyArgument {
+    fn add_to(self, out: &mut Signature, required: bool) {
+        let Self {
+            name,
+            carries,
+            ty,
+            call,
+            payload,
+        } = self;
+        out.members.push(Member {
+            name: unraw(&name),
+            optional: !required,
+            carries: carries.to_owned(),
+        });
+        if required {
+            out.args.push(quote! { #name: #ty });
+            out.builder.push(call);
+        } else {
+            out.args.push(quote! { #name: ::std::option::Option<#ty> });
+            out.builder.push(quote! { .body(#payload) });
+            out.notes.push(optional_note(&name));
+        }
+    }
+}
+
+/// What a wrapper's documentation says about the argument of a body the
+/// document leaves optional, because `None` could be read as an empty body, and
+/// no body is what it sends.
+fn optional_note(argument: &Ident) -> String {
+    format!("`{argument}` is optional: with `None` the request carries no body.")
 }
 
 /// What one parameter adds to a wrapper: an argument and the `Values` call that
@@ -590,12 +770,12 @@ fn signature_of(
 fn add_param(
     out: &mut Signature,
     param: &crate::Param,
-    item: &openapiv3::PathItem,
-    operation: &openapiv3::Operation,
+    declared: &[&Parameter],
+    components: &Components,
     names: &Names,
 ) -> Result<(), GenerateError> {
-    let join = match param.shape() {
-        Shape::Flag { join, .. } => join,
+    let list = match param.shape() {
+        Shape::Flag { list, .. } => list,
         Shape::Unreachable(why) => {
             out.notes.push(format!(
                 "The document's `{}` parameter is not an argument: it is {why}. \
@@ -605,7 +785,7 @@ fn add_param(
             return Ok(());
         }
     };
-    let word = param.name().to_snake_case();
+    let (word, led_by_digit) = spelled_with_a_digit(param.name().to_snake_case());
     let plain = ident(&word).ok_or_else(|| {
         unsupported(format!(
             "parameter `{}` has no spelling as a Rust identifier",
@@ -616,14 +796,21 @@ fn add_param(
         &plain,
         &word,
         &format!("sends the document's `{}`", param.name()),
+        led_by_digit,
     );
-    let schema = param_schema(item, operation, param.name())?;
+    let schema = param_schema(declared, param.name())?;
     let wire = param.name();
-    if join.is_some() {
+    out.members.push(Member {
+        name: unraw(&ident),
+        // A list is a `Vec`, which `bon` does not make optional.
+        optional: list.is_none() && !param.required(),
+        carries: format!("the parameter `{wire}`"),
+    });
+    if list.is_some() {
         // A list parameter is the wire name given once per value, which is the
         // repetition a repeated flag reaches the request builder with.
-        let ty = list_type(param.name(), schema, names)?;
-        out.args.push(quote! { #ident: Vec<#ty> });
+        let ty = list_type(param.name(), schema, components, names)?;
+        out.args.push(quote! { #ident: ::std::vec::Vec<#ty> });
         out.builder.push(quote! { .each(#wire, #ident) });
     } else if param.required() {
         let ty = scalar_type(schema, names)?;
@@ -631,10 +818,30 @@ fn add_param(
         out.builder.push(quote! { .param(#wire, #ident) });
     } else {
         let ty = scalar_type(schema, names)?;
-        out.args.push(quote! { #ident: Option<#ty> });
+        out.args.push(quote! { #ident: ::std::option::Option<#ty> });
         out.builder.push(quote! { .maybe(#wire, #ident) });
     }
     Ok(())
+}
+
+/// `word` with an `x` in front of it where it starts with a digit, and whether it
+/// did.
+///
+/// A parameter's name is its wire key, so an Overlay cannot spell it another way
+/// and a name the identifier rules refuse would refuse the whole bless for a
+/// parameter the command line serves. The wrapper says which wire key the
+/// argument sends.
+///
+/// The letter is `x` because that is what typify puts in front of a name that
+/// starts with a digit, so the property `3ds` of a body and the parameter `3ds`
+/// are `x3ds` alike. `bon` removes a leading `_` and panics on `_3ds` alone;
+/// an explicit builder name such as `param_3ds` also compiles.
+fn spelled_with_a_digit(word: String) -> (String, bool) {
+    if word.starts_with(|first: char| first.is_ascii_digit()) {
+        (format!("x{word}"), true)
+    } else {
+        (word, false)
+    }
 }
 
 fn multipart_note(parts: &Ident, names: &[String]) -> String {
@@ -646,22 +853,15 @@ fn multipart_note(parts: &Ident, names: &[String]) -> String {
     }
 }
 
-/// The schema one parameter declares, keyed on the document's own name.
+/// The schema one parameter declares, read off the entry the reduction made its
+/// flag from: the one that won, where an operation replaced a path item's.
 fn param_schema<'d>(
-    item: &'d openapiv3::PathItem,
-    operation: &'d openapiv3::Operation,
+    declared: &[&'d Parameter],
     name: &str,
 ) -> Result<&'d ReferenceOr<Schema>, GenerateError> {
-    let declared = item
-        .parameters
-        .iter()
-        .chain(&operation.parameters)
-        .find_map(|p| {
-            let ReferenceOr::Item(p) = p else { return None };
-            (p.parameter_data_ref().name == name).then_some(p)
-        })
+    let entry = entry_of_flag(declared, name)
         .ok_or_else(|| unsupported(format!("`{name}` is not declared on this operation")))?;
-    let openapiv3::ParameterSchemaOrContent::Schema(schema) = &declared.parameter_data_ref().format
+    let openapiv3::ParameterSchemaOrContent::Schema(schema) = &entry.parameter_data_ref().format
     else {
         return Err(unsupported(format!(
             "`{name}` is declared with `content`, not `schema`"
@@ -672,20 +872,18 @@ fn param_schema<'d>(
 
 /// The Rust spelling of a list parameter's items.
 ///
-/// Only an inline `type: array` has one here. Following a `$ref` to an array
-/// schema would mean resolving against `components`, which this generator does
-/// not carry, so the parameter names itself rather than being guessed at.
+/// The array is read as the reduction reads it ([`stated`]): a `$ref` is followed
+/// and a wrapper of one element is the schema it wraps, so the argument is the
+/// list of the flag, whichever way the document spells the array.
 fn list_type(
     name: &str,
     schema: &ReferenceOr<Schema>,
+    components: &Components,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let ReferenceOr::Item(schema) = schema else {
-        return Err(unsupported(format!(
-            "`{name}` is a list, and a list parameter must declare `items` inline"
-        )));
-    };
-    let SchemaKind::Type(Type::Array(array)) = &schema.schema_kind else {
+    let schema = stated(schema, components)
+        .map_err(|source| unsupported(format!("`{name}` cannot be followed: {source}")))?;
+    let Some(array) = array_of(&schema.schema_kind) else {
         return Err(unsupported(format!(
             "`{name}` is a list that is not an array"
         )));
@@ -700,7 +898,12 @@ fn list_type(
 
 /// A scalar schema's Rust spelling. A `$ref` to a named schema keeps its name,
 /// so an enumerated parameter is the generated enum rather than a string.
+///
+/// The schema is read as the reduction reads the value that became a flag, so the
+/// argument has the type of the flag. A wrapper of one element is the schema it
+/// wraps, and a scalar that `openapiv3` holds as `AnySchema` has the type it names.
 fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStream, GenerateError> {
+    let schema = unwrap_inline(schema);
     if let Some(name) = ref_name(schema) {
         return names.get(name).cloned();
     }
@@ -709,10 +912,9 @@ fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStrea
             "only `#/components/schemas/` references are followed",
         ));
     };
-    let SchemaKind::Type(kind) = &schema.schema_kind else {
-        return Err(unsupported("only `type:` schemas have a scalar spelling"));
-    };
-    Ok(match kind {
+    let kind = typed(&schema.schema_kind)
+        .map_err(|why| unsupported(format!("no scalar spelling for a schema that is {why}")))?;
+    Ok(match &*kind {
         Type::String(_) => quote!(&str),
         Type::Integer(_) => quote!(i64),
         Type::Number(_) => quote!(f64),
@@ -721,46 +923,114 @@ fn scalar_type(schema: &ReferenceOr<Schema>, names: &Names) -> Result<TokenStrea
     })
 }
 
-/// The type of a JSON request body.
+/// The type of a JSON request body, read from the entry under `media_type`: the
+/// key the model sends the body under.
 ///
-/// A `$ref` keeps the named schema's type and a schema the operation states
-/// inline gets one of its own, so a body the document describes is a body the
-/// generated code holds a caller to. `serde_json::Value` is left for the one
-/// case that earns it: a JSON body the document states no schema for at all.
+/// A `$ref` keeps the named schema's type and a schema the body states inline,
+/// on the operation or in the component it takes, gets one of its own, so a body
+/// the document describes is a body the generated code holds a caller to.
+/// `serde_json::Value` is left for the one case that earns it: a JSON body the
+/// document states no schema for at all.
+///
+/// The reduction follows a `requestBody` `$ref` first and refuses the document
+/// that holds one it cannot follow, so the refusal here is a guard against the
+/// two readings coming apart, and not one that a document reaches.
 fn body_type(
     op: &Operation,
+    media_type: &str,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    match super::names::json_body(operation) {
-        JsonBody::Referenced => Err(unsupported("requestBody $refs are not followed")),
-        JsonBody::NotJson => Err(unsupported("no JSON request body")),
+    let body = super::names::json_body(operation, media_type, components)
+        .map_err(|source| unsupported(format!("its request body cannot be followed: {source}")))?;
+    match body {
+        JsonBody::Unkeyed => Err(unsupported(
+            "no request body entry under the key the model sends",
+        )),
         JsonBody::Shapeless => Ok(quote!(serde_json::Value)),
-        JsonBody::Stated(schema) => named_or_stated(schema, &Site::body(op.id()), names),
+        JsonBody::Stated { schema, .. } => named_or_stated(schema, &Site::body(op.id()), names),
     }
 }
 
 /// The type a successful response deserialises into.
+///
+/// `NoContent` is the answer where no success response has a JSON body, and
+/// nowhere else: a response that cannot be followed, or JSON bodies that do not
+/// agree, are refused. Where a response with no `content` stands beside one with
+/// a JSON body, the answer is `Option` of the type, because the typed call reads
+/// an empty body as `null` and `None` is the answer with no body. See
+/// [`Planned::send`](crate::client::Planned::send) for the dry-run layer.
 fn response_type(
     op: &Operation,
     operation: &openapiv3::Operation,
+    components: &Components,
     names: &Names,
 ) -> Result<TokenStream, GenerateError> {
-    let Some(schema) = super::names::success(operation) else {
-        return Ok(quote!(NoContent));
+    let answer = |statement: Statement<'_>| match statement.answer {
+        Answer::Shapeless => Ok(quote!(serde_json::Value)),
+        Answer::Stated(schema) => named_or_stated(schema, &Site::response(op.id()), names),
     };
-    named_or_stated(schema, &Site::response(op.id()), names)
+    match super::names::success(operation, components).map_err(unanswerable)? {
+        Reading::NoJson => Ok(quote!(NoContent)),
+        Reading::Json(statement) => answer(statement),
+        Reading::JsonOrEmpty(statement) => {
+            let ty = answer(statement)?;
+            Ok(quote!(::std::option::Option<#ty>))
+        }
+    }
+}
+
+/// The refusal for success responses that have no one answer.
+///
+/// The outer error names the operation. A reference refusal names its status
+/// and reason; a disagreement names each status, media type, component where
+/// present, and schema claim. The adopter repairs the relevant response or
+/// component in an Overlay; the generator cannot choose a schema for them.
+fn unanswerable(refusal: Unanswerable<'_>) -> GenerateError {
+    match refusal {
+        Unanswerable::Unfollowed { status, source } => unsupported(format!(
+            "its success response `{status}` cannot be followed: {source}"
+        )),
+        Unanswerable::Disagree { first, second } => unsupported(format!(
+            "the JSON bodies of its success responses do not agree on one schema, so the \
+             wrapper has no one type to return: {} and {}; an Overlay that gives them one \
+             schema, or removes one of them, mends it",
+            said(&first),
+            said(&second),
+        )),
+    }
+}
+
+/// Where a body stands and what it states, as a sentence part: the status and
+/// the media type, the response component where one states the body, and the
+/// schema.
+fn said(statement: &Statement<'_>) -> String {
+    let at = match &statement.home {
+        Home::Operation => String::new(),
+        Home::Component(at) => format!(" in `{at}`"),
+    };
+    format!(
+        "`{}` under `{}`{at} is {}",
+        statement.status,
+        statement.media,
+        statement.answer.described()
+    )
 }
 
 /// The type a schema became, whether the document named it or stated it where
 /// it is used.
 ///
 /// A `$ref` is answered from the named schemas so that one pointing nowhere is
-/// refused by the reference it names, which is what an adopter can act on.
-/// Everything else was converted under [`Site`], and a site with no type would
-/// be this emitter and [`names::sites`](super::names::sites) disagreeing about
-/// what the document states — which they read through the same two functions,
-/// so they do not.
+/// refused by the reference it names, which is what an adopter can act on. A
+/// `$ref` that leads out of `#/components/schemas/` is refused by the reference
+/// too. The load refuses one as the schema of a parameter, of the items of a
+/// list, and of the JSON or multipart body that is sent, and refuses none in a
+/// response, so the schema of a response is where one arrives here. Everything
+/// else was converted under [`Site`], and a site with no type would be this
+/// emitter and [`names::sites`](super::names::sites) disagreeing about what the
+/// document states — which they read through the same two functions, so they do
+/// not.
 fn named_or_stated(
     schema: &ReferenceOr<Schema>,
     site: &Site,
@@ -769,10 +1039,36 @@ fn named_or_stated(
     if let Some(name) = ref_name(schema) {
         return names.get(name).cloned();
     }
+    if let ReferenceOr::Reference { reference } = schema {
+        return Err(unsupported(format!(
+            "`{reference}` leads out of the schemas: only `#/components/schemas/` \
+             references are followed"
+        )));
+    }
     names
         .at(site)
         .cloned()
         .ok_or_else(|| unsupported("the schema it states inline has no Rust spelling"))
+}
+
+/// The schema that a wrapper of one element stands for, unwrapped where it is
+/// stated and with no reference followed.
+///
+/// A `$ref` erases what is written beside it, so an `allOf` of one element is how
+/// a document keeps a sentence beside a reference, and the reduction reads it as
+/// the schema it wraps. [`stated`] is that reading and follows the reference too.
+/// A scalar's argument wants the name of a named schema where the reading stops,
+/// so it unwraps the elements that are stated and leaves the `$ref` for
+/// `ref_name`.
+fn unwrap_inline(schema: &ReferenceOr<Schema>) -> &ReferenceOr<Schema> {
+    let mut current = schema;
+    while let ReferenceOr::Item(item) = current
+        && let SchemaKind::AllOf { all_of } = &item.schema_kind
+        && let [only] = all_of.as_slice()
+    {
+        current = only;
+    }
+    current
 }
 
 fn ref_name(schema: &ReferenceOr<Schema>) -> Option<&str> {
@@ -824,6 +1120,7 @@ mod tests {
             names: Vec::new(),
             builder: Vec::new(),
             notes: Vec::new(),
+            members: Vec::new(),
         };
         let bound = |signature: &mut Signature, word: &str| {
             signature

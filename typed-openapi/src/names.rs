@@ -10,14 +10,40 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// A name the document offers that is not spellable as a command.
+///
+/// The message gives the reason that is true of `raw`. A name with a character
+/// outside ASCII is refused for that character, which the message names by its
+/// code point: a soft hyphen and a zero-width space show as nothing, and an en
+/// dash shows as a hyphen, so the name alone does not say what is wrong with
+/// it. Any other name is refused because it kebab-cases to nothing.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("the {origin} `{raw}` does not kebab-case into [a-z0-9-]")]
+#[error("the {origin} `{raw}` {}", reason(.raw))]
 pub struct NameError {
     /// What the name was read off, so the message says where to go and look:
-    /// a path segment, or the `x-cli-` marker that overrode it.
+    /// a path segment, the whole path where it has no segment to read, the
+    /// `x-cli-` marker it was read from, or the word an adopter gave for the
+    /// confirmation flag.
     pub origin: &'static str,
     /// The name, as the document spells it.
     pub raw: String,
+}
+
+/// Why [`spelled`] refuses `raw`, as the end of the message of a [`NameError`].
+///
+/// The first character outside ASCII is the reason when there is one, because
+/// it is true whatever else the name holds, and it is the one thing the reader
+/// cannot always see.
+fn reason(raw: &str) -> String {
+    raw.chars().find(|c| !c.is_ascii()).map_or_else(
+        || "does not kebab-case into [a-z0-9-]".to_owned(),
+        |c| {
+            format!(
+                "holds U+{:04X}, a character outside ASCII, which this crate does not \
+                 transliterate",
+                u32::from(c)
+            )
+        },
+    )
 }
 
 /// One half of a command name: kebab-cased, `[a-z0-9-]` only.
@@ -36,7 +62,8 @@ pub struct CommandName(String);
 
 impl CommandName {
     /// `renderVoucher` becomes `render-voucher`; anything that will not reduce to
-    /// `[a-z0-9-]` is rejected rather than mangled.
+    /// `[a-z0-9-]` is rejected rather than mangled, and so is a name with a
+    /// character outside ASCII, which nothing here transliterates.
     ///
     /// `origin` is what the raw name was read off, and it is there for the
     /// error: a document whose own words cannot be spelled is told which word.
@@ -44,6 +71,7 @@ impl CommandName {
         spelled(origin, raw).map(Self)
     }
 
+    /// The name as the user types it.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -72,8 +100,6 @@ impl fmt::Display for CommandName {
 
 /// Where each of a document's operations sits in the command tree.
 ///
-/// *Requires the `document` feature.*
-///
 /// The group is a path segment, and which one is a fact about the whole
 /// document: the first, unless every operation shares it — a document served
 /// entirely under `/v1` must not collapse into one group named `v1`. So the
@@ -84,7 +110,7 @@ impl fmt::Display for CommandName {
 /// shipped binary reads them off its blob and never runs this rule at all.
 #[cfg(feature = "document")]
 #[derive(Debug, Clone, Copy)]
-pub struct Grouping {
+pub(crate) struct Grouping {
     depth: usize,
 }
 
@@ -97,7 +123,7 @@ impl Grouping {
     /// them, or before a path parameter, which names a value rather than a
     /// resource.
     #[must_use]
-    pub fn of(paths: &[&str]) -> Self {
+    pub(crate) fn of(paths: &[&str]) -> Self {
         let mut depth = 0;
         while descends(paths, depth) {
             depth += 1;
@@ -106,24 +132,24 @@ impl Grouping {
     }
 
     /// The group `path` belongs to.
-    pub fn group(&self, path: &str) -> Result<CommandName, NameError> {
-        CommandName::new(
-            "path segment",
-            segments(path).nth(self.depth).unwrap_or(path),
-        )
+    ///
+    /// A path with no segment at the depth, such as the root `/`, is named
+    /// whole, so the refusal says `path` and not a segment it does not have.
+    pub(crate) fn group(self, path: &str) -> Result<CommandName, NameError> {
+        match segments(path).nth(self.depth) {
+            Some(segment) => CommandName::new("path segment", segment),
+            None => CommandName::new("path", path),
+        }
     }
 
     /// What one operation is called under its group: the last literal segment
     /// below the group, or — where the path has none left to spend — whatever
     /// its method makes of it.
-    pub fn leaf(&self, path: &str, method: &Method) -> Result<CommandName, NameError> {
-        match segments(path)
-            .skip(self.depth + 1)
-            .filter(|segment| !templated(segment))
-            .last()
-        {
+    pub(crate) fn leaf(self, path: &str, method: &Method) -> Result<CommandName, NameError> {
+        let below = || segments(path).skip(self.depth + 1);
+        match below().filter(|segment| !templated(segment)).last() {
             Some(last) => CommandName::new("path segment", last),
-            None => CommandName::new("method", verb(method, segments(path).any(templated))),
+            None => CommandName::new("method", verb(method, below().any(templated))),
         }
     }
 }
@@ -176,8 +202,6 @@ fn verb(method: &Method, addressed: bool) -> &'static str {
 
 /// The flag names one subcommand has already spent.
 ///
-/// *Requires the `document` feature.*
-///
 /// `PUT /vouchers/{id}` takes an `id` in the path and an `id` in the body; clap
 /// panics on a duplicate name, so the second claimant is prefixed rather than
 /// dropped. Both values stay reachable from the command line, and the flag that
@@ -185,7 +209,7 @@ fn verb(method: &Method, addressed: bool) -> &'static str {
 /// a flag reports that once the document it came from is gone.
 #[cfg(feature = "document")]
 #[derive(Debug)]
-pub struct Namespace {
+pub(crate) struct Namespace {
     /// Every flag this subcommand has spent, guarded words included.
     taken: Vec<String>,
     /// The words a document name may not take over, and why each is guarded.
@@ -200,7 +224,7 @@ pub struct Namespace {
 /// [`Clash`] says which word so the refusal can name the way out.
 #[cfg(feature = "document")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Protected {
+pub(crate) enum Protected {
     /// The confirmation. Its spelling is the adopter's, so the way out is to
     /// choose another one.
     Commit,
@@ -213,7 +237,7 @@ pub enum Protected {
 /// saying yes.
 #[cfg(feature = "document")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Clash {
+pub(crate) struct Clash {
     /// The word both of them wanted.
     pub word: String,
     /// Which kind of yes it is, and so which way out the refusal offers.
@@ -233,7 +257,7 @@ impl Namespace {
     /// request nobody meant, so the document is refused instead and the adopter
     /// picks which of the two names moves.
     #[must_use]
-    pub fn guarding<'r>(
+    pub(crate) fn guarding<'r>(
         guarded: impl IntoIterator<Item = (&'r str, Protected)>,
         reserved: impl IntoIterator<Item = &'r str>,
     ) -> Self {
@@ -255,7 +279,7 @@ impl Namespace {
     ///
     /// A `preferred` that is one of the guarded words is refused rather than
     /// prefixed — see [`Namespace::guarding`].
-    pub fn claim(&mut self, preferred: &str, prefix: &str) -> Result<String, Clash> {
+    pub(crate) fn claim(&mut self, preferred: &str, prefix: &str) -> Result<String, Clash> {
         if let Some((word, kind)) = self.guarded.iter().find(|(word, _)| word == preferred) {
             return Err(Clash {
                 word: word.clone(),
@@ -297,10 +321,23 @@ pub(crate) fn renamed(flag: &str, wire_name: &str) -> bool {
 /// second rule the moment one of them is loosened. `origin` is what the raw
 /// name was read off, and it is there for the error: a document whose own words
 /// cannot be spelled is told which word.
+///
+/// A character outside ASCII refuses the name. [`kebab`] would turn it into a
+/// separator, so `straße` would become `stra-e`, and `é` written as `e` and a
+/// combining accent would become plain `e`: a flag that is not the vendor's
+/// word, which nobody can guess from it. A character that nobody sees (a soft
+/// hyphen, a zero-width space) would become a separator that nobody sees.
+/// Nothing is transliterated, because `strasse` is a choice, and a choice is the
+/// adopter's to write in an Overlay.
+///
+/// The rule is `is_ascii` and not a test for a letter, a digit or a mark.
+/// Whether a character is one of those is a table in the standard library that
+/// changes with the toolchain, and a name must be read the same way by every
+/// compiler.
 pub(crate) fn spelled(origin: &'static str, raw: &str) -> Result<String, NameError> {
     let name = kebab(raw);
     let allowed = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
-    if name.is_empty() || !name.bytes().all(allowed) {
+    if name.is_empty() || !name.bytes().all(allowed) || !raw.is_ascii() {
         return Err(NameError {
             origin,
             raw: raw.to_owned(),
@@ -309,10 +346,22 @@ pub(crate) fn spelled(origin: &'static str, raw: &str) -> Result<String, NameErr
     Ok(name)
 }
 
+/// Whether `raw` is a name that [`spelled`] leaves as it is.
+///
+/// Every flag a load writes is one: it was spelled, and nothing spells it
+/// again. A flag read off a blob is held to it, because the blob is where a
+/// name arrives that the rule never saw — `spelled` would turn `Id` into `id`
+/// and carry on, and the blob would then hold a flag that its own document
+/// could not have produced.
+#[must_use]
+pub(crate) fn is_spelled(raw: &str) -> bool {
+    spelled("flag", raw).is_ok_and(|name| name == raw)
+}
+
 /// `createVoucher` and `internal_ref` both become flag-shaped: lowercase words
 /// joined by `-`. Characters outside `[A-Za-z0-9]` are separators.
 #[must_use]
-pub fn kebab(name: &str) -> String {
+pub(crate) fn kebab(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 4);
     let mut chars = name.chars().peekable();
     let mut prev_lower_or_digit = false;
@@ -371,6 +420,93 @@ mod tests {
         );
     }
 
+    /// Kebab-casing alone makes `stra-e` of `straße`, so the flag would be no word
+    /// of the vendor's. Nothing is transliterated either, because `strasse` is a
+    /// choice the adopter makes. The letter written as a base and a combining
+    /// mark is the same letter to a reader, and is refused like the one written
+    /// as a single character.
+    #[test]
+    fn a_letter_or_a_digit_outside_ascii_is_refused_and_nothing_is_transliterated() {
+        for raw in [
+            "straße",
+            "größe",
+            "änderungen",
+            "café",
+            "日本",
+            "x٣",
+            "Ünit",
+            "a\u{308}nderungen",
+            "gro\u{308}sse",
+            "cafe\u{301}",
+            "re\u{301}sume\u{301}",
+        ] {
+            let error = CommandName::new("path segment", raw).expect_err(raw);
+            assert_eq!(
+                error,
+                NameError {
+                    origin: "path segment",
+                    raw: raw.to_owned(),
+                },
+                "{raw}"
+            );
+            assert!(!is_spelled(raw), "{raw}");
+        }
+    }
+
+    /// A character outside ASCII that is no letter and no digit is refused too:
+    /// it would be a separator, and a separator that nobody can see (the soft
+    /// hyphen and the zero-width space) is as much a mangled name as one that
+    /// shows.
+    #[test]
+    fn a_character_outside_ascii_that_is_no_letter_is_refused_too() {
+        for raw in [
+            "list\u{2014}all",
+            "list\u{2013}all",
+            "list\u{a0}all",
+            "price\u{20ac}",
+            "fo\u{ad}o",
+            "fo\u{200b}o",
+        ] {
+            let error = CommandName::new("path segment", raw).expect_err(raw);
+            assert_eq!(
+                error,
+                NameError {
+                    origin: "path segment",
+                    raw: raw.to_owned(),
+                },
+                "{raw}"
+            );
+        }
+    }
+
+    /// The message names the first character outside ASCII by its code point,
+    /// because the name alone does not show it: a soft hyphen shows as nothing
+    /// and an en dash as a hyphen. A name that kebab-cases to nothing and holds
+    /// such a character is refused for the character, which is the part the
+    /// reader can repair.
+    #[test]
+    fn the_message_of_a_refused_name_names_the_character_that_refuses_it() {
+        for (raw, code) in [
+            ("fo\u{ad}o", "U+00AD"),
+            ("fo\u{200b}o", "U+200B"),
+            ("list\u{2013}all", "U+2013"),
+            ("stra\u{df}e", "U+00DF"),
+            ("a\u{308}b\u{ad}", "U+0308"),
+            ("\u{e9}", "U+00E9"),
+            ("\u{1f600}", "U+1F600"),
+        ] {
+            let error = CommandName::new("path segment", raw).expect_err(raw);
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "the path segment `{raw}` holds {code}, a character outside ASCII, which this \
+                     crate does not transliterate"
+                ),
+                "{raw:?}"
+            );
+        }
+    }
+
     #[cfg(feature = "document")]
     #[test]
     fn the_group_is_the_segment_that_first_tells_operations_apart() {
@@ -413,6 +549,26 @@ mod tests {
                 .map(|name| name.as_str().to_owned()),
             Ok("v1".to_owned())
         );
+    }
+
+    /// A template above the group names a value the caller supplies, and says
+    /// nothing about whether the path addresses one resource.
+    #[cfg(feature = "document")]
+    #[test]
+    fn a_template_above_the_group_does_not_make_a_path_address_one_resource() {
+        let grouping = Grouping::of(&[
+            "/{tenant}/vouchers",
+            "/{tenant}/vouchers/{id}",
+            "/{tenant}/contacts",
+        ]);
+        let leaf = |path| {
+            grouping
+                .leaf(path, &Method::GET)
+                .map(|name| name.as_str().to_owned())
+                .expect("a method always spells one")
+        };
+        assert_eq!(leaf("/{tenant}/vouchers"), "list");
+        assert_eq!(leaf("/{tenant}/vouchers/{id}"), "get");
     }
 
     #[cfg(feature = "document")]

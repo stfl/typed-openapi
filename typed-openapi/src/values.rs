@@ -29,7 +29,7 @@ pub struct Part {
 }
 
 impl Part {
-    /// A text part: `--field name=value`.
+    /// A text part: `--field NAME=VALUE`.
     #[must_use]
     pub fn text(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
@@ -40,7 +40,7 @@ impl Part {
         }
     }
 
-    /// A file part: `--file name=@path`. `filename` is what the server sees.
+    /// A file part: `--file NAME=PATH`. `filename` is what the server sees.
     ///
     /// The part is sent under the media type the filename's extension names —
     /// [`media_type_of`] — because a server that stores an upload keeps the
@@ -57,11 +57,14 @@ impl Part {
         }
     }
 
+    /// The part's name in the form, as the caller gave it: the `name` of
+    /// `--field NAME=VALUE` and of `--file NAME=PATH`.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// The file name the server sees, and `None` for a text part.
     #[must_use]
     pub fn filename(&self) -> Option<&str> {
         self.filename.as_deref()
@@ -73,6 +76,7 @@ impl Part {
         self.content_type
     }
 
+    /// The part's content: a text part's value as UTF-8, or a file's bytes.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
@@ -115,6 +119,7 @@ pub struct Values {
 }
 
 impl Values {
+    /// No parameters and no body.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -161,18 +166,23 @@ impl Values {
         self
     }
 
+    /// The body as a JSON value, for an operation that takes JSON.
     #[must_use]
     pub fn json(mut self, value: serde_json::Value) -> Self {
         self.body = Some(Payload::Json(value));
         self
     }
 
+    /// The body as bytes sent verbatim, for an operation whose media type this
+    /// crate does not assemble.
     #[must_use]
     pub fn raw(mut self, bytes: Vec<u8>) -> Self {
         self.body = Some(Payload::Raw(bytes));
         self
     }
 
+    /// The body as the parts of a `multipart/form-data` request, in the order
+    /// they are sent.
     #[must_use]
     pub fn multipart(mut self, parts: Vec<Part>) -> Self {
         self.body = Some(Payload::Multipart(parts));
@@ -188,13 +198,22 @@ impl Values {
         self
     }
 
+    /// Every `(name, value)` pair given so far, in the order it was given. A
+    /// name appears once for each value of a list.
     #[must_use]
     pub fn params(&self) -> &[(String, String)] {
         &self.params
     }
 
+    /// The body, if one was given.
     #[must_use]
     pub fn payload(&self) -> Option<&Payload> {
         self.body.as_ref()
+    }
+
+    /// The body, moved out. `Invocation::new` keeps the parameters in the text it
+    /// checked them to.
+    pub(crate) fn into_body(self) -> Option<Payload> {
+        self.body
     }
 }

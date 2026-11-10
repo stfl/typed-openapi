@@ -199,6 +199,7 @@ fn a_query_parameter_is_omitted_when_it_is_none() {
 fn a_nested_body_is_one_typed_argument() {
     let api = api();
     let contact = Contact {
+        credit_limit: Some("1250".parse().unwrap()),
         id: None,
         name: "Ada".to_owned(),
         address: api::Address {
@@ -211,6 +212,7 @@ fn a_nested_body_is_one_typed_argument() {
         serde_json::from_slice::<serde_json::Value>(request.body()).unwrap(),
         serde_json::json!({
             "address": {"city": "Vienna", "street": "1 Main"},
+            "creditLimit": "1250",
             "name": "Ada",
         })
     );
@@ -319,17 +321,36 @@ fn a_replaced_type_prints_for_a_person_and_sends_what_the_document_accepts() {
     assert_eq!(twice.to_string(), "25,00");
 }
 
+/// A 4xx from a typed call prints the operation and the status and none of the
+/// body, which is the server's and can hold anything. The body is still the
+/// caller's to read, from the error, and the success type is never read out of it.
 #[test]
-fn a_non_success_status_keeps_the_body_and_never_deserialises_the_success_type() {
+fn a_non_success_status_names_the_operation_and_keeps_the_body_out_of_the_message() {
     let api = api();
     let client = Recorder::new().answering(
         StatusCode::NOT_FOUND,
         &serde_json::json!({"error": "no such voucher"}),
     );
     let error = api.get_voucher(404).unwrap().send(&client).unwrap_err();
-    let message = error.to_string();
-    assert!(message.contains("404"), "{message}");
-    assert!(message.contains("no such voucher"), "{message}");
+    assert_eq!(
+        error.to_string(),
+        "getVoucher: the server answered 404 Not Found"
+    );
+    assert!(
+        matches!(
+            &error,
+            api::Error::Status { op, status, body }
+                if op == "getVoucher"
+                    && *status == StatusCode::NOT_FOUND
+                    && body.contains("no such voucher")
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .body()
+            .is_some_and(|body| body.contains("no such voucher"))
+    );
 }
 
 #[test]
@@ -380,4 +401,20 @@ fn block_on<F: Future>(future: F) -> F::Output {
             return value;
         }
     }
+}
+
+#[test]
+fn fits_keeps_a_pattern_newtypes_own_deserialisation_message() {
+    let mut body = serde_json::json!({"total": "12.50", "currency": "eur", "status": "open"});
+    let refused = typed_openapi::client::fits::<Voucher>("createVoucher", &body)
+        .expect_err("the currency pattern requires uppercase letters");
+    let typed_openapi::client::BodyError::Mismatch { op, path, source } = &refused else {
+        panic!("{refused}");
+    };
+    assert_eq!(op, "createVoucher");
+    assert_eq!(path, "currency");
+    assert_eq!(source.to_string(), "doesn't match pattern \"^[A-Z]{3}$\"");
+    body["currency"] = serde_json::json!("EUR");
+    typed_openapi::client::fits::<Voucher>("createVoucher", &body)
+        .expect("a matching currency fits");
 }

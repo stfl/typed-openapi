@@ -1,11 +1,10 @@
-# Workspace tasks. Every cargo invocation carries `--workspace` so that a crate
-# added later is covered without editing a recipe.
+# Workspace tasks and selected package and feature checks.
 
 default:
     just --list
 
 # `rustfmt.toml` sets `unstable_features = true`, so this needs a nightly
-# toolchain; `rust-toolchain.toml` pins one.
+# toolchain; `rust-toolchain.toml` pins a dated one.
 
 # Format the workspace.
 fmt:
@@ -16,38 +15,60 @@ fmt:
 # `RUSTDOCFLAGS` is the same promotion for the `[lints.rustdoc]`
 # block. Building the docs is the only thing that runs rustdoc's lints: a
 # broken intra-doc link warns during a doctest run and fails here.
+#
+# `--cfg docsrs` is what docs.rs passes (`[package.metadata.docs.rs]`), and
+# `typed-openapi/src/lib.rs` turns it into `feature(doc_cfg)`, which prints the
+# "Available on crate feature" label on every item a feature adds. The one doc
+# build carries it, so that the path docs.rs takes is in the gate. docs.rs builds
+# a release with its own nightly, which is newer than the pinned date, so a
+# nightly that renames or drops the feature fails here once the pin reaches it.
+#
+# `--all-features` compiles, lints and documents what only a named feature
+# builds: the `builder` wrappers and the reqwest adapter of the example. A
+# target the gate builds without linting is one a lint never reaches.
 
 # Verify formatting, compile, then lint code and docs with warnings denied.
 check:
     cargo fmt --all --check
-    cargo check --workspace --all-targets
-    cargo clippy --workspace --all-targets -- -D warnings
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+    cargo check --workspace --all-targets --all-features
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    RUSTDOCFLAGS="--cfg docsrs -D warnings" cargo doc --workspace --no-deps --all-features
 
-# A feature that adds or removes items has to be compiled in every combination
-# a consumer can ask for, because nothing else finds an item that only exists
-# in one of them. These are the combinations: the default, nothing, each
-# feature alone, and everything at once. The `builder` runs go further than a
-# compile: the example's demonstration of it is a pair of doctests that only
-# exist when the feature is on, so this is the only recipe that can run them.
+# A feature that adds or removes items has to be compiled with it and without
+# it, because nothing else finds an item that only exists in one of them. These
+# are the library builds: nothing, each feature alone, and all together.
+# `generate` implies `document`; other pairs are not checked separately. The
+# `builder` runs go further than a compile: the example's demonstration of it is
+# a pair of doctests that only exist when the feature is on, so this is the only
+# recipe that can run them.
+#
+# Each build is linted with warnings denied, as `check` lints the widest one. A
+# warning that only one feature set produces, such as an item that nothing calls
+# without a feature, is absent from the widest build, and a plain `cargo check`
+# prints it and exits zero. `clippy` carries `-D warnings` to this workspace's
+# crates only; `RUSTFLAGS` would carry it to every dependency and build each
+# again.
 
-# Compile the library under every feature combination a consumer can select.
+# Lint the library with each feature alone and with all of them together.
 features:
-    cargo check -p typed-openapi
-    cargo check -p typed-openapi --no-default-features
-    cargo check -p typed-openapi --no-default-features --features clap
-    cargo check -p typed-openapi --no-default-features --features document
-    cargo check -p typed-openapi --no-default-features --features generate
-    cargo check -p typed-openapi --no-default-features --features builder
-    cargo check -p typed-openapi --all-features --all-targets
+    cargo clippy -p typed-openapi -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features --features clap -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features --features document -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features --features generate -- -D warnings
+    cargo clippy -p typed-openapi --no-default-features --features builder -- -D warnings
+    cargo clippy -p typed-openapi --all-features --all-targets -- -D warnings
     RUSTDOCFLAGS="-D warnings" cargo doc -p typed-openapi --no-deps --no-default-features
-    cargo check -p cli --features reqwest-client
-    cargo check -p api-generated --features builder
+    cargo check -p cli --no-default-features
+    cargo clippy -p cli --no-default-features --all-targets -- -D warnings
+    cargo clippy -p cli --features reqwest-client -- -D warnings
+    cargo test -p cli --features reqwest-client --test http
+    cargo clippy -p api-generated --features builder -- -D warnings
     cargo test -p api-generated --features builder --doc
     # The line that catches a builder which replaces a wrapper instead of
     # adding one: `api-generated` never calls its own wrappers, so only a
     # crate that does can tell the difference.
-    cargo check -p cli --features builder --all-targets
+    cargo clippy -p cli --features builder --all-targets -- -D warnings
     just bon-free
     just clap-free
     just bigint-free
@@ -95,9 +116,9 @@ bigint-free:
     }
     echo "num-bigint reaches the example's own type and nothing else"
 
-# The typed half of an adoption must link no argument parser: `api` takes the
-# library with `default-features = false`, so a clap in its tree is a
-# regression and not a preference.
+# The typed half of an adoption must link no argument parser: `api` reaches the
+# library through `api-generated`, which sets `default-features = false`.
+# A clap in that normal dependency tree is a regression.
 
 # Prove the typed half of the example links no argument parser.
 clap-free:
@@ -119,8 +140,22 @@ test:
     cargo nextest run --workspace
     cargo test --workspace --doc
 
-# Everything CI runs, in the order CI runs it.
-gate: check features test blessed package
+# `cargo deny` reads the advisory database over the network, and `check` runs
+# between edits: a check that fails on a fetch timeout is a check people stop
+# running. So `audit` is apart from `check` because of the network, and it is
+# in `gate` so that an advisory filed against a crate in the tree turns the
+# gate red in CI. `deny.toml` says why the licence check is left out.
+
+# Check the dependency tree for advisories, bans and unknown sources.
+audit:
+    cargo deny check advisories bans sources
+
+# Everything CI's gate job runs, in the same order. The stable job is separate.
+gate: release-check check features test blessed package audit
+
+# Run the release decision with synthetic local Git history; no remote writes.
+release-check:
+    python3 .github/tests/test_release.py
 
 # Every artefact under `api-generated` is committed, so the generator has to be
 # able to reproduce them. A diff here is either the vendor's document moving or
@@ -136,8 +171,16 @@ gate: check features test blessed package
 # apart: that the generator still writes each artefact, and that what it wrote
 # is what is committed. A file nobody generates any more keeps its bytes and
 # passes the diff.
+#
+# `git diff` does not list a file that is not tracked, so an artefact the
+# generator writes and nobody committed would pass it. `git status` lists it,
+# and it lists a changed file as well, so it is the one question the recipe
+# asks of the artefacts. A file in the generated crate that git does not track
+# and the generator does not write is a second question: the working tree has
+# it and a clean checkout does not, so a build that passes here can fail in CI.
 
-# Regenerate, and fail if anything committed changed.
+# Regenerate, and fail if an artefact differs from the commit, is not committed,
+# or if a file in the generated crate is untracked.
 blessed:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -160,9 +203,17 @@ blessed:
             exit 1
         }
     done
-    if ! git diff --quiet HEAD -- "${written[@]}"; then
-        echo "bless changed committed output:" >&2
+    differing=$(git status --porcelain --untracked-files=all -- "${written[@]}")
+    if [[ -n $differing ]]; then
+        echo "bless changed or added output that is not committed:" >&2
+        echo "$differing" >&2
         git --no-pager diff --stat HEAD -- "${written[@]}" >&2
+        exit 1
+    fi
+    untracked=$(git ls-files --others --exclude-standard -- examples/toy/api-generated)
+    if [[ -n $untracked ]]; then
+        echo "files in api-generated that git does not track:" >&2
+        echo "$untracked" >&2
         exit 1
     fi
     echo "bless writes and reproduces every committed artefact"
@@ -171,25 +222,63 @@ blessed:
 # metadata and prints the file set — and the build proves the crate stands up
 # outside this workspace.
 #
+# The build is not enough: a crate can compile and still ship tests that do not,
+# because the dev-dependency on itself that turns their features on is dropped
+# from the tarball. So the recipe unpacks the `.crate` file, the very archive
+# crates.io receives, and compiles its tests and examples with no features,
+# document only, generate only, defaults, and all features. Each target declares
+# the features it needs, so cargo skips it when they are off. The all-features
+# run also executes the tests and doctests. This is a selected matrix, not every
+# feature combination.
+#
+# The unpacked copy lives in a scratch directory outside the repository, because
+# cargo refuses to build a package that sits inside a workspace it is not a
+# member of, and `target/package/<name>-<version>/` does. The package commands
+# name `+stable`; `--manifest-path` keeps the working directory here, so the
+# tarball's test runs use the pinned nightly. `--target-dir` lets the run
+# reuse the dependencies already compiled in that directory. `tar -m` stamps the
+# unpacked files with the time of unpacking: a `.crate` carries one old date on
+# every file, cargo takes a file no newer than its last build for unchanged, and
+# the test binaries a former unpacking left behind, with that unpacking's
+# directory compiled into them, would run in place of the ones this tarball
+# builds.
+#
 # `--allow-dirty` so the recipe answers the same question while work is in
 # progress. It is not a licence to publish a dirty tree: `cargo publish` is
-# run by the release workflow from a tag, never from here.
+# run by the release workflow on a merge to `main`, never from here.
 #
-# The unpacked crate is scratch and the recipe clears it. `cargo package`
-# leaves the tarball's contents at `target/package/<name>-<version>/`, a whole
-# source tree — `src/`, `tests/` and all — inside a directory everything else
-# reads as build output. A tool that walks `target/` takes that `tests/` for a
-# build profile and looks for the nested target directories a profile of that
-# name carries; `Swatinem/rust-cache` does, and reports the two it cannot find
-# on every run it caches. The verification build's artefacts are in
-# `target/debug` with the rest of the workspace's, so clearing the unpacked
-# copy costs the next run nothing.
+# `cargo package` leaves the tarball and an unpacked copy of it at
+# `<target>/package/`, a whole source tree — `src/`, `tests/` and all — inside a
+# directory everything else reads as build output. A tool that walks the target
+# directory takes that `tests/` for a build profile and looks for the nested
+# target directories a profile of that name carries; `Swatinem/rust-cache` does,
+# and reports the two it cannot find on every run it caches. The verification
+# build's artefacts are in `<target>/debug` with the rest of the workspace's, so
+# clearing the package directory costs the next run nothing. The target
+# directory can come from `CARGO_TARGET_DIR`, from `CARGO_BUILD_TARGET_DIR` or
+# from cargo's configuration, and the recipe reads only the first. So it names
+# the directory itself, `--target-dir` on `cargo package`, and reads the tarball
+# from and clears the one it named. It clears it before it packages too: a
+# tarball left by an earlier version would make the unpacking below ambiguous.
 
-# Verify the published crate packages and builds from its own tarball.
+# Verify the published crate packages, builds, and passes its own tests.
 package:
-    cargo package -p typed-openapi --list --allow-dirty
-    cargo package -p typed-openapi --allow-dirty
-    rm -rf target/package
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="${CARGO_TARGET_DIR:-target}"
+    packaged="$target/package"
+    scratch=$(mktemp -d)
+    trap 'rm -rf "$scratch" "$packaged"' EXIT
+    rm -rf "$packaged"
+    cargo +stable package -p typed-openapi --list --allow-dirty
+    cargo +stable package -p typed-openapi --allow-dirty --target-dir "$target"
+    tar -xzmf "$packaged"/typed-openapi-*.crate -C "$scratch"
+    manifests=("$scratch"/typed-openapi-*/Cargo.toml)
+    cargo test --no-run --no-default-features --manifest-path "${manifests[0]}" --target-dir "$target"
+    cargo test --no-run --no-default-features --features document --manifest-path "${manifests[0]}" --target-dir "$target"
+    cargo test --no-run --no-default-features --features generate --manifest-path "${manifests[0]}" --target-dir "$target"
+    cargo test --no-run --manifest-path "${manifests[0]}" --target-dir "$target"
+    cargo test --all-features --manifest-path "${manifests[0]}" --target-dir "$target"
 
 # Regenerate the example adoption from the vendor document and the Overlay.
 # Everything it writes is committed, so a diff after this recipe is the answer

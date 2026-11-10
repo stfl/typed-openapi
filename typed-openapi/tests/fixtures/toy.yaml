@@ -158,6 +158,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Contact'
+  /contacts/{id}/labels:
+    put:
+      operationId: setContactLabels
+      summary: Replace the labels of a contact
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContactLabels'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactLabels'
   /documents:
     post:
       operationId: uploadDocument
@@ -209,6 +233,10 @@ paths:
                   description: Decimal amount as a string
                 memo:
                   $ref: '#/components/schemas/Memo'
+                vatRate:
+                  type: integer
+                  enum: [0, 7, 19]
+                  description: VAT rate in percent
       responses:
         '201':
           description: Created
@@ -288,3 +316,11 @@ components:
           type: string
         address:
           $ref: '#/components/schemas/Address'
+        creditLimit:
+          type: string
+          format: cents
+    ContactLabels:
+      type: object
+      description: Free-form labels on a contact, each a string.
+      additionalProperties:
+        type: string

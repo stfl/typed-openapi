@@ -4,6 +4,45 @@
 //! what a feature is allowed to do to it. -->
 #![doc = include_str!("../README.md")]
 //!
+//! # From a command line to a response
+//!
+//! Load an OpenAPI document and its Overlays, mount its commands, and dispatch
+//! through a [`Recorder`]. The example uses the library's test fixtures; a
+//! network client implements [`SyncClient`] at the same seam.
+//!
+//! ```
+//! # #[cfg(all(feature = "document", feature = "clap"))]
+//! # {
+//! use clap::Command;
+//! use http::{Method, StatusCode};
+//! use serde_json::json;
+//! use typed_openapi::{Document, Recorder, tree};
+//!
+//! # let spec = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml"));
+//! # let overlays = [
+//! #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/corrections.yaml")),
+//! #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cli.yaml")),
+//! # ];
+//! let document = Document::load(spec, &overlays)?;
+//! let matches = Command::new("accounting")
+//!     .subcommands(tree::commands(&document))
+//!     .try_get_matches_from(["accounting", "vouchers", "get", "--id", "5"])?;
+//! let recorder = Recorder::new().strict().answering_route(
+//!     Method::GET, "/vouchers/5", StatusCode::OK, &json!({"id": 5}),
+//! );
+//!
+//! let outcome = tree::dispatch(&document, document.base(), &recorder, &matches)?;
+//! let tree::Outcome::Sent(response) = outcome else { panic!("a read is sent") };
+//! assert_eq!(response.status(), StatusCode::OK);
+//! assert_eq!(response.body(), br#"{"id":5}"#);
+//! # let mut sent = recorder.take();
+//! # assert_eq!(sent.len(), 1);
+//! # assert_eq!(sent.pop().unwrap().uri().path(), "/vouchers/5");
+//! # assert_eq!(recorder.unused(), 0);
+//! # }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
 //! # The API
 //!
 //! The seven things a caller learns:
@@ -44,10 +83,9 @@
 //! # What a feature may do
 //!
 //! Every feature adds and removes whole items and never changes one. No type
-//! on this page gains a variant or a field with one, so a caller who matches
-//! an error of this crate exhaustively writes the same match in every build,
-//! and what the docs say about a type they can see is true of every build that
-//! has it.
+//! on this page gains a variant or a field with one, so a caller's match on an
+//! error of this crate is the same in every build, `_` arm included, and what
+//! the docs say about a type they can see is true of every build that has it.
 //!
 //! `clap` is on by default because most adopters want the command tree; a
 //! crate that only wants typed calls turns it off and links no argument
@@ -55,22 +93,34 @@
 //! binary that enabled either would compile a YAML parser, an OpenAPI object
 //! model and a code generator it can never reach.
 
+#![warn(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 #[cfg(feature = "clap")]
 pub mod tree;
 
 #[cfg(feature = "document")]
+mod markers;
+#[cfg(feature = "document")]
+mod openapi;
+#[cfg(feature = "document")]
 pub mod overlay;
+#[cfg(feature = "document")]
+mod patterns;
 #[cfg(feature = "document")]
 pub mod required;
 #[cfg(feature = "document")]
-pub mod schema;
+mod schema;
+#[cfg(feature = "document")]
+mod shape;
 
 #[cfg(feature = "generate")]
 pub mod generate;
 
+mod body_reader;
 pub mod client;
 pub mod model;
-pub mod multipart;
+mod multipart;
 pub mod names;
 pub mod plan;
 pub mod request;
@@ -87,14 +137,15 @@ pub mod values;
 /// generator emitted syntax for.
 #[cfg(feature = "builder")]
 pub use bon;
-pub use client::{Call, Client, NoContent};
+pub use client::{Call, Client, NoContent, Planned};
 pub use model::{
     Body, COMMIT, COMMIT_ID, Carrier, Document, DocumentError, Effect, Field, Gate, JSON_BODY,
-    JSON_BODY_TEMPLATE, Join, Location, Operation, Param, RAW_BODY, Shape, Unsupported,
+    JSON_BODY_TEMPLATE, Join, List, Location, Operation, Param, Place, RAW_BODY, Shape,
+    Unsupported,
 };
 #[cfg(feature = "document")]
 pub use model::{ConfirmationError, LoadError, Loading};
-pub use names::{CommandName, kebab};
+pub use names::CommandName;
 pub use plan::{Answers, Plan, PlanError};
 /// `regress`, for generated code to name the regex engine through.
 ///
@@ -104,8 +155,10 @@ pub use plan::{Answers, Plan, PlanError};
 /// engine stays the one the generator emitted syntax for, which is the same one
 /// [`Scalar::parse`] runs the command line's values through.
 pub use regress;
-pub use request::{Invocation, ValueError, render};
+pub use request::{BaseUrlError, Invocation, RequestError, ValueError, render};
 pub use scalar::Scalar;
+#[cfg(feature = "document")]
+pub use schema::RefError;
 pub use summary::{Summary, Unreachable};
 pub use transport::{
     AsyncClient, HttpRequest, HttpResponse, Reach, Recorder, RecorderError, SyncClient,

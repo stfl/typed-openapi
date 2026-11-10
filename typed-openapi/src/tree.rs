@@ -34,6 +34,7 @@
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
+use clap::parser::MatchesError;
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint, builder::PossibleValuesParser};
 use http::Uri;
 use thiserror::Error;
@@ -44,27 +45,91 @@ use crate::model::{
 };
 use crate::names::{CommandName, renamed};
 use crate::plan::{Answers, Plan, PlanError};
-use crate::scalar::Scalar;
+use crate::scalar::{Scalar, ScalarError};
 use crate::transport::{HttpRequest, HttpResponse, SyncClient};
 use crate::values::{Part, Payload, Values};
 
 /// Something about the arguments the document cannot repair.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ArgError {
-    #[error("cannot read {}: {source}", path.display())]
+    /// A file a flag names could not be read, or standard input could not be
+    /// when the flag names `-`.
+    #[error("cannot read {}", path.display())]
     ReadBody {
+        /// The path as the operator typed it after the flag: `--json-body`,
+        /// `--raw-body` or the `@path` of a `--file` part. `-` is standard
+        /// input.
         path: PathBuf,
+        /// The error the operating system returned.
         #[source]
         source: std::io::Error,
     },
-    #[error("{} does not hold JSON: {source}", path.display())]
+    /// The file named by `--json-body` was read and is not JSON.
+    #[error("{} does not hold JSON", path.display())]
     ParseBody {
+        /// The path as the operator typed it after `--json-body`.
         path: PathBuf,
+        /// `serde_json`'s reading of the bytes, with the line and column where
+        /// it stopped.
         #[source]
         source: serde_json::Error,
     },
+    /// A per-field flag came beside a `--json-body` file whose top level is not
+    /// an object. The flag sets a property of the body, and a list or a scalar
+    /// has none to set, so the flag would be dropped in silence.
+    #[error("`--{flag}` sets a property of the body, and {} holds {found}, not an object", path.display())]
+    FlagBesideNonObject {
+        /// The first per-field flag the operator gave, in the order of the
+        /// body's properties, without the leading `--`.
+        flag: String,
+        /// The path as the operator typed it after `--json-body`.
+        path: PathBuf,
+        /// What the file holds, as the message words it after "holds": `an
+        /// array`, `a string`, `a number`, `a boolean` or `null`.
+        found: &'static str,
+    },
+    /// A `--field` or `--file` value that has no part name before its first `=`.
     #[error("`--{flag} {raw}` is not `NAME=VALUE`")]
-    PartSyntax { flag: &'static str, raw: String },
+    PartSyntax {
+        /// The flag the value came with, without the leading `--`.
+        flag: &'static str,
+        /// The value as the operator typed it.
+        raw: String,
+    },
+    /// A flag that the command stores as another type than the one the
+    /// operation reads: a `String` for a parameter, a field and a part of a
+    /// multipart body (`--file` too, which names a file and is read as text),
+    /// and a `PathBuf` for `--json-body` and `--raw-body`. A verb of the
+    /// adopter's own that declares `--id` with `value_parser!(i64)` is one,
+    /// whatever type the document gives the parameter. The command is the
+    /// adopter's and not this crate's, so the repair is in the flag's
+    /// declaration, and the refusal names the flag.
+    #[error("`--{flag}` holds a value of another type than the one the operation reads")]
+    FlagType {
+        /// The flag, without the leading `--`.
+        flag: String,
+        /// clap's reading of the mismatch. In a debug build it prints the two
+        /// types, the one it holds and the one that was asked for; in a release
+        /// build it prints their `TypeId`s.
+        #[source]
+        source: MatchesError,
+    },
+    /// A per-field flag whose value the document's rule for the field refuses.
+    /// The flags of a subcommand that this crate built are held to the rule by
+    /// their value parsers, so this is the refusal of a verb of the adopter's
+    /// own that declared the flag with a looser parser. `Invocation::new` holds
+    /// a body to its kind and `client::fits` to its content, and neither one
+    /// knows what the rule of a field says, so the value would otherwise reach
+    /// the body unchecked.
+    #[error("`--{flag}` was given a value the document refuses")]
+    FieldValue {
+        /// The flag, without the leading `--`.
+        flag: String,
+        /// The rule of the field that the value broke.
+        #[source]
+        source: ScalarError,
+    },
 }
 
 /// One subcommand per group, in document order, holding the operations under
@@ -106,20 +171,11 @@ pub fn command(op: &Operation) -> Command {
         cmd = cmd.arg(arg);
     }
     cmd = body_args(cmd, op.body());
-    if op.effect() == Effect::Write {
-        // The operation's own word, not this crate's constant: the adopter may
-        // have chosen another one. Everything that spells the confirmation out
-        // for a reader — this flag, a gate's help, the long about below, the
-        // summary page — reads it from the same place, so a page cannot name a
-        // flag the subcommand does not accept.
-        cmd = cmd.arg(
-            Arg::new(COMMIT_ID)
-                .long(op.commit().to_owned())
-                .action(ArgAction::SetTrue)
-                .help("Send the request. Without it this is a dry run that prints it"),
-        );
-    }
-    apart(gates(cmd, op), op.body())
+    // The flag, a gate's help and the long about above read the confirmation word
+    // from the operation, and the summary page reads the document's, which a load
+    // writes as the same string, so the page of a document that a load wrote
+    // cannot name a flag that the subcommand does not accept.
+    apart(gates(confirmation(cmd, op), op), op.body())
 }
 
 /// `--json-body-template`, added last and held apart from every flag the
@@ -189,6 +245,79 @@ fn apart(cmd: Command, body: &Body) -> Command {
     cmd.arg(template_arg().conflicts_with_all(declared))
 }
 
+/// The confirmation flag of a write, added to a command of your own, in the word
+/// the operation carries.
+///
+/// [`command`] puts it on the subcommand it builds, and this is that same door:
+/// a verb you write yourself — one that fetches, decides, and then calls a
+/// write — adds it with this and spells neither the flag nor its word. The word
+/// is the document's, which an adopter chose with `Loading::commit`, so a help
+/// page, the gate flags of [`gates`] and the summary page all name the flag the
+/// verb accepts. [`answers`] reads it back.
+///
+/// A read declares no confirmation, so it is handed back unchanged, and a caller
+/// does not have to ask first:
+///
+/// ```
+/// # #[cfg(feature = "document")]
+/// # {
+/// # use clap::{Arg, Command};
+/// # use typed_openapi::{Document, tree};
+/// # let document = Document::load(
+/// #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml")),
+/// #     &[include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cli.yaml"))],
+/// # )?;
+/// # let op = document.get("enshrineVoucher").unwrap();
+/// # let id = Arg::new("id").long("id");
+/// let verb = tree::gates(tree::confirmation(Command::new("finalize-voucher").arg(id), op), op);
+/// # let matches = verb.try_get_matches_from(["finalize-voucher", "--id", "5", "--commit", "--enshrine"])?;
+/// # assert!(tree::answers(op, &matches).committed());
+/// # }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// The help says "Send the request". A verb that sends more than one request
+/// replaces it, on the flag's id ([`COMMIT_ID`]), and keeps the word the
+/// operation chose. The replacement is for the command of a write:
+/// `Command::mut_arg` panics on an id that the command never declared, and the
+/// command of a read declares no [`COMMIT_ID`].
+///
+/// ```
+/// # #[cfg(feature = "document")]
+/// # {
+/// # use clap::Command;
+/// # use typed_openapi::{COMMIT_ID, Document, tree};
+/// # let document = Document::load(
+/// #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml")), &[],
+/// # )?;
+/// # let op = document.get("createVoucher").unwrap();
+/// # let verb = Command::new("create-voucher");
+/// let verb = tree::confirmation(verb, op).mut_arg(COMMIT_ID, |arg| {
+///     arg.help("Send the writes. Without it this is a dry run that prints them")
+/// });
+/// # assert!(verb.clone().render_help().to_string().contains("Send the writes"));
+/// # let matches = verb.try_get_matches_from(["create-voucher", "--commit"])?;
+/// # assert!(tree::answers(op, &matches).committed());
+/// # }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[must_use]
+pub fn confirmation(cmd: Command, op: &Operation) -> Command {
+    if op.effect() == Effect::Read {
+        return cmd;
+    }
+    // The operation's own word, not this crate's constant: the adopter may have
+    // chosen another one. The help that a gate prints for this command names the
+    // same word, so it names a flag that the command accepts. The long about of a
+    // command of your own is yours to write: put `op.commit()` into it.
+    cmd.arg(
+        Arg::new(COMMIT_ID)
+            .long(op.commit().to_owned())
+            .action(ArgAction::SetTrue)
+            .help("Send the request. Without it this is a dry run that prints it"),
+    )
+}
+
 /// The gate flags one operation names, added to a command of your own.
 ///
 /// [`command`] puts them on the subcommand it builds, and this is that same
@@ -196,13 +325,31 @@ fn apart(cmd: Command, body: &Body) -> Command {
 /// gated operation — adds them with this and spells nothing itself. One
 /// definition rather than two is what keeps the two command lines from coming to
 /// disagree about one operation, and an Overlay that renames a gate renames the
-/// flag on both.
+/// flag on both. The confirmation they are demanded beside is [`confirmation`].
 ///
 /// An operation that names no gate is handed back unchanged, so a caller does
 /// not have to ask first:
 ///
-/// ```rust,ignore
-/// tree::gates(Command::new("finalize-voucher").arg(id).arg(commit), op)
+/// ```
+/// # #[cfg(feature = "document")]
+/// # {
+/// # use clap::{Arg, Command};
+/// # use typed_openapi::{Document, tree};
+/// # let document = Document::load(
+/// #     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/toy.yaml")),
+/// #     &[include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cli.yaml"))],
+/// # )?;
+/// # let op = document.get("enshrineVoucher").unwrap();
+/// # let id = Arg::new("id").long("id");
+/// let verb = tree::gates(tree::confirmation(Command::new("finalize-voucher").arg(id), op), op);
+/// # let missing_gate = verb.clone().try_get_matches_from(["finalize-voucher", "--id", "5", "--commit"]);
+/// # assert_eq!(missing_gate.unwrap_err().kind(), clap::error::ErrorKind::MissingRequiredArgument);
+/// # let matches = verb.try_get_matches_from(["finalize-voucher", "--id", "5", "--commit", "--enshrine"])?;
+/// # let answers = tree::answers(op, &matches);
+/// # assert!(answers.committed());
+/// # assert!(answers.answered(op.gates().first().unwrap()));
+/// # }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[must_use]
 pub fn gates(cmd: Command, op: &Operation) -> Command {
@@ -276,7 +423,34 @@ fn long_about(op: &Operation) -> String {
             );
         }
     }
+    for note in read_only_notes(op.body()) {
+        let _ = write!(out, "\n\n{note}");
+    }
     out
+}
+
+/// What the long help says about each property the API sets. It is left out of
+/// the request for the same reason a flag is: there is nothing for an operator to
+/// give. A flat body says where the flag went, and a body that goes whole says
+/// what to leave out of the file, by its path.
+fn read_only_notes(body: &Body) -> Vec<String> {
+    let (said, names): (fn(&str) -> String, &[String]) = match body {
+        Body::JsonFields { read_only, .. } => (has_no_flag, read_only),
+        Body::JsonWhole { read_only, .. } => (leave_out, read_only),
+        Body::None | Body::Multipart { .. } | Body::Opaque { .. } => (leave_out, &[]),
+    };
+    names.iter().map(|name| said(name)).collect()
+}
+
+fn has_no_flag(name: &str) -> String {
+    format!(
+        "`{name}` has no flag: it is `readOnly`, so the API sets it and the request should go \
+         out without it."
+    )
+}
+
+fn leave_out(path: &str) -> String {
+    format!("`{path}` is `readOnly`: the API sets it, so the body should go out without it.")
 }
 
 /// What the user answered at the gate, read off one operation's `ArgMatches`:
@@ -287,8 +461,8 @@ fn long_about(op: &Operation) -> String {
 /// A flag the command never declared reads as unanswered, which is the closed
 /// answer: it holds the request back. That is what makes this safe to point at
 /// a command this crate did not build — a verb of your own, or one built before
-/// an Overlay named a new gate. Give your own command its flags with [`gates`]
-/// and the two stay in step by construction.
+/// an Overlay named a new gate. Give your own command its flags with
+/// [`confirmation`] and [`gates`], and the two stay in step by construction.
 #[must_use]
 pub fn answers(op: &Operation, matches: &ArgMatches) -> Answers {
     if op.effect() == Effect::Read {
@@ -309,9 +483,9 @@ pub fn answers(op: &Operation, matches: &ArgMatches) -> Answers {
 /// Did the command line carry this flag?
 ///
 /// `ArgMatches::get_flag` panics on an id the `Command` never declared, and a
-/// panic is the wrong answer to "is this gate answered?". A command with no
-/// flag for a gate has no answer for it, and no answer is `false` — the reading
-/// the gate has everywhere else, and the one that holds the request back.
+/// panic is the wrong answer to "is this gate answered?". A command with no flag
+/// for a gate has no answer for it, and no answer is `false` — the reading the
+/// gate has everywhere else, and the one that holds the request back.
 fn flag(matches: &ArgMatches, id: &str) -> bool {
     matches
         .try_get_one::<bool>(id)
@@ -323,16 +497,22 @@ fn flag(matches: &ArgMatches, id: &str) -> bool {
 
 /// Read one operation's arguments out of its `ArgMatches`, under the names the
 /// document uses.
+///
+/// Every flag is read the way [`answers`] reads one, so this is as safe to point
+/// at a command this crate did not build. A flag the command never declared is a
+/// flag that was not given, and `Invocation::new` says so if the operation needs
+/// it. A flag the command stores as another type is [`ArgError::FlagType`], which
+/// names it.
 pub fn values(op: &Operation, matches: &ArgMatches) -> Result<Values, ArgError> {
     let mut values = Values::new();
     for param in op.params() {
         let Shape::Flag { flag, .. } = param.shape() else {
             continue;
         };
-        // `get_many` serves both kinds: a flag given once yields one value, and
+        // `strings` serves both kinds: a flag given once yields one value, and
         // a repeatable one yields every occurrence, in the order they were
         // typed — which is the order they go on the wire in.
-        for raw in strings(matches, flag) {
+        for raw in strings(matches, flag)? {
             values = values.param(param.name(), raw);
         }
     }
@@ -371,13 +551,29 @@ pub enum Outcome {
 /// a variant of its own, so this enum does not grow a type parameter for the
 /// client and an adopter's error type can absorb it whole.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DispatchError {
+    /// The matches name no group, or a group and no command under it.
+    /// [`commands`] makes every group require its subcommand, so clap refuses a
+    /// line that stops at a group; this is what `select` answers when it is
+    /// handed matches that stop short anyway.
     #[error("no command given")]
     NoCommand,
+    /// The matches name a group and a command that no operation of the document
+    /// is mounted under.
     #[error("no operation named `{group} {command}` in the document")]
-    Unknown { group: String, command: String },
+    Unknown {
+        /// The group subcommand clap matched, as the operator typed it.
+        group: String,
+        /// The command subcommand clap matched under it, as the operator typed
+        /// it.
+        command: String,
+    },
+    /// An argument the document cannot repair. The message names the flag, or
+    /// the path the flag pointed at.
     #[error(transparent)]
     Arg(#[from] ArgError),
+    /// The arguments were read and the request could not be built from them.
     #[error(transparent)]
     Plan(#[from] PlanError),
     /// The client refused the request or never got an answer, carrying the
@@ -404,7 +600,7 @@ pub enum DispatchError {
     /// = E>` fixes `E` for every client behind it. A caller who wants no box at
     /// all builds the request with [`Plan`] and sends it through the client's
     /// own `send`. `docs/client.md` shows both.
-    #[error("transport: {0}")]
+    #[error("the transport failed")]
     Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
@@ -578,51 +774,98 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
         Body::None => Ok(None),
         // A missing required body is `Invocation::new`'s to report, so that one
         // place decides what satisfies an operation.
-        Body::JsonWhole { .. } => matches
-            .get_one::<PathBuf>(JSON_BODY)
+        Body::JsonWhole { .. } => one::<PathBuf>(matches, JSON_BODY)?
             .map(|path| read_json(path).map(Payload::Json))
             .transpose(),
-        Body::Opaque { .. } => matches
-            .get_one::<PathBuf>(RAW_BODY)
+        Body::Opaque { .. } => one::<PathBuf>(matches, RAW_BODY)?
             .map(|path| read_bytes(path).map(Payload::Raw))
             .transpose(),
         Body::Multipart { .. } => parts(matches).map(|parts| parts.map(Payload::Multipart)),
-        Body::JsonFields(fields) => Ok(Some(Payload::Json(assembled(fields, matches)?))),
+        Body::JsonFields { fields, .. } => Ok(assembled(fields, matches)?.map(Payload::Json)),
     }
 }
 
 /// `--json-body` is the base document; per-field flags are merged over it, so a
 /// flag beside a file is an edit rather than a value the CLI silently drops.
-fn assembled(fields: &[Field], matches: &ArgMatches) -> Result<serde_json::Value, ArgError> {
-    let mut body = match matches.get_one::<PathBuf>(JSON_BODY) {
-        Some(path) => read_json(path)?,
-        None => serde_json::Value::Object(serde_json::Map::new()),
+///
+/// A file whose top level is not an object has no property for a flag to edit.
+/// A flag beside one is refused, because dropping it would send a body the
+/// operator believes they changed. With no flag beside it, the file goes on
+/// as it is: whether a list is a body is for the check of the adopter's types.
+///
+/// With no file and no flag the operator gave no body, and the answer is `None`
+/// whether or not the document requires one: a body that is required and
+/// missing is [`Invocation::new`]'s to report. The empty object is a body that
+/// the operator asks for, with a `--json-body` file that holds it.
+///
+/// [`Invocation::new`]: crate::Invocation::new
+fn assembled(
+    fields: &[Field],
+    matches: &ArgMatches,
+) -> Result<Option<serde_json::Value>, ArgError> {
+    let Some(path) = one::<PathBuf>(matches, JSON_BODY)? else {
+        let object = edited(serde_json::Map::new(), fields, matches)?;
+        return Ok((!object.is_empty()).then_some(serde_json::Value::Object(object)));
     };
-    let Some(object) = body.as_object_mut() else {
-        return Ok(body);
-    };
-    for field in fields {
-        let Some(raw) = matches.get_one::<String>(field.flag()) else {
-            continue;
-        };
-        // The flag's value parser has already accepted this, so the same rule
-        // is not applied twice with two error shapes; the second call is a
-        // conversion, and `Invocation::new` re-checks the whole set anyway.
-        if let Ok(value) = field.scalar().parse(raw) {
-            object.insert(field.name().to_owned(), value);
+    let body = read_json(path)?;
+    let serde_json::Value::Object(object) = body else {
+        for field in fields {
+            if given(field, matches)? {
+                return Err(ArgError::FlagBesideNonObject {
+                    flag: field.flag().to_owned(),
+                    path: path.clone(),
+                    found: crate::client::kind(&body),
+                });
+            }
         }
-    }
-    Ok(body)
+        return Ok(Some(body));
+    };
+    Ok(Some(serde_json::Value::Object(edited(
+        object, fields, matches,
+    )?)))
 }
 
-/// `--file NAME=PATH` and `--field NAME=VALUE`, in the order they were given.
+/// `object` with each per-field flag the operator gave set in it.
+///
+/// The value parser of a flag that [`command`] built has accepted the value
+/// already, so for those the refusal here cannot happen. A command of the
+/// adopter's own may declare the flag with a looser parser, and nothing after
+/// this holds the value to the field's rule, so the refusal is passed on.
+fn edited(
+    mut object: serde_json::Map<String, serde_json::Value>,
+    fields: &[Field],
+    matches: &ArgMatches,
+) -> Result<serde_json::Map<String, serde_json::Value>, ArgError> {
+    for field in fields {
+        let Some(raw) = one::<String>(matches, field.flag())? else {
+            continue;
+        };
+        let value = field
+            .scalar()
+            .parse(raw)
+            .map_err(|source| ArgError::FieldValue {
+                flag: field.flag().to_owned(),
+                source,
+            })?;
+        object.insert(field.name().to_owned(), value);
+    }
+    Ok(object)
+}
+
+/// Did the operator type this field's flag?
+fn given(field: &Field, matches: &ArgMatches) -> Result<bool, ArgError> {
+    Ok(one::<String>(matches, field.flag())?.is_some())
+}
+
+/// Text parts precede file parts. Within each kind, parts keep the order given.
+/// The flags are `--field NAME=VALUE` and `--file NAME=PATH`.
 fn parts(matches: &ArgMatches) -> Result<Option<Vec<Part>>, ArgError> {
     let mut parts = Vec::new();
-    for raw in strings(matches, FIELD_PART) {
+    for raw in strings(matches, FIELD_PART)? {
         let (name, value) = split_part(FIELD_PART, raw)?;
         parts.push(Part::text(name, value));
     }
-    for raw in strings(matches, FILE_PART) {
+    for raw in strings(matches, FILE_PART)? {
         let (name, path) = split_part(FILE_PART, raw)?;
         let path = PathBuf::from(path);
         let filename = path
@@ -633,8 +876,38 @@ fn parts(matches: &ArgMatches) -> Result<Option<Vec<Part>>, ArgError> {
     Ok((!parts.is_empty()).then_some(parts))
 }
 
-fn strings<'m>(matches: &'m ArgMatches, id: &str) -> impl Iterator<Item = &'m String> {
-    matches.get_many::<String>(id).into_iter().flatten()
+/// Every value of a flag, in the order they were typed. A flag that was not
+/// given, or that the command never declared, has none.
+fn strings<'m>(
+    matches: &'m ArgMatches,
+    id: &str,
+) -> Result<impl Iterator<Item = &'m String>, ArgError> {
+    match matches.try_get_many::<String>(id) {
+        Ok(values) => Ok(values.into_iter().flatten()),
+        Err(MatchesError::UnknownArgument { .. }) => Ok(None.into_iter().flatten()),
+        Err(source) => Err(flag_type(id, source)),
+    }
+}
+
+/// The one value of a flag, when it was given. A flag that the command never
+/// declared was not given: `get_one` panics on it in a debug build, and a panic
+/// is the wrong answer for a command this crate did not build.
+fn one<'m, T: std::any::Any + Clone + Send + Sync + 'static>(
+    matches: &'m ArgMatches,
+    id: &str,
+) -> Result<Option<&'m T>, ArgError> {
+    match matches.try_get_one::<T>(id) {
+        Ok(value) => Ok(value),
+        Err(MatchesError::UnknownArgument { .. }) => Ok(None),
+        Err(source) => Err(flag_type(id, source)),
+    }
+}
+
+fn flag_type(id: &str, source: MatchesError) -> ArgError {
+    ArgError::FlagType {
+        flag: id.to_owned(),
+        source,
+    }
 }
 
 /// `NAME=REST`, splitting at the first `=` so a value may contain more.
@@ -656,11 +929,11 @@ fn param_arg(op: &Operation, param: &Param) -> Option<Arg> {
         flag,
         location,
         scalar,
-        join,
+        list,
         // The kind the document calls this value is not a rule about it, and
-        // the help line carries rules: every note beside a flag is something
-        // `Scalar::parse` refuses a value for, and a format is something
-        // nothing here can refuse a value for.
+        // the help line carries rules: every rule note beside a flag is something
+        // `Scalar::parse` refuses a value for, or `Items::check` refuses a list
+        // for, and a format is something nothing here can refuse a value for.
         format: _,
     } = param.shape()
     else {
@@ -683,9 +956,10 @@ fn param_arg(op: &Operation, param: &Param) -> Option<Arg> {
         |text| Some(text.to_owned()),
     );
     let companions = companion_flags(op, param);
-    let notes = join
-        .map(|join| join.note().to_owned())
+    let notes = list
+        .map(|list| list.join.note().to_owned())
         .into_iter()
+        .chain(list.and_then(|list| list.items.note()))
         .chain(wire(renamed(flag, param.name()), param.name()))
         .chain(
             companions
@@ -698,7 +972,7 @@ fn param_arg(op: &Operation, param: &Param) -> Option<Arg> {
         help_line(described.as_deref(), scalar, notes),
         param.required(),
     );
-    if join.is_some() {
+    if list.is_some() {
         arg = arg.action(ArgAction::Append);
     }
     // The parser refuses the flag without its companions, the way it refuses a
@@ -735,7 +1009,9 @@ fn wire(renamed: bool, name: &str) -> Option<String> {
 fn body_args(cmd: Command, body: &Body) -> Command {
     match body {
         Body::None => cmd,
-        Body::JsonFields(fields) => json_field_args(cmd, fields),
+        Body::JsonFields {
+            fields, required, ..
+        } => json_field_args(cmd, fields, *required),
         // The flag that asks what this body looks like is `apart`'s to add,
         // once every other flag of the subcommand is there for it to name.
         Body::JsonWhole { required, .. } => cmd.arg(file_arg(JSON_BODY, *required).help(
@@ -747,15 +1023,21 @@ fn body_args(cmd: Command, body: &Body) -> Command {
             media_type,
             required,
         } => cmd.arg(file_arg(RAW_BODY, *required).help(format!(
-            "Request body read from a file, sent verbatim as `{media_type}`; `-` is stdin. \
-             This CLI does not assemble that media type"
+            "Request body read from a file, sent verbatim as `{}`; `-` is stdin. \
+             This CLI does not assemble that media type",
+            body.media_type().unwrap_or(media_type)
         ))),
     }
 }
 
 /// One flag per scalar property, and `--json-body` as the base document they
 /// are merged over.
-fn json_field_args(cmd: Command, fields: &[Field]) -> Command {
+///
+/// A property is demanded when the body is required and the property is, and a
+/// file stands for it. A body that is optional demands no flag, because the
+/// operator who types none has given no body, and a body with a flag in it is
+/// held to its type where the adopter's check reads it.
+fn json_field_args(cmd: Command, fields: &[Field], body_required: bool) -> Command {
     let mut cmd = cmd;
     for field in fields {
         let mut arg = value_arg(
@@ -768,7 +1050,7 @@ fn json_field_args(cmd: Command, fields: &[Field]) -> Command {
             ),
             false,
         );
-        if field.required() {
+        if body_required && field.required() {
             arg = arg.required_unless_present(JSON_BODY);
         }
         cmd = cmd.arg(arg);
@@ -831,6 +1113,18 @@ fn value_arg(flag: &str, scalar: &Scalar, help: Option<String>, required: bool) 
                 .map(|_| raw.to_owned())
                 .map_err(|e| e.to_string())
         })
+    };
+    // The word after a flag that takes a number or a text is its value, whatever
+    // the word starts with, and the value parser judges it. In an accounting API
+    // a negative amount or an offset is ordinary, and clap reads `-5` as a flag
+    // of its own unless it is told what the flag is for. `allow_negative_numbers`
+    // is not that: clap's check of a number takes no leading `.` and no sign after
+    // `e`, so `-.5` and `-1e-3` would be flags of their own.
+    arg = match scalar {
+        Scalar::Integer(_) | Scalar::Number(_) | Scalar::Text(_) | Scalar::Choice(_) => {
+            arg.allow_hyphen_values(true)
+        }
+        Scalar::Boolean(_) => arg,
     };
     if let Some(help) = help {
         arg = arg.help(help);

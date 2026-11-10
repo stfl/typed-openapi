@@ -37,25 +37,30 @@ early they bite:
 | **changes a summary or a description** | — | — | **nothing** |
 | **loosens a rule nothing hand-written stands for** | — | — | **nothing**, until a value the old rule refused arrives |
 
-The verbatim messages are in the sections below.
+The messages are in the sections below. Compiler excerpts omit source line
+and column numbers. The bless example uses `/checkout` as the checkout's
+absolute path.
 
 ## Bless time: the Overlay as an assertion
 
-`ErrorOnZeroMatch` is what makes a correction a check as well as an edit. Five
-of the example adoption's nine actions — two in
-[`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml), three in
-[`spec/cli.yaml`](../examples/toy/spec/cli.yaml) — are written as targets that
+`ErrorOnZeroMatch` is what makes a correction a check as well as an edit.
+The tripwire actions in [`spec/corrections.yaml`](../examples/toy/spec/corrections.yaml)
+and [`spec/cli.yaml`](../examples/toy/spec/cli.yaml) are written as targets that
 state what the vendor currently says, so a revision that changes the thing being
-corrected fails the bless rather than being silently overwritten. The message opens with the layer, because with corrections split
-by purpose that is the first thing to know:
+corrected fails the bless rather than being silently overwritten. The first line
+names the layer, because with corrections split by purpose that is the first
+thing to know, and each line under it is a cause:
 
 ```
-spec/corrections.yaml: the Overlay does not apply: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
+bless: cannot use /checkout/examples/toy/spec/corrections.yaml
+  caused by: the Overlay does not apply
+  caused by: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
 ```
 
 The form and its cost are in [docs/overlay.md](overlay.md#the-tripwire-form);
-[`typed-openapi/tests/drift.rs`](../typed-openapi/tests/drift.rs) is where both
-tripwires are held to a mutated fixture.
+[`typed-openapi/tests/drift.rs`](../typed-openapi/tests/drift.rs) holds each of
+the tripwires to a mutated fixture. A test through
+`Settings::write_to` checks the layer path in the error.
 
 The same file records what *passes* this stage, and deliberately so: withdrawing
 an operation no action names, and adding or removing a field the Overlay never
@@ -79,7 +84,7 @@ const _: () = assert!(api::documented(
 
 ```
 error[E0080]: evaluation panicked: assertion failed: api::documented("enshrineVoucher", "POST", "/vouchers/{id}/enshrine")
-  --> examples/toy/cli/src/finalize.rs:19:15
+  --> examples/toy/cli/src/finalize.rs
 ```
 
 The assertion is a whole row, so an operation that keeps its `operationId` and
@@ -108,14 +113,14 @@ A field added upstream is E0027, and it names the field:
 
 ```
 error[E0027]: pattern does not mention field `note`
-  --> examples/toy/api/src/posting.rs:44:13
+  --> examples/toy/api/src/posting.rs
 ```
 
 A field renamed is E0026, and rustc suggests the new name:
 
 ```
 error[E0026]: struct `api_generated::types::Voucher` does not have a field named `total`
-  --> examples/toy/api/src/posting.rs:49:13
+  --> examples/toy/api/src/posting.rs
    |
    |             total,
    |             ^^^^^ help: `api_generated::types::Voucher` has a field named `amount`
@@ -141,7 +146,7 @@ one in `finalize::plan`. A variant the vendor adds is:
 
 ```
 error[E0004]: non-exhaustive patterns: `&api_generated::types::VoucherStatus::Void` not covered
-  --> examples/toy/api/src/posting.rs:57:27
+  --> examples/toy/api/src/posting.rs
 ```
 
 `api` fails before `cli` is reached, so one such change reports once, in the
@@ -149,9 +154,9 @@ crate that owns the decision.
 
 ## Test time: the committed artefacts
 
-A bless step writes four files, plus the counts page where an adoption asks for
-one, and the CLI only ever reads one of them — the binary blob. Five checks hold
-the set together.
+The bless step writes the corrected document, the Rust types and wrappers, the
+model blob, and an optional counts page. The CLI reads the binary blob.
+The checks below hold the artefacts together.
 
 [`api/tests/typed.rs`](../examples/toy/api/tests/typed.rs) reduces the
 *committed document* again and compares it with the *committed blob*, operation
@@ -177,10 +182,10 @@ the document and the generated inventory disagree at operation 10: the inventory
 says `voidVoucher` and the document says there is no such operation
 ```
 
-[`api/tests/corrections.rs`](../examples/toy/api/tests/corrections.rs) is the
-third: every row of `CORRECTIONS` is checked against both documents in both
-directions, so a correction the vendor has caught up with turns red instead of
-going on working in silence. One test per kind of row, each saying which row and
+[`api/tests/corrections.rs`](../examples/toy/api/tests/corrections.rs) checks
+every row of `CORRECTIONS` against both documents in both directions, so a
+correction the vendor has caught up with turns red instead of going on working
+in silence. One test per kind of row, each saying which row and
 why:
 
 ```
@@ -193,7 +198,7 @@ And in the other direction — `` `Voucher.note` is in the corrected document an
 not the vendor's, and no row says so `` — so an Overlay edit nobody wrote down
 fails too. [docs/overlay.md](overlay.md) has the detail.
 
-[`api/tests/money.rs`](../examples/toy/api/tests/money.rs) is the fourth, and it
+[`api/tests/money.rs`](../examples/toy/api/tests/money.rs) checks the owned amount. It
 exists because the reading behind one type in this adoption is hand-written. A
 newtype the generator writes the whole of compiles the document's `pattern` into
 its own `FromStr`, so it cannot drift; `Voucher.total` is a newtype whose
@@ -214,13 +219,27 @@ arbitrary-precision integer. A narrower one would refuse amounts the document
 allows, and this page would have to list the gap — a second test says so, at
 nineteen, twenty, forty and a hundred digits.
 
-[`api/tests/summary.rs`](../examples/toy/api/tests/summary.rs) is the fifth, and
-it is the one that holds *prose*. `src/summary.md` is counted off the reduction
-and `README.md` quotes those counts, so the test builds each sentence out of
-`Document::summary` and looks for it in the page a reader arrives at:
+An owned replacement must agree with the document in both directions, or
+have a guard that it is never reachable as a flag.
+[`api/tests/cents.rs`](../examples/toy/api/tests/cents.rs) shows the second
+choice: `money::Cents` counts cents in an `i64`, while the `Cents` pattern
+allows arbitrarily many digits. The guard asks `Operation::carrying("cents")`
+for every operation, covering parameters and flat-body fields, and names the
+operation on failure. `Contact.creditLimit` goes through `--json-body` because
+`Contact` has a nested address. A response can contain a document-valid value
+that the narrower type refuses; decoding then fails. Choosing the type accepts
+that cost, as sevdesk-cli does with `Amount`.
+
+The compile-fail doctests in [`api/src/lib.rs`](../examples/toy/api/src/lib.rs)
+pin E0027, E0026, E0004 and E0080 by code. The builder doctest in
+`api-generated` pins E0277.
+
+[`api/tests/summary.rs`](../examples/toy/api/tests/summary.rs) holds *prose*.
+`src/summary.md` is counted off the reduction and `README.md` quotes those
+counts, so the test builds each sentence out of `Document::summary` and looks for it in the page a reader arrives at:
 
 ```
-the README does not say `**12 operations**`; the reduction moved and the paragraph did not
+the README does not say `**13 operations**`; the reduction moved and the paragraph did not
 ```
 
 It also holds the committed page to the committed blob, so a page committed
@@ -270,10 +289,10 @@ test wherever a rule matters, not for believing the loosening is caught.
 
 **A vendor revision nobody fetches.** Every bless-time check above runs against
 the vendor document that is committed here. `just blessed` re-runs the bless
-step and fails on a non-empty `git diff`, so the committed artefacts cannot
-drift from the committed document — but nothing fetches a *newer* document.
-Until someone updates `spec/toy.yaml`, the committed document *is* the API as
-far as this workspace is concerned.
+step and fails on a changed or untracked artefact, so the committed artefacts
+cannot drift from the committed document — but nothing fetches a *newer*
+document. Until someone updates `spec/toy.yaml`, the committed document *is* the
+API as far as this workspace is concerned.
 
 The honest summary: drift in something you **use** is loud, drift in something
 you **corrected** is loud, and drift in everything else is a diff someone has to

@@ -30,7 +30,7 @@ const PRODUCT: &[&str] = &[
 const BLESS: &str = "examples/toy/xtask";
 
 /// The three dependencies the `document` feature is there to hold back.
-const BEHIND_THE_FEATURE: &[&str] = &["openapiv3", "roas-overlay", "serde_yaml_ng"];
+const BEHIND_THE_FEATURE: &[&str] = &["openapiv3", "roas-overlay", "serde-saphyr"];
 
 #[test]
 fn the_document_reader_stays_out_of_every_build_that_ships() {

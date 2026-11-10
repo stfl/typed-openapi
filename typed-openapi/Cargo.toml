@@ -14,11 +14,122 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+# The note for an agent that edits `src/` is not what a crate's reader gets.
+exclude = ["src/CLAUDE.md"]
 
 # The two words a command line spends on consent, and what a document that
-# wants one of them is told. It reads a document, so it wants that feature.
+# wants one of them is told. It reads a document and mounts the command tree.
 [[example]]
 name = "clashing-words"
+required-features = ["document", "clap"]
+
+# The dev-dependency on this crate below turns `document` and `generate` on for
+# a run inside the workspace, and `cargo package` drops it. Required features
+# keep a target from building in the tarball when its imports are unavailable.
+# `just package` checks the unpacked
+# tests and examples with no features, document only, generate only, defaults,
+# and all features. A target that builds `Settings` or names a generator error
+# wants `generate`; other document readers want `document`, and
+# each that mounts the command tree or names one of its types wants `clap`
+# beside it. `layout` is the one that wants none: it traces the types of the
+# model, which every build has, and reads no document.
+[[test]]
+name = "anyschema"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "blob"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "dispatch"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "document"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "drift"
+required-features = ["document"]
+
+[[test]]
+name = "errors"
+required-features = ["generate", "clap"]
+
+[[test]]
+name = "file_input"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "generate"
+required-features = ["generate"]
+
+[[test]]
+name = "hostile"
+required-features = ["generate", "clap"]
+
+[[test]]
+name = "layout"
+required-features = []
+
+[[test]]
+name = "media"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "marker_references"
+required-features = ["generate"]
+
+[[test]]
+name = "optional"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "readonly"
+required-features = ["generate", "clap"]
+
+[[test]]
+name = "reading"
+required-features = ["document"]
+
+[[test]]
+name = "refusals"
+required-features = ["document"]
+
+[[test]]
+name = "required"
+required-features = ["document"]
+
+[[test]]
+name = "rules"
+required-features = ["document", "clap"]
+
+# `import_types!` over a JSON Schema, which is the only way to hold `client::fits`
+# to the types typify writes rather than to a type its author thought of. typify
+# is a dependency of `generate`.
+[[test]]
+name = "shapes"
+required-features = ["generate"]
+
+[[test]]
+name = "summary"
+required-features = ["document"]
+
+[[test]]
+name = "typed_call"
+required-features = ["document"]
+
+[[test]]
+name = "values"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "wire"
+required-features = ["document", "clap"]
+
+[[test]]
+name = "yaml"
 required-features = ["document"]
 
 [features]
@@ -34,7 +145,7 @@ clap = ["dep:clap"]
 # from `Document::from_blob` leaves it off, and then the YAML parser, the
 # OpenAPI object model and the Overlay engine are not in what it compiles,
 # links or audits.
-document = ["dep:openapiv3", "dep:roas-overlay", "dep:serde_yaml_ng"]
+document = ["dep:openapiv3", "dep:roas-overlay", "dep:serde-saphyr"]
 
 # The generator: the `generate` module a bless step calls to write the typed
 # wrappers, the Rust schema types and the reduced model. It reads a document,
@@ -45,10 +156,12 @@ generate = [
     "dep:heck",
     "dep:prettyplease",
     "dep:proc-macro2",
+    "dep:pulldown-cmark",
     "dep:quote",
     "dep:schemars",
     "dep:syn",
     "dep:typify",
+    "dep:unicode-ident",
 ]
 
 # `bon`'s builder on the generated wrappers, so a call with four arguments
@@ -58,30 +171,58 @@ generate = [
 builder = ["dep:bon"]
 
 [dependencies]
+# The builder macro on a generated wrapper, re-exported so the versions agree.
 bon = { workspace = true, optional = true }
+# The command tree and the trip back from `ArgMatches` to a sent request.
 clap = { workspace = true, optional = true }
+# Turns the document's names into the Rust names the generator writes.
 heck = { workspace = true, optional = true }
+# The request type of the client seam, `http::Request<Vec<u8>>`.
 http = { workspace = true }
+# The OpenAPI object model a document is read through while it is reduced.
 openapiv3 = { workspace = true, optional = true }
+# The encoding of the reduced model, the blob a shipped binary loads.
 postcard = { workspace = true }
+# Prints the generated syntax tree as formatted Rust source.
 prettyplease = { workspace = true, optional = true }
+# The token streams the generator builds its code in.
 proc-macro2 = { workspace = true, optional = true }
+# Finds the code blocks in a vendor's description, in any Markdown container, so
+# that none is left for `cargo test --doc`. The version is the one rustdoc is
+# built with, because two versions read the same Markdown differently.
+pulldown-cmark = { workspace = true, optional = true }
+# Writes the generated wrappers as Rust syntax with the values spliced in.
 quote = { workspace = true, optional = true }
+# Runs a document's `pattern` on the engine typify puts in a generated newtype.
 regress = { workspace = true }
+# Applies the adopter's Overlays to the vendor's document.
 roas-overlay = { workspace = true, optional = true }
+# The schema types typify takes in, built from the document's own schemas.
 schemars = { workspace = true, optional = true }
+# Derives (de)serialisation for the reduced model. Its `Serialize` and
+# `DeserializeOwned` bounds are what a typed call's body and response go through.
 serde = { workspace = true }
+# Reads the document and each Overlay as YAML, and writes the overlaid one.
+serde-saphyr = { workspace = true, optional = true }
+# A body and a document as JSON values, which an Overlay is applied to.
 serde_json = { workspace = true }
 # A body refused by `client::fits` names where it stopped — `positions[1].flag`
 # — which serde's own message does not, and a nested body sent whole through a
-# file is exactly where a caller cannot find the field by eye. It wraps the
-# deserialiser serde_json already drives and brings `itoa` with it; tracking
-# the path by hand is that same wrapper written again.
+# file is exactly where a caller cannot find the field by eye. An Overlay that
+# has the wrong shape names the action it stopped in the same way, from
+# `actions[2]`. It wraps the deserialiser serde_json already drives and brings
+# `itoa` with it. It gives a place only for a read that fails; the place of a
+# property the type skips without an error is `body_reader`'s own trail.
 serde_path_to_error = { workspace = true }
-serde_yaml_ng = { workspace = true, optional = true }
+# Parses typify's output into the tree the generator rewrites and prints.
 syn = { workspace = true, optional = true }
+# Derives `Error` and its messages for every error type the crate returns.
 thiserror = { workspace = true }
+# Writes the Rust type for each schema the document names.
 typify = { workspace = true, optional = true }
+
+# Predicts typify's enum-name character rules before conversion can panic.
+unicode-ident = { workspace = true, optional = true }
 
 [dev-dependencies]
 # This crate's own tests read documents and generate from them. Depending on
@@ -89,9 +230,20 @@ typify = { workspace = true, optional = true }
 # inheriting it: a dev-dependency's features reach `cargo test` and
 # `cargo clippy --all-targets` and stop there.
 typed-openapi = { path = ".", features = ["document", "generate"] }
+# Traces the serde layout of `Document` and every type inside it, which
+# `tests/layout.rs` compares with the committed description.
+serde-reflection = { workspace = true }
+# `serde_json` reads a `RawValue` through a branch behind `raw_value`, and a
+# build that any crate of an adopter asks it of has it on. The reader of a body
+# is tested against that branch.
+serde_json = { workspace = true, features = ["raw_value"] }
 
+# docs.rs builds with every feature on and `--cfg docsrs`, which `lib.rs` turns
+# into `feature(doc_cfg)`: that is what prints "Available on crate feature ...
+# only" on each item a feature adds.
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true

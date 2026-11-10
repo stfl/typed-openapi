@@ -10,6 +10,7 @@
 //! `api-generated/` is reproducible from a published crate rather than from
 //! this workspace.
 
+use std::error::Error as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -33,6 +34,7 @@ fn main() -> ExitCode {
         // stands for it. `Voucher.currency` beside it takes the other route: a
         // named schema, and the newtype the generator writes.
         .replace("money", "money::Money")
+        .replace("cents", "money::Cents")
         // This adoption states counts in its prose, so it asks for the page
         // those counts are measured off; an adoption that states none asks for
         // nothing and gets no file. Beside the blob because that is where
@@ -50,6 +52,13 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("bless: {error}");
+            // An error describes its own layer, so the first line names the
+            // file and the causes under it name the action and the byte.
+            let mut cause = error.source();
+            while let Some(next) = cause {
+                eprintln!("  caused by: {next}");
+                cause = next.source();
+            }
             ExitCode::FAILURE
         }
     }

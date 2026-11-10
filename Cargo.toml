@@ -16,8 +16,7 @@ members = [
 # else — but it is not what a bare `cargo build` is for, and cargo resolves
 # features once per invocation over the packages it builds. Leaving `xtask` out
 # of that set is what lets the everyday build resolve `typed-openapi` without
-# `generate` and compile 65 crates instead of 239. `--workspace` still selects
-# all six.
+# `generate`. `--workspace` selects every member, including `xtask`.
 default-members = [
     "typed-openapi",
     "examples/toy/api",
@@ -28,14 +27,13 @@ default-members = [
 
 [workspace.package]
 edition = "2024"
-# The floor for every feature set, and it is set by the regex engine: regress
-# uses let-chains and therefore wants 1.88 or newer while declaring no
-# `rust-version` of its own. A shipped binary enforces the document's patterns
-# and a generated newtype enforces its own, so both reach that engine and both
-# inherit the floor — this is not a bless-time cost. Edition 2024, clap 4.6 and
-# hashbrown 0.17 sit below it at 1.85. Derived from what those crates declare —
-# CI builds and tests on current stable rather than against an old toolchain.
-rust-version = "1.88"
+# The floor for every feature set, and it is set by serde-saphyr, which reads
+# the YAML behind the `document` feature and declares 1.89. Below it sit
+# regress, which uses let-chains and therefore wants 1.88 or newer while
+# declaring no `rust-version` of its own, and edition 2024, clap 4.6 and
+# hashbrown 0.17 at 1.85. Derived from what those crates declare — CI builds and
+# tests on current stable rather than against an old toolchain.
+rust-version = "1.89"
 version = "0.0.2"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/stfl/typed-openapi"
@@ -46,21 +44,26 @@ bon = "3.8"
 clap = { version = "4.6", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions", "wrap_help", "string"] }
 clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 heck = "0.5"
+unicode-ident = "1.0"
 http = "1.5"
 num-bigint = "0.5"
 openapiv3 = "2.2"
 postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 prettyplease = "0.3"
 proc-macro2 = "1"
+# The version rustdoc is built with, not the newest: 0.13 reads `- [ ]     x` as
+# text and rustdoc, on 0.11, runs it as code.
+pulldown-cmark = { version = "0.11", default-features = false }
 quote = "1"
 regress = "0.12"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots"] }
 roas-overlay = "0.3"
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
+serde-reflection = { version = "0.6", default-features = false }
+serde-saphyr = "2.0"
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_path_to_error = "0.1"
-serde_yaml_ng = "0.10"
 syn = { version = "3", features = ["parsing", "printing", "full", "visit-mut"] }
 thiserror = "2"
 typify = "0.8"
@@ -91,3 +94,4 @@ expect_used = "warn"
 indexing_slicing = "warn"
 string_slice = "warn"
 allow_attributes_without_reason = "warn"
+cognitive_complexity = "warn"

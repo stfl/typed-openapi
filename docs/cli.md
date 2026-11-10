@@ -26,6 +26,13 @@ the path has none left to spend, the method decides:
 | `PUT` | either | `update` |
 | `PATCH` | either | `patch` |
 | `DELETE` | either | `delete` |
+| `HEAD` | either | `head` |
+| `OPTIONS` | either | `options` |
+| `TRACE` | either | `trace` |
+
+Whether the path addresses one resource is read from the segments below the
+group only. A `{tenant}` above the group says which tenant, for every operation
+under it, so `GET /{tenant}/vouchers` is `vouchers list`.
 
 So `PUT /vouchers/{id}` is `vouchers update` and `GET /vouchers/{id}/render` is
 `vouchers render`, whatever the vendor called them. The name a vendor repeats
@@ -70,6 +77,21 @@ They are also the only way out of a collision. Two operations reducing to one
 
 Never a silent rename: a name that moves because a *second* operation arrived
 is a name that moved without anyone asking.
+
+The markers also name an operation whose path cannot be spelled. A path segment
+with a character outside ASCII, such as the `ä` of `/kontakte/änderungen`,
+gives the operation no name, and the document is refused until a marker names
+it.
+
+So does a name that clap has spent. clap declares a `help` subcommand on the tree
+and on every group, so a group or a command that comes out as `help` is two
+subcommands with one spelling. A path such as `/help/articles` is refused, and
+so is `/articles/help`, with the `operationId` and the marker that mends it
+(`x-cli-group` or `x-cli-command`) in the message:
+
+```
+listHelpArticles: the group `help` is a subcommand that clap declares itself; name it with `x-cli-group` in an Overlay
+```
 
 ## Mounting the tree
 
@@ -161,11 +183,13 @@ own type rather than the box `DispatchError::Transport` carries.
 
 | what the document says | what the subcommand grows |
 |---|---|
-| a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is |
-| the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode` |
+| a path, query or header parameter with a scalar schema | `--<name>`, required exactly when the parameter is; none for the three headers [OpenAPI ignores](#headers-openapi-says-to-ignore) |
+| the same, with an array of scalars | `--<name>`, repeatable, laid out by the parameter's `style` and `explode`, and held to the array's `minItems`, `maxItems` and `uniqueItems` |
 | a parameter no flag can carry | nothing — the subcommand's long help names it and says why |
-| a JSON body that is an object of scalars only | one `--<property>` per property, plus `--json-body FILE` |
-| any other JSON body — nested, an array, no schema | `--json-body FILE`, plus `--json-body-template` where the document describes a shape |
+| a JSON body read as an object whose non-read-only properties are scalars (excluding the `AnySchema` case below) | one `--<property>` per property, plus `--json-body FILE`; a property is required exactly when the body and the property both are, unless `--json-body` is given |
+| a property of a JSON body that the schema marks `readOnly` | nothing: the API sets it, so the subcommand's long help names it, and the body is flat or whole without regard to it |
+| any other JSON body — an array, no schema, or an object with a non-read-only property that is nested, has no name spelling or has a schema this CLI does not read as a value | `--json-body FILE`, plus `--json-body-template` where the document describes a shape, except for the object that the text below names |
+| a JSON body declared under `application/merge-patch+json`, `application/vnd.api+json` or any other `+json` type that is not a range | the same flags, and the body is sent under that key, not under `application/json` |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
 | any other media type | `--raw-body FILE`, sent verbatim under that media type |
 | no request body | nothing |
@@ -173,16 +197,97 @@ own type rather than the box `DispatchError::Transport` carries.
 | `x-cli-gates: [enshrine, email]` on an operation | `--enshrine` and `--email`, both required |
 | `x-cli-requires: [other]` on a parameter | its flag is refused unless `--other` is given too |
 
-One nested property is enough to make the whole body `--json-body` only: no
-sibling gets a flag the request builder would then throw away. `contacts create`
-is the case — its `address` is an object, so there is no `--name`, and asking
-for one is a clap error rather than a value silently dropped. A property whose
-*name* has no kebab-case spelling does the same thing for the same reason: what
-the rule turns on is whether a property has a flag, never why it has none, and
-`--json-body-template` is then where the key that could not be spelled is
-written down.
+One nested property that is not `readOnly` is enough to make the whole body
+`--json-body` only: no sibling gets a flag the request builder would then throw
+away. `contacts create` is the case — its `address` is an object, so there is no
+`--name`, and asking for one is a clap error rather than a value silently
+dropped. A property whose *name* has no kebab-case spelling does the same thing
+for the same reason, and so does a property whose schema is no scalar that this
+CLI reads: a composition (an `allOf` of more than one schema, `oneOf`, `anyOf`,
+`not`), a keyword that its `type` does not have (`pattern` beside `type:
+integer`), or no `type`. What the rule turns on is whether a property has a
+flag, never why it has none, and `--json-body-template` is then where the key
+that could not be spelled is written down. The whole body goes through
+`--json-body`, which reads it as JSON, so the property is a part of the body. A
+CLI that calls `tree::dispatch` sends that body as it is, and one that holds it
+to the generated type does so at its own seam, as *With a check of your own in
+the middle* says. The help names no reason for it: a parameter that has no flag
+has nothing else to fall back on, and a body has the file.
+
+An object held by `openapiv3` as `AnySchema`, such as one with a keyword its
+`type` does not have (`minLength` beside `type: object`), with content or with
+none (`enum: []`), is not read as an object by this CLI. Such a body goes whole.
+Its properties get no flags, supply no flag rules and make no template: it has no
+`--json-body-template`, unless it carries an `example`, which is the template as
+the document has it, and the long help names none of its `readOnly` properties.
+
+**A property the API sets has no flag, and it is not asked for.** OpenAPI 3.0.3
+says of a `readOnly` property that it "SHOULD NOT be sent as part of the
+request", and that its `required` "will take effect on the response only". A
+schema that serves a create and a read can list `id` as required and mark it
+read-only. An operator is then not asked to invent an id: there is no `--id`,
+whether or not the schema requires it. Such a property decides nothing about the
+body. It does not send the body whole, and it need not be a scalar. The long help
+names it, as it names a parameter with no flag:
+
+```
+`id` has no flag: it is `readOnly`, so the API sets it and the request should go
+out without it.
+```
+
+A body that goes whole has a line of its own for it: `` `id` is `readOnly`: the
+API sets it, so the body should go out without it. `` It names each property of
+the body's own object, and each one that `--json-body-template` leaves out below
+it, by its path as a body error spells a key, with `[]` for any item of a list:
+`address.aid`, `positions[].id`, and `[].id` for a body that is a list. The
+template writes only the properties that the schema requires and the keys of an
+`example`. An `example` is walked beside its schema through an object and a list
+that this CLI reads, into the value of each key that the object's `properties`
+declare, and loses its `readOnly` keys there. So a `readOnly` property below the
+body's own object that the document does not require and no `example` carries is
+left out of nothing and is not named. One that an `example` carries where the
+walk does not go stays in the template and is named nowhere. The walk goes where
+the schema is an object or a list that this CLI reads and the `example` has its
+shape. So it does not go where the schema is none, such as a composition, a
+schema with `properties` and no `type`, an object or an array that states a
+keyword its `type` does not have, an object that `openapiv3` holds as
+`AnySchema`, or a schema that cannot be followed, and it does not go under a key
+that `properties` does not declare.
+
+A property is `readOnly` when its own schema says so, when it points with a
+`$ref` at a named schema that says so, or when it is an `allOf` of one element
+and the flag stands on the wrapper or on the schema it wraps. The last is how a
+vendor puts a flag beside a reference. Nothing refuses a body that carries such a
+property, because the specification says "SHOULD NOT" and a server may want it.
+`writeOnly` is not read, and such a property keeps its flag.
 
 `-` as the path to `--json-body` or `--raw-body` reads stdin.
+
+**A body the document leaves optional is left out when nothing fills it in.**
+`requestBody` has its own `required`, apart from the `required` list of its
+schema, which says what a body holds once there is one. A required body that
+nobody supplies is refused, and an optional one is not in the request: no
+`--json-body`, `--raw-body`, `--file` or `--field`, and for a flat JSON body no
+property flag either. No empty object is sent in its place, because the schema
+may require a property that the empty object lacks. To send the empty object,
+give `--json-body` a file that holds `{}`, or `-` with `{}` on stdin. The flag of
+a required property is demanded only of a required body, and `--json-body` stands
+for it. Once a flag or a file makes a body of an optional one, what the schema
+requires of it is the check of the adopter's type, as it is for a file. The typed
+call is the same: a required body that is missing is `ValueError::MissingBody`
+from `Invocation::new`, and an optional one may be left out
+([docs/generating.md](generating.md#requirements-and-limits)).
+
+**A value may start with a dash.** The word after a flag that takes a number or
+a text is its value, whatever the word looks like, and the flag's parser judges
+it. So `--limit -5` and `--total -12.50` work, and not only `--limit=-5`, and a
+`<NUMBER>` flag takes `-.5` and `-1e-3` as a separate word. A word that looks
+like a flag is a value too: `--type --commit` gives `type` the text `--commit`
+and confirms nothing. A read is sent at once, so `vouchers list --type --commit`
+sends `?type=--commit`, and a write that is not confirmed shows the value in its
+dry run. A number flag refuses a word that is no number (`--limit --commit` is
+*not an integer*), and an `enum` flag takes a word that starts with a dash only
+when the word is one of its values.
 
 A `--file` part is sent under the file's own name and under the media type its
 extension names: `application/pdf` for `.pdf`, `image/png` for `.png`,
@@ -218,10 +323,12 @@ What is in it:
 | the document says | the template shows |
 |---|---|
 | a required property | the key, with a skeleton of its own schema |
+| a property that the schema marks `readOnly`, required or in an `example` | nothing, at every depth of the walk: the API sets it |
 | an optional property | nothing |
-| `example` on a property | that value, taken whole |
+| `example` on a property | that value, less the `readOnly` properties that the walk reaches |
 | `example` on the schema a property points at | that value, where the property states none of its own |
 | `enum: [draft, open, paid]` | `"draft"` — the first value it lists |
+| `enum: [7, 19]` on an integer or a number, `enum: [true]` on a boolean | `7`, `true` — the first value it lists |
 | `type: string` / `integer` / `number` / `boolean` | `""` / `0` / `0.0` / `false` |
 | a nested object | a nested object, to the depth the document nests it |
 | an array | a one-element list, the element a skeleton of `items` |
@@ -231,9 +338,11 @@ What is in it:
 `pattern` and `0` against a `minimum` are values the document itself rules out,
 so a key nobody filled in is one the server refuses rather than one it acts on.
 Where the document does offer something, the template carries it: an enumeration
-has no empty member, so it shows the first value listed, and an `example` is
-taken whole. Both are values the API admits, so a template drawing every key
-from those two holds nothing the document forbids and can go out as it stands.
+has no empty member, so it shows the first value listed, and an `example` is the
+template of the schema it is stated on, less the `readOnly` properties that the
+walk reaches. Both are values the API admits, so a template drawing every key
+from those two holds nothing the document forbids, bar a `readOnly` key that an
+`example` carries where the walk does not go.
 
 **A template is checked against nothing.** It is a skeleton to read and fill in,
 not a body to send unread. What holds the file you then pass to `--json-body` is
@@ -291,6 +400,18 @@ under `explode: false` sends `?tag=a%2Cb,c`: the comma *between* two values and
 a comma *inside* one are not the same character on the wire. The flag's help
 line says which of the two layouts it has, written by the code that lays it out.
 
+A header is not percent-encoded, so a header list cannot tell the two commas
+apart. A comma inside one item of a header list is refused
+(`ValueError::HeaderItemComma`, naming the parameter) rather than sent as two
+items: `--x-tags "a,b" --x-tags c` is a refusal, because `x-tags: a,b,c` is three
+items to a receiver. An empty item is refused too (`ValueError::HeaderItemEmpty`),
+because a receiver ignores an empty list element, so `--x-tags "" --x-tags c`
+would be read as the one item `c`. A space or a tab at the start or the end of
+an item is refused as well (`ValueError::HeaderWhitespace`), because a receiver
+strips it: `--x-tags " b"` would be read as the item `b`. A header that is not a
+list takes a comma as a character of its value, and an empty value. A space or a
+tab at the edge of its value is refused all the same.
+
 Every value goes through the item schema's own rule, so a list is checked the
 way a single value is — once at the flag, once again in `Invocation::new`.
 
@@ -300,32 +421,139 @@ nothing lands on them.
 
 ### Parameters with no flag
 
-Five shapes have no command-line spelling: `in: cookie`, a parameter described
-by `content` instead of `schema`, one whose schema is neither a value nor a list
-of values, one declaring a `style` this CLI does not write — `spaceDelimited`,
-`pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — and
-one whose *name* has no kebab-case spelling. The style is read whatever the
-schema is, because it is not only about delimiters: `matrix` puts a `;name=` in
-front of a single value too.
+Eight shapes have no command-line spelling: `in: cookie`, a parameter described
+by `content` instead of `schema`, one whose schema is an object, or an array
+that states no `items` or whose items are objects or lists, one whose schema
+states a keyword this CLI does not read as a value, one whose schema states no
+`type`, one declaring a `style` this CLI does not write — `spaceDelimited`,
+`pipeDelimited` or `deepObject` in a query, `matrix` or `label` in a path — one
+whose *name* has no kebab-case spelling, and one whose name an earlier parameter
+of the operation has (the list is below). The style is read whatever the schema
+is, because it is not only about delimiters: `matrix` puts a `;name=` in front
+of a single value too.
 
-The last of the five is the only one that is about the name rather than the
-value. A flag is `[a-z0-9-]` once kebab-cased, the rule a command name and a
-gate also pass, and a parameter named `*` or `()` reduces to nothing under it.
+The last two are about the name rather than the value. A flag is `[a-z0-9-]`
+once kebab-cased, the rule a command name and a gate also pass, and a parameter
+named `*` or `()` reduces to nothing under it. A name with a character outside
+ASCII, such as `straße`, has no spelling either: it is not kebab-cased to
+`stra-e`, and nothing is transliterated.
 
-None of them refuses the document. The parameter stays in the reduction, the
-subcommand grows nothing for it, and its long help carries a line of its own
-below the method, the path and the `operationId`:
+A scalar keeps its flag however the object model holds it. A `type: integer` with
+a bound spelled `0.0` or `1e3` is an integer with that bound, and a `string`,
+`number`, `integer` or `boolean` whose keywords all belong to its type is that
+scalar. The other shapes are named by the keyword that stops them, and the
+reason is true of the schema: `oneOf`, `anyOf`, an `allOf` of more than one
+schema and `not` are named, and so is a keyword that the `type` does not have
+(`allOf` or `pattern` beside `type: integer`, `minLength` beside `type: array`),
+an `enum` that lists a value of another type, and an integer's `multipleOf` that
+has a fraction or is whole with magnitude at least 2^53. A schema that states
+no `type` and no composition has the reason "stated with no `type`". A single
+`allOf` element is read as the schema it wraps for a list, a JSON body and a
+multipart body, as it is for a value.
+
+`openapiv3` holds a bound that is no `i64` as a double. The double is read
+where it names the integers the bound admits. A bound with a fraction is the integer next inside it, whatever
+`exclusiveMinimum` or `exclusiveMaximum` says: `minimum: 0.5` is at least 1. A
+whole bound with magnitude below 2^53 is that integer, whatever text gave it:
+the reader keeps the double and not the text, so `minimum: 1.00000000000000001`
+is at least 1, and the flag accepts 1 where the document admits only 2 and
+above. A `maximum` above every `i64` bounds nothing, and so does a `minimum`
+below every one, so an unsigned 64-bit id (`minimum: 0`, `maximum:
+18446744073709551615`) is an integer of at least 0. A `minimum` above every
+`i64` and a `maximum` below every one are met by no integer of a flag, and a
+whole bound with magnitude from 2^53 to 2^63, both ends included, is the double
+of more than one integer's text, so each is named by its keyword and rounded no
+further. The refused whole-bound intervals are `[-2^63, -2^53]` and `[2^53, 2^63]`.
+A step (`multipleOf`) is read as an integer only where it is whole: a whole
+double with magnitude below 2^53 is that integer, whatever text gave it, as for
+a bound, so `multipleOf: 2.00000000000000001` is the step 2. A step with a
+fraction is named by its keyword, because no step says that an integer is a
+multiple of 2.5, and so is a whole one with magnitude at least 2^53.
+
+The parameters of an operation are one list. It holds the path item's
+parameters in the order the path item lists them, with a parameter of the
+operation that has the name and the place of one of them in its slot, and then
+the operation's other parameters in the order the operation lists them.
+A path-level `id` that an operation overrides is one `--id`, held to the rules
+the operation's entry states, and it keeps its place in the wrapper's arguments
+and on the help page.
+
+OpenAPI tells two parameters apart by their name and their place, so `ref` in
+the path and `ref` in the query are two parameters. A value reaches a parameter
+by its name alone, on the command line and in the typed wrapper alike, so of
+two parameters with one name the one that comes first in the list has the flag
+and the one that comes later has none.
+
+A parameter with no flag does not refuse the document. The parameter stays in
+the reduction, the subcommand grows nothing for it, and its long help carries a
+line of its own below the method, the path and the `operationId`:
 
 ```
 `filter` has no flag: it is neither a value nor a list of values. The request
 goes out without it.
 ```
 
+A keyword is named in the same line: `` `code` has no flag: it is stated with
+`allOf`, which this CLI does not read as a value. The request goes out without
+it. ``
+
+The line for the `ref` in the query gives its reason as sharing its name with
+the `path` parameter.
+
 The one exception is a parameter the document marks `required: true`. That
 operation could never build a correct request, so it is a `LoadError::Parameter`
-naming the parameter and the reason when the document is read, and an
-[Overlay](overlay.md) is the way out — retype the parameter, or drop its
-`required`.
+naming the parameter, the reason and where it is when the document is read, and
+an [Overlay](overlay.md) is the way out. The error names a repair that loads:
+
+- Off the path, correct the parameter or drop its `required`.
+- A path parameter is always required (see below), so its `required` is never
+  named, and the correction is. A name with no spelling, such as `straße`, is
+  corrected by renaming the parameter and its variable in the path together,
+  because the template names the parameter: an Overlay writes the path item again
+  under the new path and removes the old one, and
+  [docs/overlay.md](overlay.md#1-plain-corrections) shows the actions. In the
+  `simple` style, the only one this CLI writes in a path, the name of a path
+  parameter never goes on the wire, only its value in place of the variable, so
+  the request does not change.
+- A name that two parameters share is mended in one of three ways. The rename
+  comes first where it applies, because it gives nothing up, and the message
+  names it before the others:
+  - When one of the two is a path parameter and the other is not, rename the path
+    parameter and its variable together, as above. The document keeps every
+    parameter it declares, and the refused parameter gets its flag. A namesake
+    that can have no flag, an `in: cookie` or a `content` one, still has none,
+    so the request does not carry it.
+  - Remove the other parameter from wherever the document declares it. That gives
+    the refused one its flag, and the document no longer declares the removed
+    one. The template needs a path parameter, so a required query or header
+    parameter whose namesake is a path parameter is not told to remove it.
+  - Drop the `required` of the refused parameter, when it is off the path. That
+    gives up the requirement.
+
+  The message names the last two after the rename because each gives up a part of
+  the document, and only you know if that part is the vendor's mistake. It says
+  whose `required` is dropped, because it names two parameters of one name, and
+  the `required` of the other one does not mend the refusal. It names the
+  repairs that apply to the refused parameter:
+  - A path parameter whose namesake is a path parameter: the removal only. A
+    rename does not part them, because the template has one variable for both.
+  - A path parameter whose namesake is off the path: the rename, then the
+    removal.
+  - A parameter off the path whose namesake is a path parameter: the rename,
+    then the drop of the `required` of the refused parameter. The template needs
+    the namesake, so the message does not name the removal.
+  - A parameter off the path whose namesake is off the path too: the removal,
+    then the drop of the `required` of the refused parameter. Both names go on
+    the wire, so a rename would change the request. Where both have one place,
+    the message calls them the earlier one and the later one.
+
+The rule for a shared name has two costs. A required path parameter that comes
+after its namesake refuses the document, because it is required and has no flag.
+It is mended by the rename, or by removing the namesake that comes first, and
+only by the removal when the namesake is a path parameter too. And a parameter
+that can have no flag, an `in: cookie` or a `content` one, still holds its name,
+so a later query or header parameter with that name has none either. The repair
+of that cost is an Overlay that removes the namesake that comes first.
 
 An object is refused a spelling rather than given a guessed one. OpenAPI says
 how a *flat* object serialises under `deepObject` and says nothing about a
@@ -336,8 +564,49 @@ parameters. A request built on a guess looks sent and is not read.
 A body is refused the same way when its `content` key is not a media type at
 all — `form-data` where `multipart/form-data` was meant is a
 `LoadError::MediaType`, not a `--raw-body` sent under a `Content-Type` no server
-parses. [docs/overlay.md](overlay.md#1-plain-corrections) has the action that
-repairs one.
+parses — or, where it is sent as the `Content-Type`, is none that a header
+carries: a byte below 0x20 except tab, or DEL. For a key sent as `Content-Type`,
+the essence before the first `;` must also be `type/subtype` after space and
+tab are trimmed from the essence's ends. Other parameter bytes are not parsed.
+Output separately trims space and tab from the whole key's ends. A media range
+such as `*/*` or `image/*` is refused too: a request goes out under one type,
+and the range does not name it (`LoadError::MediaRange`).
+
+[docs/overlay.md](overlay.md#1-plain-corrections) has the action that repairs
+either. Which key is sent when a body has several is a rule of its own, in
+[validation.md](validation.md#what-goes-on-the-wire).
+
+### The path and its parameters
+
+The path template and the path parameters are held to each other while the
+document is reduced. A request that went out with `{id}` in it, or with a value
+thrown away, looks sent and is not read. Each of these is a `LoadError` that
+names the operation and the name, and each names the Overlay that mends it:
+
+| the document has | the repair |
+|---|---|
+| a variable in the path and no path parameter of that name (`UnboundVariable`) | add the parameter |
+| a path parameter and no variable of its name in the path (`UnusedPathParameter`) | remove the parameter |
+| a path parameter that is not `required: true` (`OptionalPathParameter`) | set `required: true` |
+
+A parameter in the query or in a header does not answer a variable, whatever
+its name. A variable that the path repeats is one variable.
+
+### Headers OpenAPI says to ignore
+
+A header parameter named `Accept`, `Content-Type` or `Authorization`, compared
+without case, is not a parameter of the operation. OpenAPI 3.0.3 says its
+definition "SHALL be ignored": the media type of a request comes from its body,
+what it accepts is the client's, and a credential is a security scheme. The
+reduction drops the three, so none of them grows a flag, none is carried as a
+parameter with no flag, and a required one does not refuse the document, which
+a parameter with no flag would. A converted Swagger 2 document often declares
+them. So the `Authorization` header is never a flag, and a bearer token never
+lands in a shell's history or in the output of a dry run, and a request carries
+one `content-type`, the body's. A credential that the document declares under
+another name, such as an `X-Api-Key` header or an `api_key` query parameter, is
+a flag like any other parameter, and so is a parameter named `authorization` in
+the query, which is not a header.
 
 ### Per-field flags are merged over `--json-body`
 
@@ -356,11 +625,14 @@ content-type: application/json
 {"total":"99.99","currency":"EUR","status":"draft","internal_ref":"AB-7"}
 ```
 
-Two limits. A `--json-body` file whose top-level value is not an object passes
-through unchanged and the per-field flags are ignored. And because
-`--json-body` satisfies clap for every required field, a file that is *missing*
-one gets past the parser. In both cases whether anything then objects is the
-seam above: `toy raw` refuses them and prints why, `root` builds the request.
+Two limits. A `--json-body` file whose top-level value is not an object has no
+property for a flag to edit, so a flag beside one is an `ArgError`
+(`FlagBesideNonObject`) that names the flag and the file. With no flag beside it,
+the file passes through unchanged. And because `--json-body` satisfies clap for
+every required field, a file that is *missing* one gets past the parser. In both
+cases whether anything then objects is the seam above: `toy raw` refuses them
+and prints why, `root` builds the request. A property that no schema declares is
+the seam's refusal too: [what `fits` refuses](validation.md#what-fits-refuses).
 
 ### Renaming
 
@@ -378,9 +650,21 @@ $ toy raw vouchers update --help
           Server-assigned id (sends `id`)
 ```
 
+A flag goes to the first claimant: a parameter before a later one, and a
+parameter before a property of the body. A value that has a flag takes it before
+the ones after it, so which one moves depends on which values have a flag. A
+scalar that `openapiv3` holds as `AnySchema`, a list inside an `allOf` of one
+element and an array that states an empty keyword have a flag, so a later header
+`Id` after a query parameter `id` of one of them is `--param-id`, and a property
+`id` of the body is `--body-id`. The help line of the moved flag says which name
+it sends.
+
 Each subcommand's namespace starts with `json-body`, `json-body-template`,
-`raw-body`, `file` and `field` already spent, so a document that names a field
-`raw-body` gets `--body-raw-body` instead of colliding at startup.
+`raw-body`, `file`, `field` and `help` already spent, so a document that names a
+field `raw-body` gets `--body-raw-body` instead of colliding at startup, and a
+parameter or a property that the vendor calls `help` gets `--param-help` or
+`--body-help`. `--help` stays clap's, and the request still carries the vendor's
+word.
 [`src/names.rs`](../typed-openapi/src/names.rs) holds the rule: a name still
 taken after the first prefix gains a counter, `body-id`, `body-id-3`. A global
 flag the surrounding CLI adds — `toy`'s `--base-url`, for instance — is not in
@@ -398,32 +682,40 @@ $ cargo run --features document --example clashing-words
 enshrineVoucher: the property `enshrine` and the gate `enshrine` both want `--enshrine`; rename the gate in `x-cli-gates`, to `gate-enshrine` or another word
 ```
 
-[Choosing the confirmation word](generating.md#choosing-the-confirmation-word)
+[Choosing the confirmation word](generating.md#settingscommit_wordword---resultsettings-confirmationerror)
 has the call; `typed-openapi/examples/README.md` walks the whole collision.
+
+Only a value that has a flag is held to this. A property of a body that goes
+whole has no flag, so one named like a gate or like the confirmation loads
+wherever it stands among the other properties, and so does a parameter that has
+no flag. This exempts the name collision only; a required parameter may still
+be refused for another cause.
 
 ## Value checking
 
-A flag's value parser is the document's own schema, so a value the document
-rules out reports itself at parse time the way a bad enum value does — one error
-shape for one kind of mistake.
+A flag's value parser checks the scalar and list rules retained in the model.
+A string enum keeps its choices and discards `pattern`, `minLength` and
+`maxLength`. A value that fails a retained rule reports itself at parse time.
 
 | the document says | value name | accepted |
 |---|---|---|
 | `type: string` | `<STRING>` | whatever its `pattern`, `minLength` and `maxLength` allow |
-| `type: integer` | `<INT>` | an `i64` inside its `minimum`, `maximum` and `multipleOf` |
-| `type: number` | `<NUMBER>` | a finite `f64`, under the same three |
-| `type: boolean` | `<BOOL>` | `true` or `false` |
+| `type: integer` | `<INT>` | an `i64` inside its `minimum`, `maximum` and `multipleOf`, and one of its `enum` |
+| `type: number` | `<NUMBER>` | a finite `f64`, under the same four |
+| `type: boolean` | `<BOOL>` | `true` or `false`, or the one value its `enum` lists |
 | `enum: [...]` on a string | `<STRING>` | one of the listed values, and these complete |
+| an array of scalars | repeatable | each value as above, and the list inside `minItems`, `maxItems` and `uniqueItems` |
 
-Every rule a scalar schema states is enforced, and the ones that constrain a
-value are on the flag's help line, written by the same code that refuses it.
+Each retained scalar rule is enforced. The retained constraints are on the
+flag's help line, written by the same code that refuses the value. For a string
+enum, this means membership alone, without pattern or length checks.
 [validation.md](validation.md) is the whole list — what each refusal reads
 like, which road a parameter and a body field take, and what the regex engine
 behind `pattern` costs a binary.
 
 ```console
 $ toy raw vouchers create --total 12.505 --currency EUR --status open
-error: invalid value '12.505' for '--total <STRING>': `12.505` does not match ^-?[0-9]+(\.[0-9]{1,2})?$
+error: invalid value '12.505' for '--total <STRING>': `12.505` is not a match for ^-?[0-9]+(\.[0-9]{1,2})?$
 
 $ toy raw vouchers create --total 12.50 --currency EUR --status void
 error: invalid value 'void' for '--status <STRING>'
@@ -440,7 +732,10 @@ something other than what a confirmed run sends.
 Which operations write is the document's answer, not a guess from the method: a
 safe method is a read unless the operation carries `x-cli-writes: true`, and
 everything else is a write. The marker can only add writes, never remove them,
-so the gate is default-closed. `renderVoucher` is a `GET` that stores a PDF,
+so the gate is default-closed. It is the boolean `true` or it is not there:
+`"true"`, `yes`, `1`, `[true]` and `false` are each a `LoadError`, because the
+one reading left for them is no marker at all, and that sends a writing `GET` on
+sight. `renderVoucher` is a `GET` that stores a PDF,
 and it is gated:
 
 ```console
@@ -490,7 +785,9 @@ safe method is a `LoadError` at bless time, because a request that is sent on
 sight has nothing for a gate to hold.
 
 What a word means is yours. `typed-openapi` carries it, offers it and demands
-it, and never reads anything into it.
+it, and never reads anything into it. A gate named `help`, or like one of the
+flags above, is a `LoadError`: `--help` is the flag somebody types to read, and
+it must never answer the word that stands in front of a write.
 
 ```console
 $ toy raw vouchers enshrine --help
@@ -504,10 +801,37 @@ Named gates: --enshrine. Each one is required, and demanded in addition to
 --commit.
 ```
 
-A verb you write yourself joins in through the same three calls the generated
-surface uses: `tree::gates` puts the flags on your command, `tree::answers`
-reads them back, and `Plan::decide` does the rest. The flags are spelled in one
-place, so the two command lines cannot come to disagree about one operation.
+A verb you write yourself joins in through the same calls the generated surface
+uses: `tree::confirmation` and `tree::gates` put the flags on your command,
+`tree::answers` reads them back, and `Call::plan` puts a typed call to the gate
+with them. The flags are spelled in one place, in the document's own words, so
+the two command lines cannot come to disagree about one operation. A document
+whose bless step confirms with `yes` has `--yes` on your verb too, and its gate
+flags say "in addition to --yes".
+
+The help of the confirmation flag says "Send the request". A verb that sends
+more than one replaces it on the flag's id and keeps the word:
+`finalize-voucher`, whose chain sends two writes, says "Send the writes". The
+replacement is for the command of a write, because `Command::mut_arg` panics on
+an id the command never declared and a read declares no confirmation flag.
+
+```rust,ignore
+tree::confirmation(verb, op).mut_arg(COMMIT_ID, |arg| {
+    arg.help("Send the writes. Without it this is a dry run that prints them")
+})
+```
+
+The plan holds the request the gate decided on. What your verb prints for a dry
+run and what it sends once the write is confirmed are that one value, and a dry
+run has nothing to send:
+
+```rust,ignore
+let planned = api.enshrine_voucher(id)?.plan(&answers)?;
+println!("{}", render(planned.request()));
+if let Some(voucher) = planned.send(&client)? {
+    // the write was confirmed, it was sent, and this is its typed answer
+}
+```
 
 A flag your command does not declare reads as **unanswered**, which holds the
 request back. So a command built before an Overlay named a new gate goes on
@@ -555,15 +879,17 @@ is worth copying.
 
 [`main.rs`](../examples/toy/cli/src/main.rs) prints an error's own message and
 then walks the `source` chain, because the cause is where the detail is and an
-agent reading stderr cannot ask for it afterwards:
+agent reading stderr cannot ask for it afterwards. Every error in `typed-openapi`
+describes its own layer and leaves the cause to `source()`, so an error printed
+alone drops the detail and a chain prints each line once:
 
 ```console
 $ toy raw contacts create --json-body notes.txt
-toy: notes.txt does not hold JSON: expected ident at line 1 column 2
+toy: notes.txt does not hold JSON
   caused by: expected ident at line 1 column 2
 
 $ toy raw vouchers get --id 5
-toy: transport: io: Connection refused (os error 111)
+toy: the transport failed
   caused by: io: Connection refused (os error 111)
 ```
 

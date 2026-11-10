@@ -2,9 +2,9 @@
 //!
 //! What is here is the reduction itself: a list of [`Operation`]s, the values
 //! each one carries, and the two names a user types to reach it. Every type on
-//! this page is in every build, because the blob a shipped binary reads is
-//! these types and nothing else — so a caller who matches one exhaustively
-//! writes the same match whatever the feature set.
+//! this page is in every build, because the encoding a shipped binary reads,
+//! after the stamp a blob opens with, is these types and nothing else — so a
+//! caller who matches one writes the same match whatever the feature set.
 //!
 //! Where they come from is `reduce`, which the `document` feature brings and a
 //! shipped binary leaves out. Reducing a document is bless-time work, not
@@ -15,8 +15,12 @@
 //! test holds the shipped blob to the shipped document to prove the pair was
 //! written by the same run.
 
+mod blob;
 #[cfg(feature = "document")]
 mod reduce;
+
+use std::collections::HashMap;
+use std::fmt;
 
 use http::{Method, Uri};
 use serde::{Deserialize, Serialize};
@@ -27,8 +31,12 @@ use thiserror::Error;
 // the one type wherever the reading itself is written down.
 #[cfg(feature = "document")]
 pub use self::reduce::{ConfirmationError, LoadError, Loading};
+// The generator reads the parameters of an operation as the reduction did.
+#[cfg(feature = "generate")]
+pub(crate) use self::reduce::{declared, entry_of_flag};
 use crate::names::{CommandName, NameError, renamed, spelled};
-use crate::scalar::Scalar;
+use crate::request::without_userinfo_and_query;
+use crate::scalar::{Items, Scalar};
 
 /// Whole-body flag, for every operation that takes JSON.
 pub const JSON_BODY: &str = "json-body";
@@ -57,14 +65,122 @@ pub const COMMIT: &str = "commit";
 /// a generated subcommand.
 pub const COMMIT_ID: &str = "cli:commit";
 
+/// The six words that no flag of a subcommand may take: the five flags that
+/// carry a request's body, which the tree declares itself, and `--help`, which
+/// clap declares on every subcommand whether or not anyone asked.
+///
+/// A parameter or a body field that wants one moves aside for it, and a gate or
+/// the confirmation that wants one is refused. Nothing here is a person saying
+/// yes, which is why a parameter yields where a gate and the confirmation do
+/// not: a `--body-json-body` is ugly and harmless, where a confirmation nobody
+/// typed is neither. `--help` is the plainest case, because somebody types it to
+/// read, so a word that answers it would be answered by a person who asked for
+/// no more than a help page.
+///
+/// Spending a word here changes the reduced model of any document that declares
+/// a field spelled the same way, which is the point: the field moves aside at
+/// bless time, where a reviewer sees it, rather than shadowing a flag the CLI
+/// needs. The six are written once: the load puts them in every `Namespace`,
+/// and [`spends`] asks them of a decoded blob.
+pub(crate) const SPENT: [&str; 6] = [
+    JSON_BODY,
+    JSON_BODY_TEMPLATE,
+    RAW_BODY,
+    FILE_PART,
+    FIELD_PART,
+    HELP,
+];
+
+/// The word clap spends twice: `--help` on every subcommand, and the `help`
+/// subcommand that it adds to every command that has subcommands.
+pub(crate) const HELP: &str = "help";
+
+/// Whether a word is one that no flag of a subcommand may take, one of the
+/// [`SPENT`] six.
+///
+/// None of them can move, so a gate or the confirmation is refused when it wants
+/// one, and a parameter or a property moves aside. The reduction asks here for
+/// the first, a decoded blob is refused for holding any of them, and both ask
+/// here.
+pub(crate) fn spends(word: &str) -> bool {
+    SPENT.contains(&word)
+}
+
+/// Whether clap declares a subcommand of this name itself, on every command
+/// that has subcommands.
+///
+/// Nothing can move it, so a group or a command that wears the name is two
+/// subcommands with one spelling. The reduction refuses a document that places
+/// an operation under one, and a decoded blob is refused for holding one, and
+/// both ask here.
+pub(crate) fn spends_command(name: &str) -> bool {
+    name == HELP
+}
+
+/// The gate that stands on a read, if one does.
+///
+/// A read is sent on sight, so there is nothing for a gate to hold back. The
+/// load refuses a document that names a gate on a read, and a decoded blob is
+/// refused for holding one, and both ask here.
+pub(crate) fn gate_on_read(effect: Effect, gates: &[Gate]) -> Option<&Gate> {
+    match (effect, gates.first()) {
+        (Effect::Read, gate) => gate,
+        (Effect::Write, _) => None,
+    }
+}
+
+/// The first operation that has a later twin under its `<group> <command>`, and
+/// its first twin, in the order of the document.
+///
+/// The load refuses a document that has two, because one would shadow the other.
+/// A decoded blob is refused for holding two, and both ask here. A shipped binary
+/// asks at every start-up, and the number of operations is the document's, so one
+/// pass answers.
+///
+/// The first operation with a twin is the first of its name, and its first twin
+/// is the second of that name. So the pass remembers where each name first
+/// stood, and the pair is the one whose first operation stood earliest among the
+/// names that came up a second time.
+pub(crate) fn first_collision(ops: &[Operation]) -> Option<(&Operation, &Operation)> {
+    let mut first_of = HashMap::with_capacity(ops.len());
+    let mut earliest: Option<(usize, usize)> = None;
+    for (index, op) in ops.iter().enumerate() {
+        let first = *first_of.entry((&op.group, &op.command)).or_insert(index);
+        if first != index && earliest.is_none_or(|(held, _)| first < held) {
+            earliest = Some((first, index));
+        }
+    }
+    let (first, second) = earliest?;
+    Some((ops.get(first)?, ops.get(second)?))
+}
+
 /// Every operation the document describes, in document order, plus the server
 /// it describes them against.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     #[serde(with = "uri_string")]
     base: Uri,
     commit: String,
     ops: Vec<Operation>,
+}
+
+/// The base is shown without its userinfo and its query. A load refuses a
+/// server that holds either, but a blob is read with no load, and so is a
+/// document read through `Deserialize` in another format, and a `Debug` goes to
+/// logs. Every field is bound by name, so a field added to `Document` stops this
+/// from compiling until it is shown or left out on purpose.
+impl fmt::Debug for Document {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { base, commit, ops } = self;
+        f.debug_struct("Document")
+            .field(
+                "base",
+                &format_args!("{}", without_userinfo_and_query(base)),
+            )
+            .field("commit", commit)
+            .field("ops", ops)
+            .finish()
+    }
 }
 
 /// One operation: one subcommand under one group, one request.
@@ -180,11 +296,42 @@ impl<'op> Carrier<'op> {
     }
 }
 
+/// Where the document puts a parameter: its `in`.
+///
+/// [`Location`] is where a flag's value goes in the request, and a cookie has no
+/// flag, so the fourth place is only here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Place {
+    /// `in: path`.
+    Path,
+    /// `in: query`.
+    Query,
+    /// `in: header`.
+    Header,
+    /// `in: cookie`.
+    Cookie,
+}
+
+impl std::fmt::Display for Place {
+    /// The word the document spells `in` with.
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(match self {
+            Self::Path => "path",
+            Self::Query => "query",
+            Self::Header => "header",
+            Self::Cookie => "cookie",
+        })
+    }
+}
+
 /// Where a parameter goes in the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Location {
+    /// A `{name}` placeholder in the path template.
     Path,
+    /// A field of the query string.
     Query,
+    /// A request header.
     Header,
 }
 
@@ -214,13 +361,19 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Shape {
     /// The flag this parameter grows, where its value goes, and what the flag
-    /// accepts. `join` is `None` for a parameter that takes one value, and
+    /// accepts. `list` is `None` for a parameter that takes one value, and
     /// `Some` for a list — a flag that may be given again.
     Flag {
+        /// The long flag as the user types it, without the leading `--`.
         flag: String,
+        /// The part of the request the value is written into.
         location: Location,
+        /// The rules the document states about one value, which the flag's
+        /// parser enforces and its help line renders.
         scalar: Scalar,
-        join: Option<Join>,
+        /// What the repeats of the flag make, and `None` for a parameter that
+        /// takes one value.
+        list: Option<List>,
         /// The `format` the document declares about this value, in its own
         /// spelling, and `None` where it declares none. It sits beside the
         /// rules rather than among them: nothing in this crate reads it, and
@@ -230,6 +383,19 @@ pub enum Shape {
     /// Nothing a flag carries. The subcommand names the parameter in its long
     /// help and grows nothing for it, and the request goes out without it.
     Unreachable(Unsupported),
+}
+
+/// A parameter that takes a list of values: how they reach the request, and
+/// what the document states about the list as a whole.
+///
+/// The fields are public because there is nothing here to keep true: each one
+/// is read straight off the parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct List {
+    /// How the values reach the request.
+    pub join: Join,
+    /// `minItems`, `maxItems` and `uniqueItems`, which no one value can break.
+    pub items: Items,
 }
 
 /// How the values of a list parameter reach the request.
@@ -251,16 +417,24 @@ pub enum Join {
 
 /// Why a parameter carries no flag.
 ///
-/// Five shapes, one answer, because they cost a document the same thing: an
+/// Eight shapes, one answer, because they cost a document the same thing: an
 /// operation nobody can express sits beside a hundred that are expressible, and
 /// refusing the document for it makes those hundred unreachable too. So an
 /// unsupported parameter is carried rather than refused, and only a *required*
 /// one — an operation that could never be invoked correctly — is named as a
 /// `LoadError` while the document is reduced.
 ///
-/// Four of the five are the document describing a value this CLI cannot put on
-/// a flag. [`Unsupported::Unspellable`] is the other half of the same question:
-/// the value is ordinary and it is the *name* that no flag can carry.
+/// Six of the eight are the document describing a value this CLI cannot put on
+/// a flag. [`Unsupported::Unspellable`] and [`Unsupported::Shared`] are the other
+/// half of the same question: the value is ordinary and it is the *name* that no
+/// flag can carry, because the CLI cannot spell it or because another parameter
+/// already has it.
+///
+/// The reason is the true one. A schema that is an object, or an array whose
+/// items are no value, and whose keywords all belong to it, is
+/// [`Unsupported::Structured`]. A schema that says a keyword this crate cannot
+/// read as a value names it ([`Unsupported::Keyword`]), and a schema that says
+/// nothing of what it is ([`Unsupported::Untyped`]) is that.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Unsupported {
     /// `in: cookie`. This CLI sends no cookies.
@@ -269,7 +443,8 @@ pub enum Unsupported {
     /// is a document in some media type, not a value.
     Encoded,
     /// A schema that is neither a value nor a list of values — an object, or an
-    /// array of them.
+    /// array whose items are no value (a list of objects, a list of lists, an
+    /// array that states no `items`).
     ///
     /// There is no spelling here to be exact about. OpenAPI states how a *flat*
     /// object serialises under `deepObject` and states nothing at all for a
@@ -278,22 +453,58 @@ pub enum Unsupported {
     /// parameters. A rendering this crate invented would produce a request that
     /// looks sent and is not read, which is worse than one that was never built.
     Structured,
+    /// A schema that states a keyword this crate cannot read as a value, named
+    /// as the document spells it: a composition (`oneOf`, `anyOf`, an `allOf` of
+    /// more than one schema, `not`), a keyword that the schema's `type` does not
+    /// have (`allOf` or `pattern` beside `type: integer`, `minLength` beside
+    /// `type: array`), an `enum` that
+    /// lists a value of another type, an integer's bound or step that
+    /// `openapiv3` holds as a double and that the double does not state as the
+    /// integers it admits, or a `type` that is none of the six.
+    ///
+    /// A bound is read as its double names it: one with a fraction is the integer
+    /// next inside it, a whole one with magnitude below 2^53 is that integer
+    /// whatever text gave it (`openapiv3` keeps the double and not the text, so
+    /// `1.00000000000000001` is 1), and one past every `i64` bounds nothing, or
+    /// admits none and is refused. A `multipleOf` is read only where it is whole:
+    /// a whole double with magnitude below 2^53 is that integer, whatever text
+    /// gave it, as for a bound. A whole bound with magnitude from 2^53 to 2^63,
+    /// both ends included, is refused by its keyword. So is a `multipleOf` that
+    /// has a fraction or is whole with magnitude at least 2^53.
+    ///
+    /// Reading the value anyway would be a guess at what the vendor meant, and a
+    /// correction is the adopter's to write in an Overlay where a reviewer can
+    /// see it. Only a schema `openapiv3` holds as `AnySchema` or as a
+    /// composition is this: a scalar it holds as a type is read.
+    Keyword(String),
+    /// A schema that states no `type` and no composition, so it can be any value
+    /// and a flag needs to know which: `{}`, or only an `enum`, a `pattern` or
+    /// `properties`.
+    Untyped,
     /// A `style` this crate does not serialise, named as the document spells
     /// it. Writing it out as some other style would put the value on the wire
     /// in a shape the server does not read.
     Style(String),
-    /// A name with no kebab-case spelling, so there is no flag to offer. A
-    /// parameter named `*` or `()` or `_` is the vendor's business and reaches
-    /// a command line as nothing at all.
+    /// A name with no spelling as a flag, so there is no flag to offer. It holds
+    /// a character outside ASCII, which nothing here transliterates (`straße`),
+    /// or it does not kebab-case into `[a-z0-9-]`: a parameter named `*` or `()`
+    /// or `_` is the vendor's business and reaches a command line as nothing at
+    /// all.
     ///
     /// A flag is the one name in this crate a *user types*, so it passes the
     /// rule [`crate::names`] states once and a command name and a gate are
-    /// already held to. A parameter spelled outside it would otherwise get a
-    /// flag called `""`, which clap renders as the end-of-options marker and
-    /// which nothing on the help page distinguishes from one — a name the
-    /// command line cannot spell, spelled anyway, and discoverable only by
-    /// accident.
+    /// already held to. A punctuation-only name could otherwise become an
+    /// empty flag; a non-ASCII name could lose characters during conversion.
     Unspellable,
+    /// A name that an earlier parameter of the operation already has, in the
+    /// place this value names.
+    ///
+    /// OpenAPI tells two parameters apart by their name and their place, and
+    /// [`Values`](crate::Values) tells them apart by their name alone, so a value
+    /// for the name reaches the first parameter that has it and never the
+    /// second. The one that comes later in [`Operation::params`] has no flag, so
+    /// no flag is left that could never send.
+    Shared(Place),
 }
 
 impl std::fmt::Display for Unsupported {
@@ -306,15 +517,21 @@ impl std::fmt::Display for Unsupported {
                 out.write_str("described by `content`, which this CLI does not encode")
             }
             Self::Structured => out.write_str("neither a value nor a list of values"),
+            Self::Keyword(keyword) => write!(
+                out,
+                "stated with `{keyword}`, which this CLI does not read as a value"
+            ),
+            Self::Untyped => {
+                out.write_str("stated with no `type`, so this CLI cannot tell what it is")
+            }
             Self::Style(style) => {
                 write!(
                     out,
                     "declared with `style: {style}`, which this CLI does not serialise"
                 )
             }
-            Self::Unspellable => {
-                out.write_str("named in a way that does not kebab-case into [a-z0-9-]")
-            }
+            Self::Unspellable => out.write_str("named without an ASCII kebab-case flag spelling"),
+            Self::Shared(place) => write!(out, "sharing its name with the `{place}` parameter"),
         }
     }
 }
@@ -336,7 +553,7 @@ impl Shape {
     /// given again, and a list on the wire.
     #[must_use]
     pub fn repeatable(&self) -> bool {
-        matches!(self, Self::Flag { join: Some(_), .. })
+        matches!(self, Self::Flag { list: Some(_), .. })
     }
 }
 
@@ -358,14 +575,31 @@ pub struct Field {
 pub enum Body {
     /// The document asks for no body.
     None,
-    /// A JSON object whose every property is a scalar: one flag per property,
-    /// plus `--json-body` as a base document to merge them over.
+    /// A JSON object whose every property is a scalar or is set by the API: one
+    /// flag per scalar, plus `--json-body` as a base document to merge them
+    /// over. A property the schema marks `readOnly` has no flag and is read for
+    /// no rule, so it never sends the body whole.
     ///
     /// No template: the per-field flags already say what goes in the body, one
     /// per property, each with the rules its schema states. A second rendering
     /// of the same facts in a second notation would be the one place the two
     /// could come to disagree.
-    JsonFields(Vec<Field>),
+    JsonFields {
+        /// The `content` key the body is sent under, as the document spells it,
+        /// parameters included: `application/merge-patch+json` goes out as that.
+        /// [`Body::media_type`] is the `Content-Type` that is sent.
+        media_type: String,
+        /// Whether the document requires the body. It is the body's and not a
+        /// property's: [`Field::required`] says whether the schema requires a
+        /// property once there is a body, and a body that is not required is
+        /// left out of the request when nothing fills it in.
+        required: bool,
+        /// The properties, one flag each, in document order.
+        fields: Vec<Field>,
+        /// The properties the schema marks `readOnly`, in document order. None
+        /// has a flag: the API sets it, and a request leaves it out.
+        read_only: Vec<String>,
+    },
     /// JSON this CLI will not take apart — a nested object, an array, anything
     /// but an object of scalars. `--json-body` only, and no dead per-field
     /// flags beside it.
@@ -376,36 +610,313 @@ pub enum Body {
     /// while the document was reduced. `None` where the document describes no
     /// shape to render, and then the subcommand grows no flag to ask for one.
     JsonWhole {
+        /// The `content` key the body is sent under, as the document spells it.
+        /// [`Body::media_type`] is the `Content-Type` that is sent.
+        media_type: String,
+        /// Whether the document requires the body.
         required: bool,
+        /// The JSON skeleton of the body, rendered while the document was
+        /// reduced, and `None` where the document describes no shape to render.
         template: Option<String>,
+        /// The properties that the schema marks `readOnly` and that a request
+        /// should leave out, each by its path as a [`BodyError`] spells a key, with
+        /// `[]` for any item of a list: `address.aid`, `positions[].id`, `[].id`.
+        /// The properties of the body's own object come first, in document order.
+        /// Then come the ones the template leaves out below it, in the order its
+        /// walk meets them: the required ones, and the ones an `example` carries
+        /// where the walk goes through the example, because the template writes only
+        /// those. The walk goes through an object and a list that this crate reads
+        /// and an `example` that has their shape, into the value of each key that
+        /// the object's `properties` declare. Wherever it does not go the `example`
+        /// stays as the document has it, such as below a composition, below a schema
+        /// with `properties` and no `type`, in an object or an array that states a
+        /// keyword its `type` does not have, in an object that `openapiv3` holds as
+        /// `AnySchema`, under a key that `properties` does not declare, and below a
+        /// schema that cannot be followed: a `readOnly` key there stays in the
+        /// template and is named nowhere.
+        ///
+        /// [`BodyError`]: crate::client::BodyError
+        read_only: Vec<String>,
     },
-    /// `multipart/form-data`: assembled from `--file name=@path` and
+    /// `multipart/form-data`: assembled from `--file NAME=PATH` and
     /// `--field name=value`. `names` is what the document declares, for the
     /// help line; the CLI accepts any part name, because a document that
     /// declares none (or misdeclares them) is common and refusing would help
     /// nobody.
-    Multipart { names: Vec<String>, required: bool },
+    Multipart {
+        /// The part names the document declares, in its order.
+        names: Vec<String>,
+        /// Whether the document requires the body.
+        required: bool,
+    },
     /// A media type this CLI does not assemble. `--raw-body FILE` sends the
     /// bytes verbatim under this `Content-Type` — and a media type is what it
-    /// is, because a `content` key that is not one is refused while the
-    /// document is reduced rather than carried here.
-    Opaque { media_type: String, required: bool },
+    /// is, because a `content` key that is not one, or that is a media range, is
+    /// refused while the document is reduced rather than carried here.
+    Opaque {
+        /// The `content` key the bytes are sent under, as the document spells it.
+        /// [`Body::media_type`] is the `Content-Type` that is sent.
+        media_type: String,
+        /// Whether the document requires the body.
+        required: bool,
+    },
 }
 
-/// The bytes a bless step wrote are not a reduction this crate can read.
+/// The bytes a bless step wrote are not a reduction this build can read.
 ///
 /// This is the whole of what [`Document::from_blob`] and [`Document::to_blob`]
 /// can say, and therefore the whole of what a shipped binary can fail with —
 /// the one door it has onto a document is the blob. The type has the same
-/// shape in every build: a caller who matches it exhaustively writes the same
-/// match whether or not the `document` feature is on, and reading its rustdoc
-/// under either feature set tells them the same thing. Reducing a document is
+/// shape in every build: a caller's match on it is the same, `_` arm included,
+/// whether or not the `document` feature is on, and reading its rustdoc under
+/// either feature set tells them the same thing. Reducing a document is
 /// a different job with a different failure list, and `LoadError` — which the
 /// `document` feature brings with the reader — is where that list lives.
+///
+/// Every variant that refuses a blob says to run the bless step again, because
+/// the repair is the same for all of them: a blob is written by a bless step,
+/// and a blob that cannot be read is written again. [`Encode`] is the one
+/// variant that is not about a blob that was read.
+///
+/// [`from_blob`] asks the first four in this order. It reads the stamp the blob
+/// opens with before it decodes a byte, so [`Unstamped`] and [`Stale`] never
+/// depend on what follows the stamp. [`Blob`] and [`Trailing`] are a blob that
+/// does not decode as the model and nothing else. The rest are a blob that
+/// decodes and holds something a load would not have written, and a rule that
+/// compares two flags or two operations needs the whole model, so they are
+/// asked after the decode. They are asked operation by operation in the order
+/// of the document, and the names two operations share after every operation,
+/// not in the order of this page. Each of them names the operation that holds
+/// it, [`DuplicateCommand`] names both of two, and [`Confirmation`] names the
+/// word the document confirms with, which belongs to no operation.
+///
+/// [`from_blob`]: Document::from_blob
+/// [`Unstamped`]: DocumentError::Unstamped
+/// [`Stale`]: DocumentError::Stale
+/// [`Blob`]: DocumentError::Blob
+/// [`Trailing`]: DocumentError::Trailing
+/// [`Confirmation`]: DocumentError::Confirmation
+/// [`DuplicateCommand`]: DocumentError::DuplicateCommand
+/// [`Encode`]: DocumentError::Encode
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DocumentError {
-    #[error("the reduced model the bless step writes is not valid: {0}")]
-    Blob(#[from] postcard::Error),
+    /// The bytes do not open with a layout stamp: an empty file, a blob from a
+    /// typed-openapi older than 0.1.0, or a file that is no model blob at all.
+    #[error(
+        "the model blob carries no layout stamp, so a typed-openapi older than 0.1.0 wrote it, \
+         or it is not a model blob; this build reads layout {reads}; run the bless step again"
+    )]
+    Unstamped {
+        /// The layout this build reads, [`Document::MODEL_LAYOUT`].
+        reads: u32,
+    },
+    /// The stamp names another layout than this build reads. Nothing after the
+    /// stamp was decoded, because the same bytes would mean something else.
+    #[error(
+        "the model blob has layout {layout}, written by typed-openapi {version}; \
+         this build reads layout {reads}; run the bless step again"
+    )]
+    Stale {
+        /// The layout the blob was written in.
+        layout: u32,
+        /// The version of typed-openapi that wrote it, as the stamp spells it.
+        version: String,
+        /// The layout this build reads, [`Document::MODEL_LAYOUT`].
+        reads: u32,
+    },
+    /// The stamp is this build's, and `postcard` could not read the bytes after
+    /// it as a reduction.
+    #[error("the model blob is damaged; run the bless step again")]
+    Blob(#[source] postcard::Error),
+    /// The stamp is this build's, the bytes after it decode as a reduction, and
+    /// more bytes follow the reduction. A blob is the stamp and one encoding and
+    /// nothing else, so bytes that were added or left over from a longer file
+    /// mean the blob is not what a bless step wrote.
+    #[error(
+        "the model blob is damaged: bytes left after the model: {bytes}; run the bless step again"
+    )]
+    Trailing {
+        /// How many bytes follow the encoding of the reduction.
+        bytes: usize,
+    },
+    /// The document's confirmation word is one a load refuses: a word nobody
+    /// could type as a flag, or one that every subcommand spends already.
+    #[error(
+        "the confirmation word `{word}` of the model blob is not one a load accepts; \
+         run the bless step again"
+    )]
+    Confirmation {
+        /// The word as the blob spells it, without the `--`.
+        word: String,
+    },
+    /// The confirmation word an operation declares is one a load refuses. It is
+    /// the flag clap sees. A leading `-` causes a debug-only clap assertion.
+    /// A word also declared by help or the body's flags collides with that
+    /// declaration.
+    #[error(
+        "{op}: the confirmation word `{word}` is not one a load accepts; \
+         run the bless step again"
+    )]
+    OperationConfirmation {
+        /// The `operationId` of the operation that declares the word.
+        op: String,
+        /// The word as the blob spells it, without the `--`.
+        word: String,
+    },
+    /// A flag of an operation, on a parameter or on a body property, is not
+    /// spelled as a load spells one: not kebab-case, not `[a-z0-9-]`, or empty.
+    /// A flag with a leading `-` makes a debug build of the binary panic when it
+    /// builds the command tree.
+    #[error("{op}: the flag `{flag}` is not one a load spells; run the bless step again")]
+    Flag {
+        /// The `operationId` of the operation that declares the flag.
+        op: String,
+        /// The flag as the blob spells it, without the `--`.
+        flag: String,
+    },
+    /// A flag of an operation, on a parameter, a body property or a gate, is one
+    /// that every subcommand spends already: `--help`, or one of the five flags
+    /// that carry a body. Where the subcommand declares the word too, which is
+    /// always so for `help`, a debug build of the binary panics when it builds
+    /// the command tree, and a release build lets one declaration take the place
+    /// of the other.
+    #[error(
+        "{op}: the flag `{flag}` is one every subcommand already spends; \
+         run the bless step again"
+    )]
+    FlagSpent {
+        /// The `operationId` of the operation that declares the flag.
+        op: String,
+        /// The flag as the blob spells it, without the `--`.
+        flag: String,
+    },
+    /// Two declarations of one operation take one flag. A declaration is a
+    /// parameter, a body property, a gate or, on a write, the confirmation word,
+    /// and any two of them clash, as does one gate named twice. A load gives
+    /// every declaration a flag of its own. A debug build of the binary panics
+    /// when it builds the command tree and meets a flag twice, and a release
+    /// build lets one declaration take the place of the other.
+    #[error("{op}: the flag `{flag}` is declared twice; run the bless step again")]
+    FlagTwice {
+        /// The `operationId` of the operation that declares the flag.
+        op: String,
+        /// The flag as the blob spells it, without the `--`.
+        flag: String,
+    },
+    /// A read names a gate. A read is sent on sight, so there is nothing for a
+    /// gate to hold back, and a load refuses the document that says both. A
+    /// `GET` that the document makes a write and gates is held as a write, so a
+    /// blob that holds it as a read is one that no load wrote, and the gate it
+    /// still names is what gives it away.
+    #[error(
+        "{op}: a read stands behind no gate, and this one names `{gate}`; \
+         run the bless step again"
+    )]
+    GatedRead {
+        /// The `operationId` of the read.
+        op: String,
+        /// The gate as the blob spells it, without the `--`.
+        gate: String,
+    },
+    /// An operation is marked a read and its method writes. A load makes every
+    /// method but `GET`, `HEAD`, `OPTIONS` and `TRACE` a write, so a blob that
+    /// says otherwise is one that no load wrote, and a read is sent on sight:
+    /// the subcommand declares no confirmation word, and nothing holds the
+    /// request back.
+    ///
+    /// The blob does not hold the document's `x-cli-writes`, so the check finds
+    /// a method that writes held as a read and cannot find a `GET` that the
+    /// document marks as a write and the blob holds as a read. Where such a
+    /// `GET` names a gate, [`DocumentError::GatedRead`] finds it.
+    #[error(
+        "{op}: `{method}` writes, and the model blob holds the operation as a read, \
+         which is sent on sight; run the bless step again"
+    )]
+    WriteAsRead {
+        /// The `operationId` of the operation held as a read.
+        op: String,
+        /// The method of the operation, as the blob spells it.
+        method: String,
+    },
+    /// A group or a command is named `help`. A load refuses a document that
+    /// places an operation under one. clap declares a `help` subcommand on every
+    /// command that has subcommands, so a debug build of the binary panics when
+    /// it builds the command tree, and a release build lets one take the place
+    /// of the other.
+    #[error(
+        "{op}: the {what} `{name}` is a subcommand that clap declares itself; \
+         run the bless step again"
+    )]
+    NameSpent {
+        /// The `operationId` of the operation under the name.
+        op: String,
+        /// Which of the two names it is: `group` or `command`.
+        what: &'static str,
+        /// The name as the blob spells it.
+        name: String,
+    },
+    /// Two operations sit under one `<group> <command>`. A load refuses a
+    /// document that has two. A debug build of the binary panics when it builds
+    /// the command tree, and a release build lets one shadow the other.
+    #[error(
+        "`{first}` and `{second}` are both `{group} {command}` on the command line; \
+         run the bless step again"
+    )]
+    DuplicateCommand {
+        /// The group both operations are mounted under.
+        group: CommandName,
+        /// The command both operations are mounted under.
+        command: CommandName,
+        /// The `operationId` of the operation that comes first in the blob.
+        first: String,
+        /// The `operationId` of the later one.
+        second: String,
+    },
+    /// A parameter requires its own name. A load refuses a document that says
+    /// so, and a debug build of the binary panics when it builds the command
+    /// tree, because clap does not let an argument require itself.
+    #[error("{op}: `{name}` requires itself; run the bless step again")]
+    RequiresItself {
+        /// The `operationId` of the operation that declares the parameter.
+        op: String,
+        /// The parameter that requires itself, as the document spells it.
+        name: String,
+    },
+    /// A parameter requires a name the operation declares no parameter under.
+    #[error(
+        "{op}: `{name}` requires `{requires}`, which is not a parameter of this operation; \
+         run the bless step again"
+    )]
+    RequiresUnknown {
+        /// The `operationId` of the operation that declares the parameter.
+        op: String,
+        /// The parameter that requires another, as the document spells it.
+        name: String,
+        /// The name that no parameter of the operation has.
+        requires: String,
+    },
+    /// A parameter requires one that has no flag, so no request giving the
+    /// first could ever be built.
+    #[error(
+        "{op}: `{name}` requires `{requires}`, and `{requires}` is {why}; \
+         run the bless step again"
+    )]
+    RequiresUnreachable {
+        /// The `operationId` of the operation that declares the parameter.
+        op: String,
+        /// The parameter that requires another, as the document spells it.
+        name: String,
+        /// The listed parameter that has no flag.
+        requires: String,
+        /// Why this crate has no flag for it.
+        why: Unsupported,
+    },
+    /// `postcard` could not write the reduction as bytes. No reduction a load
+    /// writes fails this way, so it is a defect of the encoder or of a type of
+    /// the model, and the bless step that meets it has no blob to write again.
+    #[error("the model could not be written as a blob")]
+    Encode(#[source] postcard::Error),
 }
 
 /// A generated inventory and the document it was generated from disagree.
@@ -420,12 +931,47 @@ pub enum DocumentError {
     found.as_deref().map_or_else(|| "there is no such operation".to_owned(), |id| format!("`{id}`"))
 )]
 pub struct DriftError {
+    /// The index of the first row where the inventory and the document differ,
+    /// counted from zero.
     pub position: usize,
+    /// The `operationId` the inventory names at `position`, or `nothing after
+    /// it` where the document has an operation past the inventory's last row.
     pub expected: String,
+    /// The `operationId` the document has at `position`, or `None` where the
+    /// document ends before the inventory does.
     pub found: Option<String>,
 }
 
+impl Effect {
+    /// What the method alone makes of an operation: every method but `GET`,
+    /// `HEAD`, `OPTIONS` and `TRACE` writes.
+    ///
+    /// The document's `x-cli-writes` can add a write to a safe method and never
+    /// removes one, so this is the least an operation is. The load starts from
+    /// it, and a decoded blob that holds a read where this says write is
+    /// refused.
+    pub(crate) fn of_method(method: &Method) -> Self {
+        match *method {
+            Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE => Self::Read,
+            _ => Self::Write,
+        }
+    }
+}
+
 impl Document {
+    /// The layout of the model this build reads and writes.
+    ///
+    /// Every blob opens with the number of the layout it was written in, and
+    /// [`Document::from_blob`] refuses another number before it decodes
+    /// anything. The number moves with the layout: a change to a type of the
+    /// model that `postcard` writes differently, such as a field added,
+    /// removed, reordered or retyped, or a variant added, removed or moved,
+    /// needs a new number. It moves too when a load writes something different
+    /// for the same document and no type changed. The crate's own tests trace
+    /// the layout and fail on a change to a type that left the number where it
+    /// was.
+    pub const MODEL_LAYOUT: u32 = 9;
+
     /// The same reduction, already done and written down.
     ///
     /// This is the call a shipped binary makes. `Document::load` is bless-time
@@ -433,21 +979,82 @@ impl Document {
     /// path item — and none of it tells a CLI anything that is not already in
     /// here. The bytes come from [`Document::to_blob`] in the same bless run
     /// that wrote the rest of the generated code.
+    ///
+    /// The stamp is read first. A blob that does not open with one is
+    /// [`DocumentError::Unstamped`], and one stamped with another layout is
+    /// [`DocumentError::Stale`]; neither reaches the decoder, so a blob that
+    /// another build wrote never decodes into a wrong model. A blob of this
+    /// layout that does not decode is [`DocumentError::Blob`], and bytes after
+    /// the encoding are [`DocumentError::Trailing`].
+    ///
+    /// What decodes is then checked again, because a shipped binary starts from
+    /// the blob and nothing has read the document. The check repeats these rules
+    /// of a load: the confirmation word of the document, and for each operation
+    /// its group and command, which are not called `help`; the effect its method
+    /// allows; its confirmation word; its gates, which stand on a write only; its
+    /// flags, each spelled as a load spells it, none of them `help` or one of the
+    /// five that carry a body, and each declared once; and each `requires`. It
+    /// also repeats that no two operations share a `<group> <command>`. It leaves
+    /// out the rules whose input the blob does not hold, such as a `$ref`, and
+    /// three that a blob can break: a required parameter that has no flag, a body
+    /// whose `Content-Type` is no media type, and a `pattern` that no engine here
+    /// reads.
+    ///
+    /// Each operation is asked in the order of the document, and the names two
+    /// operations share after every operation. The error names the operation, or
+    /// both of two operations that share a name, and for the document's own
+    /// confirmation word it names the word. The two command names and the
+    /// spelling of each gate are checked as they decode.
+    ///
+    /// Only `from_blob` applies these rules. `postcard` drops the message of an
+    /// error a `Deserialize` raises, so a check inside one could not name the
+    /// operation, and a rule that compares two flags or two operations cannot sit
+    /// in a single field. A `Document` read through `Deserialize` in another
+    /// format is not held to them.
     pub fn from_blob(blob: &[u8]) -> Result<Self, DocumentError> {
-        Ok(postcard::from_bytes(blob)?)
+        let unstamped = || DocumentError::Unstamped {
+            reads: Self::MODEL_LAYOUT,
+        };
+        let (stamp, encoding) = blob::read(blob).ok_or_else(unstamped)?;
+        if stamp.layout != Self::MODEL_LAYOUT {
+            return Err(DocumentError::Stale {
+                layout: stamp.layout,
+                version: stamp.version,
+                reads: Self::MODEL_LAYOUT,
+            });
+        }
+        let (document, rest) =
+            postcard::take_from_bytes::<Self>(encoding).map_err(DocumentError::Blob)?;
+        if !rest.is_empty() {
+            return Err(DocumentError::Trailing { bytes: rest.len() });
+        }
+        document.check()?;
+        Ok(document)
     }
 
     /// This reduction, as the bytes a bless step commits.
     ///
-    /// The encoding is not self-describing and carries no version tag: it is
-    /// written and read by one build of one workspace, and an adopter who skips
-    /// the bless step is caught by the pairing check in `Api::new` and by the
-    /// test that reduces the committed document and compares it with this.
+    /// The bytes open with a stamp: a magic of eight bytes, the number of the
+    /// layout the model is written in ([`Document::MODEL_LAYOUT`], four bytes,
+    /// little-endian), and the version of typed-openapi that wrote it (its
+    /// length in four bytes, little-endian, then its UTF-8). The `postcard`
+    /// encoding follows. The format of the stamp itself never changes, because
+    /// it is what a later build reads of a blob it cannot decode.
+    ///
+    /// The encoding is not self-describing, and the stamp is what tells a build
+    /// that a blob was written in another layout. A blob also carries the
+    /// version, so a bless step run again after the crate moves writes other
+    /// bytes even when the layout stayed. An adopter who skips the bless step
+    /// after a change to a document is caught by the pairing check in `Api::new`
+    /// and by the test that reduces the committed document and compares it with
+    /// this.
     pub fn to_blob(&self) -> Result<Vec<u8>, DocumentError> {
-        Ok(postcard::to_allocvec(self)?)
+        let stamp = blob::stamp(Self::MODEL_LAYOUT, env!("CARGO_PKG_VERSION"));
+        postcard::to_extend(self, stamp).map_err(DocumentError::Encode)
     }
 
-    /// The server the document names first. A caller may override it.
+    /// The server the document names first, with each variable in its URL
+    /// replaced by the `default` the document gives it. A caller may override it.
     #[must_use]
     pub fn base(&self) -> &Uri {
         &self.base
@@ -465,6 +1072,7 @@ impl Document {
         &self.commit
     }
 
+    /// Every operation, in document order.
     pub fn iter(&self) -> std::slice::Iter<'_, Operation> {
         self.ops.iter()
     }
@@ -576,6 +1184,8 @@ impl Operation {
         &self.command
     }
 
+    /// The HTTP method, which with the `x-cli-writes` marker decides the
+    /// operation's [`Effect`].
     #[must_use]
     pub fn method(&self) -> &Method {
         &self.method
@@ -587,26 +1197,37 @@ impl Operation {
         &self.path
     }
 
+    /// The document's one-line `summary` of the operation, if it has one.
     #[must_use]
     pub fn summary(&self) -> Option<&str> {
         self.summary.as_deref()
     }
 
+    /// The document's longer `description` of the operation, if it has one.
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
 
+    /// Every parameter the document declares for the operation, the ones with
+    /// no flag included: the path item's in the order it lists them, then the
+    /// operation's own. A parameter of the operation takes the place of the
+    /// path item's with the same name and place, as OpenAPI says. The three
+    /// headers it says to ignore (`Accept`, `Content-Type` and `Authorization`)
+    /// are not listed.
     #[must_use]
     pub fn params(&self) -> &[Param] {
         &self.params
     }
 
+    /// The request body the document asks for, and the flags it grows.
     #[must_use]
     pub fn body(&self) -> &Body {
         &self.body
     }
 
+    /// Whether the operation runs on sight or waits for the confirmation. It
+    /// comes from the method and the `x-cli-writes` marker, never from a name.
     #[must_use]
     pub fn effect(&self) -> Effect {
         self.effect
@@ -633,7 +1254,9 @@ impl Operation {
         &self.commit
     }
 
-    /// The parameter the document spells `name`, if there is one.
+    /// The first parameter the document spells `name`, if there is one: the one
+    /// that a value given under that name reaches. Another parameter with the
+    /// name has no flag ([`Unsupported::Shared`]).
     #[must_use]
     pub fn param(&self, name: &str) -> Option<&Param> {
         self.params.iter().find(|p| p.name == name)
@@ -710,6 +1333,7 @@ impl Param {
         }
     }
 
+    /// Whether the document requires the parameter.
     #[must_use]
     pub fn required(&self) -> bool {
         self.required
@@ -730,18 +1354,67 @@ impl Param {
         &self.requires
     }
 
+    /// The document's `description` of the parameter, if it has one.
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
 }
 
+/// A requirement among the parameters of one operation that cannot be mounted:
+/// it names the parameter itself, a parameter the operation does not declare, or
+/// one that has no flag.
+///
+/// The load and the decode of a blob both refuse such a requirement, each in
+/// its own error, so the question is asked here once and each caller words the
+/// answer.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Unmet<'p> {
+    /// The parameter lists its own name. It asks for nothing, and a debug build
+    /// of clap refuses an argument that requires itself.
+    Itself { name: &'p str },
+    /// The parameter that `requires` lists is not one the operation declares.
+    Unknown { name: &'p str, requires: &'p str },
+    /// The parameter that `requires` lists has no flag.
+    Unreachable {
+        name: &'p str,
+        requires: &'p str,
+        why: &'p Unsupported,
+    },
+}
+
+/// The first requirement among `params` that cannot be mounted, in the order the
+/// parameters are listed.
+pub(crate) fn unmet(params: &[Param]) -> Option<Unmet<'_>> {
+    params.iter().find_map(|param| {
+        param.requires().iter().find_map(|requires| {
+            let name = param.name();
+            if requires == name {
+                return Some(Unmet::Itself { name });
+            }
+            match params.iter().find(|other| other.name() == requires) {
+                None => Some(Unmet::Unknown { name, requires }),
+                Some(other) => match other.shape() {
+                    Shape::Unreachable(why) => Some(Unmet::Unreachable {
+                        name,
+                        requires,
+                        why,
+                    }),
+                    Shape::Flag { .. } => None,
+                },
+            }
+        })
+    })
+}
+
 impl Field {
+    /// The property's name in the body, as the document spells it.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// The long flag as the user types it, without the leading `--`.
     #[must_use]
     pub fn flag(&self) -> &str {
         &self.flag
@@ -754,11 +1427,16 @@ impl Field {
         renamed(&self.flag, &self.name)
     }
 
+    /// Whether the body's schema requires the property, whether or not the
+    /// document requires the body: a property of an optional body is required
+    /// of the body that is sent, and [`Body::JsonFields`] says if one has to be.
     #[must_use]
     pub fn required(&self) -> bool {
         self.required
     }
 
+    /// The rules the document states about one value of the property, which
+    /// the flag's parser enforces.
     #[must_use]
     pub fn scalar(&self) -> &Scalar {
         &self.scalar
@@ -775,6 +1453,8 @@ impl Field {
         self.format.as_deref()
     }
 
+    /// What the property says about itself, or what the schema it points at
+    /// says, if either does.
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
@@ -791,7 +1471,7 @@ impl Body {
     pub fn present(&self) -> bool {
         match self {
             Self::None => false,
-            Self::JsonFields(_)
+            Self::JsonFields { .. }
             | Self::JsonWhole { .. }
             | Self::Multipart { .. }
             | Self::Opaque { .. } => true,
@@ -811,7 +1491,7 @@ impl Body {
     pub fn whole(&self) -> bool {
         match self {
             Self::None => false,
-            Self::JsonFields(fields) => fields.is_empty(),
+            Self::JsonFields { fields, .. } => fields.is_empty(),
             Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => true,
         }
     }
@@ -836,10 +1516,50 @@ impl Body {
     #[must_use]
     pub fn fields(&self) -> &[Field] {
         match self {
-            Self::JsonFields(fields) => fields,
+            Self::JsonFields { fields, .. } => fields,
             Self::None | Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => {
                 &[]
             }
+        }
+    }
+
+    /// The properties of the body that the schema marks `readOnly`, each by its
+    /// path as a [`BodyError`] spells a key, with `[]` for any item of a list: the
+    /// API sets each of them, so none has a flag and a request should leave each
+    /// out.
+    ///
+    /// A body that is flat names the properties of its object, in document order.
+    /// A body that goes whole names the same for its own object, and then every
+    /// property that its template leaves out below it (`address.aid`,
+    /// `positions[].id`). Every other kind of body answers with nothing, as
+    /// [`Body::fields`] does.
+    ///
+    /// [`BodyError`]: crate::client::BodyError
+    #[must_use]
+    pub fn read_only(&self) -> &[String] {
+        match self {
+            Self::JsonFields { read_only, .. } | Self::JsonWhole { read_only, .. } => read_only,
+            Self::None | Self::Multipart { .. } | Self::Opaque { .. } => &[],
+        }
+    }
+
+    /// The `Content-Type` this body goes out under: the `content` key as the
+    /// document spells it, parameters included, without the space and the tab at
+    /// its two ends. A receiver reads the same type without them, and over
+    /// HTTP/2 a request with them is malformed (RFC 9113, section 8.2.1).
+    ///
+    /// The one place a request reads it, so that a JSON body and a body sent
+    /// verbatim cannot take it from two readings. [`Body::None`] sends nothing
+    /// and answers `None`, and so does [`Body::Multipart`]: its `Content-Type`
+    /// carries a boundary that is chosen when the parts are encoded, so the key
+    /// alone is not what is sent.
+    #[must_use]
+    pub fn media_type(&self) -> Option<&str> {
+        match self {
+            Self::JsonFields { media_type, .. }
+            | Self::JsonWhole { media_type, .. }
+            | Self::Opaque { media_type, .. } => Some(media_type.trim_matches([' ', '\t'])),
+            Self::None | Self::Multipart { .. } => None,
         }
     }
 }

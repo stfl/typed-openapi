@@ -12,7 +12,7 @@ the only thing you write is a binary that calls it.
 
 - [The artefacts](#the-artefacts)
 - [`Settings`](#settings)
-- [Layers](#layers)
+- [Layers](overlay.md#layers)
 - [Wiring your own `xtask`](#wiring-your-own-xtask)
 - [The crate it writes into](#the-crate-it-writes-into)
 - [The `builder` feature](#the-builder-feature)
@@ -43,9 +43,49 @@ blob only after decoding it again and checking that what comes back is what it
 reduced.
 
 Every generated Rust file opens with the command that rewrites it, where a
-correction belongs, and one `#![allow(...)]` block — generated source is not
-graded on style, and the exemption travels with the file it exempts rather than
-with a wrapping module.
+correction belongs, and one `#![allow(...)]` block — generated source is graded
+on neither style nor any lint your crate turns on, and the exemption travels
+with the file it exempts rather than with a wrapping module. `warnings` is in
+the block, so `clippy::nursery`, `missing_docs` and `unused_qualifications` at
+`warn`, with `-D warnings` over them, do not fail on a file you did not write. A
+lint outside the named groups that your crate sets to `deny` remains yours to relax.
+
+Mark the blob as binary in your repository's `.gitattributes`:
+
+```gitattributes
+*.postcard binary
+```
+
+This disables text diffs, text merges and end-of-line conversion for model blobs.
+Review a blob change with its corrected document and generated Rust files.
+
+### The blob's stamp
+
+`src/model.postcard` opens with a stamp: a magic of 8 bytes, the number of the
+model layout as a `u32` (`Document::MODEL_LAYOUT`), and the version of
+typed-openapi that wrote it, as a length and then UTF-8. `Document::from_blob`
+reads the stamp before it decodes anything, so a blob that another build wrote
+is refused with a message that says what to do, and never decodes into a wrong
+model. Every refusal has the same repair: run your bless step again and commit
+the blob.
+
+| The blob | `DocumentError` | The message names |
+|---|---|---|
+| does not open with a stamp: an empty file, a blob of typed-openapi 0.0.2, or a file that is no model blob | `Unstamped` | that the blob carries no layout stamp, so a typed-openapi older than 0.1.0 wrote it or it is not a model blob, and the layout this build reads |
+| is stamped with another layout | `Stale` | the layout and the version that wrote the blob, and the layout this build reads |
+| is stamped with this layout and does not decode | `Blob` | that the blob is damaged |
+| decodes, and more bytes follow the encoding | `Trailing` | that the blob is damaged, and how many bytes are left after the model |
+| decodes, and holds a confirmation word, a flag, a gate, a name or a `requires` that a load refuses, or a method that writes, held as a read | `Confirmation`, `OperationConfirmation`, `Flag`, `FlagSpent`, `FlagTwice`, `GatedRead`, `WriteAsRead`, `NameSpent`, `DuplicateCommand`, `RequiresItself`, `RequiresUnknown`, `RequiresUnreachable` | the word, flag, gate, method, name or parameter, and the operation, or both of two operations that share a name; `Confirmation` names the document's confirmation word, which belongs to no operation |
+
+Only `from_blob` makes the last check. A `Document` read through `Deserialize`
+in another format is not held to it. `to_blob` fails with `DocumentError::Encode`
+when `postcard` cannot write the model; no reduction a load writes does.
+
+The layout number moves with the layout, not with the crate's version, so a
+release that does not touch the model leaves your blob readable. The stamp
+holds the version too, which makes the bytes of a blessed blob change whenever
+typed-openapi does. A check that blesses again and compares the result asks for
+a commit after each upgrade.
 
 ### The summary page
 
@@ -96,6 +136,46 @@ commit, to review and to remember.
 
 [`Summary`]: https://docs.rs/typed-openapi/latest/typed_openapi/summary/struct.Summary.html
 
+### The vendor's descriptions
+
+A `summary` or a `description` in the vendor's document is a doc comment in
+`src/types.rs` or `src/ops.rs`, and `cargo test --doc` and `cargo doc` read it as
+Markdown. The generator keeps the words and changes the Markdown where it would
+run, stop your build or put the vendor's markup on your pages:
+
+| The vendor wrote | The doc comment holds |
+|---|---|
+| a code block that rustdoc reads as Rust: a fence with no language or with `rust`, `rust2018`, `ignore`, `{.json}` or `ignore-wasm32`, at the top or in a block quote or a list item | the same block, with the language `text` |
+| a fence that names a language rustdoc leaves alone, such as `json` | the fence as written |
+| an indented code block | the text, indented by three columns at most, which is no code block |
+| a `<` outside a code block and a code span, which includes an autolink `<https://…>` | `\<`, which the page shows as `<` |
+| a link or an image to a scheme other than `http`, `https` and `mailto`, or a reference to one: `[a](javascript:…)`, `![a](data:…)` | the same text with a backslash before the `[`, which the page shows as the characters it is written in |
+| a character that changes the direction of text (U+202A to U+202E, U+2066 to U+2069) | its code point, `\u{202e}`, because the compiler refuses the character in a comment |
+| a carriage return, alone or before a line feed | a line break |
+
+An indented sample in a block quote, a list item or a footnote is a paragraph
+on your page, as it is at the top of a description: its lines join and its first
+character is read as Markdown. A fence is the way to keep a sample as a sample.
+A link that stays a link is one to a page (`http:`, `https:`), to a mail
+(`mailto:`) or to a place the page already has (a relative path, `#fragment`),
+and a link to a script is repaired with an `https` link, in an Overlay.
+
+A doc comment of several lines is written as one `///` line for each line of it.
+That is a description of several lines, and the doc of each wrapper in `ops.rs`,
+which holds the generator's paragraphs after the summary even when the summary
+is one line. Under stable options, `rustfmt` preserves the text after `///`;
+`hard_tabs` and `tab_spaces` can change the indentation before the slashes, so
+what rustdoc reads is the text the generator checked. `wrap_comments` and the
+other options that rewrite doc comments are nightly options, and the guarantee
+does not cover them. Under `wrap_comments` `rustfmt` can also refuse a generated
+file, and the bless stops there with `rustfmt rejected the generated …`
+(`GenerateError::RustfmtFailed`). A `rustfmt.toml` in the directory of the
+generated files that leaves the option out ends that, because `rustfmt` reads
+the nearest one.
+
+The command line's `--help` reads the model and not the doc comments, so it shows
+the document's text as written.
+
 ## `Settings`
 
 ```rust
@@ -123,14 +203,16 @@ once per layer; calls accumulate, and the order of the calls is the order the
 layers are applied.
 
 Every layer is named in the headers too, in that order. A layer that does not
-read, or does not apply, names itself in the error — which is the practical
-reason to have more than one. [overlay.md](overlay.md#layers) has the split
-this repository recommends, and what each layer buys.
+read, does not apply, or changes the `openapi` of the document names itself in
+the error — which is the practical reason to have more than one.
+[overlay.md](overlay.md#layers) has the split this repository recommends, and
+what each layer buys.
 
 ### `Settings::replace(format, rust_type) -> Settings`
 
 Emit `rust_type` wherever the document declares `format`. Call it once per
-format; calls accumulate.
+format. Calls for different formats accumulate. When a format is named more
+than once, the first replacement is kept.
 
 This is where a type you already own replaces the `String` the document would
 otherwise produce. A schema of `format: money` becomes your own `Money`, with
@@ -143,7 +225,11 @@ second.
 
 `rust_type` is written into the generated source verbatim, so it must be a path
 the generated crate can name — which means the crate that owns the type is a
-dependency of the generated crate.
+dependency of the generated crate. The bless step reads each one as a Rust path
+before it converts a schema, whether or not the document states its format, and
+refuses one that is none by the format and the text you wrote: `` `cents::`, named
+for `format: money`, is not a Rust path ``. A path may be rooted (`::cents::Cents`),
+start with `crate`, and carry arguments (`std::vec::Vec<u8>`).
 
 **What your type has to implement.** Your type needs the `Serialize`,
 `Deserialize`, `Clone`, `Debug` and `PartialEq` that every generated type
@@ -187,6 +273,11 @@ whose format is replaced hands the whole reading to your `FromStr`: the
 document's `pattern` reaches the command line, and nothing re-runs it inside the
 wrapper. The two can therefore disagree, and only a test holds them together —
 see [owning the type yourself](overlay.md#owning-the-type-yourself).
+A narrower type can instead be guarded against reaching any flag. The toy
+replaces `cents` with `money::Cents` and guards it with `Operation::carrying`.
+Its generated `Cents` newtype delegates to the owned `i64` count. A response
+with more digits than that count can hold fails to decode, even when its value
+meets the document's pattern; the adopter accepts this cost.
 
 It is the route for a type that needs *behaviour*, or one the document cannot
 describe — a fixed-point decimal, say. A rule needs no Rust at all: name the
@@ -238,9 +329,12 @@ let written = Settings::new("vendor.yaml")
 ```
 
 Refused where `word` is not spellable as a flag (`[a-z0-9-]`), and where it is
-one every subcommand already declares — `json-body`, `json-body-template`,
-`raw-body`, `file`, `field`, or clap's own `help`. Those cannot move, so a
-confirmation wearing one of their names would be two flags with one spelling.
+a reserved word — `json-body`, `json-body-template`, `raw-body`, `file`,
+`field`, or clap's own `help`. `help` is declared on every subcommand. JSON
+bodies declare
+`json-body`, with `json-body-template` where a template exists. Opaque bodies
+declare `raw-body`, and multipart bodies `file` and `field`. Their words are
+reserved even on other body kinds.
 
 The chosen word travels in the reduced model, so the binary you ship reads it
 rather than deriving one: the flag a subcommand accepts, the flag its `--help`
@@ -253,8 +347,29 @@ the same choice for a caller who reduces a document without generating from it.
 
 Write the artefacts under `crate_dir` and answer with their paths: the four of
 the table above, in that order, then the summary page if you asked for one.
-Directories are created as needed. Each Rust file is handed to `rustfmt` after
-it is written, so what lands in the tree is what `cargo fmt --check` expects.
+Directories are created as needed. Every Rust file goes through `rustfmt`, so
+what lands in the tree is what `cargo fmt --check` expects.
+
+**A bless that is refused writes nothing.** Every artefact is built in memory
+first, and `rustfmt` formats the Rust there, in the nearest directory that
+exists above the file, which is where it reads `rustfmt.toml` from. The first
+file is written only after the document, both emitters, the blob's round trip
+and `rustfmt` have all said yes. A vendor revision that the generator refuses
+therefore leaves the committed artefacts as they were, byte for byte, and not a
+new `types.rs` beside the old `ops.rs` and the old blob.
+
+Each file is then written beside its destination as `<name>.bless-tmp`, flushed
+to the disk, and renamed over the destination once every file is written. A disk
+that fills, or a path that cannot be made, stops the bless before any file is
+replaced, and the files written beside are removed, and so does a destination
+that is a directory. A directory that the bless made for a file stays, empty,
+when the bless stops before the renames. A file at a destination is replaced and not written
+through, so a symlink there becomes a file. A rename that fails all the same,
+after another succeeded, leaves the files already renamed: the first pass has
+shown that a file can be written there, so the file system refused it. The
+renames are one step each and not one step together, and the directories are not
+flushed after them, so a power loss between two of them leaves some files new
+and the rest old. Run the bless again and it writes the rest.
 
 The answer is what was written, so a run that asked for no page reports four
 paths and a script that copies or checks the answer copies or checks four files.
@@ -267,14 +382,22 @@ the caller's to choose.
 ### `GenerateError`
 
 One `thiserror` enum, non-exhaustive. A bless step reports and exits, so nothing
-in it is meant to be branched on — it names the thing to go and fix. The cases
-worth knowing about in advance:
+in it is meant to be branched on — it names the thing to go and fix. Each
+variant describes its own layer and leaves the cause to `source()`, so a bless
+step prints the chain, as the `xtask` below does. The cases worth knowing about
+in advance:
 
 | Case | Means |
 |---|---|
-| `Overlay` | a document did not read, or a correction did not apply — the message opens with the file. See [drift.md](drift.md) |
-| `Unusable` | the corrected document does not describe a usable CLI |
-| `Unsupported` | the document declares something the generator has no Rust spelling for |
+| `Overlay` | a document did not read, a correction did not apply, or a layer changed the `openapi` of the document — the message names the file. See [drift.md](drift.md) |
+| `Unusable` | the document does not describe a usable CLI: the vendor's `openapi` is not 3.0, or the document with its layers laid is refused |
+| `Unsupported` | the document declares something the generator has no Rust spelling for, or a type given to `Settings::replace` is no Rust path |
+| `OneType` | two schemas are one Rust name: two the document declares, a schema stated inline that takes a name another has, or a schema that is the name typify derives for one nested in another (`Foo.bar` is `FooBar`) |
+| `DuplicateIdentifier` | two items of `ops.rs` that one name would define twice: see [Two items of the generated code never share a name](#requirements-and-limits) |
+| `DuplicateField` | two fields share a Rust name: properties such as `fooBar` and `foo_bar`, or a property and the map typify adds for `additionalProperties` |
+| `EnumVariants` | string enum values become one Rust variant; the message names the values and variant |
+| `Panicked` | typify panicked during conversion or token emission; the message names the failing trial or inline site |
+| `CyclicAllOf` | a merge state repeats during composition, negation, container merging or carried conversion; see the limits below |
 | `RustfmtMissing` | `rustfmt` is not on `PATH` |
 
 Every Overlay is applied with `ErrorOnZeroMatch`. A correction whose target the
@@ -298,6 +421,7 @@ typed-openapi = { version = "0.1", features = ["generate"] }
 and one file:
 
 ```rust
+use std::error::Error as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -322,6 +446,11 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("bless: {error}");
+            let mut cause = error.source();
+            while let Some(next) = cause {
+                eprintln!("  caused by: {next}");
+                cause = next.source();
+            }
             ExitCode::FAILURE
         }
     }
@@ -343,15 +472,99 @@ with `generate` and compiling typify. `--workspace` still selects it.
 `write_to` fills `src/` and `spec/` of a crate you own; it never writes a
 `Cargo.toml` or a `lib.rs`. Those are yours, and they are short. The example's
 is `examples/toy/api-generated`, whose hand-written half is two files: a
-`lib.rs` declaring `pub mod ops; pub mod types;`, and a `client.rs` holding the
-newtype the generated `impl` block hangs off — a generated method on a foreign
-type would not compile, so the handle has to live beside what is generated for
-it.
+`lib.rs`, and a `client.rs` holding the newtype the generated `impl` block hangs
+off — a generated method on a foreign type would not compile, so the handle has
+to live beside what is generated for it.
 
-Its dependencies are the runtime crate with `default-features = false`, `serde`,
-`http`, and whatever crate owns the types you passed to `replace` — which has to
-sit *below* it, because the generated source names it. Nothing about a generator
-reaches it.
+### The crate root
+
+A root that declares `pub mod ops; pub mod types;` and nothing else does not
+compile. `src/ops.rs` names five items of the crate root:
+
+| Item | What the generated code uses it for |
+|---|---|
+| `Api` | the handle every wrapper is a method of, `impl Api { pub fn get_voucher(&self, …) }` |
+| `Call` | what a wrapper returns, in `Result<Call<'_, T>, Error>` |
+| `Error` | the error of a wrapper |
+| `NoContent` | the answer of an operation that has no JSON body |
+| `to_json` | the body argument of a wrapper as JSON, naming the operation it is for |
+
+`Call`, `Error`, `NoContent` and `to_json` are `typed_openapi::client`'s, and the
+root re-exports them. `Api` is yours, a newtype over
+`typed_openapi::client::Client`, and every wrapper calls one method of it,
+`Api::call<T>(&self, op: OperationId, values: Values) -> Result<Call<'_, T>,
+Error>`, where `OperationId` is `ops::OperationId` and `Values` is
+`typed_openapi::Values`. This root compiles, and it is the smallest one.
+The wrappers are methods of `Api`, so an operation that a method of `Api` is
+called after would define it twice. The generator reserves `new`, `call` and
+`document`, and refuses an operation called any of these (`GenerateError::DuplicateIdentifier`). A method of your own handle that
+is called after an operation is yours to find.
+`Api::new` pairs the blob with the generated inventory, so that `call` can take
+the operation at the position of its `OperationId`:
+
+```rust
+pub mod ops;
+pub mod types;
+
+use typed_openapi::client::Client;
+pub use typed_openapi::client::{Call, Error, NoContent, to_json};
+use typed_openapi::{Document, Values};
+
+use crate::ops::{OPERATIONS, OperationId};
+
+const MODEL: &[u8] = include_bytes!("model.postcard");
+
+pub struct Api(Client);
+
+impl Api {
+    pub fn new() -> Result<Self, Error> {
+        let client = Client::over(Document::from_blob(MODEL)?);
+        client.document().matches(OPERATIONS)?;
+        Ok(Self(client))
+    }
+
+    pub fn call<T>(&self, op: OperationId, values: Values) -> Result<Call<'_, T>, Error> {
+        let operation = &self.0.document().operations()[op as usize];
+        self.0.call(operation, values)
+    }
+}
+```
+
+`examples/toy/api-generated/src/client.rs` is the same handle with the
+embedded document and summary, `with_base` and the accessors an application
+wants; copy it rather than this.
+
+### The dependencies
+
+The generated code names these crates, so the crate that holds it declares each
+one it uses:
+
+```toml
+[dependencies]
+# What the wrappers call: `Values`, `Part`, and the regex engine behind a
+# `pattern`. No clap, and no generator.
+typed-openapi = { version = "0.1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+# `OperationId::check_body` takes a `serde_json::Value`, and a schema that states
+# no shape is one.
+serde_json = "1"
+# `format: date-time` and `format: date`.
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
+# `format: uuid`.
+uuid = { version = "1", features = ["serde"] }
+
+[features]
+# Forward this feature to turn on the builders declared by `ops.rs`.
+builder = ["typed-openapi/builder"]
+```
+
+`chrono` and `uuid` are needed only where the document states those formats; a
+build without them says `cannot find chrono in the list of imported crates`, and
+the format it came from is the one in `types.rs`. `serde_json` is needed whether
+or not any schema is open, because `check_body` names it. Add whatever crate
+owns the types you passed to `replace`, which has to sit *below* the generated
+crate, because the generated source names it, and `http` if your handle names a
+`Uri`, as the example's does. Nothing about a generator reaches this crate.
 
 Make it a crate of its own rather than a module. An edit to your hand-written
 code then recompiles your lines and not the generated volume.
@@ -362,7 +575,7 @@ code then recompiles your lines and not the generated volume.
 generated wrapper:
 
 ```rust
-let voucher = api.update_voucher().id(5).body(&draft).call()?.send(&client)?;
+let voucher = api.update_voucher_builder().id(5).body(&draft).call()?.send(&client)?;
 ```
 
 A missing required argument is a compile error, not a wrong request.
@@ -376,16 +589,18 @@ builder = ["typed-openapi/builder"]
 
 Three things are worth knowing:
 
-- **Flipping it never regenerates.** The generated `ops.rs` carries the
-  attributes under `cfg_attr` in every build, so the committed file is the same
+- **Flipping it never regenerates.** The generated `ops.rs` carries a second
+  `impl` block under `#[cfg(feature = "builder")]` in every build, with one
+  `<op>_builder()` method beside each wrapper, so the committed file is the same
   bytes with the feature on and off, and the feature flag is the whole
-  difference.
+  difference. The positional wrapper stays, and means the same thing in both.
 - **You add no dependency.** `bon` is named through `typed_openapi::bon`, so the
   proc-macro that expands the attribute is the version the generator emitted
   syntax for.
-- **It costs compile time.** Turning it on puts two proc-macro crates in the
-  dependency graph of the crate that holds the generated code: TBD — measured in
-  [builders.md](builders.md).
+- **It costs build time.** Turning it on adds crates to the dependency graph of
+  the crate that holds the generated code, and a build that leaves the feature
+  off resolves none of them. [builders.md](builders.md) has the table and how it
+  was measured.
 
 ## Requirements and limits
 
@@ -395,36 +610,223 @@ Three things are worth knowing:
 - **`generate` implies `document`,** and pulls in typify, an OpenAPI object
   model and a syntax-tree printer. Enable it only in the bless step. A shipping
   binary that enabled it would compile a code generator it can never reach.
-- **`generate` needs a newer compiler than the crate's MSRV.** typify reaches
-  `regress`, which uses let-chains. That costs a shipping binary nothing,
-  because a shipping binary never enables the feature.
 - **The generator emits from what the document describes, named or not.** A
   `$ref` to a named schema keeps that schema's name; a body or response an
   operation states inline is converted under its own `title`, or under a name
-  derived from the operation. `serde_json::Value` is left for a JSON body the
-  document states no schema for. `requestBody` `$ref`s are not followed, and
-  only `#/components/schemas/` references are.
+  derived from the operation. `serde_json::Value` is left for a JSON body or a
+  JSON response the document states no schema for. A `requestBody` that is a
+  `$ref` to `#/components/requestBodies/` is followed as the command line follows
+  it, a chain of references included, so the wrapper takes the type of the
+  component's schema and is optional where the component is. A schema that a
+  component states inline is a type for each operation that takes the component,
+  named after the operation. A schema's own `$ref` is followed to
+  `#/components/schemas/` on the reduction's schema-resolution road. References
+  outside that prefix are refused where the load resolves a parameter schema,
+  list items, a JSON or multipart body's schema, or an object-body property.
+  The bless refuses one at the top of a JSON response schema. Deeper schemas
+  submitted to typify use its last-segment component lookup; a missing component
+  can cause a caught `GenerateError::Panicked` naming the schema. Schemas ignored
+  by both reduction and generation, such as an unselected request content key,
+  are not resolved by either road. A reference below an opaque byte body is not
+  read merely because the request body exists.
+- **A `title` makes a schema stated inline one type, and a name is one type.**
+  A schema stated inline under a `title` is the type of that name. Where two
+  places state the same schema under it, they take one type and the `struct` is
+  written once: a component that two operations share, the same schema on two
+  operations, and a body and a response that state it alike. Where they state
+  different schemas, the bless is refused, since the second would take a type of
+  the first one's shape. Inline claimants must have equal canonical schemas
+  after `NotRequired`; non-inline claimants must have the same typify type id.
+  An inline claimant and a named claimant conservatively refuse sharing,
+  including a singleton `allOf` around a named reference. The type of a request
+  body does not require what the API sets: a `readOnly` property keeps its place
+  in the type and leaves the `required` list. So a schema whose `required` names
+  a `readOnly` property is two schemas where a body and a response both state
+  it, and the bless is refused. The same schema with the property not required
+  is one. The refusal names each place, and where a component states the schema
+  it names the component and the operation that takes it. For a response it
+  names the first JSON body of the operation, and the bodies state one schema,
+  so a new `title` goes on each of them. Repair: give one of the schemas another
+  `title` in an Overlay, at the component where there is one.
+- **A wrapper answers with the type its success responses state.** A success
+  response is a status from `200` to `299` or the range `2XX`; `default` is not
+  read. A response that is a `$ref` to `#/components/responses/` is followed, a
+  chain of references included. The JSON bodies of all of them, under every JSON
+  media type, are the answer, and they have to agree: one schema, whether named
+  or stated inline, gives one type. The client sends no `Accept` header, so a
+  server may answer with any of them. A success response with no `content`, such
+  as a `204`, stands beside the JSON body as an answer with no body, so the
+  wrapper answers `Option` of the type and `None` is the answer with no body. A
+  planned call (`Planned::send`) answers `Option` of that, where `None` is the
+  dry run, so there `Some(None)` is the answer with no body. A success response
+  whose `content` names no JSON media type adds nothing to the type, so a `200`
+  with a JSON body beside a `201` with a PDF answers with the type. The answer is
+  `NoContent` when no success response has a JSON body. `NoContent` takes an
+  empty body or any JSON and drops it, and a body that is not JSON, such as a
+  PDF, is a `client::Error::Decode`, because the typed call reads JSON only. A
+  response that cannot be followed is refused by name with the reference. So are
+  JSON bodies that do not state one schema, a body with no schema beside one
+  with a schema among them, with the status and the media type of each and the
+  response component that states it where there is one. `NoContent` is never the
+  answer to a response the generator could not read. The repair for the second
+  is an Overlay that gives the bodies one schema or removes one of them, made in
+  the component where there is one.
 - **A `content` key must be a media type.** A request body declared under a key
   with no `type/subtype` in it — `form-data` where `multipart/form-data` was
   meant — is a `LoadError` naming the operation and the key, rather than bytes
-  sent under a `Content-Type` no server reads. The repair is an Overlay action,
-  and [overlay.md](overlay.md#1-plain-corrections) writes one out.
+  sent under a `Content-Type` no server reads. A key that is sent as the
+  `Content-Type` must also have a `type/subtype` essence before the first `;`,
+  after space and tab are trimmed from the essence's ends. The whole key must
+  contain no byte below 0x20 except tab, and no DEL. Other parameter bytes are
+  not parsed. Output separately trims space and tab from the whole key's ends.
+  A key that is a media range (`*/*`, `image/*`) is refused too
+  (`LoadError::MediaRange`), when it is the key the body is sent under. The
+  repair is an Overlay action, and [overlay.md](overlay.md#1-plain-corrections)
+  writes one out.
+
 - **A parameter becomes an argument only where a command line could spell it.**
   A scalar is one argument; an array of scalars is a `Vec` argument the wrapper
-  fills by repeating the wire name, which is what a repeated flag does. A
+  fills by repeating the wire name, which is what a repeated flag does. The
+  schema is read as the command line reads it: an `allOf` of one element is the
+  schema it wraps, and a reference inside it keeps its named type. A
   parameter neither can supply — `in: cookie`, one declared with `content`
-  rather than `schema`, one whose schema is an object, one whose name has no
-  kebab-case spelling — is an argument on neither, and the wrapper's own
-  documentation says which parameter it does not carry and why. An array must
-  declare its `items` inline: a `$ref` to an array schema is a
-  `GenerateError::Unsupported` naming the parameter.
+  rather than `schema`, one whose schema is an object or states a keyword this
+  crate does not read as a value, one whose name has no kebab-case spelling — is
+  an argument on neither, and the wrapper's own
+  documentation says which parameter it does not carry and why. The array is
+  read the same way, so a list whose array is a `$ref`, bare or in a wrapper of
+  one element, is a `Vec` argument of its items' type.
+- **A property the API sets is not required of a request.** OpenAPI 3.0.3 says
+  that the `required` of a `readOnly` property "will take effect on the response
+  only". One schema serves a create and a read, so a `required` that lists `id`
+  would make a type that a request cannot build. A type that a request body
+  reaches does not require such a property, and the field is an `Option`: the
+  schema the body names or states, behind `#/components/requestBodies/` or not,
+  and every schema those refer to with a `$ref`.
+  A type that only responses reach keeps the document's `required`, because there
+  it takes effect, so the generated type still refuses a response that lacks what
+  the API promised. A property is `readOnly` as the command line reads it
+  ([docs/cli.md](cli.md#flags)): marked, behind a `$ref` to a schema that is, or
+  the `allOf` of one element that is. A schema that is an `allOf` is one type, so
+  a property that the schema or any member declares read-only comes off the
+  `required` of the schema and of every member stated inline in it. One limit: a
+  member that is a `$ref` is a named schema, one type wherever it is used, so it
+  keeps its own `required` unless it declares the property read-only itself: where
+  it declares the property without `readOnly` and requires it, the composed type
+  requires it too.
+- **`nullable: true` makes the type an `Option`.** It is how an OpenAPI 3.0
+  document says "or `null`", and the generated type reads the `null` the vendor
+  sends. A property that the schema requires and calls nullable is an `Option`
+  whose key has to be there. An optional one is an `Option` too, and so is an
+  optional array, map or scalar with a default, which without the keyword is a
+  `Vec`, a map or a value that takes its default. Every shape that states it is
+  read: a scalar, an enum, an
+  object stated inline, an array and its items, a composition, and a format you
+  own through `replace` (`Option<money::Money>`). A schema that holds anything
+  admits `null` already and stays `serde_json::Value`. A component that is
+  nullable is a newtype over an `Option` of what it would be, because every use
+  of it takes `null`: `Maybe(Option<String>)` for a string, and
+  `Owner(Option<OwnerInner>)` for a struct, with the fields, or the `pattern`
+  and its `FromStr`, on `OwnerInner`. A response that is nullable makes the
+  wrapper answer an `Option`, where `None` is the `null`. The keyword is not
+  read beside a `$ref`: OpenAPI 3.0.3 says that properties added to a Reference
+  Object "SHALL be ignored", so `{ $ref: X, nullable: true }` is `X`. The
+  spelling that carries it is `allOf` of the one reference, with
+  `nullable: true` beside it, and an Overlay writes that where the vendor did
+  not.
+- **A body the document leaves optional is an `Option` argument.** A body with
+  `required: true` is an argument of its type: `&T` for a JSON body, `Vec<u8>`
+  for one sent verbatim and `Vec<Part>` for a multipart body. A body without it
+  is `Option<&T>`, `Option<Vec<u8>>` or `Option<Vec<Part>>`, and `None` sends the
+  request with no body and no `Content-Type`, as the command line does when its
+  operator gives no flag and no file. A `Some` goes out as the body it holds. The
+  wrapper of an optional body says so in its documentation. With the `builder`
+  feature the body is a setter that may be left out.
 - **Two values that reduce to one Rust word get one argument each.** A document
-  may name a parameter `self` and another `Self`, or use one wire name in the
-  path and again in the query; a function signature binds each name once, so
-  the later of the two is `self_2` or `ref_2`. What it sends is unaffected —
-  the wire name travels beside the argument as a literal — and the wrapper's
-  own documentation says which name the moved argument carries, the way the
-  flag that moved aside says so on its help line.
+  may name a parameter `self` and another `Self`, or `ref` in the path and `Ref`
+  in the query; a function signature binds each name once, so the later of the
+  two is `self_2` or `ref_2`. What it sends is unaffected — the wire name
+  travels beside the argument as a literal — and the wrapper's own
+  documentation says which name the moved argument carries, the way the flag
+  that moved aside says so on its help line.
+- **A name that starts with a digit gets an `x`.** A parameter called `3ds` has a
+  flag on the command line, and a Rust identifier does not start with a digit.
+  The argument is `x3ds`, which is how typify spells a property of that name, and
+  the wrapper's own documentation says which wire name it sends. The parameter's
+  name is its wire key, so an Overlay could only remove it, and the document is
+  not refused for it. The `builder` feature has the setter `.x3ds(…)`. The prefix
+  is not `_`, because `bon` takes a leading `_` off a member and panics on a name
+  that then starts with a digit. An `operationId` that starts with a digit is
+  refused, naming the operation.
+- **Two items of the generated code never share a name.** typify and `syn`
+  accept a file that defines one name twice, and your compiler does not, so the
+  bless step asks first and refuses by the two items. In `ops.rs` the names are
+  the wrappers, the `_builder` method beside each, the reserved handle methods
+  `new`, `call` and `document`,
+  the variants of `OperationId`, and, for each operation, the methods that `bon`
+  derives for its builder: a setter for each argument, a second setter named
+  `maybe_…` for each argument that is optional, and `call`, which ends the
+  builder. So `listThings` beside `list_things` is refused, and so are an
+  operation called `<x>Builder` beside `<x>`, one called `new`, `call` or `document`,
+  and a parameter called `call` or `maybe_<x>` beside an optional parameter `<x>`
+  (`GenerateError::DuplicateIdentifier`, naming both). In `types.rs` they are the
+  types: a schema called `FooBar` beside a schema nested in `Foo` (`OneType`), and
+  the fields of one object, such as `fooBar` and `foo_bar`
+  (`GenerateError::DuplicateField`). Two operations of one `operationId` are
+  refused before that, by the load, naming the method and the path of both
+  (`LoadError::DuplicateOperationId`). Repair: an Overlay that corrects one of
+  the two. A parameter's name is its wire key, so for a parameter the Overlay
+  removes one of them. These checks apply whether or not `builder` is enabled;
+  setter and `_builder` collisions cause compile errors when that feature is on.
+- **The generated code names every standard item by its full path.** A schema may
+  be called `Ok`, `Err`, `Some`, `None`, `String`, `Vec`, `Option`, `Result`,
+  `Box` or `Default`, and the code means the standard item all the same:
+  `::std::result::Result::Ok(…)`, `::std::default::Default::default()` and
+  `TryFrom<::std::string::String>` in `types.rs`, and `::std::result::Result`,
+  `::std::option::Option` and `::std::vec::Vec` in `ops.rs`. `tests/hostile.rs`
+  builds the output of a document that has all ten, with the `builder` feature on
+  and off with `cargo check`, then runs doctests with the feature on, under
+  `-D warnings`, `missing_docs` and `unused_qualifications`. This test runs no clippy.
+- **Enum values and merge loops are checked before typify runs.** String enum
+  values that become one variant after typify's two naming passes (`active` and
+  `ACTIVE`, `a-b` and `a_b`, `+` and `-`) are `GenerateError::EnumVariants`, naming
+  the values and their variant. Repair: rename or remove a value in an Overlay.
+  Other panics during conversion and token emission become `GenerateError::Panicked`
+  when the bless uses `panic = "unwind"` (the default). The message names every
+  schema in the smallest reference-closed trial that panics, in document order,
+  or the inline request body or response. The process's panic hook runs for each
+  caught panic; diagnosis can print a named trial's panic text more than once.
+  Repair: correct the shape named in the cause.
+
+  An `allOf` merge whose operand set repeats is `GenerateError::CyclicAllOf`,
+  checked after the nullable, open-map and request-required rewrites. The walk
+  follows references, top-level composition and negation. It also checks the
+  properties, items and maps that two or more operands combine, a property
+  against another operand's map, and merges carried inside inline subschemas.
+  This includes double negation and a merge into a loop of wrappers or `oneOf`s.
+  The refusal names the schemas on the loop, in document order, and the merge's
+  place when inline. Repair: break the loop in an Overlay.
+
+  A recursive property or item passes when no other operand constrains it.
+  Loops of wrappers or `oneOf`s pass when no merge reaches them. A wrapper with one
+  reference and only `title`, `description` or `type: object`, including the
+  property description idiom `allOf: [{$ref: Node}, {description: …}]`, is not
+  carried as a merge. A multi-member `allOf` starts reference resolution even
+  with a description-only second member. Other keywords count as a merge.
+
+  The check compares document identities rather than schema values. It
+  conservatively refuses an object merged with an array whose items merge that
+  object, and equal reference operands leading into a composition loop
+  (`allOf: [A, A]` with a recursive `oneOf` behind A). typify converts these
+  shapes. Repair for either refusal: an Overlay that breaks the loop.
+- **One wire name gets one argument.** A parameter is identified by its name and
+  its place, so a document may use `ref` in the path and again in the query, and
+  an operation may override a parameter of its path item. The override is one
+  argument, with the type that the operation's entry states, inline or by a
+  `$ref`. The request builder is given values by name alone, so the one that
+  comes later of two parameters with one name has no argument (the order is in
+  [docs/cli.md](cli.md#parameters-with-no-flag)), and the wrapper's own
+  documentation says so, as it does for any parameter it cannot carry.
 
 [typify]: https://docs.rs/typify
 [bon]: https://bon-rs.com

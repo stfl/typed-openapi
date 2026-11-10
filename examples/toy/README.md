@@ -1,14 +1,15 @@
 # The toy adoption
 
 One adoption of [`typed-openapi`](../../typed-openapi) from end to end: a vendor
-document that is wrong in six ways, two Overlay layers that correct it, a bless
-step, and two CLIs over the result. It is built, linted and tested with the library on
-every push, so it cannot rot into an example that no longer compiles.
+document with vendor mistakes, two Overlay layers that correct it, a bless
+step, and both a nested and a root CLI over the result. It is built, linted and
+tested with the library on every push, so it cannot rot into an example that no longer compiles.
 
-The Toy Accounting API is invented, and nothing here reaches the network: the
-default server is `http://localhost:9999`, every write is a dry run until
-`--commit`, and the tests drive the real commands through a recording client
-with no socket.
+The Toy Accounting API is invented. The default server is
+`http://localhost:9999`, and every write is a dry run until `--commit`.
+Recorder-based command tests use no socket. The adapter tests use a local
+HTTP server. The root CLI test runs the example process through a local HTTP
+proxy and checks its exit code, stdout and stderr.
 
 ## Try it
 
@@ -70,8 +71,8 @@ error: the following required arguments were not provided:
   --enshrine
 ```
 
-That one is a `GET`. HTTP cannot say "this GET writes", so the Overlay does,
-with `x-cli-writes` — and the gate treats it like any `POST`.
+The earlier `vouchers render` operation is a `GET` that writes. The Overlay
+marks it with `x-cli-writes`, and the gate treats it like any `POST`.
 
 ## How big this API is
 
@@ -79,12 +80,12 @@ with `x-cli-writes` — and the gate treats it like any `POST`.
 beside the reduced model: what the bless step counted, counted off the model
 rather than off anybody's memory of it.
 
-This adoption reduces to **12 operations** in **5 groups**: **2 reads** sent on
-sight and **10 writes** held behind `--commit`. Two of those writes are more than
+This adoption reduces to **13 operations** in **5 groups**: **2 reads** sent on
+sight and **11 writes** held behind `--commit`. Two of those writes are more than
 one question, so the document names **2 gates** — `--enshrine` and `--email`,
 with **1 operation** behind each. **5 operations** are asked for no body at all,
-**3 bodies** go out whole because a command line cannot take a nested object, a
-PDF or a multipart upload apart, and **0 parameters** are carried without a flag.
+**4 bodies** go out whole because a command line cannot take a nested object, a
+map with no declared property, a PDF or a multipart upload apart, and **0 parameters** are carried without a flag.
 
 Every number in that paragraph is asserted against the summary by
 [`api/tests/summary.rs`](api/tests/summary.rs), and that is the point rather
@@ -113,21 +114,22 @@ third layer this adoption has no need of.
 | the vendor | the correction | what it buys |
 |---|---|---|
 | declares `format: money` and never says what an amount is | an Overlay `update` naming a `Money` schema with the rule *and* the vendor's format in it, pointing `total` at it, and `xtask`'s `.replace("money", "money::Money")` | `--total` rejects `1,50`, and `Voucher.total` is a transparent newtype over a fixed-point type that adds |
+| declares `format: cents` without its digit rule | an Overlay naming `Cents` with `^[0-9]+$`, plus `.replace("cents", "money::Cents")` | `Contact.creditLimit` uses the owned count, guarded against flag exposure |
 | calls a bare string an ISO 4217 code, in prose nothing can run | an `update` naming a `Currency` schema with `^[A-Z]{3}$` in it, and pointing `currency` at it | `Voucher.currency` is a `Currency`, and `--currency` rejects `eur` |
 | returns an `internal_ref` it never documented | an `update` adding the property | a struct field and a `--internal-ref` flag |
 | ships `archiveVoucher` and documents it nowhere | an `update` adding the path | a wrapper and a subcommand, for no Rust at all |
 | serves a `GET` that stores a PDF | `x-cli-writes: true`, in `spec/cli.yaml` | `vouchers render` is behind `--commit` |
 | serves one upload under a media type nothing here assembles | left alone, and both uploads work | `--raw-body` for the `application/pdf` one, `--file` / `--field` for the multipart one |
 
-Three of those actions are **tripwires** — two in the vendor layer, one in the
-CLI layer: their JSONPath states what the vendor currently says, so under
+The **tripwire** actions in both layers state what the vendor currently says
+in their JSONPaths, so under
 `ErrorOnZeroMatch` a vendor revision that moves the thing being corrected fails
 the bless step instead of being silently overwritten, naming the layer it is
 in. [`../../docs/overlay.md`](../../docs/overlay.md) explains the form;
 [`../../docs/drift.md`](../../docs/drift.md) is the whole table of what is
 caught where.
 
-[`api/src/corrections.rs`](api/src/corrections.rs) lists the same six as Rust,
+[`api/src/corrections.rs`](api/src/corrections.rs) lists the corrections as Rust,
 one line each, and `api/tests/corrections.rs` holds that list to both documents
 in both directions — a row that no longer describes a real difference fails, and
 a real difference with no row fails.
@@ -136,8 +138,8 @@ a real difference with no row fails.
 
 | crate | written by | holds |
 |---|---|---|
-| [`money`](money) | the adopter | one type: a fixed-point amount, which the generated code wraps |
-| [`api-generated`](api-generated) | `just bless`, except `client.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
+| [`money`](money) | the adopter | a fixed-point amount and bounded cents, which the generated code wraps |
+| [`api-generated`](api-generated) | `just bless`, except `client.rs` and `lib.rs` | the corrected document, the Rust types, one wrapper per operation, the reduced model |
 | [`api`](api) | the adopter | the crate an adopter's own code names: corrections, `Posting`, and everything re-exported |
 | [`cli`](cli) | the adopter | the `toy` binary, and `examples/root.rs` beside it |
 | [`xtask`](xtask) | the adopter | the bless step — the generator itself ships in `typed-openapi` |
@@ -151,11 +153,10 @@ whichever crate you are curious about, at the moment you ask.
 The split is about what recompiles, and about what can name what. An edit to
 `api` rebuilds the adopter's own lines and not the generated volume beneath
 them; `money` sits below `api-generated` because the generated source names it,
-and `api-generated`'s whole dependency list is `serde`, `http`, `money` and the
-library — nothing about a generator reaches it.
+and `api-generated`'s whole dependency list is `serde`, `serde_json`, `http`,
+`money` and the library — nothing about a generator reaches it.
 
-One type here is hand-written, and it is the one no OpenAPI document can
-describe. OpenAPI has no fixed-point decimal, so [`money`](money/src/lib.rs)
+The owned types live below the generated crate. OpenAPI has no fixed-point decimal, so [`money`](money/src/lib.rs)
 owns a `Money` over whole cents — an arbitrary-precision count of them, so
 `+`, `-` and `sum()` are exact and total and nothing has to be unwrapped — and
 `xtask` tells the bless step that `format: money` means that type. The document
@@ -168,6 +169,13 @@ adoption spends. `Voucher.currency` next door goes the other way — the Overlay
 names a `Currency` schema and the generator writes the reading as well as the
 type — and the two fields are side by side because neither route replaces the
 other.
+
+`Contact.creditLimit` shows a narrower owned type: `money::Cents` holds an
+`i64` count, while the document's `Cents` pattern allows unbounded digits.
+[`api/tests/cents.rs`](api/tests/cents.rs) guards that no operation carries
+`cents` as a flag. The nested address keeps the contact body on `--json-body`.
+A response outside the owned count's range fails to decode even when the
+document allows it; choosing this type accepts that cost.
 
 `num-bigint` is declared in `money`'s manifest and nowhere else: what an owned
 type is made of is the adopter's business, never the library's, and
@@ -194,11 +202,13 @@ match has no `_` arm, so a status the vendor adds is a compile error where
 someone has to decide whether it may be enshrined.
 
 The verb is held to the same words the generated subcommand is. Its chain calls
-the gated `enshrineVoucher`, so it adds its gate flags with `tree::gates` — the
-same call the generated subcommand makes — and reads them back with
-`tree::answers`. The word is the document's, not this crate's, and
-`toy finalize-voucher` demands `--enshrine` exactly as `toy raw vouchers
-enshrine` does.
+the gated `enshrineVoucher`, so it adds the confirmation and the gate flags with
+`tree::confirmation` and `tree::gates` — the same calls the generated subcommand
+makes — and reads them back with `tree::answers`. The words are the document's,
+not this crate's, and `toy finalize-voucher` demands `--enshrine` exactly as
+`toy raw vouchers enshrine` does. Each write of the chain is planned with those
+answers (`Call::plan`) and sent from the plan, so the request the dry run prints
+is the request `--commit` sends.
 
 [`cli/examples/root.rs`](cli/examples/root.rs) is the other shape: the
 operations *are* the CLI — no `raw` layer, no dispatch of its own, and one file
@@ -220,6 +230,8 @@ Settings::new(adoption.join("spec/toy.yaml"))
     .overlay(adoption.join("spec/corrections.yaml"))
     .overlay(adoption.join("spec/cli.yaml"))
     .replace("money", "money::Money")
+    .replace("cents", "money::Cents")
+    .summary_page("src/summary.md")
     .write_to(adoption.join("api-generated"))
 ```
 

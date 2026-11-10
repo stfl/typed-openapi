@@ -9,6 +9,7 @@ when a correction later stops fitting is [docs/drift.md](drift.md).
 - [Why an Overlay](#why-an-overlay)
 - [Action kinds](#action-kinds)
 - [A correction adds; it cannot subtract](#a-correction-adds-it-cannot-subtract)
+- [The version is the vendor's](#the-version-is-the-vendors)
 - [Pointing a field at a named schema](#pointing-a-field-at-a-named-schema)
 - [The tripwire form](#the-tripwire-form)
 - [Writing a target](#writing-a-target)
@@ -50,13 +51,30 @@ actions:
 ```
 
 The `overlay` field has to match `1.1.x`. A document declaring `1.0.0` is
-refused before any action runs:
+refused before any action runs. In the examples, `/checkout` stands for the
+checkout's absolute path:
 
 ```
-the Overlay document is not valid YAML or JSON: invalid value: string "1.0.0", expected `1.1.<patch>` semver (Overlay v1.1)
+bless: cannot use /checkout/examples/toy/spec/corrections.yaml
+  caused by: the Overlay document is valid YAML or JSON but not an Overlay 1.1 document
+  caused by: overlay: invalid value: string "1.0.0", expected `1.1.<patch>` semver (Overlay v1.1)
 ```
 
 Overlay files are YAML or JSON, and so are the documents they extend.
+The reader refuses raw U+007F, U+0080 to U+009F except U+0085, and U+FFFE and
+U+FFFF. This applies inside a JSON string too, although JSON permits them.
+A document is refused with "the OpenAPI document cannot be read as YAML or
+JSON". An Overlay is refused with "the Overlay document cannot be read as YAML
+or JSON". The cause says "unexpected character" and names the character.
+
+The document is read before the first Overlay, so no Overlay can repair this
+refusal. An Overlay is read before its actions run. Write the character as an
+escape in the vendor's text before the bless reads it: for example, `\u007f`
+in a JSON string. The escaped character loads in a document and in an Overlay.
+
+Booleans are read as YAML 1.2 reads them: `yes`, `no`, `on`, `off`, `y` and `n` are
+strings, and `true` and `false` are the booleans. A mapping that repeats a key is refused,
+with the line and column of the second one.
 
 ## Action kinds
 
@@ -116,6 +134,24 @@ The workaround that does exist is to replace the whole parent object rather than
 the one keyword, which costs every sibling key the vendor wrote. That is usually
 worse than living with the stale keyword.
 
+## The version is the vendor's
+
+`openapi` is the one key of the document that no Overlay changes. The version
+decides how every schema of the document is read, and a label that an Overlay
+writes can drop rules that nobody who reads the Overlay can see: a 3.1 document
+that an Overlay calls `3.0.3` loses the `maximum` beside a `$ref`, and `const`.
+So `typed-openapi` asks the vendor's `openapi` before it lays the first layer,
+and it refuses a layer that changes the key: another version, another patch of
+3.0, a value that is not text, or no key at all. The refusal names the layer and
+both versions:
+
+```
+the Overlay changes `openapi` from `3.0.3` to `3.1.0`; the version is the vendor's, and no Overlay changes it
+```
+
+A document that says 3.1 has no repair in an Overlay. Reading 3.1 is out of
+scope.
+
 ## Pointing a field at a named schema
 
 This is the crate's recommended correction — say the rule once under a name, and
@@ -126,7 +162,7 @@ they are blessed.
 | Spelling | Outcome |
 |---|---|
 | `update: { $ref: … }` merged over the vendor's keys | **Use this.** A `$ref` wins over everything written beside it, the field keeps its place in `properties`, and the rule the crate reads is the named schema's. |
-| `update: { allOf: [ { $ref: … } ] }` merged over them | Silently neither. Beside a vendor's `type` or `format` the node parses as neither a scalar nor a wrapper, the field stops being a flag, and the whole body falls back to `--json-body`, taking every sibling's flag with it. |
+| `update: { allOf: [ { $ref: … } ] }` merged over them | Silently neither. Beside a vendor's `type` or `format` the node parses as neither a scalar nor a wrapper. A parameter has no flag, and its long help says it is stated with `allOf`. A property stops being a flag, and the whole body falls back to `--json-body`, taking every sibling's flag with it. |
 | `remove` the property, then `update` the parent to re-add it clean | Works, and costs the property its place in `properties`, so `--help` order moves. |
 
 The price of the first is the vendor's own per-field description: a `$ref`'s
@@ -176,7 +212,9 @@ pointing an amount's rule at a schema that is no longer a string. The filter
 form fails instead, and names itself:
 
 ```
-spec/corrections.yaml: the Overlay does not apply: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
+bless: cannot use /checkout/examples/toy/spec/corrections.yaml
+  caused by: the Overlay does not apply
+  caused by: actions[1] (target "$.components.schemas.Voucher[?(@.total.format == 'money')].total"): target matched zero nodes (error-on-zero-match)
 ```
 
 The same trick works on a path item. Targeting `.get` rather than the path
@@ -192,8 +230,7 @@ itself asserts that the operation is still a `GET`:
 A vendor who moves that operation to `POST` makes this a zero match — which is
 the right outcome, because a `POST` is already gated and the correction has
 become redundant. [`typed-openapi/tests/drift.rs`](../typed-openapi/tests/drift.rs)
-holds every tripwire to a mutated fixture; the example adoption has five, two
-in the vendor layer and three in the CLI layer.
+holds the example adoption's tripwires to mutated fixtures in both layers.
 
 The cost is deliberate: every tripwire is a place a vendor revision stops the
 build. That is the trade — you are buying a failure you can read in exchange for
@@ -304,6 +341,138 @@ An operation the vendor ships and documents nowhere:
             "200": { description: OK }
 ```
 
+A document with no `servers`. The first server is the default host that the
+command line and the typed client start from, and a caller may replace it. A
+document that lists none has no default to give, so `typed-openapi` refuses the
+document and the Overlay is where the host goes:
+
+```
+the document lists no `servers` entry to send requests to; add one in an Overlay
+```
+
+```yaml
+  - target: $
+    description: Where requests go.
+    update:
+      servers:
+        - url: https://api.example.com/v1
+```
+
+A server URL may hold variables, as in `https://{tenant}.example.com/v1`. The
+`default` that OpenAPI requires for each one fills it in. A name that `variables`
+does not declare has no default, and the URL that is left is not one.
+
+An operation with no `operationId`. The id is what every refusal and every
+generated wrapper calls the operation by, so the document is refused with the
+operation's method and path:
+
+```
+get /vouchers has no operationId; add one in an Overlay
+```
+
+```yaml
+  - target: "$.paths['/vouchers'].get"
+    description: Name the operation.
+    update:
+      operationId: listVouchers
+```
+
+Two operations with one `operationId`. OpenAPI says it MUST be unique, and the id
+is what `Document::get` and every generated wrapper call an operation by, so the
+document is refused with the method and the path of both:
+
+```
+`listThings` is the operationId of both `get /things` and `get /v2/things`; an Overlay gives one of them another
+```
+
+```yaml
+  - target: "$.paths['/v2/things'].get"
+    description: Its own name.
+    update:
+      operationId: listThingsV2
+```
+
+A `servers` on a path item or on an operation. A request goes to the first
+server of the document, and the caller may replace it, so a host that one
+operation names for itself has no place in the model. `typed-openapi` refuses the
+document rather than send the request to another host than the document means,
+and the refusal spells the target of the action that removes the list:
+
+```
+upload: `servers` stands on `$.paths['/upload'].post.servers`, and this crate sends every request to the first server of the document; remove it in an Overlay
+```
+
+```yaml
+  - target: "$.paths['/upload'].post.servers"
+    description: Send the upload to the host the caller chose.
+    remove: true
+```
+
+Whether that is right is a judgement about the API, which is why the crate
+leaves it to you: after the action the upload goes to the document's first
+server, or to the base URL that the caller passes in its place.
+
+A path template that does not match its path parameters. Every variable in the
+path wants a path parameter of its name, every path parameter wants its variable,
+and a path parameter is `required: true`. Each break is refused with the
+operation and the name, because the request would otherwise go out with `{id}`
+in it or with a value thrown away:
+
+```
+getVoucher: `/vouchers/{id}` has the variable `{id}`, and the operation declares no path parameter of that name; add one in an Overlay
+```
+
+```yaml
+  - target: "$.paths['/vouchers/{id}'].get"
+    description: The id the path names.
+    update:
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+```
+
+A path parameter whose name has no spelling as a flag, such as `straße`. A path
+parameter is `required`, so there is nothing to drop, and the template names it,
+so an `update` of the parameter alone leaves the parameter and its variable with
+two names. In the `simple` style, the only one this CLI writes in a path, the
+name of a path parameter never goes on the wire, only its value in place of the
+variable, so the parameter and its variable are renamed together, and the
+request does not change. No action renames a key, so one action writes the path
+item again under the new path and another removes the old one:
+
+```
+getThing: parameter `straße` is named without an ASCII kebab-case flag spelling, and the document requires it; rename the parameter and its variable in the path together, in an Overlay that writes the path item again under the new path and removes the old one
+```
+
+```yaml
+  - target: $.paths
+    description: The path item again, under the name that has a spelling.
+    update:
+      /things/{strasse}:
+        get:
+          operationId: getThing
+          parameters:
+            - { name: strasse, in: path, required: true, schema: { type: string } }
+          responses:
+            "200": { description: OK }
+
+  - target: "$.paths['/things/{straße}']"
+    description: Remove the path item under the old name.
+    remove: true
+```
+
+The same two actions mend a path parameter and a parameter off the path that
+share a name, such as `ref` in the path and `ref` in the query. Rename the path
+parameter and its variable: the document keeps both parameters, the path
+parameter has the flag of its new name, and the query parameter has the flag
+`--ref`, which it had already or which it gets now. A cookie parameter or one
+described by `content` has no flag, so the request does not carry it. The
+message names that rename first, and then the repair that gives a part of the
+document up. For a path parameter that is the removal of the query parameter.
+For a query parameter that is the drop of its own `required`, and the message
+says that it is the `required` of the query parameter and not of the path
+parameter. [docs/cli.md](cli.md#parameters-with-no-flag) has the repairs of the
+other cases.
+
 A content type that is not one. A media type is `type/subtype`, so a body
 declared under the bare key `form-data` names none, and there is nothing to
 send that body under. `typed-openapi` refuses the document while it reduces it
@@ -336,6 +505,23 @@ This is the layer for it. The vendor's server reads a multipart body whatever
 its document says, so the repair is true of the API: a TypeScript generator, a
 mock server and a request validator all want it, and it is a correction worth
 handing back — the document is the thing that is wrong.
+
+A media range is refused the same way, when it is the key the body would be sent
+under. A body declared under `*/*` or `image/*` says that the server reads any
+type the range admits, and a request goes out under one:
+
+```
+upload: `*/*` is a media range, and a body is sent under one media type; an Overlay is where a document's content type is corrected
+```
+
+The two actions are the ones above: `remove` takes the range out, and `update`
+puts in the type the server reads, which is a judgement of yours and, where the
+server really reads several, a choice. A range that stands beside a key that
+names JSON is not read, because the JSON key is the one that is sent. The one
+exception is a range that ends in `+json`, such as `application/*+json`: it names
+JSON by its suffix, so it is read unless a key before it names JSON. Where
+`application/json` stands after it, `remove` alone is the repair, and that key
+is the one that is sent.
 
 A rule the vendor names and never states. There are two ways to name one
 without stating it, and the toy document has both.
@@ -434,7 +620,7 @@ will produce it — the file is not special to `typed-openapi`. With this crate:
 let vendor = fs::read_to_string("spec/toy.yaml")?;
 let corrections = fs::read_to_string("spec/corrections.yaml")?;
 let corrected = overlay::apply(overlay::parse(&vendor)?, &corrections)?;
-print!("{}", serde_yaml_ng::to_string(&corrected)?);
+println!("{}", serde_json::to_string_pretty(&corrected)?);
 ```
 
 This repository does not commit that output. It is derived data with no reader
@@ -494,10 +680,27 @@ and it is last because nothing else has any use for what is in it.
 | `x-cli-command: <name>` | an operation | call it this rather than what its path and method name |
 | `x-cli-requires: [<parameter>, …]` | a parameter | refuse it unless each named parameter of the same operation is given too |
 
-The last two are also the only way out of a name collision — two operations
-reducing to one `<group> <command>` is a `LoadError` at bless time naming both
-`operationId`s, never a silent rename. [docs/cli.md](cli.md#the-shape-of-the-tree)
-has the rule they overrule.
+This crate owns the `x-cli-` prefix, and a marker is read where it stands or the
+document is refused. The four on an operation are read on an operation, a method
+of a path item under `paths`, and `x-cli-requires` on a parameter under `paths`
+or `components.parameters`, and not beside a string `$ref`, which the OpenAPI model
+drops in silence. The same key on a path item, or any other `x-cli-` key on an
+object of the document, is a `LoadError` that names the key and the node that
+holds it:
+
+```
+`x-cli-writes` stands on `$.paths['/vouchers/{id}/render']`, where this crate does not read it; it reads that key on a method of a path item directly in `paths`
+```
+
+An extension of your own goes under another prefix. A name or a value that
+happens to be spelled like a marker, such as a property called `x-cli-writes` or
+an `example`, is no marker and is not read. Nothing under a key that OpenAPI 3.0
+does not define is read either, such as `webhooks` or a schema's `$defs`.
+
+`x-cli-group` and `x-cli-command` are also the only way out of a name collision
+— two operations reducing to one `<group> <command>` is a `LoadError` at bless
+time naming both `operationId`s, never a silent rename.
+[docs/cli.md](cli.md#the-shape-of-the-tree) has the rule they overrule.
 
 ```yaml
   - target: $.paths['/vouchers/{id}/enshrine'].post
@@ -541,7 +744,8 @@ alone with a `400` is one the document should hold to both:
 The requirement runs one way, from the parameter carrying the marker. The
 command line refuses the flag without its companion, and `Invocation::new`
 refuses the same `Values` a typed wrapper builds. A name that is not a parameter
-of the operation, or names one this crate cannot send, is a `LoadError`.
+of the operation, one that names a parameter this crate cannot send, and the
+parameter's own name are each a `LoadError`.
 
 ## Owning the type yourself
 
@@ -637,15 +841,14 @@ The trade against the named-schema route above:
 | the type's name | the schema's | the schema's, wrapped around yours |
 | `Display`, arithmetic, conversions | what the generator emits | anything you write, reached through the wrapper |
 | enforced on the command line | yes | only if the document states the rule too |
-| held to the document | by construction — typify compiles the same `pattern` | by a test you write |
+| held to the document | by construction — typify compiles the same `pattern` | by a test you write, or guarded against reaching flags |
 | your dependency tree | nothing — the generator writes the type | whatever your type is built from |
 | the regex engine | linked either way ([validation.md](validation.md#what-it-costs)) | linked either way |
 
 Neither route buys or saves the regex engine: `typed-openapi` links `regress`
 unconditionally so that a command line can enforce whatever pattern the
 document states, and it is in the tree of every crate here — `api`'s included,
-which links no argument parser. The 810 KB is the price of enforcing rules at
-all, not of choosing one of these two routes.
+which links no argument parser. Choosing an owned type does not remove it.
 
 **The dependency row is a real cost, and it is yours alone.** Exact money over
 an integer that cannot overflow means `num-bigint` and its `num-integer` /
@@ -665,6 +868,14 @@ is what notices: it reads the `pattern` out of the embedded document and holds
 the amount to it over every edge the pattern has, in both directions, so a
 vendor who widens the rule fails there instead of quietly admitting values the
 type refuses.
+
+A narrower replacement can instead be guarded so it never reaches a flag.
+The toy's `Contact.creditLimit` uses `money::Cents`, an `i64` count, with an
+unbounded digit pattern. `api/tests/cents.rs` uses `Operation::carrying` to
+check parameters and flat-body fields. Its nested address keeps `Contact` on
+`--json-body`. A response with a value the pattern allows but the count cannot
+hold fails to decode. The adopter accepts that cost when choosing the type;
+sevdesk-cli's `Amount` makes the same choice.
 
 Reach for `replace` when you need behaviour on the type, or when no JSON Schema
 can say what the value *is*. Reach for the named schema alone when you need the

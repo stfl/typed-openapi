@@ -17,6 +17,7 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
+use std::fmt::Write as _;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -92,6 +93,10 @@ fn a_required_key_nothing_declares_is_refused_and_named_where_it_stands() {
          \x20     period: { type: string, description: The period it is booked into. }\n";
 
     let refused = loaded(LEDGER).expect_err("`period` is declared nowhere");
+    assert!(
+        matches!(&refused, typed_openapi::LoadError::Phantom(_)),
+        "{refused:?}"
+    );
     assert_eq!(
         refused.to_string(),
         "the document requires keys that nothing declares; declare each key in an \
@@ -100,7 +105,8 @@ fn a_required_key_nothing_declares_is_refused_and_named_where_it_stands() {
     );
 
     let repaired = Document::load(&document(LEDGER), &[REPAIR]).expect("the Overlay repairs it");
-    let Body::JsonFields(fields) = repaired.get("postEntry").expect("postEntry").body() else {
+    let Body::JsonFields { fields, .. } = repaired.get("postEntry").expect("postEntry").body()
+    else {
         panic!("every property of `Entry` is a scalar");
     };
     let period = fields
@@ -280,7 +286,7 @@ fn a_required_request_body_is_not_a_required_key() {
             .get("postEntry")
             .expect("postEntry")
             .body(),
-        Body::JsonFields(_)
+        Body::JsonFields { .. }
     ));
 }
 
@@ -326,6 +332,65 @@ components:
     // requiring it, so finding nothing is also the proof that the walk went
     // round rather than stopping short.
     assert!(found.is_empty(), "{found:?}");
+}
+
+/// A document is as long as its vendor wrote it, and a chain of `allOf` hops
+/// is one schema written as many. The walk follows it with a work list and not
+/// with a call per hop, so the stack it needs does not depend on the length: the
+/// check runs here on a thread of 512 KiB. A call per hop overflows the stack at
+/// 7,000 hops, a thread of 8 MiB included.
+///
+/// The first schema requires `x` and the last one declares it, so finding
+/// nothing is also the proof that the walk went to the end of the chain. The
+/// second document ends in a schema that declares something else, and the walk
+/// names the first schema.
+#[test]
+fn a_chain_of_allof_hops_is_walked_without_a_call_per_hop() {
+    const HOPS: usize = 7_000;
+
+    fn chain(last: &str) -> String {
+        let mut schemas = String::new();
+        for hop in 0..HOPS {
+            let required = if hop == 0 {
+                "      required: [x]\n"
+            } else {
+                ""
+            };
+            write!(
+                schemas,
+                "    S{hop}:\n{required}      allOf: [ {{ $ref: '#/components/schemas/S{}' }} ]\n",
+                hop + 1
+            )
+            .expect("a string takes text");
+        }
+        format!(
+            "paths: {{}}\ncomponents:\n  schemas:\n{schemas}    S{HOPS}:\n      type: object\n      \
+             properties:\n        {last}: {{ type: string }}\n"
+        )
+    }
+
+    let (done, waiting) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("long-chain".to_owned())
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            drop(done.send((
+                named(&chain("x")),
+                named(&chain("y")),
+                loaded(&chain("x")).map(|document| document.operations().len()),
+            )));
+        })
+        .expect("a thread to run the walk on");
+    let (declared, undeclared, document) = waiting
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the walk of a long chain ends rather than aborting the process");
+
+    assert!(declared.is_empty(), "{declared:?}");
+    assert_eq!(
+        undeclared,
+        ["$.components.schemas.S0 requires `x`".to_owned()]
+    );
+    assert_eq!(document.expect("a chain that declares `x` loads"), 0);
 }
 
 /// Permitting a name is not describing it. A node that admits any name still
@@ -612,6 +677,10 @@ fn the_committed_fixture_reduces_and_the_same_fixture_with_a_phantom_does_not() 
     let refused = Document::load(&stripped, OVERLAYS)
         .expect_err("`Address` still requires the key that was taken out");
     assert!(
+        matches!(&refused, typed_openapi::LoadError::Phantom(_)),
+        "{refused:?}"
+    );
+    assert!(
         refused
             .to_string()
             .contains("$.components.schemas.Address requires `city`"),
@@ -767,9 +836,16 @@ components:
     );
 }
 
-/// One phantom in every position the specification puts a schema in: one per
-/// key the walk's table spells, down to each of the eight methods and each of
-/// the two spellings of a definitions map.
+/// One phantom in every position the walk reads a schema in: one per key the
+/// walk's table spells, down to each of the eight methods and each of the two
+/// spellings of a definitions map.
+///
+/// The table spells positions that OpenAPI 3.0.3 does not define as well:
+/// `webhooks`, `components.pathItems`, the JSON Schema keywords outside OpenAPI
+/// 3.0.3, a key of `paths` that is no path and a key of the responses that is
+/// no status code. Each is a row, because the walk judges a schema by what it
+/// holds and not by where it stands, and the model drops each of them without a
+/// word.
 ///
 /// Four of the keywords carry their phantom one level further down, under a
 /// `properties` of their own. `not`, `if`, `then` and `else` exempt everything
@@ -822,6 +898,11 @@ const EVERYWHERE: &str = r"paths:
                   spare:
                     type: object
                     additionalProperties: { type: object, required: [onAdditional] }
+        foo:
+          description: no status code
+          content:
+            application/json:
+              schema: { type: object, required: [onNoStatusCode] }
       callbacks:
         settled:
           '{$request.body#/url}':
@@ -849,6 +930,8 @@ const EVERYWHERE: &str = r"paths:
       parameters: [{ name: n, in: query, schema: { type: object, required: [onPatch] } }]
     trace:
       parameters: [{ name: n, in: query, schema: { type: object, required: [onTrace] } }]
+  vouchers:
+    parameters: [{ name: n, in: query, schema: { type: object, required: [onNoPath] } }]
 webhooks:
   settled:
     post:
@@ -964,6 +1047,8 @@ const EVERY_PHANTOM: &[&str] = &[
      .properties.rows.items requires `onItems`",
     "$.paths['/ledger'].post.responses['200'].content['application/json'].schema\
      .properties.spare.additionalProperties requires `onAdditional`",
+    "$.paths['/ledger'].post.responses.foo.content['application/json'].schema \
+     requires `onNoStatusCode`",
     "$.paths['/ledger'].post.callbacks.settled['{$request.body#/url}'].post.requestBody\
      .content['application/json'].schema requires `onCallbackBody`",
     "$.paths['/methods'].get.parameters[0].schema requires `onGet`",
@@ -974,6 +1059,7 @@ const EVERY_PHANTOM: &[&str] = &[
     "$.paths['/methods'].head.parameters[0].schema requires `onHead`",
     "$.paths['/methods'].patch.parameters[0].schema requires `onPatch`",
     "$.paths['/methods'].trace.parameters[0].schema requires `onTrace`",
+    "$.paths.vouchers.parameters[0].schema requires `onNoPath`",
     "$.webhooks.settled.post.requestBody.content['application/json'].schema \
      requires `onWebhook`",
     "$.components.parameters.Period.schema requires `onComponentParameter`",

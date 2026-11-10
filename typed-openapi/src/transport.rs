@@ -9,8 +9,7 @@
 //! This crate ships no adapter and depends on no HTTP client, in any feature
 //! combination: an adopter's choice of client is theirs, and a crate that
 //! pinned one would make it everyone's. `examples/toy/cli/src/client.rs` has
-//! both adapters in full — a ureq 3 agent in nine lines, a `reqwest::Client`
-//! in twelve — written to be copied rather than depended on.
+//! both adapters in full, written to be copied rather than depended on.
 //!
 //! An adapter in an adopter's crate wraps the client in a newtype, because
 //! [`SyncClient`] and the client are both foreign there. A crate that owns
@@ -63,7 +62,7 @@
 //! assert_eq!(client.send(get("/vouchers?page=1")).unwrap().body(), br#"[{"id":5}]"#);
 //! assert_eq!(client.send(get("/vouchers?page=2")).unwrap().body(), b"[]");
 //!
-//! // One answer queued for anything is left, and nothing asked for it.
+//! // The POST failure and the fallback answer are unused.
 //! assert_eq!(client.unused(), 2);
 //! assert_eq!(client.take().len(), 2);
 //! ```
@@ -154,9 +153,20 @@ pub type HttpRequest = Request<Vec<u8>>;
 pub type HttpResponse = Response<Vec<u8>>;
 
 /// Something that can send a request and wait for the answer.
+///
+/// An adapter must not turn a status code into an error. The layer above reads
+/// the status together with the body that came with it, and the body of a `4xx`
+/// is what a caller needs; an `Err` that carried only the status would throw it
+/// away. `Err` is for a request that got no answer at all. `ureq` turns a
+/// status into an error by default and must be built with
+/// `http_status_as_error(false)`.
 pub trait SyncClient {
+    /// What the client reports when no answer came back: a refused connection,
+    /// a timeout, a failed handshake. It never stands for a status code.
     type Error: std::error::Error + Send + Sync + 'static;
 
+    /// Sends `request` and returns the response as the server wrote it, with
+    /// whatever status and body it carried.
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error>;
 }
 
@@ -186,9 +196,17 @@ impl<C: SyncClient + ?Sized> SyncClient for &C {
 
 /// The same, for a caller inside a runtime. `Send` on the future so that a
 /// call can be `tokio::spawn`ed.
+///
+/// The adapter rule of [`SyncClient`] holds here: an adapter must not turn a
+/// status code into an error, because the body that came with a `4xx` is what a
+/// caller needs. `reqwest` does not, and an adapter over it needs no setting.
 pub trait AsyncClient {
+    /// What the client reports when no answer came back: a refused connection,
+    /// a timeout, a failed handshake. It never stands for a status code.
     type Error: std::error::Error + Send + Sync + 'static;
 
+    /// Sends `request` and resolves to the response as the server wrote it,
+    /// with whatever status and body it carried. The future is `Send`.
     fn send(
         &self,
         request: HttpRequest,

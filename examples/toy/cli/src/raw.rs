@@ -25,7 +25,8 @@ pub fn run<C: SyncClient>(api: &Api, client: &C, matches: &ArgMatches) -> Result
         Asked::Template(template) => return Ok(shape(template)),
     };
     vet_body(&selected)?;
-    Ok(report(selected.send(client, api.base())?))
+    let commit = selected.operation().commit();
+    Ok(report(selected.send(client, api.base())?, commit))
 }
 
 /// The skeleton of a body, on stdout with the sentence about it on stderr.
@@ -60,13 +61,14 @@ fn vet_body(selected: &Selection<'_>) -> Result<(), Error> {
     Ok(id.check_body(body)?)
 }
 
-/// Render what the gate did. Nothing here decides anything.
-fn report(outcome: Outcome) -> Output {
+/// Render what the gate did. Nothing here decides anything. `commit` is the
+/// word the operation is confirmed with.
+fn report(outcome: Outcome, commit: &str) -> Output {
     match outcome {
         Outcome::Sent(response) => Output::answered(&response),
         Outcome::DryRun(request) => Output::note(
             render(&request),
-            "dry run: nothing was sent. Add --commit to send it.\n",
+            format!("dry run: nothing was sent. Add --{commit} to send it.\n"),
         ),
         // `select` answers this before a `Selection` exists, so nothing `send`
         // hands back carries one. The arm is here because `Outcome` is also

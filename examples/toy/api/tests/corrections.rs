@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use api::{CORRECTIONS, Correction, Money, OPERATIONS, Voucher};
+use api::{CORRECTIONS, Cents, Contact, Correction, Money, OPERATIONS, Voucher};
 use typed_openapi::{Document, Effect, Gate};
 
 /// The vendor's document, unpatched. `api` never reads this — that is the
@@ -74,8 +74,7 @@ fn schema_names(document: &serde_json::Value) -> BTreeSet<String> {
     document
         .pointer("/components/schemas")
         .and_then(serde_json::Value::as_object)
-        .map(|schemas| schemas.keys().cloned().collect())
-        .unwrap_or_default()
+        .map_or_else(BTreeSet::new, |schemas| schemas.keys().cloned().collect())
 }
 
 /// The rows, sorted into the question each kind of correction answers.
@@ -265,24 +264,20 @@ fn every_retype_still_corrects_something() {
     // typify's own `String` rather than the generated newtype.
     let total: fn(&Voucher) -> &Money = |voucher| &voucher.total;
     let _ = total;
+    let credit_limit: fn(&Contact) -> &Option<Cents> = |contact| &contact.credit_limit;
+    let _ = credit_limit;
 }
 
 /// An undeclared property is a correction only while the vendor leaves it out.
 #[test]
 fn every_undeclared_property_is_still_undeclared() {
     for (schema, property) in rows().undeclared {
-        let declared = |document: &str| {
-            document
-                .split(&format!("{schema}:"))
-                .nth(1)
-                .is_some_and(|rest| rest.contains(&format!("{property}:")))
-        };
         assert!(
-            !declared(VENDOR),
+            !declared(VENDOR, schema, property),
             "`{schema}.{property}` is listed as undeclared but the vendor now declares it"
         );
         assert!(
-            declared(api::DOCUMENT),
+            declared(api::DOCUMENT, schema, property),
             "`{schema}.{property}` is listed as undeclared but the Overlay no longer adds it"
         );
     }
@@ -398,4 +393,22 @@ fn the_vendor_layer_says_nothing_about_a_command_line() {
         "`spec/cli.yaml` no longer carries the marker the gate reads, so either \
          the gate is uncorrected or this check can no longer see it"
     );
+}
+
+fn declared(document: &str, schema: &str, property: &str) -> bool {
+    properties(&json(document)).contains_key(&(schema.to_owned(), property.to_owned()))
+}
+
+#[test]
+fn an_undeclared_property_on_another_schema_does_not_count_as_declared() {
+    let contact =
+        "    Contact:\n      type: object\n      required: [name, address]\n      properties:\n";
+    assert!(VENDOR.contains(contact), "the fixture declares Contact");
+    let document = VENDOR.replacen(
+        contact,
+        &format!("{contact}        internal_ref:\n          type: string\n"),
+        1,
+    );
+    assert!(declared(&document, "Contact", "internal_ref"));
+    assert!(!declared(&document, "Voucher", "internal_ref"));
 }

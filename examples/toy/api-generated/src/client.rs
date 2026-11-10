@@ -63,7 +63,7 @@ impl Api {
     /// `Document::load` does not exist in this build and the blob is the only
     /// reduction there is.
     pub fn new() -> Result<Self, Error> {
-        let client = Client::over(Document::from_blob(MODEL)?)?;
+        let client = Client::over(Document::from_blob(MODEL)?);
         client.document().matches(OPERATIONS)?;
         Ok(Self(client))
     }

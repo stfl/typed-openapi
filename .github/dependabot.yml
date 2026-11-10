@@ -23,3 +23,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # `rust-toolchain.toml` names a dated nightly, and this entry proposes the
+  # next date as a pull request, so CI says whether `just gate` passes on it
+  # before the date moves.
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: weekly

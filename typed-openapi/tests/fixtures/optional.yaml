@@ -1,0 +1,120 @@
+# Bodies a request may leave out, and one that a request may not.
+#
+# `toy.yaml` declares every body `required: true`, so it cannot tell a model that
+# carries whether the body is required from one that does not. The shapes here
+# do: an optional flat body, an optional body that goes whole, one body of each
+# other kind that is optional, and a required flat body in which no property is
+# required, which a model that folded the body's `required` into its properties
+# could not tell from an optional one. `tests/optional.rs` pins what each road
+# sends for each of them.
+openapi: 3.0.3
+info:
+  title: Optional bodies
+  version: "1.0"
+servers:
+  - url: http://localhost:9999
+paths:
+  # The input of the SEV-249 probe `A7/docs/optbody.yaml`: an optional flat body
+  # of which a property is required once a body is sent.
+  /reminders:
+    post:
+      operationId: createReminder
+      parameters:
+        - { name: invoice, in: query, required: true, schema: { type: integer } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [note]
+              properties:
+                note: { type: string }
+      responses:
+        "201": { description: Created }
+  # An optional flat body in which every property is optional.
+  /notes:
+    post:
+      operationId: createNote
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: string }
+                pinned: { type: boolean }
+      responses:
+        "201": { description: Created }
+  # An optional body that goes whole: one nested property is enough.
+  /exports:
+    post:
+      operationId: createExport
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filter:
+                  type: object
+                  properties:
+                    year: { type: integer }
+      responses:
+        "201": { description: Created }
+  # A required flat body in which no property is required.
+  /labels:
+    post:
+      operationId: createLabel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                color: { type: string }
+      responses:
+        "201": { description: Created }
+  # A required flat body in which a property is required, beside the two above.
+  /tags:
+    post:
+      operationId: createTag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                color: { type: string }
+      responses:
+        "201": { description: Created }
+  # An optional body sent verbatim, and an optional multipart body.
+  /attachments:
+    post:
+      operationId: uploadAttachment
+      requestBody:
+        required: false
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "201": { description: Created }
+  /scans:
+    post:
+      operationId: uploadScan
+      requestBody:
+        required: false
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: Created }

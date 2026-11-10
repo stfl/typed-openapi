@@ -1,0 +1,163 @@
+# The media types a body is declared under, as vendors write them.
+#
+# `toy.yaml` declares `application/json` and nothing else, so it cannot tell a
+# request that sends the type a body is declared under from one that sends
+# `application/json` whatever the document says. The shapes here tell the two
+# apart: JSON under a `+json` type, and several `content` keys on one body.
+# `tests/media.rs` pins the `Content-Type` of each and the key the reduction
+# picks.
+#
+# A `content` key that this crate refuses cannot stand in a document that has to
+# load, and neither can a key that is picked and refused, `application/*+json`
+# among them. Those documents are built beside their assertions in that file.
+openapi: 3.0.3
+info:
+  title: Media types
+  version: "1.0"
+servers:
+  - url: http://localhost:9999
+paths:
+  # A merge patch, which a server reads with the semantics of RFC 7396 and
+  # answers 415 when it is sent as `application/json`.
+  /things/{id}:
+    get:
+      operationId: getThing
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: OK }
+    patch:
+      operationId: patchThing
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                title: { type: string }
+      responses:
+        "200": { description: OK }
+  # JSON:API, with a flat body and with a nested one, which is sent whole. The
+  # second type has a parameter, and a server matches the profile on it.
+  /articles:
+    post:
+      operationId: createArticle
+      requestBody:
+        required: true
+        content:
+          application/vnd.api+json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+      responses:
+        "201": { description: Created }
+  /comments:
+    post:
+      operationId: createComment
+      requestBody:
+        required: true
+        content:
+          'application/vnd.api+json; profile="https://example.com/Profiles/Timestamps"':
+            schema:
+              type: object
+              properties:
+                data:
+                  type: object
+                  properties:
+                    type: { type: string }
+      responses:
+        "201": { description: Created }
+  # A body whose key carries no schema at all goes whole, under its key.
+  /freeform:
+    post:
+      operationId: postFreeform
+      requestBody:
+        content:
+          application/vnd.api+json: {}
+      responses:
+        "201": { description: Created }
+  # Several `content` keys on one body. The key that is sent is the first one
+  # that names JSON, wherever it stands, and else the first of all. A media
+  # range is read only when it is that key, and none of these is.
+  /picks/json-over-text:
+    post:
+      operationId: pickJsonOverText
+      requestBody:
+        content:
+          text/plain: { schema: { type: string } }
+          application/json:
+            schema: { type: object, properties: { a: { type: string } } }
+      responses:
+        "201": { description: Created }
+  /picks/first-json:
+    post:
+      operationId: pickFirstJson
+      requestBody:
+        content:
+          text/csv: { schema: { type: string } }
+          application/vnd.api+json:
+            schema: { type: object, properties: { a: { type: string } } }
+          application/json:
+            schema: { type: object, properties: { b: { type: string } } }
+      responses:
+        "201": { description: Created }
+  /picks/urlencoded-first:
+    post:
+      operationId: pickUrlencodedFirst
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema: { type: object, properties: { a: { type: string } } }
+          multipart/form-data:
+            schema: { type: object, properties: { a: { type: string } } }
+      responses:
+        "201": { description: Created }
+  /picks/multipart-first:
+    post:
+      operationId: pickMultipartFirst
+      requestBody:
+        content:
+          multipart/form-data:
+            schema: { type: object, properties: { a: { type: string } } }
+          application/x-www-form-urlencoded:
+            schema: { type: object, properties: { a: { type: string } } }
+      responses:
+        "201": { description: Created }
+  /picks/json-over-range:
+    post:
+      operationId: pickJsonOverRange
+      requestBody:
+        content:
+          image/*: { schema: { type: string, format: binary } }
+          application/json:
+            schema: { type: object, properties: { a: { type: string } } }
+      responses:
+        "201": { description: Created }
+  # A range that ends in `+json` names JSON by its suffix, as `application/json`
+  # does. Standing after the key that names JSON first, it is not the key that
+  # is sent, so it is not read.
+  /picks/json-before-json-range:
+    post:
+      operationId: pickJsonBeforeJsonRange
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { b: { type: string } } }
+          application/*+json:
+            schema: { type: object, properties: { a: { type: string } } }
+      responses:
+        "201": { description: Created }
+  /picks/text-over-range:
+    post:
+      operationId: pickTextOverRange
+      requestBody:
+        content:
+          text/plain: { schema: { type: string } }
+          image/*: { schema: { type: string, format: binary } }
+      responses:
+        "201": { description: Created }

@@ -1,5 +1,4 @@
-//! An amount of money, as fixed point over an arbitrary-precision count of
-//! cents.
+//! Owned amounts: arbitrary-precision fixed-point money and bounded cents.
 //!
 //! # Why this is not a generated type
 //!
@@ -21,7 +20,7 @@
 //! # Why this is a crate
 //!
 //! The generated code names [`Money`], so the crate that owns it has to sit
-//! *below* the generated one. That is the whole of the arrangement: one type,
+//! *below* the generated one. That is the whole of the arrangement: owned types,
 //! `serde`, `thiserror` and `num-bigint`, and no way for an edit here to
 //! recompile anything it does not have to. The bignum stops here — the library
 //! has no business knowing what an adopter's own type is made of, and
@@ -317,9 +316,74 @@ fn digit(byte: u8) -> Option<u8> {
     byte.is_ascii_digit().then(|| byte - b'0')
 }
 
+/// A non-negative count of cents bounded by `i64`, narrower than its pattern.
+///
+/// The adopter guards that this format is never a flag. A response with more
+/// digits than this count can hold fails to decode, even if the document allows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Cents(i64);
+
+/// A string outside the non-negative `i64` range of [`Cents`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("expected a non-negative i64 count of cents")]
+pub struct CentsError {
+    raw: String,
+}
+
+impl FromStr for Cents {
+    type Err = CentsError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let count = (!raw.is_empty() && raw.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| raw.parse::<i64>().ok())
+            .flatten();
+        count.map(Self).ok_or_else(|| CentsError {
+            raw: raw.to_owned(),
+        })
+    }
+}
+
+impl fmt::Display for Cents {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Serialize for Cents {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Cents {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cents_errors_have_a_bounded_message_for_large_rejected_values() {
+        for digits in [1_048_576, 32] {
+            let raw = "9".repeat(digits);
+            let Err(error) = raw.parse::<Cents>() else {
+                panic!("an oversized count must be refused");
+            };
+            assert!(matches!(error, CentsError { .. }));
+            let message = error.to_string();
+            assert!(
+                message.len() <= 64,
+                "diagnostic is {} bytes for {digits} input bytes",
+                message.len()
+            );
+            assert_eq!(message, "expected a non-negative i64 count of cents");
+        }
+    }
 
     fn money(raw: &str) -> Money {
         raw.parse()

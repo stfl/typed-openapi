@@ -287,3 +287,106 @@ fn an_empty_list_is_a_sentence_and_not_an_empty_table() {
     );
     assert!(page.contains("| operations | 1 |"), "{page}");
 }
+
+/// `A1/errs` (`page`): a parameter named `a|b` in a cookie, one named `|` in the
+/// query, and an `operationId` that holds a pipe, which the page lists in the
+/// table of parameters carried without a flag.
+const PIPES: &str = r#"
+openapi: 3.0.3
+info: { title: Pipes, version: "1.0" }
+servers: [{ url: "http://localhost:9999" }]
+paths:
+  /a:
+    get:
+      operationId: list|A
+      parameters:
+        - { name: 'a|b', in: cookie, schema: { type: string } }
+        - { name: '|', in: query, schema: { type: string } }
+      responses: { "200": { description: OK } }
+"#;
+
+/// The cells of a table row, split where a pipe is a column break: a pipe that a
+/// backslash precedes is text in the cell, as a Markdown reader takes it, inside
+/// a code span too.
+fn cells(row: &str) -> Vec<String> {
+    let inner = row
+        .strip_prefix('|')
+        .and_then(|rest| rest.strip_suffix('|'))
+        .expect("a row starts and ends with a pipe");
+    let mut cells: Vec<String> = Vec::new();
+    let mut escaped = false;
+    for piece in inner.split('|') {
+        match cells.last_mut() {
+            Some(last) if escaped => {
+                last.push('|');
+                last.push_str(piece);
+            }
+            _ => cells.push(piece.to_owned()),
+        }
+        escaped = piece.ends_with('\\');
+    }
+    cells.iter().map(|cell| cell.trim().to_owned()).collect()
+}
+
+/// A name is the document's and may hold a pipe, and a pipe in a cell is the end
+/// of the cell. Each row of the table has its three cells whatever the names say.
+#[test]
+fn a_pipe_in_a_name_stays_in_its_cell() {
+    let page = summary(PIPES, &[]).to_string();
+
+    let rows: Vec<&str> = page
+        .lines()
+        .skip_while(|line| !line.starts_with("## Parameters"))
+        .filter(|line| line.starts_with("| `"))
+        .collect();
+    assert_eq!(rows.len(), 2, "both parameters are listed:\n{page}");
+    let mut operations = Vec::new();
+    let mut parameters = Vec::new();
+    for row in rows {
+        let Ok([operation, parameter, _why]) = <[String; 3]>::try_from(cells(row)) else {
+            panic!("a pipe broke the row `{row}`");
+        };
+        operations.push(operation);
+        parameters.push(parameter);
+    }
+    assert_eq!(parameters, ["`a\\|b`", "`\\|`"], "{page}");
+    assert_eq!(
+        operations,
+        ["`list\\|A`", "`list\\|A`"],
+        "the operation is escaped too:\n{page}"
+    );
+}
+
+/// The reason a parameter is carried without a flag is the crate's own words for
+/// a document that was loaded. A `Document` read from a blob or from another
+/// format holds whatever `Unsupported::Keyword` it was written with, and a pipe
+/// in that text ends the cell as a pipe in a name does.
+#[test]
+fn a_pipe_in_the_reason_stays_in_its_cell() {
+    let loaded = Document::load(PIPES, &[]).expect("a document");
+    let json = serde_json::to_string(&loaded).expect("a document writes as JSON");
+    let edited = json.replace(
+        r#""Unreachable":"Cookie""#,
+        r#""Unreachable":{"Keyword":"a|b"}"#,
+    );
+    assert_ne!(
+        edited, json,
+        "the cookie parameter is carried without a flag"
+    );
+    let doc: Document = serde_json::from_str(&edited).expect("a document reads back");
+
+    let page = doc.summary().to_string();
+
+    let row = page
+        .lines()
+        .skip_while(|line| !line.starts_with("## Parameters"))
+        .find(|line| line.contains("`a\\|b`"))
+        .unwrap_or_else(|| panic!("the cookie parameter is listed:\n{page}"));
+    let Ok([_operation, _parameter, why]) = <[String; 3]>::try_from(cells(row)) else {
+        panic!("a pipe broke the row `{row}`");
+    };
+    assert_eq!(
+        why,
+        "stated with `a\\|b`, which this CLI does not read as a value"
+    );
+}

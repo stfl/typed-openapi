@@ -11,7 +11,10 @@ use api::{Api, OperationId};
 use cli::app;
 use cli::output::Output;
 use http::StatusCode;
-use typed_openapi::Recorder;
+use typed_openapi::tree::{self, ArgError, Asked, DispatchError};
+use typed_openapi::{
+    BaseUrlError, COMMIT_ID, Document, PlanError, Recorder, RequestError, ValueError,
+};
 
 /// The write the report quotes. Every field the document marks required is
 /// required on the command line too, so an incomplete PUT is refused here
@@ -59,7 +62,7 @@ fn run(client: &Recorder, args: &[&str]) -> Output {
 
 #[test]
 fn a_write_without_commit_prints_the_request_and_sends_nothing() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
     let out = run(&client, UPDATE);
     assert_eq!(
         out.stdout,
@@ -83,8 +86,10 @@ fn a_write_without_commit_prints_the_request_and_sends_nothing() {
 /// Comparing the two renderings would only prove `render` is deterministic.
 #[test]
 fn commit_sends_exactly_what_the_dry_run_printed() {
-    let dry = run(&Recorder::new(), UPDATE);
-    let client = Recorder::new().answering(StatusCode::OK, &voucher("draft"));
+    let dry = run(&Recorder::new().strict(), UPDATE);
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("draft"));
     let committed: Vec<&str> = UPDATE.iter().copied().chain(["--commit"]).collect();
     let wet = run(&client, &committed);
 
@@ -127,6 +132,199 @@ fn a_base_url_that_is_not_a_url_stops_the_invocation() {
     let shown = error.to_string();
     assert!(shown.contains("not a url"), "{shown}");
     assert!(shown.contains("--base-url"), "{shown}");
+}
+
+/// What an operator's terminal shows for `error`, the way `main` prints it: the
+/// error, then each cause under it.
+fn shown(error: &app::Error) -> String {
+    let causes = std::iter::successors(std::error::Error::source(error), |cause| cause.source())
+        .map(|cause| format!("  caused by: {cause}"));
+    std::iter::once(format!("toy: {error}"))
+        .chain(causes)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `--base-url` with a credential or a key in it. Unrefused, a dry run prints the
+/// userinfo in its `host:` line, a confirmed run sends it as a `Basic` header, and
+/// the query is dropped in silence. The refusal says which part of the URL it is
+/// and prints none of it, and it is the same for every verb and for a dry run.
+#[test]
+fn a_base_url_that_carries_a_credential_stops_the_invocation_and_prints_none_of_it() {
+    for (base, variant, part, secrets) in [
+        (
+            "http://alice:s3cret@127.0.0.1:18473/",
+            BaseUrlError::Userinfo,
+            "userinfo",
+            &["alice", "s3cret"][..],
+        ),
+        // The `http` crate reads this one as a path, and a dry run would print it.
+        (
+            "//alice:s3cret@127.0.0.1:18473/",
+            BaseUrlError::Userinfo,
+            "userinfo",
+            &["alice", "s3cret"][..],
+        ),
+        (
+            "http://127.0.0.1:18471/api?key=secret",
+            BaseUrlError::Query,
+            "query",
+            &["key", "secret"][..],
+        ),
+    ] {
+        for verb in [
+            &["raw", "vouchers", "render", "--id", "5"][..],
+            &["raw", "vouchers", "render", "--id", "5", "--commit"][..],
+            &["raw", "vouchers", "list"][..],
+            &["finalize-voucher", "--id", "5", "--enshrine"][..],
+        ] {
+            let client = Recorder::new().strict();
+            let api = api();
+            let matches = app::root(&api).get_matches_from(
+                ["toy", "--base-url", base]
+                    .into_iter()
+                    .chain(verb.iter().copied()),
+            );
+
+            let error = app::run(api, &client, &matches).expect_err("the base URL is refused");
+
+            // Under `raw` the tree refuses it, and the hand-written verb's typed
+            // calls refuse it through the client: one refusal, two doors.
+            let (app::Error::Dispatch(DispatchError::Plan(PlanError::Request(
+                RequestError::Base(refused),
+            )))
+            | app::Error::Api(typed_openapi::client::Error::Request(RequestError::Base(
+                refused,
+            )))) = &error
+            else {
+                panic!("{base} {verb:?}: {error:?}");
+            };
+            assert_eq!(*refused, variant, "{base} {verb:?}");
+            let stderr = shown(&error);
+            assert!(stderr.contains(part), "{base} {verb:?}: {stderr}");
+            for secret in secrets {
+                assert!(
+                    !stderr.contains(secret),
+                    "{base} {verb:?}: `{secret}` in {stderr}"
+                );
+            }
+            assert!(client.take().is_empty(), "nothing reached the transport");
+        }
+    }
+}
+
+/// A value that starts with a dash is a value. clap reads `-5` as a flag of its
+/// own unless the flag is told what it is for, and in an accounting API a negative
+/// amount or an offset is ordinary.
+#[test]
+fn a_negative_number_and_a_text_with_a_leading_dash_are_separate_words() {
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &serde_json::json!([]));
+    run(
+        &client,
+        &[
+            "toy", "raw", "vouchers", "list", "--limit", "-5", "--type", "-x",
+        ],
+    );
+    let sent = client.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].uri().path_and_query().map(ToString::to_string),
+        Some("/vouchers?limit=-5&type=-x".to_owned())
+    );
+
+    // A body field too, and a credit note is an amount with a sign.
+    let credit: Vec<&str> = UPDATE
+        .iter()
+        .copied()
+        .map(|word| if word == "12.50" { "-12.50" } else { word })
+        .collect();
+    let out = run(&Recorder::new().strict(), &credit);
+    assert!(
+        out.stdout
+            .contains(r#"{"total":"-12.50","currency":"EUR","status":"draft"}"#),
+        "{}",
+        out.stdout
+    );
+
+    // The separate word is checked like the joined one.
+    let api = api();
+    let refused = app::root(&api)
+        .try_get_matches_from(["toy", "raw", "vouchers", "list", "--limit", "-5.5"])
+        .expect_err("`-5.5` is not an integer");
+    assert_eq!(refused.kind(), clap::error::ErrorKind::ValueValidation);
+}
+
+/// The number that is checked is the number that is sent: `+5` is `5` on the wire,
+/// and the raw text `%2B5` never is.
+#[test]
+fn a_number_is_sent_as_it_was_parsed() {
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("draft"))
+        .answering(StatusCode::OK, &serde_json::json!([]));
+    run(&client, &["toy", "raw", "vouchers", "get", "--id", "+005"]);
+    run(
+        &client,
+        &["toy", "raw", "vouchers", "list", "--limit", "+007"],
+    );
+    let sent: Vec<String> = client
+        .take()
+        .iter()
+        .filter_map(|request| request.uri().path_and_query().map(ToString::to_string))
+        .collect();
+    assert_eq!(sent, ["/vouchers/5", "/vouchers?limit=7"]);
+}
+
+/// The toy's ids are integers, which refuse `..` as "not an integer" already, so
+/// this runs the toy's shape of document with a free-text path parameter through
+/// the same tree and the same recorder. `DELETE /things/..` is a request that a
+/// server or a proxy reads as the collection above, so it is never built.
+#[test]
+fn a_path_value_that_is_a_dot_segment_stops_the_invocation_and_sends_nothing() {
+    let document = Document::load(
+        "openapi: 3.0.3\n\
+         info: { title: Things, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+         \x20 /things/{name}:\n\
+         \x20   delete:\n\
+         \x20     operationId: deleteThing\n\
+         \x20     parameters:\n\
+         \x20       - { name: name, in: path, required: true, schema: { type: string } }\n\
+         \x20     responses: { '204': { description: Deleted } }\n",
+        &[],
+    )
+    .expect("a document with a free-text path parameter");
+    let root = clap::Command::new("toy")
+        .subcommand_required(true)
+        .subcommands(tree::commands(&document));
+
+    for value in ["..", ".", ""] {
+        let client = Recorder::new().strict();
+        let matches = root
+            .clone()
+            .get_matches_from(["toy", "things", "delete", "--name", value, "--commit"]);
+        let Asked::Run(selection) = tree::select(&document, &matches).expect("an operation") else {
+            panic!("this command line runs the operation");
+        };
+
+        let error = selection
+            .send(&client, document.base())
+            .expect_err("the segment is refused");
+
+        assert!(
+            matches!(
+                &error,
+                DispatchError::Plan(PlanError::Value(ValueError::PathSegment { name, .. }))
+                    if name == "name"
+            ),
+            "`{value}`: {error:?}"
+        );
+        assert!(error.to_string().contains("`name`"), "{error}");
+        assert!(client.take().is_empty(), "nothing reached the transport");
+    }
 }
 
 /// A request, as the dry run prints it and as the transport receives it — the
@@ -200,7 +398,9 @@ fn every_command_builds() {
 
 #[test]
 fn a_read_carries_no_flag_and_runs_on_sight() {
-    let client = Recorder::new().answering(StatusCode::OK, &serde_json::json!([voucher("paid")]));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &serde_json::json!([voucher("paid")]));
     let out = run(
         &client,
         &["toy", "raw", "vouchers", "list", "--status", "paid"],
@@ -217,7 +417,7 @@ fn a_read_carries_no_flag_and_runs_on_sight() {
 /// HTTP says this is a GET. The document says it writes, and the document wins.
 #[test]
 fn the_writing_get_is_gated_like_any_other_write() {
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
     let out = run(&client, &["toy", "raw", "vouchers", "render", "--id", "5"]);
     assert!(
         out.stdout.starts_with("GET /vouchers/5/render"),
@@ -254,7 +454,9 @@ fn mailing_a_voucher_wants_its_own_word_beside_commit() {
     );
     assert!(refused.to_string().contains("--email"), "{refused}");
 
-    let client = Recorder::new().answering(StatusCode::ACCEPTED, &serde_json::json!(null));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::ACCEPTED, &serde_json::json!(null));
     let both: Vec<&str> = committed.iter().copied().chain(["--email"]).collect();
     let out = run(&client, &both);
 
@@ -273,7 +475,7 @@ fn a_flag_beside_json_body_is_an_edit_not_a_value_that_is_dropped() {
         serde_json::json!({"total": "1.00", "currency": "EUR", "status": "draft"}).to_string(),
     )
     .expect("writing the fixture");
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
     let out = run(
         &client,
         &[
@@ -295,16 +497,16 @@ fn a_flag_beside_json_body_is_an_edit_not_a_value_that_is_dropped() {
     );
 }
 
-/// The hole the CLI path used to have beside the typed one: a `--json-body`
-/// file the document's own schema refuses is refused here, before a request is
-/// built, rather than sent for the server to reject.
+/// A `--json-body` file the document's own schema refuses is refused here,
+/// before a request is built, rather than sent for the server to reject, as the
+/// typed call is held to the same schema.
 #[test]
 fn a_json_body_that_does_not_fit_the_document_is_refused_with_nothing_sent() {
     let dir = tempdir();
     let path = dir.join("contact.json");
     std::fs::write(&path, serde_json::json!({"name": "Ada"}).to_string())
         .expect("writing the fixture");
-    let client = Recorder::new();
+    let client = Recorder::new().strict();
     let api = api();
     let matches = app::root(&api).get_matches_from([
         "toy",
@@ -328,6 +530,269 @@ fn a_json_body_that_does_not_fit_the_document_is_refused_with_nothing_sent() {
     assert!(client.take().is_empty(), "nothing reached the transport");
 }
 
+/// The bodies the requirements name for an undeclared property, byte for byte.
+const CONTACT: &str = r#"{ "name": "Acme Ltd", "address": { "street": "1 Example Way", "city": "Vienna" }, "undeclaredField": "this property is in no schema" }"#;
+const NESTED: &str = r#"{ "name": "Acme Ltd", "address": { "street": "1 Example Way", "city": "Vienna", "extra": "x" } }"#;
+const GOOD: &str =
+    r#"{ "name": "Acme Ltd", "address": { "street": "1 Example Way", "city": "Vienna" } }"#;
+const LABELS: &str = r#"{ "vip": "yes", "region": "east" }"#;
+
+/// `args` with `--json-body` pointing at a file that holds `text`, run to its
+/// end. The error is what an operator's terminal shows as `toy: …`, with the
+/// cause under it, the way `main` prints it.
+fn refused(client: &Recorder, args: &[&str], text: &str) -> (app::Error, String) {
+    let dir = tempdir();
+    let path = dir.join("body.json");
+    std::fs::write(&path, text).expect("writing the fixture");
+    let path = path.to_str().expect("a UTF-8 path");
+    let api = api();
+    let matches =
+        app::root(&api).get_matches_from(args.iter().copied().chain(["--json-body", path]));
+    let error = app::run(api, client, &matches).expect_err("the body is refused");
+    let causes = std::iter::successors(std::error::Error::source(&error), |cause| cause.source())
+        .map(|cause| format!("  caused by: {cause}"));
+    let shown = std::iter::once(format!("toy: {error}"))
+        .chain(causes)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (error, shown)
+}
+
+/// AC-7.1: a property no schema declares stops the request in a dry run.
+#[test]
+fn a_property_no_schema_declares_stops_the_dry_run() {
+    let client = Recorder::new().strict();
+
+    let (error, stderr) = refused(&client, &["toy", "raw", "contacts", "create"], CONTACT);
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Body(api::BodyError::Undeclared { op, path })
+                if op == "createContact" && path == "undeclaredField"
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("createContact"), "{stderr}");
+    assert!(stderr.contains("undeclaredField"), "{stderr}");
+    assert!(
+        !stderr.contains("this property is in no schema"),
+        "the refusal never prints the value: {stderr}"
+    );
+    assert!(client.take().is_empty(), "nothing reached the transport");
+}
+
+/// AC-7.2: the same refusal in a confirmed run, with nothing on the wire.
+#[test]
+fn a_property_no_schema_declares_stops_a_confirmed_run_too() {
+    let client = Recorder::new().strict();
+
+    let (error, stderr) = refused(
+        &client,
+        &["toy", "raw", "contacts", "create", "--commit"],
+        CONTACT,
+    );
+
+    assert!(
+        matches!(&error, app::Error::Body(api::BodyError::Undeclared { .. })),
+        "{error:?}"
+    );
+    assert!(stderr.contains("undeclaredField"), "{stderr}");
+    assert!(
+        client.take().is_empty(),
+        "a request that the check refuses is never handed to the transport"
+    );
+}
+
+/// AC-7.3: a property one level down is named by its path.
+#[test]
+fn a_nested_property_no_schema_declares_is_named_by_its_path() {
+    let client = Recorder::new().strict();
+
+    let (error, stderr) = refused(&client, &["toy", "raw", "contacts", "create"], NESTED);
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Body(api::BodyError::Undeclared { path, .. }) if path == "address.extra"
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("`address.extra`"), "{stderr}");
+    assert!(client.take().is_empty());
+}
+
+/// AC-7.4: a body that declares everything it carries is sent as it is.
+#[test]
+fn a_body_with_only_declared_properties_is_printed_as_given() {
+    let dir = tempdir();
+    let path = dir.join("good.json");
+    std::fs::write(&path, GOOD).expect("writing the fixture");
+    let client = Recorder::new().strict();
+
+    let out = run(
+        &client,
+        &[
+            "toy",
+            "raw",
+            "contacts",
+            "create",
+            "--json-body",
+            path.to_str().expect("a UTF-8 path"),
+        ],
+    );
+
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stdout.contains("POST /contacts"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            r#"{"name":"Acme Ltd","address":{"street":"1 Example Way","city":"Vienna"}}"#
+        ),
+        "{}",
+        out.stdout
+    );
+}
+
+/// AC-7.5: `additionalProperties` admits the labels, which no struct declares.
+#[test]
+fn a_property_an_open_schema_admits_is_sent_as_before() {
+    let dir = tempdir();
+    let path = dir.join("labels.json");
+    std::fs::write(&path, LABELS).expect("writing the fixture");
+    let path = path.to_str().expect("a UTF-8 path");
+    let line = [
+        "toy",
+        "raw",
+        "contacts",
+        "labels",
+        "--id",
+        "1",
+        "--json-body",
+        path,
+    ];
+
+    let dry = run(&Recorder::new().strict(), &line);
+    assert!(dry.success, "{}", dry.stderr);
+    assert!(
+        dry.stdout.contains("PUT /contacts/1/labels"),
+        "{}",
+        dry.stdout
+    );
+    assert!(dry.stdout.contains("vip"), "{}", dry.stdout);
+    assert!(dry.stdout.contains("region"), "{}", dry.stdout);
+
+    let client = Recorder::new().strict().answering(
+        StatusCode::OK,
+        &serde_json::json!({"vip": "yes", "region": "east"}),
+    );
+    let committed: Vec<&str> = line.iter().copied().chain(["--commit"]).collect();
+    let wet = run(&client, &committed);
+    assert!(wet.success, "{}", wet.stderr);
+    assert_eq!(client.take().len(), 1, "an open body goes out once");
+}
+
+/// The open schema takes strings, and only strings: it is a map of them.
+#[test]
+fn an_open_schema_still_holds_its_values_to_their_type() {
+    let client = Recorder::new().strict();
+
+    let (error, stderr) = refused(
+        &client,
+        &["toy", "raw", "contacts", "labels", "--id", "1"],
+        r#"{ "vip": 1 }"#,
+    );
+
+    assert!(
+        matches!(&error, app::Error::Body(api::BodyError::Mismatch { .. })),
+        "{error:?}"
+    );
+    assert!(stderr.contains("setContactLabels"), "{stderr}");
+    assert!(client.take().is_empty());
+}
+
+/// F-29, from the input of its probe: five values in the order the generated
+/// `Voucher` declares its fields. Serde reads a struct from a list by place, so
+/// the list is refused for what it is.
+#[test]
+fn a_list_in_the_place_of_an_object_stops_the_request() {
+    let client = Recorder::new().strict();
+
+    let (error, stderr) = refused(
+        &client,
+        &["toy", "raw", "vouchers", "create", "--commit"],
+        r#"["EUR",null,null,"draft","1.00"]"#,
+    );
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Body(api::BodyError::NotAnObject { op, path, found })
+                if op == "createVoucher" && path == "." && *found == "an array"
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("createVoucher"), "{stderr}");
+    assert!(client.take().is_empty());
+}
+
+/// F-29 below the top: `address` is a list that holds the two values the
+/// generated `Address` declares, which serde reads by place. The server would
+/// read a list.
+#[test]
+fn a_list_in_the_place_of_a_nested_object_stops_the_request() {
+    let client = Recorder::new().strict();
+
+    let (error, stderr) = refused(
+        &client,
+        &["toy", "raw", "contacts", "create", "--commit"],
+        r#"{"name": "Acme Ltd", "address": ["Vienna", "1 Example Way"]}"#,
+    );
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Body(api::BodyError::NotAnObject { op, path, found })
+                if op == "createContact" && path == "address" && *found == "an array"
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("`address`"), "{stderr}");
+    assert!(client.take().is_empty());
+}
+
+/// F-30, from the input of its probe: field flags beside a list.
+#[test]
+fn a_field_flag_beside_a_list_is_refused_and_not_dropped() {
+    let client = Recorder::new().strict();
+
+    let (error, stderr) = refused(
+        &client,
+        &[
+            "toy",
+            "raw",
+            "vouchers",
+            "create",
+            "--currency",
+            "USD",
+            "--total",
+            "99.99",
+            "--status",
+            "paid",
+        ],
+        r#"["EUR",null,null,"draft","1.00"]"#,
+    );
+
+    assert!(
+        matches!(
+            &error,
+            app::Error::Dispatch(DispatchError::Arg(ArgError::FlagBesideNonObject { .. }))
+        ),
+        "{error:?}"
+    );
+    assert!(stderr.contains("`--total`"), "{stderr}");
+    assert!(client.take().is_empty());
+}
+
 #[test]
 fn a_nested_body_goes_through_a_file_and_no_dead_flags_are_offered() {
     let dir = tempdir();
@@ -336,7 +801,9 @@ fn a_nested_body_goes_through_a_file_and_no_dead_flags_are_offered() {
         "name": "Ada", "address": {"street": "1 Main", "city": "Vienna"}
     });
     std::fs::write(&path, contact.to_string()).expect("writing the fixture");
-    let client = Recorder::new().answering(StatusCode::CREATED, &contact);
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::CREATED, &contact);
     let out = run(
         &client,
         &[
@@ -374,7 +841,7 @@ fn a_nested_body_goes_through_a_file_and_no_dead_flags_are_offered() {
 /// That it answers at all is the evidence nothing was built.
 #[test]
 fn the_template_is_the_file_json_body_wants() {
-    let asked = Recorder::new();
+    let asked = Recorder::new().strict();
     let out = run(
         &asked,
         &["toy", "raw", "contacts", "create", "--json-body-template"],
@@ -402,7 +869,7 @@ fn the_template_is_the_file_json_body_wants() {
         .replace("\"street\": \"\"", "\"street\": \"1 Main\"");
     std::fs::write(&path, &filled).expect("writing the fixture");
 
-    let client = Recorder::new().answering(
+    let client = Recorder::new().strict().answering(
         StatusCode::CREATED,
         &serde_json::json!({"id": 1, "name": "Ada",
                             "address": {"street": "1 Main", "city": "Vienna"}}),
@@ -424,11 +891,43 @@ fn the_template_is_the_file_json_body_wants() {
 }
 
 #[test]
+fn raw_body_sends_the_files_bytes_under_the_documents_media_type() {
+    let dir = tempdir();
+    let path = dir.join("document.pdf");
+    let bytes = b"%PDF-1.7\n\0\xff";
+    std::fs::write(&path, bytes).expect("writing the fixture");
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::CREATED, &serde_json::json!(null));
+    let out = run(
+        &client,
+        &[
+            "toy",
+            "raw",
+            "documents",
+            "create",
+            "--raw-body",
+            path.to_str().expect("a UTF-8 path"),
+            "--commit",
+        ],
+    );
+    assert!(out.success, "{}", out.stderr);
+    let sent = client.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].method(), "POST");
+    assert_eq!(sent[0].uri().path(), "/documents");
+    assert_eq!(sent[0].headers()["content-type"], "application/pdf");
+    assert_eq!(sent[0].body(), bytes);
+}
+
+#[test]
 fn the_multipart_upload_is_assembled_from_parts() {
     let dir = tempdir();
     let path = dir.join("doc.bin");
     std::fs::write(&path, b"PDF").expect("writing the fixture");
-    let client = Recorder::new().answering(StatusCode::CREATED, &serde_json::json!(null));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::CREATED, &serde_json::json!(null));
     run(
         &client,
         &[
@@ -452,7 +951,9 @@ fn the_multipart_upload_is_assembled_from_parts() {
 
 #[test]
 fn the_chain_prints_every_request_it_would_make() {
-    let client = Recorder::new().answering(StatusCode::OK, &voucher("open"));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("open"));
     let out = run(&client, FINALIZE);
     let lines: Vec<&str> = out
         .stdout
@@ -509,9 +1010,38 @@ fn the_chain_offers_every_gate_the_operation_it_calls_names() {
     }
 }
 
+/// The chain sends two writes, so the help of its confirmation says so, in the
+/// word the operation chose: the help a generated subcommand has is about one
+/// request.
+#[test]
+fn the_chains_confirmation_says_that_it_sends_the_writes() {
+    let api = api();
+    let root = app::root(&api);
+    let verb = root
+        .find_subcommand("finalize-voucher")
+        .expect("the verb is mounted");
+
+    let commit = verb
+        .get_arguments()
+        .find(|arg| arg.get_id() == COMMIT_ID)
+        .expect("the chain writes, so it offers the confirmation");
+
+    assert_eq!(
+        commit.get_long(),
+        Some(api.operation(OperationId::EnshrineVoucher).commit()),
+        "the word stays the operation's"
+    );
+    assert_eq!(
+        commit.get_help().map(ToString::to_string).as_deref(),
+        Some("Send the writes. Without it this is a dry run that prints them")
+    );
+}
+
 #[test]
 fn the_chain_skips_the_irreversible_step_for_a_voucher_that_is_not_open() {
-    let client = Recorder::new().answering(StatusCode::OK, &voucher("paid"));
+    let client = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("paid"));
     let out = run(&client, FINALIZE);
     assert!(
         !out.stdout.contains("/vouchers/5/enshrine"),
@@ -532,7 +1062,9 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
 
     // The dry run: the fetch the chain depends on goes there, and all three
     // requests are printed against it.
-    let dry = Recorder::new().answering(StatusCode::OK, &voucher("open"));
+    let dry = Recorder::new()
+        .strict()
+        .answering(StatusCode::OK, &voucher("open"));
     let printed = run(
         &dry,
         &[
@@ -562,6 +1094,7 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
 
     // And `--commit` sends every one of them there.
     let wet = Recorder::new()
+        .strict()
         .answering(StatusCode::OK, &voucher("open"))
         .answering(StatusCode::OK, &voucher("paid"))
         .answering(StatusCode::OK, &voucher("paid"));
@@ -589,9 +1122,47 @@ fn the_chain_sends_to_the_base_url_it_was_given() {
     );
 }
 
+/// The chain decides on one request for each write and sends that one: the
+/// requests the dry run printed are, parsed back into method, target, headers and
+/// body, the requests `--commit` handed the transport. A chain that built a
+/// request to decide on and another to send would be equal here only while
+/// building is pure.
+#[test]
+fn the_chain_sends_the_requests_it_printed() {
+    let script = || {
+        Recorder::new()
+            .strict()
+            .answering(StatusCode::OK, &voucher("open"))
+            .answering(StatusCode::OK, &voucher("paid"))
+            .answering(StatusCode::OK, &voucher("paid"))
+    };
+    let dry = run(&script(), FINALIZE);
+    let wet = script();
+    let committed: Vec<&str> = FINALIZE.iter().copied().chain(["--commit"]).collect();
+    run(&wet, &committed);
+
+    let printed: Vec<Printed> = dry.stdout.split("\n\n").map(Printed::parse).collect();
+    let sent: Vec<Printed> = wet.take().iter().map(Printed::of).collect();
+
+    assert_eq!(printed.len(), 3, "the fetch and the two writes");
+    assert_eq!(printed, sent);
+    assert_eq!(
+        printed
+            .iter()
+            .map(|request| format!("{} {}", request.method, request.target))
+            .collect::<Vec<_>>(),
+        [
+            "GET /vouchers/5",
+            "POST /vouchers/5/enshrine",
+            "GET /vouchers/5/render",
+        ]
+    );
+}
+
 #[test]
 fn commit_runs_the_whole_chain_in_order() {
     let client = Recorder::new()
+        .strict()
         .answering(StatusCode::OK, &voucher("open"))
         .answering(StatusCode::OK, &voucher("paid"))
         .answering(StatusCode::OK, &voucher("paid"));
@@ -619,7 +1190,7 @@ fn commit_runs_the_whole_chain_in_order() {
 
 #[test]
 fn a_static_completion_script_covers_the_whole_tree() {
-    let script = run(&Recorder::new(), &["toy", "completions", "bash"]).stdout;
+    let script = run(&Recorder::new().strict(), &["toy", "completions", "bash"]).stdout;
     for name in ["raw", "finalize-voucher", "vouchers", "update", "archive"] {
         assert!(script.contains(name), "`{name}` is missing from the script");
     }
@@ -628,38 +1199,98 @@ fn a_static_completion_script_covers_the_whole_tree() {
 #[test]
 fn the_document_refuses_bad_values_before_a_request_is_built() {
     let api = api();
-    for args in [
-        // Not an amount; not a `VoucherStatus`; not an integer; and a PUT
-        // missing two fields the document marks required.
-        vec![
-            "toy", "raw", "vouchers", "update", "--id", "5", "--total", "12.5x",
-        ],
-        vec![
-            "toy", "raw", "vouchers", "update", "--id", "5", "--status", "bogus",
-        ],
-        vec![
-            "toy", "raw", "vouchers", "update", "--id", "x", "--total", "1.00",
-        ],
-        vec![
-            "toy", "raw", "vouchers", "update", "--id", "5", "--total", "12.50",
-        ],
+    for (flag, bad) in [
+        ("--total", "12.5x"),
+        ("--status", "bogus"),
+        ("--id", "x"),
+        ("--currency", "EU"),
     ] {
+        let args: Vec<&str> = UPDATE
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if index > 0 && UPDATE[index - 1] == flag {
+                    bad
+                } else {
+                    *value
+                }
+            })
+            .collect();
+        let error = app::root(&api)
+            .try_get_matches_from(&args)
+            .expect_err("one value breaks the document's rule");
         assert!(
-            app::root(&api).try_get_matches_from(&args).is_err(),
-            "{args:?} should not parse"
+            matches!(
+                error.kind(),
+                clap::error::ErrorKind::ValueValidation | clap::error::ErrorKind::InvalidValue
+            ),
+            "{flag}: {error}"
         );
+        assert!(error.to_string().contains(flag), "{error}");
     }
+    let error = app::root(&api)
+        .try_get_matches_from([
+            "toy",
+            "raw",
+            "ledger",
+            "entries",
+            "--account",
+            "4400",
+            "--amount",
+            "12.50",
+            "--vat-rate",
+            "5",
+        ])
+        .expect_err("the numeric enum does not list 5");
+    assert!(
+        matches!(
+            error.kind(),
+            clap::error::ErrorKind::ValueValidation | clap::error::ErrorKind::InvalidValue
+        ),
+        "{error}"
+    );
+    assert!(error.to_string().contains("--vat-rate"), "{error}");
+}
+
+/// The rates an operator may type are on the help page, because the same code
+/// that refuses `5` writes that line.
+#[test]
+fn the_help_of_a_numeric_enum_lists_its_values() {
+    let api = api();
+    let page = app::root(&api)
+        .try_get_matches_from(["toy", "raw", "ledger", "entries", "--help"])
+        .expect_err("--help stops the parse")
+        .to_string();
+    assert!(
+        page.contains("VAT rate in percent (one of 0, 7, 19)"),
+        "{page}"
+    );
+    assert!(
+        app::root(&api)
+            .try_get_matches_from([
+                "toy",
+                "raw",
+                "ledger",
+                "entries",
+                "--account",
+                "4400",
+                "--amount",
+                "12.50",
+                "--vat-rate",
+                "19",
+            ])
+            .is_ok()
+    );
 }
 
 /// A directory of this test binary's own, without taking a dependency for it.
 fn tempdir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "toy-e2e-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default()
+            .map_or(0, |d| d.as_nanos())
     ));
     std::fs::create_dir_all(&dir).expect("creating the scratch directory");
     dir

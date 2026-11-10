@@ -1,9 +1,11 @@
-//! The gate: whether a built request may be sent, decided once.
+//! The gate: whether a request may be sent, decided once.
 //!
-//! Every caller that has a request and what the user answered builds a [`Plan`]
-//! and executes what it gets back, rather than testing the flags again. That is
-//! what makes a dry run print the exact bytes a confirmed run sends — they are
-//! this one value.
+//! Every caller that has an [`Invocation`] and what the user answered builds a
+//! [`Plan`] and executes what it gets back, rather than testing the flags again.
+//! That is what makes a dry run print the exact bytes a confirmed run sends —
+//! they are this one value. The plan builds the request itself, from the
+//! invocation, so the operation the gate reads and the request it carries are
+//! one operation: no caller can put a write's request beside a read's verdict.
 //!
 //! What the user answered is an [`Answers`]: the write confirmation, plus one
 //! answer per gate the operation names. Both halves are demanded together, so
@@ -12,8 +14,10 @@
 //!
 //! Nothing here knows about command lines. A CLI reaches it through
 //! the `tree` module (feature `clap`), and a Rust caller that wants the same gate over a typed
-//! wrapper calls [`Plan::decide`] directly, which is what the `finalize-voucher`
-//! verb in the example does.
+//! wrapper calls [`Call::plan`], which is what the `finalize-voucher` verb in the
+//! example does.
+//!
+//! [`Call::plan`]: crate::client::Call::plan
 
 use std::collections::BTreeSet;
 
@@ -21,7 +25,7 @@ use http::{Request, Uri};
 use thiserror::Error;
 
 use crate::model::{Effect, Gate, Operation};
-use crate::request::{Invocation, ValueError};
+use crate::request::{Invocation, RequestError, ValueError};
 use crate::values::Values;
 
 /// What a caller answered at the gate: the write confirmation, and one answer
@@ -45,7 +49,7 @@ impl Answers {
         Self::default()
     }
 
-    /// The write confirmation — `--commit`, on a command line.
+    /// The write confirmation, spelled as [`Operation::commit`] on a command line.
     #[must_use]
     pub fn commit(mut self) -> Self {
         self.commit = true;
@@ -90,12 +94,35 @@ pub enum Plan {
 impl Plan {
     /// The gate: a read runs on sight, a write runs once it is confirmed and
     /// every gate it names is answered.
-    #[must_use]
-    pub fn decide(op: &Operation, answers: &Answers, request: Request<Vec<u8>>) -> Self {
-        match (op.effect(), opened(op, answers)) {
+    ///
+    /// The request is built here, from the invocation that holds the operation
+    /// the gate reads, so the verdict and the request are about one operation.
+    /// A plan cannot be made of an operation and a request that came from
+    /// another:
+    ///
+    /// ```compile_fail,E0308
+    /// use typed_openapi::{Answers, Operation, Plan};
+    ///
+    /// fn pair(read: &Operation, write_request: http::Request<Vec<u8>>) -> Plan {
+    ///     // A write's request with a read's verdict, which is `Send`.
+    ///     Plan::decide(read, &Answers::new(), write_request)
+    /// }
+    /// ```
+    ///
+    /// The one failure is the request: a base that holds userinfo or a query,
+    /// or a URI, a header name or a header value that the `http` crate cannot
+    /// build.
+    pub fn decide(
+        invocation: &Invocation<'_>,
+        base: &Uri,
+        answers: &Answers,
+    ) -> Result<Self, RequestError> {
+        let op = invocation.operation();
+        let request = invocation.request(base)?;
+        Ok(match (op.effect(), opened(op, answers)) {
             (Effect::Read, _) | (Effect::Write, true) => Self::Send(request),
             (Effect::Write, false) => Self::DryRun(request),
-        }
+        })
     }
 
     /// Values that satisfy an operation, rendered against a server and put to
@@ -108,7 +135,7 @@ impl Plan {
         answers: &Answers,
     ) -> Result<Self, PlanError> {
         let invocation = Invocation::new(op, values)?;
-        Ok(Self::decide(op, answers, invocation.request(base)?))
+        Ok(Self::decide(&invocation, base, answers)?)
     }
 
     /// The request, whichever way the gate went — a dry run prints exactly the
@@ -131,9 +158,15 @@ fn opened(op: &Operation, answers: &Answers) -> bool {
 
 /// Why values that parsed did not turn into a request.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PlanError {
+    /// The values do not satisfy the operation. The message names the
+    /// parameter, or says the body is the problem.
     #[error(transparent)]
     Value(#[from] ValueError),
-    #[error("cannot build the request: {0}")]
-    Request(#[from] http::Error),
+    /// The values satisfied the operation and the request they render to could
+    /// not be built: the base URL holds userinfo or a query, or the `http` crate
+    /// refused what the document names, a URI, a header name or a header value.
+    #[error(transparent)]
+    Request(#[from] RequestError),
 }

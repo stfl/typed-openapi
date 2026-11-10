@@ -15,12 +15,14 @@
     reason = "a test that cannot build its fixture should fail loudly and name it"
 )]
 
+use std::error::Error as _;
+
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use http::{Method, StatusCode};
 use serde_json::json;
-use typed_openapi::tree::{self, Asked, DispatchError, Outcome, Selection};
+use typed_openapi::tree::{self, ArgError, Asked, DispatchError, Outcome, Selection};
 use typed_openapi::{
-    Answers, COMMIT, COMMIT_ID, Document, HttpRequest, JSON_BODY, JSON_BODY_TEMPLATE, Plan, Reach,
+    Answers, COMMIT_ID, Document, HttpRequest, JSON_BODY, JSON_BODY_TEMPLATE, Loading, Plan, Reach,
     Recorder, RecorderError, SyncClient, Values, render,
 };
 
@@ -123,7 +125,14 @@ fn a_client_that_fails_is_reported_as_the_transport_and_the_request_still_went_o
         .expect_err("the script fails this route");
 
     assert!(matches!(error, DispatchError::Transport(_)), "{error:?}");
-    assert_eq!(error.to_string(), "transport: read timed out");
+    assert_eq!(error.to_string(), "the transport failed");
+    assert_eq!(
+        error
+            .source()
+            .expect("the transport's own error is the cause")
+            .to_string(),
+        "read timed out"
+    );
     assert_eq!(only(&client).uri().path(), "/vouchers/5");
     assert_eq!(client.unused(), 0, "the script was used up");
 }
@@ -154,7 +163,7 @@ fn a_value_the_documents_rule_refuses_never_becomes_a_request() {
         "{refused}"
     );
     assert!(
-        refused.contains(r"`1,50` does not match ^-?[0-9]+(\.[0-9]{1,2})?$"),
+        refused.contains(r"`1,50` is not a match for ^-?[0-9]+(\.[0-9]{1,2})?$"),
         "{refused}"
     );
 
@@ -783,7 +792,10 @@ fn operations_are_mounted_under_the_resource_their_path_names() {
                     "archive".to_owned(),
                 ]
             ),
-            ("contacts".to_owned(), vec!["create".to_owned()]),
+            (
+                "contacts".to_owned(),
+                vec!["create".to_owned(), "labels".to_owned()]
+            ),
             ("documents".to_owned(), vec!["create".to_owned()]),
             ("documents-multipart".to_owned(), vec!["create".to_owned()]),
             ("ledger".to_owned(), vec!["entries".to_owned()]),
@@ -1033,6 +1045,120 @@ fn an_operation_that_names_no_gate_adds_no_flag() {
     );
 }
 
+/// A document that chose another word to confirm with. The words a verb of the
+/// caller's own spells are the operation's: `tree::confirmation` reads the one
+/// the operation carries, so the verb accepts what its help names.
+fn confirmed_with_yes() -> Document {
+    Document::load_with(
+        TOY,
+        OVERLAYS,
+        &Loading::new()
+            .commit("yes")
+            .expect("`yes` is a word a flag can have"),
+    )
+    .expect("the document loads with its own word")
+}
+
+/// `A7/docs/gated.yaml` with `A7_COMMIT_WORD=yes`: a hand-written verb spells no
+/// word of its own, so the flag it accepts is the flag the gate's help names. The
+/// door adds the flag the generated subcommand carries, in the operation's word,
+/// with the same id, help and action.
+#[test]
+fn a_verb_of_your_own_carries_the_confirmation_the_subcommand_carries() {
+    for doc in [document(), confirmed_with_yes()] {
+        let op = doc
+            .get("enshrineVoucher")
+            .expect("the document describes it");
+        let word = op.commit();
+
+        let mine = tree::confirmation(Command::new("finalize-voucher"), op);
+        let generated = tree::command(op);
+
+        let (mine_arg, generated_arg) = (flag(&mine, word), flag(&generated, word));
+        assert_eq!(mine_arg.get_id(), generated_arg.get_id());
+        assert_eq!(mine_arg.get_id().as_str(), COMMIT_ID);
+        assert_eq!(
+            mine_arg.get_help().map(ToString::to_string),
+            generated_arg.get_help().map(ToString::to_string)
+        );
+        assert!(matches!(mine_arg.get_action(), ArgAction::SetTrue));
+        assert!(!mine_arg.is_required_set(), "a dry run needs no word");
+
+        // Nothing else came with it, and the help page names no other word.
+        let added: Vec<&str> = mine
+            .get_arguments()
+            .filter_map(|arg| arg.get_long())
+            .filter(|long| *long != "help")
+            .collect();
+        assert_eq!(added, [word]);
+    }
+}
+
+/// The verb takes the word the operation chose and refuses the one it did not,
+/// and `tree::answers` reads it back as the confirmation.
+#[test]
+fn a_verb_of_your_own_accepts_the_word_the_operation_chose() {
+    let doc = confirmed_with_yes();
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+    let verb = || tree::gates(tree::confirmation(Command::new("finalize-voucher"), op), op);
+
+    let matches = verb()
+        .try_get_matches_from(["finalize-voucher", "--enshrine", "--yes"])
+        .expect("the chosen word and the gate are accepted");
+    let answered = tree::answers(op, &matches);
+    assert!(answered.committed(), "`--yes` is the confirmation");
+    assert!(answered.answered(op.gates().first().expect("one gate")));
+
+    let refused = verb()
+        .try_get_matches_from(["finalize-voucher", "--enshrine", "--commit"])
+        .expect_err("`--commit` is not this document's word");
+    assert_eq!(refused.kind(), clap::error::ErrorKind::UnknownArgument);
+
+    let unconfirmed = verb()
+        .try_get_matches_from(["finalize-voucher", "--enshrine"])
+        .expect("a dry run is a command line");
+    assert!(!tree::answers(op, &unconfirmed).committed());
+}
+
+/// The help of a gate says which word it is demanded beside. A verb that adds
+/// the gate with `tree::gates` and the confirmation with `tree::confirmation`
+/// names, on one page, only flags it accepts.
+#[test]
+fn the_help_of_a_verb_names_only_flags_it_accepts() {
+    let doc = confirmed_with_yes();
+    let op = doc
+        .get("enshrineVoucher")
+        .expect("the document describes it");
+    let mut verb = tree::gates(tree::confirmation(Command::new("finalize-voucher"), op), op);
+
+    let help = verb.render_long_help().to_string();
+
+    assert!(help.contains("--yes"), "{help}");
+    assert!(
+        !help.contains("--commit"),
+        "a flag the verb refuses is on its help page:\n{help}"
+    );
+}
+
+/// A read declares no confirmation, so the door hands the command back as it was
+/// given it, as `tree::gates` does for an operation with no gate. A caller adds
+/// it unconditionally and asks the document nothing.
+#[test]
+fn a_read_adds_no_confirmation() {
+    let doc = document();
+    let op = doc.get("getVoucher").expect("the document describes it");
+
+    let mine = tree::confirmation(Command::new("show"), op);
+
+    assert!(
+        mine.get_arguments()
+            .filter_map(|arg| arg.get_long())
+            .all(|long| long == "help")
+    );
+}
+
 /// A command this crate did not build has no answer for a gate it never
 /// declared, and no answer is the closed one: the request is held back, rather
 /// than the reading panicking on a flag clap has not heard of.
@@ -1044,8 +1170,7 @@ fn a_gate_flag_a_command_never_declared_reads_as_unanswered() {
         .expect("the document describes it");
     // A verb of the caller's own that offers `--commit` and no gate flag: the
     // shape `tree::gates` exists to prevent, and the one that must still answer.
-    let matches = Command::new("finalize-voucher")
-        .arg(Arg::new(COMMIT_ID).long(COMMIT).action(ArgAction::SetTrue))
+    let matches = tree::confirmation(Command::new("finalize-voucher"), op)
         .get_matches_from(["finalize-voucher", "--commit"]);
 
     let answered = tree::answers(op, &matches);
@@ -1253,5 +1378,216 @@ fn a_flag_that_requires_another_is_refused_by_the_parser_without_it() {
     assert_eq!(
         only(&client).uri().query(),
         Some("voucher%5Bid%5D=5&voucher%5BobjectName%5D=Voucher")
+    );
+}
+
+/// A `DELETE` and a `PATCH` write by their method alone, and nothing in the
+/// document marks either. Each is a dry run until the confirmation is typed and
+/// goes out as the method it names once it is. A method that fell through to a
+/// read would be sent on sight, and no document says so.
+#[test]
+fn a_delete_and_a_patch_are_dry_runs_until_they_are_confirmed() {
+    const DOC: &str = "openapi: 3.0.3\n\
+         info: { title: t, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+         \x20 /vouchers/{id}:\n\
+         \x20   delete:\n\
+         \x20     operationId: deleteVoucher\n\
+         \x20     parameters:\n\
+         \x20       - { name: id, in: path, required: true, schema: { type: integer } }\n\
+         \x20     responses: { \"200\": { description: OK } }\n\
+         \x20   patch:\n\
+         \x20     operationId: patchVoucher\n\
+         \x20     parameters:\n\
+         \x20       - { name: id, in: path, required: true, schema: { type: integer } }\n\
+         \x20     responses: { \"200\": { description: OK } }\n";
+
+    let doc = Document::load(DOC, &[]).expect("a document with a DELETE and a PATCH");
+    for (command, method) in [("delete", Method::DELETE), ("patch", Method::PATCH)] {
+        let client = Recorder::new().answering(StatusCode::OK, &json!({}));
+
+        let unconfirmed = parse(&doc, &["toy", "vouchers", command, "--id", "5"]);
+        let outcome = tree::dispatch(&doc, doc.base(), &client, &unconfirmed)
+            .expect("a write without the confirmation dispatches");
+        let Outcome::DryRun(request) = outcome else {
+            panic!("{command}: a write without --commit is a dry run");
+        };
+        assert_eq!(request.method(), method, "{command}: the dry run");
+        assert!(
+            client.take().is_empty(),
+            "{command}: a dry run reaches the client with nothing"
+        );
+
+        let confirmed = parse(&doc, &["toy", "vouchers", command, "--id", "5", "--commit"]);
+        let outcome = tree::dispatch(&doc, doc.base(), &client, &confirmed)
+            .expect("a confirmed write dispatches");
+        assert!(matches!(outcome, Outcome::Sent(_)), "{command}");
+        let sent = only(&client);
+        assert_eq!(
+            sent.method(),
+            method,
+            "{command}: the request that went out"
+        );
+        assert_eq!(sent.uri().path(), "/vouchers/5", "{command}");
+    }
+}
+
+/// `--help` prints a help page and sends nothing, whatever the document spells.
+/// A parameter and a property that the vendor calls `help` move to `--param-help`
+/// and `--body-help`, so clap's flag stays clap's and the vendor's values still
+/// reach the wire under the vendor's name.
+#[test]
+fn help_prints_help_and_sends_nothing_where_the_document_spells_a_help_of_its_own() {
+    const DOC: &str = "openapi: 3.0.3\n\
+         info: { title: t, version: \"1\" }\n\
+         servers: [{ url: 'http://localhost:9999' }]\n\
+         paths:\n\
+         \x20 /notes:\n\
+         \x20   post:\n\
+         \x20     operationId: addNote\n\
+         \x20     parameters:\n\
+         \x20       - { name: help, in: query, schema: { type: string } }\n\
+         \x20     requestBody:\n\
+         \x20       content:\n\
+         \x20         application/json:\n\
+         \x20           schema:\n\
+         \x20             type: object\n\
+         \x20             properties:\n\
+         \x20               help: { type: string }\n\
+         \x20     responses: { \"200\": { description: OK } }\n";
+
+    let doc = Document::load(DOC, &[]).expect("a document that spells a help of its own");
+    root(&doc).debug_assert();
+
+    for args in [
+        ["toy", "notes", "create", "--help"],
+        ["toy", "notes", "create", "-h"],
+    ] {
+        let asked = root(&doc)
+            .try_get_matches_from(args)
+            .expect_err("`--help` asks for a help page and no command runs");
+        assert_eq!(
+            asked.kind(),
+            clap::error::ErrorKind::DisplayHelp,
+            "{args:?}"
+        );
+        let page = asked.to_string();
+        assert!(page.contains("--param-help <STRING>"), "{page}");
+        assert!(page.contains("--body-help <STRING>"), "{page}");
+    }
+
+    let client = Recorder::new().answering(StatusCode::OK, &json!({}));
+    let matches = parse(
+        &doc,
+        &[
+            "toy",
+            "notes",
+            "create",
+            "--param-help",
+            "a",
+            "--body-help",
+            "b",
+            "--commit",
+        ],
+    );
+    let outcome = tree::dispatch(&doc, doc.base(), &client, &matches).expect("dispatches");
+    assert!(matches!(outcome, Outcome::Sent(_)));
+    let sent = only(&client);
+    assert_eq!(sent.uri().query(), Some("help=a"));
+    assert_eq!(sent.body().as_slice(), br#"{"help":"b"}"#);
+}
+
+/// A file under `CARGO_TARGET_TMPDIR`, named for this test binary's process so
+/// that two runs do not meet in one file.
+fn scratch(name: &str, text: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "typed-openapi-dispatch-{}-{name}",
+        std::process::id()
+    ));
+    std::fs::write(&path, text).expect("writing the fixture");
+    path
+}
+
+/// `--json-body` is the base and a field flag is an edit of it. A list or a
+/// scalar has no property to edit, so a flag beside one has nothing to act on
+/// and is refused (F-30).
+#[test]
+fn a_field_flag_beside_a_body_that_is_not_an_object_is_refused() {
+    let doc = document();
+    for (name, text, found) in [
+        (
+            "arr5.json",
+            r#"["EUR",null,null,"draft","1.00"]"#,
+            "an array",
+        ),
+        ("scalar.json", r#""EUR""#, "a string"),
+        ("null.json", "null", "null"),
+    ] {
+        let path = scratch(name, text);
+        let matches = parse(
+            &doc,
+            &[
+                "toy",
+                "vouchers",
+                "create",
+                "--json-body",
+                path.to_str().expect("a UTF-8 path"),
+                "--currency",
+                "USD",
+                "--total",
+                "99.99",
+                "--status",
+                "paid",
+            ],
+        );
+
+        let Err(refused) = tree::select(&doc, &matches) else {
+            panic!("{name}: the flags had nothing to edit and were dropped");
+        };
+
+        let DispatchError::Arg(ArgError::FlagBesideNonObject {
+            flag,
+            path: refused_path,
+            found: seen,
+        }) = &refused
+        else {
+            panic!("{name}: a flag with no object to edit is an argument error: {refused:?}");
+        };
+        // The first flag the operator gave, in the order the document lists the
+        // properties, so the message is the same on every run.
+        assert_eq!(flag, "total", "{name}");
+        assert_eq!(refused_path, &path, "{name}");
+        assert_eq!(*seen, found, "{name}");
+        let shown = refused.to_string();
+        assert!(shown.contains("`--total`"), "{name}: {shown}");
+        assert!(shown.contains(found), "{name}: {shown}");
+    }
+}
+
+/// The same list with no flag beside it is the seam's to judge: the library
+/// cannot name the type that tells whether a list is a body.
+#[test]
+fn a_body_that_is_not_an_object_passes_through_when_no_flag_edits_it() {
+    let doc = document();
+    let path = scratch("arr-alone.json", r#"["EUR",null,null,"draft","1.00"]"#);
+    let matches = parse(
+        &doc,
+        &[
+            "toy",
+            "vouchers",
+            "create",
+            "--json-body",
+            path.to_str().expect("a UTF-8 path"),
+        ],
+    );
+
+    let selection = running(&doc, &matches);
+
+    assert_eq!(
+        selection.values().payload(),
+        Some(&typed_openapi::Payload::Json(json!([
+            "EUR", null, null, "draft", "1.00"
+        ])))
     );
 }

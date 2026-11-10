@@ -1,16 +1,16 @@
 //! The command tree, and which module runs each command in it.
 //!
 //! `run` is generic over the HTTP client and hands back an [`Output`] rather
-//! than printing it, so every test in `tests/` drives the real thing with a
-//! recording client and no socket.
+//! than printing it. Callers can supply a recording client and inspect the
+//! returned streams.
 
-use api::{Api, OperationId};
+use api::Api;
 use clap::{Arg, ArgMatches, Command, value_parser};
 use clap_complete::aot::Shell;
 use http::Uri;
 use thiserror::Error;
-use typed_openapi::SyncClient;
 use typed_openapi::tree::{self, DispatchError};
+use typed_openapi::{COMMIT_ID, SyncClient};
 
 use crate::output::Output;
 use crate::{finalize, raw};
@@ -34,8 +34,13 @@ pub enum Error {
     Dispatch(#[from] DispatchError),
     #[error(transparent)]
     Body(#[from] api::BodyError),
-    #[error("cannot build the request: {0}")]
+    #[error("cannot build the request")]
     Request(#[from] http::Error),
+    /// The fetch that the chain depends on is a write in the document, and
+    /// nobody confirmed it. A read is sent on sight, so the toy's document never
+    /// raises this.
+    #[error("the fetch the chain depends on is a write, and it was not confirmed")]
+    FetchHeld,
     #[error("no operation named `{0}` in the document")]
     Unknown(String),
     #[error("no command given")]
@@ -57,10 +62,13 @@ pub fn root(api: &Api) -> Command {
                 .value_name("URL")
                 .help("Server to send to")
                 // Parsed where it arrives, so what the rest of the CLI passes
-                // around is a `Uri` and not a string that might be one. A
-                // `--base-url` the document's own server could not be is
-                // clap's error, naming the value the user typed — never a
-                // quiet fall back to the server they were overriding.
+                // around is a `Uri` and not a string that might be one. A text
+                // that is no `Uri` is clap's error, naming the value the user
+                // typed — never a quiet fall back to the server they were
+                // overriding. A `Uri` with userinfo or a query passes clap and
+                // is refused when a request is built (`RequestError::Base`),
+                // which prints none of it. A fragment is dropped when the text
+                // is parsed, as every client drops it.
                 .value_parser(value_parser!(Uri))
                 .default_value(api.base().to_string()),
         )
@@ -87,41 +95,47 @@ pub fn root(api: &Api) -> Command {
 
 /// The hand-written verb, with the words its chain stands behind.
 ///
-/// `--commit` is this verb's own, because the chain is this verb's own. The
-/// gates are not: they belong to the operation the chain calls, so `tree::gates`
-/// puts them here — the same call `tree::command` makes for a generated
-/// subcommand, spelled once. An Overlay that renames the gate renames this flag
-/// with it, and there is nothing to keep in step.
+/// Neither word is this verb's own. They belong to the operation the chain calls
+/// and to the document: `tree::confirmation` puts the confirmation here, in the
+/// word the document chose, and `tree::gates` puts the gates — the same two
+/// calls `tree::command` makes for a generated subcommand, spelled once. An
+/// Overlay that renames a gate renames this flag with it, and so does the word
+/// the bless step confirms with, and there is nothing to keep in step.
+///
+/// The chain sends two writes, so the help of the confirmation says "the
+/// writes": the help `tree::confirmation` gives is about one request.
 ///
 /// Every gate is `required`, exactly as it is under `raw`, and a voucher that
 /// turns out not to need enshrining does not soften that: which operations the
 /// chain reaches is the *server's* answer, arriving after the command line is
 /// gone, so the word is asked for while there is still someone to ask.
 fn finalize_voucher(api: &Api) -> Command {
+    let op = finalize::gate(api);
     tree::gates(
-        Command::new(FINALIZE)
-            .about("Fetch a voucher, enshrine it if it is open, then render it")
-            .long_about(
-                "Fetch a voucher, enshrine it if it is open, then render it.\n\n\
-                 The fetch is a read and always runs — the chain depends on the \
-                 answer. Without --commit the writes that follow are printed and \
-                 not sent.",
-            )
-            .arg(
-                Arg::new(ID)
-                    .long(ID)
-                    .required(true)
-                    .value_name("INT")
-                    .value_parser(value_parser!(i64))
-                    .help("The voucher to finalize"),
-            )
-            .arg(
-                Arg::new(typed_openapi::COMMIT_ID)
-                    .long(typed_openapi::COMMIT)
-                    .action(clap::ArgAction::SetTrue)
-                    .help("Send the writes. Without it this is a dry run that prints them"),
-            ),
-        api.operation(OperationId::EnshrineVoucher),
+        tree::confirmation(
+            Command::new(FINALIZE)
+                .about("Fetch a voucher, enshrine it if it is open, then render it")
+                .long_about(format!(
+                    "Fetch a voucher, enshrine it if it is open, then render it.\n\n\
+                     The fetch is a read and always runs — the chain depends on the \
+                     answer. Without --{} the writes that follow are printed and \
+                     not sent.",
+                    op.commit()
+                ))
+                .arg(
+                    Arg::new(ID)
+                        .long(ID)
+                        .required(true)
+                        .value_name("INT")
+                        .value_parser(value_parser!(i64))
+                        .help("The voucher to finalize"),
+                ),
+            op,
+        )
+        .mut_arg(COMMIT_ID, |arg| {
+            arg.help("Send the writes. Without it this is a dry run that prints them")
+        }),
+        op,
     )
 }
 
@@ -143,7 +157,7 @@ pub fn run<C: SyncClient>(api: Api, client: &C, matches: &ArgMatches) -> Result<
             // Read the way the generated surface reads its own: the flags on
             // this verb are the operation's words, so the same function makes
             // the same answer out of them.
-            &tree::answers(api.operation(OperationId::EnshrineVoucher), sub),
+            &tree::answers(finalize::gate(&api), sub),
         ),
         Some((COMPLETIONS, sub)) => Ok(completions(&api, sub)),
         Some((name, _)) => Err(Error::Unknown(name.to_owned())),
