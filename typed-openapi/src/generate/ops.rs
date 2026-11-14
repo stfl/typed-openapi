@@ -216,10 +216,10 @@ fn check_body(ops: &[Emitted]) -> TokenStream {
     quote! {
         #[doc = "Does `body` fit the type this operation's wrapper takes?"]
         #[doc = ""]
-        #[doc = "Every operation that sends JSON has such a type, whether the"]
+        #[doc = "Every operation that reads JSON input has such a type, whether the"]
         #[doc = "document named the schema or stated it where it is used. The"]
-        #[doc = "operations that answer for any value are the ones that send no"]
-        #[doc = "JSON at all — a multipart or verbatim body, or no body — and"]
+        #[doc = "operations that answer for any value are the ones that read no"]
+        #[doc = "JSON input — a multipart or verbatim body, or no body — and"]
         #[doc = "the ones whose JSON body the document states no schema for."]
         pub fn check_body(
             self,

@@ -1,9 +1,9 @@
 //! Following `$ref`s, and deciding what one schema is worth on a command line.
 //!
-//! This is the whole of what this crate understands about JSON Schema: a schema
-//! either fits on one flag — it is a [`Scalar`] — or it does not, and then the
-//! body goes through a file. Nothing richer is modelled, because nothing richer
-//! has a command-line spelling.
+//! This module reduces a flag's schema to a [`Scalar`]. A JSON body that
+//! cannot be taken apart into flags goes through a file. Structured forms have
+//! a separate bounded contract in [`crate::Body::Form`], retaining enum and
+//! text constraints together without offering per-field flags.
 //!
 //! A `$ref` is followed before the schema is read, so a property pointed at a
 //! named schema carries that schema's rules onto the flag.

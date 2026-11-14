@@ -87,6 +87,10 @@ with **1 operation** behind each. **5 operations** are asked for no body at all,
 **7 bodies** go out whole because a command line cannot take a nested object, a
 map with no declared property, a PDF, a multipart upload or a structured form apart, and **0 parameters** are carried without a flag.
 
+The form routes demonstrate [structured JSON input and shared form encoding](../../docs/structured-forms.md),
+with an opaque byte-form route beside them. `CORRECTIONS` records each opt-in and
+its named gate against the vendor document.
+
 Every number in that paragraph is asserted against the summary by
 [`api/tests/summary.rs`](api/tests/summary.rs), and that is the point rather
 than a nicety: a page quoting a count fails nothing when the count moves unless

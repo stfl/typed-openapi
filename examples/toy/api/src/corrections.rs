@@ -21,6 +21,9 @@
 /// One difference between the vendor's document and the API this crate offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Correction {
+    /// An operation whose opaque form bytes the adopter replaces with
+    /// structured JSON input through `x-cli-form-json`.
+    StructuredForm(&'static str),
     /// An operation the vendor ships and the document never mentions. The
     /// Overlay adds it to `paths`, so it becomes a generated wrapper and a
     /// subcommand like any other and costs no Rust at all.
@@ -72,6 +75,12 @@ pub enum Correction {
 ///
 /// [`OPERATIONS`]: crate::OPERATIONS
 pub const CORRECTIONS: &[Correction] = &[
+    Correction::StructuredForm("submitForm"),
+    Correction::StructuredForm("submitEmptyForm"),
+    Correction::Guarded {
+        op: "submitForm",
+        gates: &["toy-form"],
+    },
     Correction::Retyped {
         schema: "Contact",
         property: "creditLimit",

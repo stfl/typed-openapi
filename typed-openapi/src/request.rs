@@ -36,7 +36,7 @@ use crate::values::{Payload, Values};
 /// Every variant names the operation by its `operationId` in `op`. The eleven
 /// that are about a parameter also carry it in `name`: the name the document
 /// gives it, or, in [`ValueError::UnknownParam`], the name the caller gave, which
-/// the document does not declare. The three about the body carry no `name`.
+/// the document does not declare. The variants about the body carry no `name`.
 ///
 /// The four that refuse a header value print no value of the caller's: a header
 /// value can be a credential. The segment of [`ValueError::PathSegment`] is one

@@ -109,10 +109,10 @@ impl OperationId {
     }
     ///Does `body` fit the type this operation's wrapper takes?
     ///
-    ///Every operation that sends JSON has such a type, whether the
+    ///Every operation that reads JSON input has such a type, whether the
     ///document named the schema or stated it where it is used. The
-    ///operations that answer for any value are the ones that send no
-    ///JSON at all — a multipart or verbatim body, or no body — and
+    ///operations that answer for any value are the ones that read no
+    ///JSON input — a multipart or verbatim body, or no body — and
     ///the ones whose JSON body the document states no schema for.
     pub fn check_body(
         self,
