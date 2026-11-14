@@ -113,6 +113,10 @@ name = "shapes"
 required-features = ["generate"]
 
 [[test]]
+name = "structured_form"
+required-features = ["generate", "clap"]
+
+[[test]]
 name = "summary"
 required-features = ["document"]
 

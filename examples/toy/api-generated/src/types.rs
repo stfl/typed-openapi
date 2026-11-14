@@ -239,6 +239,13 @@ pub struct Delivery {
     ///Mailbox the voucher is sent to
     pub recipient: ::std::string::String,
 }
+///`EmptyForm`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyForm {
+    #[serde(rename = "a+%&= ä[]")]
+    pub a_ä: ::std::string::String,
+}
 ///The four-digit account an entry is posted to.
 #[derive(::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
@@ -376,6 +383,354 @@ impl ::std::convert::TryFrom<::std::string::String> for Money {
         value.parse()
     }
 }
+///`SubmitEmptyFormBody`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SubmitEmptyFormBody {
+    #[serde(rename = "a+%&= ä[]")]
+    pub a_ä: ::std::string::String,
+}
+///`SubmitFormBody`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SubmitFormBody {
+    pub choice: SubmitFormBodyChoice,
+    pub digits: SubmitFormBodyDigits,
+    pub kind: SubmitFormBodyKind,
+    #[serde(rename = "ref[id]")]
+    pub ref_id: ::std::string::String,
+    pub text: ::std::string::String,
+}
+///`SubmitFormBodyChoice`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum SubmitFormBodyChoice {
+    #[serde(rename = "0")]
+    X0,
+    #[serde(rename = "1")]
+    X1,
+}
+impl ::std::fmt::Display for SubmitFormBodyChoice {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::X0 => f.write_str("0"),
+            Self::X1 => f.write_str("1"),
+        }
+    }
+}
+impl ::std::str::FromStr for SubmitFormBodyChoice {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "0" => ::std::result::Result::Ok(Self::X0),
+            "1" => ::std::result::Result::Ok(Self::X1),
+            _ => ::std::result::Result::Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for SubmitFormBodyChoice {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SubmitFormBodyChoice {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`SubmitFormBodyDigits`
+#[derive(::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[serde(transparent)]
+pub struct SubmitFormBodyDigits(::std::string::String);
+impl ::std::ops::Deref for SubmitFormBodyDigits {
+    type Target = ::std::string::String;
+    fn deref(&self) -> &::std::string::String {
+        &self.0
+    }
+}
+impl ::std::convert::From<SubmitFormBodyDigits> for ::std::string::String {
+    fn from(value: SubmitFormBodyDigits) -> Self {
+        value.0
+    }
+}
+impl ::std::str::FromStr for SubmitFormBodyDigits {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        if value.chars().count() > 3usize {
+            return ::std::result::Result::Err("longer than 3 characters".into());
+        }
+        if value.chars().count() < 2usize {
+            return ::std::result::Result::Err("shorter than 2 characters".into());
+        }
+        static PATTERN: ::std::sync::LazyLock<::typed_openapi::regress::Regex> =
+            ::std::sync::LazyLock::new(|| {
+                ::typed_openapi::regress::Regex::new("^[0-9]+$").unwrap()
+            });
+        if PATTERN.find(value).is_none() {
+            return ::std::result::Result::Err("doesn't match pattern \"^[0-9]+$\"".into());
+        }
+        ::std::result::Result::Ok(Self(value.to_string()))
+    }
+}
+impl ::std::convert::TryFrom<&str> for SubmitFormBodyDigits {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SubmitFormBodyDigits {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for SubmitFormBodyDigits {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        ::std::string::String::deserialize(deserializer)?
+            .parse()
+            .map_err(|e: self::error::ConversionError| {
+                <D::Error as ::serde::de::Error>::custom(e.to_string())
+            })
+    }
+}
+///`SubmitFormBodyKind`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum SubmitFormBodyKind {
+    Toy,
+}
+impl ::std::fmt::Display for SubmitFormBodyKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Toy => f.write_str("Toy"),
+        }
+    }
+}
+impl ::std::str::FromStr for SubmitFormBodyKind {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "Toy" => ::std::result::Result::Ok(Self::Toy),
+            _ => ::std::result::Result::Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for SubmitFormBodyKind {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SubmitFormBodyKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ToyForm`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ToyForm {
+    pub choice: ToyFormChoice,
+    pub digits: ToyFormDigits,
+    pub kind: ToyFormKind,
+    #[serde(rename = "ref[id]")]
+    pub ref_id: ::std::string::String,
+    pub text: ::std::string::String,
+}
+///`ToyFormChoice`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum ToyFormChoice {
+    #[serde(rename = "0")]
+    X0,
+    #[serde(rename = "1")]
+    X1,
+}
+impl ::std::fmt::Display for ToyFormChoice {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::X0 => f.write_str("0"),
+            Self::X1 => f.write_str("1"),
+        }
+    }
+}
+impl ::std::str::FromStr for ToyFormChoice {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "0" => ::std::result::Result::Ok(Self::X0),
+            "1" => ::std::result::Result::Ok(Self::X1),
+            _ => ::std::result::Result::Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ToyFormChoice {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ToyFormChoice {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ToyFormDigits`
+#[derive(::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[serde(transparent)]
+pub struct ToyFormDigits(::std::string::String);
+impl ::std::ops::Deref for ToyFormDigits {
+    type Target = ::std::string::String;
+    fn deref(&self) -> &::std::string::String {
+        &self.0
+    }
+}
+impl ::std::convert::From<ToyFormDigits> for ::std::string::String {
+    fn from(value: ToyFormDigits) -> Self {
+        value.0
+    }
+}
+impl ::std::str::FromStr for ToyFormDigits {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        if value.chars().count() > 3usize {
+            return ::std::result::Result::Err("longer than 3 characters".into());
+        }
+        if value.chars().count() < 2usize {
+            return ::std::result::Result::Err("shorter than 2 characters".into());
+        }
+        static PATTERN: ::std::sync::LazyLock<::typed_openapi::regress::Regex> =
+            ::std::sync::LazyLock::new(|| {
+                ::typed_openapi::regress::Regex::new("^[0-9]+$").unwrap()
+            });
+        if PATTERN.find(value).is_none() {
+            return ::std::result::Result::Err("doesn't match pattern \"^[0-9]+$\"".into());
+        }
+        ::std::result::Result::Ok(Self(value.to_string()))
+    }
+}
+impl ::std::convert::TryFrom<&str> for ToyFormDigits {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ToyFormDigits {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for ToyFormDigits {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        ::std::string::String::deserialize(deserializer)?
+            .parse()
+            .map_err(|e: self::error::ConversionError| {
+                <D::Error as ::serde::de::Error>::custom(e.to_string())
+            })
+    }
+}
+///`ToyFormKind`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum ToyFormKind {
+    Toy,
+}
+impl ::std::fmt::Display for ToyFormKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Toy => f.write_str("Toy"),
+        }
+    }
+}
+impl ::std::str::FromStr for ToyFormKind {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "Toy" => ::std::result::Result::Ok(Self::Toy),
+            _ => ::std::result::Result::Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ToyFormKind {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ToyFormKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::default::Default for ToyFormKind {
+    fn default() -> Self {
+        ToyFormKind::Toy
+    }
+}
 ///`Voucher`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, PartialEq)]
 pub struct Voucher {
@@ -476,6 +831,16 @@ impl ::std::fmt::Display for Currency {
     }
 }
 impl ::std::fmt::Display for LedgerAccount {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::std::fmt::Display::fmt(&self.0, f)
+    }
+}
+impl ::std::fmt::Display for SubmitFormBodyDigits {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::std::fmt::Display::fmt(&self.0, f)
+    }
+}
+impl ::std::fmt::Display for ToyFormDigits {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         ::std::fmt::Display::fmt(&self.0, f)
     }

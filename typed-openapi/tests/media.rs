@@ -49,6 +49,7 @@ fn picked(doc: &Document, id: &str) -> (&'static str, Option<String>) {
         Body::Opaque { .. } => "opaque",
         Body::Multipart { .. } => "multipart",
         Body::None => "none",
+        Body::Form { .. } => "form",
     };
     (kind, body.media_type().map(str::to_owned))
 }

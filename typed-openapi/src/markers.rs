@@ -1,4 +1,4 @@
-//! The `x-cli-` markers: the five keys this crate reads, where each of them is
+//! The `x-cli-` markers: the keys this crate reads, where each of them is
 //! read, and the refusal of every other `x-cli-` key and of every one that
 //! stands where nothing reads it.
 //!
@@ -14,7 +14,7 @@
 //!
 //! | key | read on |
 //! |---|---|
-//! | `x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes` | an operation: a method of a path item directly in `paths` |
+//! | `x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes`, `x-cli-form-json` | an operation: a method of a path item directly in `paths` |
 //! | `x-cli-requires` | a parameter: of a path item, of an operation, or under `components.parameters`, and not beside a string `$ref` |
 //!
 //! Those are the places the reduction reads, so a key on any other object the
@@ -70,11 +70,13 @@ const REACH: Reach = Reach::Defined;
 /// The prefix this crate owns.
 const PREFIX: &str = "x-cli-";
 
-/// The four extensions this crate reads on an operation, all of them an
+/// The extensions this crate reads on an operation, each an
 /// adopter's say over something the document alone cannot settle. An Overlay is
 /// where they are written.
 ///
 /// HTTP cannot say "this GET writes", so the document has to.
+pub(crate) const FORM_JSON: &str = "x-cli-form-json";
+/// An operation whose effect is explicitly writing.
 pub(crate) const WRITES: &str = "x-cli-writes";
 /// The command name to mount an operation under, where the path spells one
 /// badly — or where two operations reduce to the same name.
@@ -106,7 +108,8 @@ enum Subject {
 /// standing on anything but its subject is read by nothing either.
 ///
 /// A new key joins this table, and the wording of a refusal follows from it.
-const READ: [(&str, Subject); 5] = [
+const READ: [(&str, Subject); 6] = [
+    (FORM_JSON, Subject::Operation),
     (COMMAND, Subject::Operation),
     (GATES, Subject::Operation),
     (GROUP, Subject::Operation),

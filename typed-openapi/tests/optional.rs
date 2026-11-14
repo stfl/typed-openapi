@@ -114,6 +114,7 @@ fn scratch(name: &str, text: &str) -> std::path::PathBuf {
 fn required(body: &Body) -> Option<bool> {
     match body {
         Body::None => None,
+        Body::Form { .. } => Some(true),
         Body::JsonFields { required, .. }
         | Body::JsonWhole { required, .. }
         | Body::Multipart { required, .. }

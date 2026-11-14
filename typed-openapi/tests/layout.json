@@ -1,5 +1,5 @@
 {
-  "model_layout": 9,
+  "model_layout": 10,
   "traces": {
     "Bounds<f64>": {
       "Bounds": {
@@ -49,9 +49,22 @@
       "Body": {
         "ENUM": {
           "0": {
-            "None": "UNIT"
+            "Form": {
+              "STRUCT": [
+                {
+                  "fields": {
+                    "SEQ": {
+                      "TYPENAME": "FormField"
+                    }
+                  }
+                }
+              ]
+            }
           },
           "1": {
+            "None": "UNIT"
+          },
+          "2": {
             "JsonFields": {
               "STRUCT": [
                 {
@@ -75,7 +88,7 @@
               ]
             }
           },
-          "2": {
+          "3": {
             "JsonWhole": {
               "STRUCT": [
                 {
@@ -97,7 +110,7 @@
               ]
             }
           },
-          "3": {
+          "4": {
             "Multipart": {
               "STRUCT": [
                 {
@@ -111,7 +124,7 @@
               ]
             }
           },
-          "4": {
+          "5": {
             "Opaque": {
               "STRUCT": [
                 {
@@ -204,6 +217,25 @@
           {
             "description": {
               "OPTION": "STR"
+            }
+          }
+        ]
+      },
+      "FormField": {
+        "STRUCT": [
+          {
+            "name": "STR"
+          },
+          {
+            "choices": {
+              "OPTION": {
+                "SEQ": "STR"
+              }
+            }
+          },
+          {
+            "text": {
+              "TYPENAME": "Text"
             }
           }
         ]

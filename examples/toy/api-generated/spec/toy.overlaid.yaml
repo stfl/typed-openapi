@@ -262,6 +262,47 @@ paths:
                   balance:
                     type: string
                     format: money
+  /forms:
+    post:
+      operationId: submitForm
+      summary: Submit a flat toy form from JSON input
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/ToyForm"
+      responses:
+        "204":
+          description: Accepted
+      x-cli-form-json: true
+      x-cli-gates:
+      - toy-form
+  /empty-forms:
+    post:
+      operationId: submitEmptyForm
+      summary: Submit a literal punctuation key and an empty string
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/EmptyForm"
+      responses:
+        "204":
+          description: Accepted
+      x-cli-form-json: true
+  /opaque-forms:
+    post:
+      operationId: submitOpaqueForm
+      summary: Submit pre-encoded arbitrary form bytes
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded: {}
+      responses:
+        "204":
+          description: Accepted
   "/vouchers/{id}/archive":
     post:
       operationId: archiveVoucher
@@ -282,6 +323,43 @@ paths:
                 $ref: "#/components/schemas/Voucher"
 components:
   schemas:
+    ToyForm:
+      type: object
+      additionalProperties: false
+      required:
+      - choice
+      - digits
+      - kind
+      - ref[id]
+      - text
+      properties:
+        text:
+          type: string
+        "ref[id]":
+          type: string
+        kind:
+          type: string
+          enum:
+          - Toy
+          default: Toy
+        digits:
+          type: string
+          pattern: ^[0-9]+$
+          minLength: 2
+          maxLength: 3
+        choice:
+          type: string
+          enum:
+          - "0"
+          - "1"
+    EmptyForm:
+      type: object
+      additionalProperties: false
+      required:
+      - a+%&= ä[]
+      properties:
+        "a+%&= ä[]":
+          type: string
     VoucherStatus:
       type: string
       enum:

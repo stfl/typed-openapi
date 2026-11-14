@@ -17,6 +17,8 @@
 
 mod blob;
 #[cfg(feature = "document")]
+mod form;
+#[cfg(feature = "document")]
 mod reduce;
 
 use std::collections::HashMap;
@@ -568,11 +570,26 @@ pub struct Field {
     description: Option<String>,
 }
 
+/// One required, literal key in a structured form. Enum and text constraints
+/// travel together so that no reduction can discard their conjunction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FormField {
+    pub(crate) name: String,
+    pub(crate) choices: Option<Vec<String>>,
+    pub(crate) text: crate::scalar::Text,
+}
+
 /// What the operation wants in the request body — and therefore which flags the
 /// subcommand grows. Each variant is exactly one flag set, so a body can never
 /// offer a flag that the request builder then ignores.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Body {
+    /// JSON input validated as a closed, required string object and encoded as
+    /// `application/x-www-form-urlencoded`. No per-field or raw-byte flags.
+    Form {
+        /// Every required property and all of its string rules.
+        fields: Vec<FormField>,
+    },
     /// The document asks for no body.
     None,
     /// A JSON object whose every property is a scalar or is set by the API: one
@@ -970,7 +987,7 @@ impl Document {
     /// for the same document and no type changed. The crate's own tests trace
     /// the layout and fail on a change to a type that left the number where it
     /// was.
-    pub const MODEL_LAYOUT: u32 = 9;
+    pub const MODEL_LAYOUT: u32 = 10;
 
     /// The same reduction, already done and written down.
     ///
@@ -1471,7 +1488,8 @@ impl Body {
     pub fn present(&self) -> bool {
         match self {
             Self::None => false,
-            Self::JsonFields { .. }
+            Self::Form { .. }
+            | Self::JsonFields { .. }
             | Self::JsonWhole { .. }
             | Self::Multipart { .. }
             | Self::Opaque { .. } => true,
@@ -1492,7 +1510,10 @@ impl Body {
         match self {
             Self::None => false,
             Self::JsonFields { fields, .. } => fields.is_empty(),
-            Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => true,
+            Self::Form { .. }
+            | Self::JsonWhole { .. }
+            | Self::Multipart { .. }
+            | Self::Opaque { .. } => true,
         }
     }
 
@@ -1517,9 +1538,11 @@ impl Body {
     pub fn fields(&self) -> &[Field] {
         match self {
             Self::JsonFields { fields, .. } => fields,
-            Self::None | Self::JsonWhole { .. } | Self::Multipart { .. } | Self::Opaque { .. } => {
-                &[]
-            }
+            Self::Form { .. }
+            | Self::None
+            | Self::JsonWhole { .. }
+            | Self::Multipart { .. }
+            | Self::Opaque { .. } => &[],
         }
     }
 
@@ -1539,7 +1562,7 @@ impl Body {
     pub fn read_only(&self) -> &[String] {
         match self {
             Self::JsonFields { read_only, .. } | Self::JsonWhole { read_only, .. } => read_only,
-            Self::None | Self::Multipart { .. } | Self::Opaque { .. } => &[],
+            Self::Form { .. } | Self::None | Self::Multipart { .. } | Self::Opaque { .. } => &[],
         }
     }
 
@@ -1559,6 +1582,7 @@ impl Body {
             Self::JsonFields { media_type, .. }
             | Self::JsonWhole { media_type, .. }
             | Self::Opaque { media_type, .. } => Some(media_type.trim_matches([' ', '\t'])),
+            Self::Form { .. } => Some("application/x-www-form-urlencoded"),
             Self::None | Self::Multipart { .. } => None,
         }
     }

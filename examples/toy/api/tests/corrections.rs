@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use api::{CORRECTIONS, Cents, Contact, Correction, Money, OPERATIONS, Voucher};
-use typed_openapi::{Document, Effect, Gate};
+use typed_openapi::{Body, Document, Effect, Gate};
 
 /// The vendor's document, unpatched. `api` never reads this — that is the
 /// point: it is the thing the corrections are corrections *to*.
@@ -84,6 +84,7 @@ fn schema_names(document: &serde_json::Value) -> BTreeSet<String> {
 /// means — rather than a row that quietly goes unchecked.
 #[derive(Debug, Default)]
 struct Rows {
+    forms: Vec<&'static str>,
     undocumented: Vec<&'static str>,
     skipped: Vec<&'static str>,
     gated: Vec<&'static str>,
@@ -96,6 +97,7 @@ fn rows() -> Rows {
     let mut rows = Rows::default();
     for correction in CORRECTIONS {
         match *correction {
+            Correction::StructuredForm(id) => rows.forms.push(id),
             Correction::Undocumented(id) => rows.undocumented.push(id),
             Correction::Skipped(id) => rows.skipped.push(id),
             Correction::Gated(id) => rows.gated.push(id),
@@ -218,6 +220,21 @@ fn every_named_gate_is_the_overlays_own_and_is_carried() {
     }
 }
 
+#[test]
+fn every_structured_form_row_is_the_overlays_own_and_is_carried() {
+    let (vendor, corrected) = (vendor(), corrected());
+    for id in rows().forms {
+        assert!(matches!(
+            vendor.get(id).expect("vendor form").body(),
+            Body::Opaque { .. }
+        ));
+        assert!(matches!(
+            corrected.get(id).expect("corrected form").body(),
+            Body::Form { .. }
+        ));
+    }
+}
+
 /// A retype is a correction only while the vendor leaves the rule unsaid and
 /// the schema that says it is the Overlay's own — and only while the generated
 /// field really is that newtype.
@@ -292,13 +309,24 @@ fn every_undeclared_property_is_still_undeclared() {
 /// and which words it stands behind.
 #[test]
 fn every_operation_the_command_line_treats_differently_has_a_row() {
-    let Rows { gated, guarded, .. } = rows();
+    let Rows {
+        gated,
+        guarded,
+        forms,
+        ..
+    } = rows();
 
     let (vendor, corrected) = (vendor(), corrected());
     for op in &corrected {
         let Some(before) = vendor.get(op.id()) else {
             continue;
         };
+        assert!(
+            matches!(before.body(), Body::Form { .. }) == matches!(op.body(), Body::Form { .. })
+                || forms.contains(&op.id()),
+            "`{}` changes form input mode and no row says so",
+            op.id()
+        );
         assert!(
             before.effect() == op.effect() || gated.contains(&op.id()),
             "`{}` is gated differently from the vendor's own method and no row says so",

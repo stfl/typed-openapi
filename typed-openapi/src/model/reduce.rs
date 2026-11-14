@@ -61,6 +61,14 @@ const BODY: &str = "requestBody";
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum LoadError {
+    /// An opt-in form cannot keep its declared contract.
+    #[error("{op}: `x-cli-form-json`: {reason}")]
+    StructuredForm {
+        /// The operation that opted in.
+        op: String,
+        /// The unsupported shape or marker value.
+        reason: String,
+    },
     /// The vendor's document could not be read as YAML or JSON. The cause
     /// holds the line and the column of the text where the reader stopped.
     #[error(transparent)]
@@ -987,9 +995,10 @@ impl Document {
         // On the raw document too, because the object model drops a marker
         // standing beside a `$ref` without a word.
         crate::markers::check(&doc)?;
+        let forms = super::form::reduce(&doc)?;
         let model = crate::openapi::model_of(&doc)
             .map_err(|Misfit { at, source }| LoadError::Shape { at, source })?;
-        let loaded = Self::from_openapi(&model, &loading.commit)?;
+        let loaded = Self::from_openapi(&model, &loading.commit, &forms)?;
         // After the reduction, so that a `pattern` which `runnable_scalar` read
         // is refused there, with the value that holds it. This reads the
         // `pattern` of every other schema the model reads.
@@ -997,7 +1006,11 @@ impl Document {
         Ok(loaded)
     }
 
-    fn from_openapi(doc: &OpenAPI, commit: &str) -> Result<Self, LoadError> {
+    fn from_openapi(
+        doc: &OpenAPI,
+        commit: &str,
+        forms: &HashMap<String, Body>,
+    ) -> Result<Self, LoadError> {
         let base = base_of(doc.servers.first().ok_or(LoadError::NoServer)?)?;
         let empty = Components::default();
         // Which segment groups this document is a fact about all of its paths,
@@ -1005,6 +1018,7 @@ impl Document {
         let paths: Vec<&str> = doc.paths.paths.keys().map(String::as_str).collect();
         let whole = Reading {
             components: doc.components.as_ref().unwrap_or(&empty),
+            forms,
             grouping: Grouping::of(&paths),
             commit,
         };
@@ -1201,7 +1215,10 @@ impl Operation {
             })
             .collect::<Result<Vec<_>, _>>()?;
         companions(id, &params)?;
-        let body = Body::build(id, op, whole.components, &mut flags)?;
+        let body = match whole.forms.get(id) {
+            Some(body) => body.clone(),
+            None => Body::build(id, op, whole.components, &mut flags)?,
+        };
 
         Ok(Self {
             id: id.to_owned(),
@@ -1424,6 +1441,7 @@ fn namesake(earlier: &[&Parameter], param: &Parameter) -> Option<Place> {
 /// the operation, so both are read once and handed down.
 #[derive(Debug, Clone, Copy)]
 struct Reading<'d> {
+    forms: &'d HashMap<String, Body>,
     components: &'d Components,
     grouping: Grouping,
     /// The word this CLI spends on confirming a write. Read once here and then

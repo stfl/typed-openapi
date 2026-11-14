@@ -830,3 +830,12 @@ Three things are worth knowing:
 
 [typify]: https://docs.rs/typify
 [bon]: https://bon-rs.com
+
+## Structured form request types
+
+A marked structured form operation takes a named request type generated through
+operation-body naming, such as `SubmitFormBody` in the toy. The generator builds
+it from the reduced required-string contract, retaining enum, pattern and length
+rules together. Defaults and descriptive formats supply no input behavior.
+The original named component type remains available with its ordinary JSON
+semantics. See [structured forms](structured-forms.md).
