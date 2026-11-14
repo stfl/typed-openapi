@@ -214,6 +214,8 @@ fn property_refusals() -> Vec<(String, Value)> {
         json!({"type":"string","not":{"enum":["x"]}}),
         json!({"type":"string","const":"x"}),
         json!({"type":"string","minLength":-1}),
+        json!({"type":"string","minLength":4294967296_u64}),
+        json!({"type":"string","maxLength":4294967296_u64}),
         json!({"type":"string","enum":[null]}),
         json!({"type":"string","enum":[]}),
         json!({"type":"string","minimum":1}),
@@ -245,6 +247,11 @@ fn structured_form_schema_contract() {
         .expect("generation follows the same references");
     let ops = std::fs::read_to_string(output.join("src/ops.rs")).expect("generated ops");
     assert!(ops.contains("body: &crate::types::SubmitFormBody"), "{ops}");
+    let mut boundary = source();
+    boundary["components"]["schemas"]["Form"]["properties"]["text"]["maxLength"] = json!(u32::MAX);
+    load(&boundary).expect("the generator's largest length survives reduction");
+    generated(&boundary, "structured-form-length-boundary")
+        .expect("the largest supported length generates");
     let mut formatted = source();
     formatted["components"]["schemas"]["Form"]["properties"]["text"]["format"] = json!("date");
     let output = generated(&formatted, "structured-form-descriptive-format")

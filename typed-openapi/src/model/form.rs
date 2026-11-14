@@ -255,8 +255,9 @@ fn length(schema: &Value, key: &str, op: &str, name: &str) -> Result<Option<usiz
         .map(|value| {
             value
                 .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
                 .and_then(|n| usize::try_from(n).ok())
-                .ok_or_else(|| refused(op, format!("{name}: {key} must be a non-negative length")))
+                .ok_or_else(|| refused(op, format!("{name}: {key} must be a non-negative length representable by the generator")))
         })
         .transpose()
 }

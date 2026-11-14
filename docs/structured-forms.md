@@ -11,7 +11,8 @@ object with explicit `additionalProperties: false`. All properties must be
 required, non-nullable strings. Ordinary component and request-body references
 are followed. Read-only properties, optional properties, compositions, nested
 objects, arrays, non-string fields and form encoding directives are refused.
-Unsupported validation keywords are refused with the operation and reason.
+Unsupported validation keywords and lengths that the generator cannot represent
+are refused with the operation and reason.
 
 String `enum`, `pattern`, `minLength` and `maxLength` rules apply together.
 Lengths count Unicode characters, including combining characters separately.
