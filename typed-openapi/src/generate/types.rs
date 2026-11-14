@@ -130,12 +130,12 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use schemars::schema::{InstanceType, Schema, SchemaObject, SingleOrVec, SubschemaValidation};
 use schemars::visit::Visitor;
-use serde_json::Value;
+use serde_json::{Value, json};
 use syn::visit_mut::VisitMut;
 use typify::{TypeSpace, TypeSpaceImpl, TypeSpaceSettings};
 
 use super::GenerateError;
-use super::names::{Inline, Names};
+use super::names::{Home, Inline, Names, Site};
 use crate::Document;
 use crate::schema::read_only_of;
 
@@ -181,6 +181,7 @@ pub(super) fn emit(
     let paths = rust_paths(replacements)?;
     let mut definitions = definitions(api)?;
     let mut stated = stated(api, model)?;
+    stated.extend(form_requests(model));
 
     let owned = owned(replacements);
     for (_, schema) in &mut definitions {
@@ -988,6 +989,47 @@ fn stated(api: &openapiv3::OpenAPI, model: &Document) -> Result<Vec<Stated>, Gen
                         source,
                     })?;
                 Ok(as_json_schema(value))
+            })
+        })
+        .collect()
+}
+
+/// A form's input is a distinct request schema: all keys are required,
+/// annotations supply no values or validation, and every string rule survives.
+/// Feeding this through the existing inline naming path leaves component types
+/// used by JSON calls unchanged, including their formats and defaults.
+fn form_requests(model: &Document) -> Vec<Stated> {
+    model
+        .iter()
+        .filter_map(|op| {
+            let crate::Body::Form { fields } = op.body() else {
+                return None;
+            };
+            let mut properties = serde_json::Map::new();
+            for field in fields {
+                let mut schema = serde_json::Map::from_iter([("type".to_owned(), json!("string"))]);
+                if let Some(choices) = &field.choices {
+                    schema.insert("enum".to_owned(), json!(choices));
+                }
+                if let Some(pattern) = &field.text.pattern {
+                    schema.insert("pattern".to_owned(), json!(pattern));
+                }
+                if let Some(min) = field.text.min_length {
+                    schema.insert("minLength".to_owned(), json!(min));
+                }
+                if let Some(max) = field.text.max_length {
+                    schema.insert("maxLength".to_owned(), json!(max));
+                }
+                properties.insert(field.name.clone(), Value::Object(schema));
+            }
+            Some(Inline {
+                site: Site::body(op.id()),
+                home: Home::Operation,
+                schema: json!({
+                    "type": "object", "additionalProperties": false,
+                    "required": fields.iter().map(|f| &f.name).collect::<Vec<_>>(),
+                    "properties": properties
+                }),
             })
         })
         .collect()

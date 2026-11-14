@@ -32,3 +32,9 @@ The toy keeps three routes side by side: `Voucher.total` is owned and held
 both ways, `Voucher.currency` is generated, and `Contact.creditLimit` is
 owned and guarded. `api` re-exports `money` as a module so the generated
 schema wrappers and their owned values keep distinct names.
+
+The structured form examples use generic string schemas, punctuation keys and
+literal wire goldens. `cli/tests/structured_form.rs` exercises the generated
+named request types and raw commands through Recorder, including the optional
+builder. The opaque form beside them keeps the byte interface. Source and
+reduced-model contracts live in the library's own synthetic tests.

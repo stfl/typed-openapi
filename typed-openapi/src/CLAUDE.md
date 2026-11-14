@@ -76,10 +76,10 @@ from the segments below the group only: a template above the group names a
 value the caller supplies for every operation under it.
 
 **This crate owns the `x-cli-` prefix, and a marker is read where it stands or
-the load is refused.** `src/markers.rs` holds the five keys, what each is read
+the load is refused.** `src/markers.rs` holds the keys, what each is read
 off, and the scan that `Document::load_with` runs on the overlaid document
 before the object model reads it, because the model drops a key beside a string
-`$ref` without a word. The four on an operation are read on a method of a path item
+`$ref` without a word. The operation markers are read on a method of a path item
 under `paths`, and `x-cli-requires` on a parameter that is not a Reference
 Object: a path item's, an operation's, or one under `components.parameters`,
 which is a place
@@ -1556,3 +1556,15 @@ after every change, because one change can make the next necessary: escaping the
 `<` that opens an HTML block leaves lines for the parser, and one of them may
 open a fence. The round limit falls back to a fenced sample if edits do not
 settle.
+
+**Structured forms have one validation and encoding seam.** `Body::Form` holds
+literal required keys with enum and text rules together. `model/form.rs` reads
+marked operations before object-model normalization and follows ordinary refs
+through `schema::resolve`. Its bounded vocabulary refuses unsupported rules;
+changes to that vocabulary need refusal cases in `tests/structured_form.rs`.
+`Invocation::new` validates direct values as well as raw and generated input;
+`Invocation::request` renders the form bytes. The generator derives a named
+operation-body input from the reduced contract so formats and defaults cannot
+supply behavior and component types used by JSON keep theirs. The reasoning is
+in `docs/adr/0001-structured-form-requests.md`. `Body::fields()` remains the
+per-field flag inventory and returns no fields for a structured form.

@@ -48,6 +48,12 @@ pub enum OperationId {
     UploadDocumentMultipart,
     ///createLedgerEntry
     CreateLedgerEntry,
+    ///submitForm
+    SubmitForm,
+    ///submitEmptyForm
+    SubmitEmptyForm,
+    ///submitOpaqueForm
+    SubmitOpaqueForm,
     ///archiveVoucher
     ArchiveVoucher,
 }
@@ -67,6 +73,9 @@ impl OperationId {
         OperationId::UploadDocument,
         OperationId::UploadDocumentMultipart,
         OperationId::CreateLedgerEntry,
+        OperationId::SubmitForm,
+        OperationId::SubmitEmptyForm,
+        OperationId::SubmitOpaqueForm,
         OperationId::ArchiveVoucher,
     ];
     ///The `<group> <command>` pair the CLI mounts this
@@ -91,6 +100,9 @@ impl OperationId {
                 ::std::option::Option::Some(Self::UploadDocumentMultipart)
             }
             ("ledger", "entries") => ::std::option::Option::Some(Self::CreateLedgerEntry),
+            ("forms", "create") => ::std::option::Option::Some(Self::SubmitForm),
+            ("empty-forms", "create") => ::std::option::Option::Some(Self::SubmitEmptyForm),
+            ("opaque-forms", "create") => ::std::option::Option::Some(Self::SubmitOpaqueForm),
             ("vouchers", "archive") => ::std::option::Option::Some(Self::ArchiveVoucher),
             _ => ::std::option::Option::None,
         }
@@ -125,12 +137,22 @@ impl OperationId {
             Self::CreateLedgerEntry => typed_openapi::client::fits::<
                 crate::types::CreateLedgerEntryBody,
             >("createLedgerEntry", body),
+            Self::SubmitForm => {
+                typed_openapi::client::fits::<crate::types::SubmitFormBody>("submitForm", body)
+            }
+            Self::SubmitEmptyForm => {
+                typed_openapi::client::fits::<crate::types::SubmitEmptyFormBody>(
+                    "submitEmptyForm",
+                    body,
+                )
+            }
             Self::ListVouchers
             | Self::GetVoucher
             | Self::EnshrineVoucher
             | Self::RenderVoucher
             | Self::UploadDocument
             | Self::UploadDocumentMultipart
+            | Self::SubmitOpaqueForm
             | Self::ArchiveVoucher => ::std::result::Result::Ok(()),
         }
     }
@@ -152,11 +174,14 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
     ("uploadDocument", "POST", "/documents"),
     ("uploadDocumentMultipart", "POST", "/documents-multipart"),
     ("createLedgerEntry", "POST", "/ledger/entries"),
+    ("submitForm", "POST", "/forms"),
+    ("submitEmptyForm", "POST", "/empty-forms"),
+    ("submitOpaqueForm", "POST", "/opaque-forms"),
     ("archiveVoucher", "POST", "/vouchers/{id}/archive"),
 ];
 ///How many operations the document declares. An operation *added*
 ///upstream moves this number and nothing else would have noticed.
-pub const OPERATION_COUNT: usize = 13usize;
+pub const OPERATION_COUNT: usize = 16usize;
 const fn str_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
@@ -361,6 +386,47 @@ impl Api {
             Values::new().json(crate::to_json("createLedgerEntry", body)?),
         )
     }
+    /// Submit a flat toy form from JSON input
+    ///
+    /// POST /forms
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit` and `--toy-form`.
+    pub fn submit_form(
+        &self,
+        body: &crate::types::SubmitFormBody,
+    ) -> ::std::result::Result<Call<'_, NoContent>, Error> {
+        self.call(
+            OperationId::SubmitForm,
+            Values::new().json(crate::to_json("submitForm", body)?),
+        )
+    }
+    /// Submit a literal punctuation key and an empty string
+    ///
+    /// POST /empty-forms
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    pub fn submit_empty_form(
+        &self,
+        body: &crate::types::SubmitEmptyFormBody,
+    ) -> ::std::result::Result<Call<'_, NoContent>, Error> {
+        self.call(
+            OperationId::SubmitEmptyForm,
+            Values::new().json(crate::to_json("submitEmptyForm", body)?),
+        )
+    }
+    /// Submit pre-encoded arbitrary form bytes
+    ///
+    /// POST /opaque-forms
+    ///
+    /// This operation writes. A Rust caller is trusted; the CLI holds it behind `--commit`.
+    ///
+    /// `body` is sent verbatim under the document's own `application/x-www-form-urlencoded`, which this crate does not assemble.
+    pub fn submit_opaque_form(
+        &self,
+        body: ::std::vec::Vec<u8>,
+    ) -> ::std::result::Result<Call<'_, NoContent>, Error> {
+        self.call(OperationId::SubmitOpaqueForm, Values::new().raw(body))
+    }
     /// Archive a voucher (undocumented; vendor ships it)
     ///
     /// POST /vouchers/{id}/archive
@@ -476,6 +542,30 @@ impl Api {
         body: &crate::types::CreateLedgerEntryBody,
     ) -> ::std::result::Result<Call<'_, crate::types::CreateLedgerEntryResponse>, Error> {
         self.create_ledger_entry(body)
+    }
+    ///The same call as [`Api::submit_form`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn submit_form_builder(
+        &self,
+        body: &crate::types::SubmitFormBody,
+    ) -> ::std::result::Result<Call<'_, NoContent>, Error> {
+        self.submit_form(body)
+    }
+    ///The same call as [`Api::submit_empty_form`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn submit_empty_form_builder(
+        &self,
+        body: &crate::types::SubmitEmptyFormBody,
+    ) -> ::std::result::Result<Call<'_, NoContent>, Error> {
+        self.submit_empty_form(body)
+    }
+    ///The same call as [`Api::submit_opaque_form`], with its arguments named. A missing required argument is a compile error.
+    #[builder]
+    pub fn submit_opaque_form_builder(
+        &self,
+        body: ::std::vec::Vec<u8>,
+    ) -> ::std::result::Result<Call<'_, NoContent>, Error> {
+        self.submit_opaque_form(body)
     }
     ///The same call as [`Api::archive_voucher`], with its arguments named. A missing required argument is a compile error.
     #[builder]

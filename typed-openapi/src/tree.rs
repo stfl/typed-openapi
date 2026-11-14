@@ -437,7 +437,9 @@ fn read_only_notes(body: &Body) -> Vec<String> {
     let (said, names): (fn(&str) -> String, &[String]) = match body {
         Body::JsonFields { read_only, .. } => (has_no_flag, read_only),
         Body::JsonWhole { read_only, .. } => (leave_out, read_only),
-        Body::None | Body::Multipart { .. } | Body::Opaque { .. } => (leave_out, &[]),
+        Body::Form { .. } | Body::None | Body::Multipart { .. } | Body::Opaque { .. } => {
+            (leave_out, &[])
+        }
     };
     names.iter().map(|name| said(name)).collect()
 }
@@ -774,7 +776,7 @@ fn payload(op: &Operation, matches: &ArgMatches) -> Result<Option<Payload>, ArgE
         Body::None => Ok(None),
         // A missing required body is `Invocation::new`'s to report, so that one
         // place decides what satisfies an operation.
-        Body::JsonWhole { .. } => one::<PathBuf>(matches, JSON_BODY)?
+        Body::Form { .. } | Body::JsonWhole { .. } => one::<PathBuf>(matches, JSON_BODY)?
             .map(|path| read_json(path).map(Payload::Json))
             .transpose(),
         Body::Opaque { .. } => one::<PathBuf>(matches, RAW_BODY)?
@@ -1009,6 +1011,9 @@ fn wire(renamed: bool, name: &str) -> Option<String> {
 fn body_args(cmd: Command, body: &Body) -> Command {
     match body {
         Body::None => cmd,
+        Body::Form { .. } => cmd.arg(file_arg(JSON_BODY, true).help(
+            "Read a complete JSON object from FILE; validate required strings and encode application/x-www-form-urlencoded wire bytes",
+        )),
         Body::JsonFields {
             fields, required, ..
         } => json_field_args(cmd, fields, *required),

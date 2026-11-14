@@ -339,8 +339,18 @@ fn json_body_type(
         Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
             body_type(op, media_type, operation, components, names).map(Some)
         }
+        Body::Form { .. } => form_body_type(op, names).map(Some),
         Body::None | Body::Opaque { .. } | Body::Multipart { .. } => Ok(None),
     }
+}
+
+/// The named request generated from the reduced form contract, independently
+/// of a component's descriptive formats and input defaults.
+fn form_body_type(op: &Operation, names: &Names) -> Result<TokenStream, GenerateError> {
+    names
+        .at(&Site::body(op.id()))
+        .cloned()
+        .ok_or_else(|| unsupported("structured form request has no Rust spelling"))
 }
 
 fn wrapper(
@@ -638,6 +648,10 @@ fn add_body(
 ) -> Result<(), GenerateError> {
     let (required, argument) = match op.body() {
         Body::None => return Ok(()),
+        Body::Form { .. } => {
+            let ty = form_body_type(op, names)?;
+            (true, json_argument(out, op, &ty))
+        }
         Body::JsonFields {
             media_type,
             required,

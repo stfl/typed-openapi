@@ -318,6 +318,11 @@ refuses (`X Bad`), refuses the document: `LoadError::HeaderName`, and an Overlay
 corrects the name or removes the parameter. A header parameter with no flag sends
 nothing, so its name is not asked.
 
+**Structured forms opt in.** `x-cli-form-json: true` selects the bounded
+[structured form contract](structured-forms.md), including shared validation,
+conjoined string rules and deterministic encoding. Unmarked operations follow
+the media-key selection below.
+
 **The `Content-Type` is the document's.** A JSON body goes out under the
 `content` key it was declared under, spelled as the document spells it, with
 its parameters and less a space and a tab at its two ends:
@@ -330,7 +335,7 @@ that type. `Body::JsonFields` and `Body::JsonWhole` carry the key, as
 `Content-Type`, and a caller sets none: `Values` has no way to name a media
 type.
 
-**One key is sent, and this is the rule that picks it.** A body may be declared
+**One key is sent, and this is the rule that picks it for unmarked operations.** A body may be declared
 under several `content` keys, and a request goes out under one. The key is the
 first, in the order of the overlaid document, that names JSON (`application/json`
 or a type whose subtype ends in `+json`), wherever it stands among the others.
