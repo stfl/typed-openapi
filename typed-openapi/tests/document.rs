@@ -2821,7 +2821,7 @@ fn an_x_cli_requires_on_the_component_a_ref_names_is_read() {
 }
 
 /// This crate owns the prefix. A key under it that nothing reads is a typo of
-/// one of the five, or an extension that belongs under another prefix, and the
+/// one of the supported markers, or an extension that belongs under another prefix, and the
 /// refusal names the key and says which.
 #[test]
 fn an_x_cli_key_this_crate_has_no_reading_for_is_refused_by_key_and_place() {
@@ -2835,12 +2835,12 @@ fn an_x_cli_key_this_crate_has_no_reading_for_is_refused_by_key_and_place() {
         typo.to_string(),
         "`x-cli-write` stands on `$.paths['/render/{id}'].get`, \
          and this crate reads no such key; it owns the `x-cli-` prefix and reads \
-         `x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes` and \
+         `x-cli-form-json`, `x-cli-command`, `x-cli-gates`, `x-cli-group`, `x-cli-writes` and \
          `x-cli-requires`; spell the key as one of them, or give an extension of \
          your own another prefix"
     );
 
-    // The same key on the other nodes of the document, and beside the five.
+    // The same key on the other nodes of the document, and beside valid markers.
     let gate = render_with(
         "x-p: 1",
         "x-q: 1",
