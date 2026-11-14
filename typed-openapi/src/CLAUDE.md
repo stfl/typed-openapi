@@ -369,7 +369,7 @@ name, so it reads every property (`properties_of`) before it decides whether the
 body is flat. A property the API sets is read for no rule. A rule asked only of
 the properties listed before the one that sends the body whole would make a
 document that loads depend on which property comes first. A cookie parameter, a
-parameter stated with `content`, a property of a form or multipart body or of a
+parameter stated with `content`, a property of an unmarked form or multipart body or of a
 body whose schema is an `allOf` of more than one schema, and the items of an
 array body are not read by it. The walk asks them the escape rule and nothing
 else, so a `multipleOf` of 0 or a `pattern` that no engine reads loads there. A

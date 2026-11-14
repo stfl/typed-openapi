@@ -156,7 +156,7 @@ schema and a name with no spelling. Other properties are still checked for
 retained rules, so their order does not change the verdict. A property that the
 schema marks `readOnly` is no part of the request, so it is read for none: it
 has no flag, and no flag could have carried its rules. A cookie parameter, a
-parameter stated with `content`, a property of a form, a multipart or a multi-schema `allOf` body and the items of an array body are not read that way. Only the escape below
+parameter stated with `content`, a property of an unmarked form, a multipart or a multi-schema `allOf` body and the items of an array body are not read that way. Only the escape below
 is asked of them.
 
 **A `pattern` with `\p{`, `\P{` or `\u{` is refused the same way.** Without the
