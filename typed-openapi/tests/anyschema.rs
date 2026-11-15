@@ -1536,7 +1536,11 @@ fn a_wrapper_is_read_at_every_place_a_schema_is_read() {
     let parts = |id: &str| -> Vec<String> {
         match operation(&doc, id).body() {
             Body::Multipart { names, .. } => names.clone(),
-            Body::None | Body::JsonFields { .. } | Body::JsonWhole { .. } | Body::Opaque { .. } => {
+            Body::Form { .. }
+            | Body::None
+            | Body::JsonFields { .. }
+            | Body::JsonWhole { .. }
+            | Body::Opaque { .. } => {
                 panic!("{id}: a multipart body")
             }
         }

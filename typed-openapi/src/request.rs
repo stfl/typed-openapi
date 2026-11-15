@@ -36,7 +36,7 @@ use crate::values::{Payload, Values};
 /// Every variant names the operation by its `operationId` in `op`. The eleven
 /// that are about a parameter also carry it in `name`: the name the document
 /// gives it, or, in [`ValueError::UnknownParam`], the name the caller gave, which
-/// the document does not declare. The three about the body carry no `name`.
+/// the document does not declare. The variants about the body carry no `name`.
 ///
 /// The four that refuse a header value print no value of the caller's: a header
 /// value can be a credential. The segment of [`ValueError::PathSegment`] is one
@@ -45,6 +45,14 @@ use crate::values::{Payload, Values};
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ValueError {
+    /// Structured form input broke the closed object's required string rules.
+    #[error("{op}: invalid structured form: {reason}")]
+    Form {
+        /// The operation whose form was refused.
+        op: String,
+        /// The missing or invalid key and the rule it broke.
+        reason: String,
+    },
     /// The operation declares the parameter required and no value came.
     #[error("{op}: `{name}` is required")]
     MissingParam {
@@ -524,7 +532,14 @@ impl<'a> Invocation<'a> {
     /// The `Content-Type` and the bytes, or `None` for a body-less request.
     fn body(&self) -> Option<(String, Vec<u8>)> {
         let bytes = match self.body.as_ref()? {
-            Payload::Json(value) => value.to_string().into_bytes(),
+            Payload::Json(value) => match self.op.body() {
+                Body::Form { .. } => encode_form(value),
+                Body::None
+                | Body::JsonFields { .. }
+                | Body::JsonWhole { .. }
+                | Body::Multipart { .. }
+                | Body::Opaque { .. } => value.to_string().into_bytes(),
+            },
             Payload::Raw(bytes) => bytes.clone(),
             Payload::Multipart(parts) => {
                 let encoded = multipart::encode(parts);
@@ -718,9 +733,12 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
         | (Body::JsonFields { .. } | Body::JsonWhole { .. }, Some(Payload::Json(_)))
         | (Body::Multipart { .. }, Some(Payload::Multipart(_)))
         | (Body::Opaque { .. }, Some(Payload::Raw(_))) => Ok(()),
+        (Body::Form { fields }, Some(Payload::Json(value))) => check_form(op, fields, value),
+        (Body::Form { .. }, Some(_)) => wrong("JSON input for application/x-www-form-urlencoded"),
         (Body::None, Some(_)) => Err(ValueError::UnexpectedBody { op: name() }),
         (
-            Body::JsonFields { required: true, .. }
+            Body::Form { .. }
+            | Body::JsonFields { required: true, .. }
             | Body::JsonWhole { required: true, .. }
             | Body::Multipart { required: true, .. }
             | Body::Opaque { required: true, .. },
@@ -730,6 +748,80 @@ fn check_body(op: &Operation, body: Option<&Payload>) -> Result<(), ValueError> 
         (Body::Multipart { .. }, Some(_)) => wrong("multipart/form-data"),
         (Body::Opaque { media_type, .. }, Some(_)) => wrong(media_type),
     }
+}
+
+/// No coercion, defaults or singleton repair: every key comes from the caller.
+fn check_form(
+    op: &Operation,
+    fields: &[crate::model::FormField],
+    value: &serde_json::Value,
+) -> Result<(), ValueError> {
+    let refused = |reason| ValueError::Form {
+        op: op.id().to_owned(),
+        reason,
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| refused("body must be an object".to_owned()))?;
+    for name in object.keys() {
+        if !fields.iter().any(|field| &field.name == name) {
+            return Err(refused(format!("unknown key `{name}`")));
+        }
+    }
+    for field in fields {
+        let text = object
+            .get(&field.name)
+            .ok_or_else(|| refused(format!("missing key `{}`", field.name)))?
+            .as_str()
+            .ok_or_else(|| refused(format!("`{}` must be a string", field.name)))?;
+        if let Some(choices) = &field.choices {
+            crate::scalar::Scalar::Choice(choices.clone())
+                .parse(text)
+                .map_err(|error| refused(format!("`{}`: {error}", field.name)))?;
+        }
+        crate::scalar::Scalar::Text(field.text.clone())
+            .parse(text)
+            .map_err(|error| refused(format!("`{}`: {error}", field.name)))?;
+    }
+    Ok(())
+}
+
+/// Only validated form objects reach rendering. Sort original keys, before
+/// escaping them, because encoded order is a different order for punctuation.
+fn encode_form(value: &serde_json::Value) -> Vec<u8> {
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    let mut pairs: Vec<_> = object.iter().collect();
+    pairs.sort_unstable_by(|(a, _), (b, _)| a.as_bytes().cmp(b.as_bytes()));
+    pairs
+        .into_iter()
+        .map(|(name, value)| {
+            format!(
+                "{}={}",
+                form_component(name),
+                form_component(value.as_str().unwrap_or_default())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+        .into_bytes()
+}
+
+fn form_component(raw: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for byte in raw.bytes() {
+        match byte {
+            b' ' => out.push('+'),
+            b'*' | b'-' | b'.' | b'_' => out.push(char::from(byte)),
+            _ if byte.is_ascii_alphanumeric() => out.push(char::from(byte)),
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
 }
 
 /// One parameter's values as a single field: each percent-encoded, joined by

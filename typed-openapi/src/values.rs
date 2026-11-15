@@ -11,7 +11,7 @@
 /// [`Body`]: crate::Body
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Payload {
-    /// JSON, either assembled from per-field flags or taken whole from a file.
+    /// JSON input, assembled from fields or taken whole, including structured forms.
     Json(serde_json::Value),
     /// Bytes the CLI does not interpret, sent under the document's media type.
     Raw(Vec<u8>),
@@ -166,7 +166,7 @@ impl Values {
         self
     }
 
-    /// The body as a JSON value, for an operation that takes JSON.
+    /// The body as a JSON value, for JSON wire output or a structured form.
     #[must_use]
     pub fn json(mut self, value: serde_json::Value) -> Self {
         self.body = Some(Payload::Json(value));

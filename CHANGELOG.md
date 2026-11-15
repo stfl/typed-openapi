@@ -7,6 +7,28 @@ the crate follows [Semantic Versioning][semver].
 [keep]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
 
+## Unreleased
+
+### Added
+
+- `x-cli-form-json: true` opts an operation into bounded structured form input.
+  A required form-only named closed object with required non-nullable strings
+  accepts `--json-body` and a generated named request type. The shared invocation
+  rejects missing or unknown keys, non-string values and enum/pattern/length
+  violations before planning, including direct `Values` input. Defaults and
+  singleton enums do not repair input; formats remain descriptive in form input.
+- Form names and values are encoded once in original-key UTF-8 byte order, with
+  literal bracket names, spaces as `+` and uppercase percent escapes. Raw and
+  typed callers share the encoder and fixed form content type. Existing JSON,
+  multipart and unmarked byte-form interfaces retain their behavior.
+- The public `Body::Form` variant and `model::FormField` retain complete string
+  constraints in the reduced model. Exhaustive matches on `Body` must handle
+  the new variant. Blob layout 10 refuses previous layouts explicitly; run the
+  adopter's bless step to regenerate the model. No package version change.
+- Unsupported marked schemas and invalid marker values fail with
+  `LoadError::StructuredForm`; misplaced and unknown markers use existing
+  marker diagnostics. `ValueError::Form` reports invalid structured input.
+
 ## 0.1.0 - 2026-11-10
 
 ### Fixed

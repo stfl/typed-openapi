@@ -637,9 +637,12 @@ fn body_of<'a>(
     op: &Operation,
     components: &'a Components,
 ) -> Option<(&'a ReferenceOr<Schema>, Home)> {
-    let (Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. }) = op.body()
-    else {
-        return None;
+    let media_type = match op.body() {
+        Body::JsonFields { media_type, .. } | Body::JsonWhole { media_type, .. } => {
+            media_type.as_str()
+        }
+        Body::Form { .. } => "application/x-www-form-urlencoded",
+        Body::None | Body::Opaque { .. } | Body::Multipart { .. } => return None,
     };
     match json_body(operation, media_type, components) {
         Ok(JsonBody::Stated { schema, home }) => Some((schema, home)),

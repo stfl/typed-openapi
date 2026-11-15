@@ -50,3 +50,11 @@ actions:
     description: Sending mail to a third party is typed out by name.
     update:
       x-cli-gates: [email]
+
+  - target: "$.paths['/forms'].post"
+    update:
+      x-cli-form-json: true
+      x-cli-gates: [toy-form]
+  - target: "$.paths['/empty-forms'].post"
+    update:
+      x-cli-form-json: true

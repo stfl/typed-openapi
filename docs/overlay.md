@@ -296,7 +296,7 @@ else could use this?*
 |---|---|---|
 | `corrections.yaml` | what is true of the API and the vendor got wrong or left out | anyone — the vendor, a TypeScript generator, a mock server, a request validator |
 | `client.yaml` | what is true of *your* client but not of the API | you, in any language |
-| `cli.yaml` | `x-cli-writes`, `x-cli-gates`, `x-cli-group`, `x-cli-command`, `x-cli-requires` | the command-line half of this crate |
+| `cli.yaml` | `x-cli-writes`, `x-cli-gates`, `x-cli-group`, `x-cli-command`, `x-cli-requires`, `x-cli-form-json` | the command-line half of this crate |
 
 Later layers may say things earlier ones must not, so the order is not a
 preference. The practical argument is also small and immediate: a tripwire that
@@ -667,13 +667,14 @@ uses one layer down. The difference is only who the statement is true of — see
 
 ### 3. Grouping and the command line
 
-**What only this crate reads** — the five `x-cli-` extensions, under the `x-`
+**What only this crate reads** — the `x-cli-` extensions, under the `x-`
 prefix OpenAPI reserves for exactly this.
 [`examples/toy/spec/cli.yaml`](../examples/toy/spec/cli.yaml) is this layer,
 and it is last because nothing else has any use for what is in it.
 
 | marker | on | says |
 |---|---|---|
+| `x-cli-form-json: true` | an operation | read complete JSON input and encode a supported [structured form](structured-forms.md) |
 | `x-cli-writes: true` | an operation | hold it behind `--commit`, whatever its method is |
 | `x-cli-gates: [<name>, …]` | an operation | demand one flag per name as well, each required |
 | `x-cli-group: <name>` | an operation | mount it under this group rather than the one its path names |
@@ -681,7 +682,7 @@ and it is last because nothing else has any use for what is in it.
 | `x-cli-requires: [<parameter>, …]` | a parameter | refuse it unless each named parameter of the same operation is given too |
 
 This crate owns the `x-cli-` prefix, and a marker is read where it stands or the
-document is refused. The four on an operation are read on an operation, a method
+document is refused. The operation markers are read on an operation, a method
 of a path item under `paths`, and `x-cli-requires` on a parameter under `paths`
 or `components.parameters`, and not beside a string `$ref`, which the OpenAPI model
 drops in silence. The same key on a path item, or any other `x-cli-` key on an

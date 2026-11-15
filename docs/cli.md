@@ -190,6 +190,7 @@ own type rather than the box `DispatchError::Transport` carries.
 | a property of a JSON body that the schema marks `readOnly` | nothing: the API sets it, so the subcommand's long help names it, and the body is flat or whole without regard to it |
 | any other JSON body — an array, no schema, or an object with a non-read-only property that is nested, has no name spelling or has a schema this CLI does not read as a value | `--json-body FILE`, plus `--json-body-template` where the document describes a shape, except for the object that the text below names |
 | a JSON body declared under `application/merge-patch+json`, `application/vnd.api+json` or any other `+json` type that is not a range | the same flags, and the body is sent under that key, not under `application/json` |
+| `x-cli-form-json: true` with a supported required form object | `--json-body FILE`; input JSON is validated and encoded as form wire bytes; see [structured forms](structured-forms.md) |
 | `multipart/form-data` | `--file NAME=PATH` and `--field NAME=VALUE`, both repeatable |
 | any other media type | `--raw-body FILE`, sent verbatim under that media type |
 | no request body | nothing |
