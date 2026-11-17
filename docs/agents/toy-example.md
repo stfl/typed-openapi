@@ -1,13 +1,11 @@
 # examples/toy — the worked adoption
 
 The invariants the example keeps. The rules of the library are in
-`typed-openapi/src/CLAUDE.md`, and the rules that reach past this directory are
-in the root `CLAUDE.md`.
+`docs/agents/library-modules.md`, and the rules that reach past the example are
+in the root `AGENTS.md`.
 
-**The typed half of an adoption links no argument parser.** The normal
-dependency graph reaches `typed-openapi` through `api` → `api-generated`.
-`api-generated` sets `default-features = false` on that dependency.
-`just clap-free` checks the normal dependency graph of `api`.
+**The typed half of an adoption links no argument parser.** An adopter's typed
+code must not pay for the command line.
 
 **Generated files are never edited.** `examples/toy/api-generated/src/{types,ops}.rs`,
 `model.postcard` and `summary.md` beside those Rust files, and

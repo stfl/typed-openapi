@@ -2,9 +2,9 @@
 
 The invariants the library's modules keep. A path that starts with `src/` or
 `tests/` is relative to `typed-openapi/`, and one that starts with `examples/`
-or `docs/` is relative to the repository root. The rules that reach past this
-directory are in the root `CLAUDE.md`, and the rules of the example are in
-`examples/toy/CLAUDE.md`.
+or `docs/` is relative to the repository root. The rules that reach past the
+library are in the root `AGENTS.md`, and the rules of the example are in
+`docs/agents/toy-example.md`.
 
 **The gate is default-closed and derived from the document.** `Plan::decide` in
 `src/plan.rs` is the only place that decides whether a request is sent. A write
@@ -32,11 +32,11 @@ field spelled like one refuses the load — `GateTakenByName`, `CommitTakenByNam
 and go on the wire; a confirmation answerable by a flag somebody typed for
 another reason is not a confirmation. Each word moves on the side that owns it:
 a gate in the adopter's `x-cli-gates`, the confirmation through
-`Loading::commit` or `Settings::commit_word`. `help` and the five body flags are
+`Loading::commit` or `Settings::commit_word`. `help` and the body flags are
 not consent and still yield, to `--param-<name>` or `--body-<name>`. They are
-the six words of `SPENT` in `src/model.rs`, which the load puts in every
+the words of `SPENT` in `src/model.rs`, which the load puts in every
 `Namespace` and `spends` asks of a decoded blob, and a gate or the confirmation
-that wears one of the six is refused (`ReservedGate`,
+that wears one of them is refused (`ReservedGate`,
 `ConfirmationError::Taken`): `--help` is typed to read a page, and a word that
 `--help` answers is a write that somebody sent by asking for help. A group or a
 command called `help` is refused for the same collision with clap's own
@@ -115,11 +115,11 @@ whose `x-…` keys are extensions.
 
 A route is one that 3.0.3 defines or one that only the schema walk enters
 (`Reach::Defined` and `Reach::Whole`), and each has one place in the table. A
-map added for a route that 3.0.3 defines is added for all three walks. The
+map added for a route that 3.0.3 defines is added for every walk. The
 schema walk also enters the rest, because `required::check` judges a schema by
 what it holds and not by where it stands: wherever it can tell that a name is
-declared nowhere it refuses the phantom, although typify writes no type there
-(F-81), and the refusal names an Overlay. A marker is judged by where it stands,
+declared nowhere it refuses the phantom, although typify writes no type there,
+and the refusal names an Overlay. A marker is judged by where it stands,
 so the scan stops at what the model reads. So does the walk of `src/patterns.rs`,
 because those checks concern schemas the model reads. A route that
 the table gains for the schema walk alone gets a row in `tests/required.rs` and
@@ -233,7 +233,7 @@ name one vocabulary. Unlike `description_of`, the named schema wins over the
 field: a sentence is about the field, a kind is about the value.
 
 **`Operation::carrying` is the whole question; `Body::fields` and
-`Param::format` are its parts, and all three are public.** `Body::fields` is the
+`Param::format` are its parts, and each is public.** `Body::fields` is the
 door to a flat body's properties for anything walking one — a guard, a renderer,
 documentation — and answers empty for every other body, so a walk is complete
 with no match over `Body` and covers a variant added later. Keeping it private
@@ -255,7 +255,7 @@ tab at the two ends of the key: a field value does not start or end with one
 `Content-Type`, and `Values` has no way to name one. The key that is sent among
 several is picked in `Body::build`: the first that `is_json`, wherever it stands,
 and else the first of all, so a multipart key is no better than another. The
-generator does not pick again: it reads the `media_type` field of the two JSON
+generator does not pick again: it reads the `media_type` field of the JSON
 variants where it types an argument (`src/generate/names.rs` and
 `src/generate/ops.rs`), and `json_body` finds the entry under that key, so the
 type of a wrapper's argument and the request come from one entry. Only the key
@@ -268,7 +268,7 @@ refused as a range. A response is not sent, so it is read at every key of its
 `content` that `is_json` accepts, because the client sends no `Accept` header
 (`names::success`).
 
-`MediaType` is two questions. Every request body key that is picked is asked
+`MediaType` asks a range question and a content-type question. Every request body key that is picked is asked
 `is_media_type`, a `type/subtype` of two `token`s, and reads as `is_json` does,
 with `str::trim`. A key that goes out as the request's `Content-Type`, a JSON
 body's and one that is sent verbatim, is asked `is_content_type` as well, after
@@ -496,12 +496,12 @@ generator still spoils onto the list.
 
 Both conditions are necessary. Where the walk can tell whether a name is
 declared, a phantom is refused although typify writes no field for it, and the
-rows measure what a node holds and not where the node stands. SEV-249 measured
-nine positions where typify writes no field: `unevaluatedProperties`, a
+rows measure what a node holds and not where the node stands. A measurement of typify found
+positions where it writes no field: `unevaluatedProperties`, a
 `dependentSchemas` subschema, `propertyNames`, `prefixItems`, `contains`,
 `then`, `contentSchema`, `$defs`, and anywhere below `not`. At each of them the
 walk reads the node and can tell, so a phantom there is refused, and no row
-exempts a position. Eight of the nine are keywords that a 3.0 schema does not
+exempts a position. Every one but the position below `not` is a keyword that a 3.0 schema does not
 have, and a document that is not 3.0 is refused first. A 3.0 document that
 carries one is read all the same: the walk reads the keyword and refuses a
 phantom under it, although the model drops it, and the refusal names an Overlay.
@@ -509,8 +509,8 @@ So it does below `not`, which is rare.
 
 The walk takes its nodes from a work list that shares the `followed` set, and
 makes no call for a hop. A chain of `allOf` hops is as long as the vendor wrote
-it, and a call per hop overflows the stack at 7,000 of them, on a thread of
-8 MiB too. `schema::follow` is a loop for the same reason, so a reference chain
+it, and a call per hop overflows the stack on a long enough chain, on a main
+thread too. `schema::follow` is a loop for the same reason, so a reference chain
 adds no recursion to either walk.
 
 **A shape this crate cannot spell stops at the operation, not at the document.**
@@ -535,7 +535,7 @@ its types: an integer bound spelled `0.0` or `1e3` is an `f64`, a bound past
 `typed` in `src/schema.rs` is the one place that reads such a schema, and
 `scalar_of`, `lists_only_null`, `format_of` and `array_of` ask it. `any_type`
 matches the `type` once, and the arm gives the keywords that type has with the
-way it is read, so a keyword is named for each of the six types, an object and
+way it is read, so a keyword is named for each type, an object and
 an array included. The unit test in `src/schema.rs` puts each keyword beside
 each type, because a keyword of the table that nothing exercises is a keyword
 read as no word at all. An `AnySchema` whose `type` is a scalar or an array and
@@ -650,7 +650,7 @@ them. `declared` drops the header parameters `Accept`, `Content-Type` and
 right, and a flag for the `Authorization` header puts a credential in argv, in
 shell history and in every dry run. A credential that the document declares
 under another name is a parameter like any other. `place` is the one map from
-the four kinds of `openapiv3::Parameter` to `Place`, with no `_` arm.
+each kind of `openapiv3::Parameter` to `Place`, with no `_` arm.
 
 `Values` is keyed by the name alone, and so is `Operation::param`, which finds
 the first. So of two parameters left with one name the one that is later in the
@@ -662,8 +662,8 @@ itself (`in: cookie`, `content`), and a required path parameter that comes later
 refuses the document. `docs/cli.md` says the repairs of both costs. A rule by
 reachability would make `Operation::param` "the first parameter with a flag",
 and a rule by place would add a second order beside the list. Both would widen a
-public seam for a rare document, and both would contradict spec F-10 ("the one
-the document lists later"). The values under a name are the first parameter's,
+public seam for a rare document, and both would contradict the spec: a later parameter of one name is the one the
+document lists later. The values under a name are the first parameter's,
 so `Invocation::new` counts the given values of a parameter with a flag only.
 The generator reads the same list: `entry_of_flag` finds the entry that a flag
 was read from in what `declared` returns, which is the first entry with the
@@ -883,7 +883,7 @@ each namespace is asked once the types and the wrappers are decided and before
 fields of every struct and every struct variant, which typify hands back as Rust
 spells them and not as the document does, so `DuplicateField` names the type and
 the field and cannot name the properties. `src/generate/identifiers.rs` asks the
-three namespaces of `ops.rs`: the methods of the handle (the wrapper and the
+namespaces of `ops.rs`: the methods of the handle (the wrapper and the
 `_builder` method of each operation, and the reserved handle methods `new`,
 `call` and `document`), the variants of `OperationId`, and the methods of
 one operation's builder, which `bon` derives (a setter for each argument,
@@ -892,7 +892,7 @@ builder). `signature_of` runs once for an operation and the wrapper, the builder
 and the check read that one `Signature`, and its `Member` is what `bon` sees of an
 argument: a list is a `Vec` and is required, and a body or a parameter that the
 document leaves optional is an `Option`. A method of the adopter's handle beyond
-those three is the adopter's to find. A duplicate `operationId` is asked earlier, by
+those is the adopter's to find. A duplicate `operationId` is asked earlier, by
 the reduction, and a blob is not checked for one, because no binary is stopped by
 it: the command line mounts operations by `<group> <command>`, which `check`
 holds apart, `Document::get` answers with the first, and a generated inventory
@@ -948,13 +948,13 @@ tuple struct, which is a function of its own name, so a bare `Ok(…)` in a file
 that defines it builds the newtype, and a bare `String` is the schema. typify
 writes `Ok(…)`, `Err(…)`, `Default::default()` and `impl TryFrom<String>` bare in
 its templates, so `StandardItems` in `src/generate/types.rs` rewrites them in the
-tree: the four prelude variants and `Default::default` where they stand in an
+tree: the prelude variants and `Default::default` where they stand in an
 expression or in the path of a pattern, and the `String` of an `impl
 TryFrom<String>`, which is found by its shape and leaves the type that the impl is
 for alone, because that type may be called `String`. A bare word in a type position
 elsewhere is a schema of the document, and the rewrite leaves it. A release of
 typify that writes another bare word fails the compile test of `tests/hostile.rs`
-under the schema that has its name, and the fixture has all ten. `ops.rs` is this
+under the schema that has its name, and the fixture holds a schema of each such name. `ops.rs` is this
 crate's own and spells `::std::result::Result`, `::std::option::Option` and
 `::std::vec::Vec` in its templates; `the_generated_code_names_every_standard_item_by_its_full_path`
 holds it to the text, because no schema can be called what `ops.rs` names, so no
@@ -970,7 +970,7 @@ own in the tarball that `just package` unpacks, which carries it. The manifest
 sets `warnings = "deny"` over `missing_docs` and `unused_qualifications`, so the
 `#![allow(warnings)]` of the generated files is what keeps them clean. It covers
 the lints at `warn`, including a named `deny` inside an explicitly allowed group.
-A named `deny` outside those groups remains the adopter's to relax. `COLLISIONS` is the table of F-12: a bless that
+A named `deny` outside those groups remains the adopter's to relax. `COLLISIONS` is the table of name collisions: a bless that
 succeeds over a document of it is compiled, and the test fails with the compiler's
 words, so a refusal that is removed shows as the error it prevented.
 
@@ -987,10 +987,10 @@ starts with a digit is refused.
 a generated wrapper through `Values` directly. Anything that makes the command
 line and the typed call disagree about an operation is a bug, not a feature.
 
-`Invocation::new` refuses five values that the request would carry as another
+`Invocation::new` refuses values that the request would carry as another
 value than the caller gave, whichever road they came by. Beside the schema it
 refuses a path value that is empty, `.` or `..` (judged as the text `url` writes
-for a list), and four header values. A receiver that follows RFC 9110 would
+for a list), and header values. A receiver that follows RFC 9110 would
 read another value, or another list, than the caller gave when the value holds
 a byte that `HeaderValue` refuses (`HeaderValue`), starts or ends with a space or
 a tab (`HeaderWhitespace`, an item of a list too), and, for a header list, when
@@ -1019,7 +1019,7 @@ holds the two together. `render` gives it the text of the host, and the request
 line only of a URI with no host, because only then are the path and the query
 the whole text that is read. With a host a `//` at the start of the path is a
 path, an `@` after it is no userinfo, and the line shows the path that is sent
-(`http://host//u@h/`). Three types hold a base. `Client` holds the
+(`http://host//u@h/`). The types that hold a base are `Client`, `Document` and `Call`. `Client` holds the
 caller's, and `Document` holds the one its load, its blob or a read through
 `Deserialize` in another format gave it: the last two read with no load, and
 `from_blob` does not repeat `ServerBase`, so the base of a `Document` can hold
@@ -1082,7 +1082,7 @@ one place that spells the place of a refusal, whether the walk found it or the
 read did. `schema::Place` spells the path of a read-only property with `[]` for
 any item, because the path names the property of every element.
 
-D4: no flag, setting or cargo feature lets an undeclared property through on a
+No flag, setting or cargo feature lets an undeclared property through on a
 call. The repair is an Overlay that declares it, which an adopter blesses and a
 reviewer reads, and a second road round the check (an `--allow-undeclared`) is
 what the rule is there to prevent. The generated types get no
@@ -1166,7 +1166,7 @@ that it writes as a struct of `flatten`ed `Option`s, an `allOf`, a map of object
 and each way to leave the rest open), so a release of typify that writes a shape
 another way fails under the case that stood on it. The unit tests in
 `src/client.rs` and `src/body_reader.rs` use hand-written types and hold the
-mechanism. Two shapes are narrower in the type than in the document, and a body
+mechanism. Some shapes are narrower in the type than in the document, and a body
 is refused like any other: an `anyOf` that typify writes as an `untagged` enum,
 given a body that fills two members, and a `oneOf` of an object and a list given
 a list that the object reads. `docs/validation.md` says both to an adopter. The
@@ -1229,21 +1229,19 @@ a default is a different document. On sevdesk-cli's committed overlaid file the
 defaults read the enum value `N` as `false`. They read a vendor's
 `x-cli-writes: yes` as `true`. So `yes`, `no`, `on`, `off`, `y` and `n` stay
 strings, and `<<` is an ordinary key. Comments are not read: a value holds none,
-and the default refuses a run of more than 32 between a key and its nested
-value. The budget limits the value that a read builds: 2 500 000 nodes and
-64 MiB of scalar text, counted with every alias expanded, at a depth of 128.
+and the default refuses a long run of them between a key and its nested
+value. The budget limits the value that a read builds: nodes and scalar text, counted
+with every alias expanded, and a depth (`NODE_LIMIT`, `TEXT_LIMIT`).
 Every other cap is set where a document inside those limits cannot reach it,
 with one exception: anchors nested inside each other keep a copy of their events
 and of their owned text for each anchor open around them, so they reach the caps
-on what anchors keep (10 000 000 events, 64 MiB) with a value inside the limits,
+on what anchors keep (`EVENT_LIMIT`, `TEXT_LIMIT`) with a value inside the limits,
 and the reader refuses them. A response defined once and used by a hundred
 operations, and a value that occurs a million times, are documents working as
 intended. The node limit is what refuses an alias bomb, because the reader
 counts each event that an alias replays in it. `NODE_LIMIT` in `src/overlay.rs`
 is the one place in code where the node limit is written, and the caps that
-follow from it are written from it. The docs state the numbers too (`2 500 000`,
-`2 500 001`, `10 000 000`, `64 MiB`, and `400`, the bomb's nodes over the node
-limit, in the doc of `REFUSAL_WITHIN`), so a change to `NODE_LIMIT`,
+follow from it are written from it. The docs state the numbers too (the doc of `REFUSAL_WITHIN` among them), so a change to `NODE_LIMIT`,
 `EVENT_LIMIT`, `TEXT_LIMIT` or the bomb's `BOMB_LEAVES` changes them as well:
 grep for the numbers in `src/`, `tests/`, `docs/` and `CHANGELOG.md`. A cap that
 a later release of the reader adds is a new way to refuse a document the base
@@ -1261,14 +1259,14 @@ carry come from crates at 1.0 or later: `serde_json::Error`,
 a release of that crate a break here.
 
 The depth limit is a recursion limit, and the library holds it on any thread. The
-reader descends 128 levels before it refuses the 129th, which takes up to 3 MiB
-of stack in a debug build, and a test thread has 2 MiB while a Windows main
-thread has 1 MiB. A refusal that aborts the process is no refusal, so `read`
+reader descends to the depth limit before it refuses the next level, which
+takes more stack in a debug build than a test thread or a Windows main thread
+has. A refusal that aborts the process is no refusal, so `read`
 runs the reader on a scoped thread whose stack the crate sizes (`READER_STACK`),
 and builds the `Cause` there, so no type of the reader crosses the thread. A
 panic comes back on the caller's thread. Where the system refuses the thread,
 `read` reads on the caller's, because a read does not fail for want of one.
-`tests/yaml.rs` calls the reader from a 256 KiB thread, which is why it passes
+`tests/yaml.rs` calls the reader from a thread with a small stack, which is why it passes
 only if the descent is off the caller's stack.
 
 **`pub` means an adopter calls it.** What no caller outside the crate used is
@@ -1391,13 +1389,13 @@ engine runs refuses every value of its flag when the flag is parsed, and
 repeating the rule would compile every pattern of every operation at each
 start-up to run one subcommand. A refusal whose input the blob does not hold
 (the document's text, a `$ref`, an `x-cli-` marker) cannot be broken from the
-blob at all. Two refusals of a load stand outside the line. A blob whose header
+blob at all. Some refusals of a load stand outside the line. A blob whose header
 parameter has a name that no header has meets the `http` crate when a value is
 given for it (`RequestError::Http`), so `HeaderName` is not repeated. A blob
 whose base holds userinfo or a query meets `Invocation::request`, which refuses
 every base it is given, so `ServerBase` is not repeated either. Neither sends a
-request. Three rules are repeated whatever their breaks, because F-70, the
-finding that asked for the check, names them: the confirmation word, which is
+request. Some rules are repeated whatever their breaks, because the finding that asked
+for the check names them: the confirmation word, which is
 the validation of `Loading::commit`, the spelling of each flag, and each
 `requires`. The spelling of a flag and the confirmation word of a write have
 breaks inside the line (a word with a leading `-` makes a debug build panic),
@@ -1443,7 +1441,7 @@ demonstration that the shape is right — it builds the toy README's own sentenc
 out of the summary — and any count this crate adds owes a row there.
 
 **The value is derived for everyone; the file is asked for.** `Settings::write_to`
-writes four artefacts and answers with what it wrote;
+writes the generated artefacts and answers with what it wrote;
 `Settings::summary_page(path)` adds the page, and the answer grows by exactly
 that path. The page is Markdown an adopter commits, reviews and lists in their
 own bless check, in prose they cannot word — a whole obligation, so only an
