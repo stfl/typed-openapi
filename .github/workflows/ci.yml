@@ -1,13 +1,21 @@
 name: ci
 
+# A slice reaches its feature branch by a plain merge, with no pull request, so
+# a push to any branch runs the jobs and the head of every branch carries its
+# checks. A pull request into `main` runs them as well, because a push run never
+# reports on a pull request from a fork. A branch of this repository with such
+# a pull request therefore runs them twice on its head: a pull request run that
+# skipped itself for such a branch would report a skipped, and so passing,
+# check under the same name as the push run's.
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
+    branches: [main]
   # The nightly is a date and the tools are pinned, so they hold still, but the
   # stable toolchain and the runner image do not. A weekly run shows when the
   # stable toolchain has turned the `rust stable` job red, or the runner image
-  # either job, while no pull request is open to say so.
+  # either job, while nothing is pushed to say so.
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
@@ -17,12 +25,14 @@ on:
 permissions:
   contents: read
 
-# A newer commit on a pull request makes its older run moot. Every other run (a
-# push to `main`, the weekly schedule, a dispatch) has a group of its own, so
-# none of them is cancelled or replaced.
+# A newer commit on a pull request, or pushed to a branch other than `main`,
+# makes the older run on that ref moot. A push run and a pull request run never
+# share a ref, so neither cancels the other. Every other run (a push to `main`,
+# the weekly schedule, a dispatch) has a group of its own, so none of them is
+# cancelled or replaced.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ (github.event_name == 'pull_request' || github.event_name == 'push' && github.ref != 'refs/heads/main') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
